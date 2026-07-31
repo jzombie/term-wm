@@ -10,7 +10,7 @@ publish.workspace = true
 
 [dependencies]
 crossterm = { workspace = true }
-term-wm-core = { workspace = true }
+term-wm-events = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

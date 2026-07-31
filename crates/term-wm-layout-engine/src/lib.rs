@@ -12,6 +12,7 @@ extern crate alloc;
 mod floating;
 mod hit_test;
 mod layout;
+mod mouse_coord;
 mod node;
 mod ordering;
 mod orientation;
@@ -27,6 +28,7 @@ pub use floating::{
 };
 pub use hit_test::{detect_quadrant, find_closest_region, hit_test_leaf, resolve_target};
 pub use layout::LayoutEngine;
+pub use mouse_coord::{CoordSpace, MousePosition};
 pub use node::{BspNode, NaryNode};
 pub use ordering::{FocusRing, ZOrder};
 pub use orientation::{LongestSide, OrientationHeuristic, Spiral};

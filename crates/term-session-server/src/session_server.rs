@@ -10,7 +10,7 @@ use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID,
+    ChannelName, CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID,
     SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
@@ -26,8 +26,16 @@ const SESSION_ID: u64 = 1;
 /// Bounded input channel capacity — memory safety against extreme input bursts.
 const INPUT_CHANNEL_CAPACITY: usize = 128;
 
+/// Grace period to let the transport flush end-of-stream frames after the
+/// session exits, before the server process terminates.
+const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How often the output polling task wakes to re-check the session's exit
+/// status, as a fallback for a missed or raced PTY EOF notification.
+const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 pub struct SessionServerConfig {
-    pub socket_path: String,
+    pub channel: ChannelName,
     pub cmd: Vec<String>,
     pub cols: u16,
     pub rows: u16,
@@ -152,6 +160,7 @@ type SharedState = Arc<Mutex<ServerState>>;
 pub async fn run_server(
     config: SessionServerConfig,
 ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let socket_name = config.channel.to_string();
     let notify = Arc::new(Notify::new());
     let state: SharedState = Arc::new(Mutex::new(ServerState::new(notify.clone())));
 
@@ -162,9 +171,17 @@ pub async fn run_server(
         } else {
             Some(config.cmd.clone())
         };
-        let session = Session::spawn(SESSION_ID, cmd, config.cols, config.rows)?;
+        let session = Session::spawn(
+            SESSION_ID,
+            cmd,
+            config.cols,
+            config.rows,
+            Some(&config.channel),
+        )?;
         st.set_session(session);
     }
+
+    let channel_id = config.channel.clone();
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let server = RpcIpcServer::new(Some(event_tx));
@@ -172,9 +189,11 @@ pub async fn run_server(
 
     // Register Spawn
     let st = Arc::clone(&state);
+    let ch = channel_id.clone();
     endpoint
         .register_prebuffered(Spawn::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
+            let ch = ch.clone();
             async move {
                 let mut guard = state.lock().await;
                 let (cmd, cols, rows) = Spawn::decode_request(&payload)
@@ -208,7 +227,7 @@ pub async fn run_server(
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
                 let id = SESSION_ID;
-                let session = Session::spawn(id, cmd, cols, rows)?;
+                let session = Session::spawn(id, cmd, cols, rows, Some(&ch))?;
                 guard.set_session(session);
                 // Enforce global geometric constraints on the newly instantiated PTY
                 guard.recalculate_pty_size();
@@ -301,11 +320,19 @@ pub async fn run_server(
             async move {
                 let (id, data) = WriteInput::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let mut guard = state.lock().await;
-                if let Some(session) = guard.session.as_mut()
-                    && session.id == id
-                {
-                    let _ = session.pty.write_bytes(&data);
+                let writer = {
+                    let guard = state.lock().await;
+                    guard
+                        .session
+                        .as_ref()
+                        .filter(|s| s.id == id)
+                        .map(|s| s.pty.writer_handle())
+                };
+                // PTY writes are blocking I/O (kernel input buffer); offload
+                // to the blocking pool so a full buffer never stalls an async
+                // worker or holds the state lock.
+                if let Some(writer) = writer {
+                    let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
                 }
                 WriteInput::encode_response(())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -340,9 +367,15 @@ pub async fn run_server(
     let input_st = Arc::clone(&state);
     tokio::spawn(async move {
         while let Some(data) = input_rx.recv().await {
-            let mut guard = input_st.lock().await;
-            if let Some(session) = guard.session.as_mut() {
-                let _ = session.pty.write_bytes(&data);
+            let writer = {
+                let guard = input_st.lock().await;
+                guard.session.as_ref().map(|s| s.pty.writer_handle())
+            };
+            // PTY writes are blocking I/O (kernel input buffer); offload to
+            // the blocking pool so a full buffer never stalls an async worker
+            // or holds the state lock. Awaiting per chunk preserves order.
+            if let Some(writer) = writer {
+                let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
             }
         }
     });
@@ -431,12 +464,17 @@ pub async fn run_server(
     // Output polling via Notify — blocks until PTY produces output.
     // When the session exits, the exit code is sent back through this
     // channel so run_server can return it.
+    //
+    // A periodic timer also wakes the loop so a session exit is detected even
+    // when the reader thread's EOF/Exited notification is missed or raced.
     let (exit_tx, mut exit_rx) = oneshot::channel::<i32>();
     let st = Arc::clone(&state);
     tokio::spawn(async move {
         loop {
-            // Block until PTY actually produces output — 0 wakeups when idle
-            notify.notified().await;
+            tokio::select! {
+                _ = notify.notified() => {}
+                _ = tokio::time::sleep(SESSION_EXIT_POLL_INTERVAL) => {}
+            }
             let mut guard = st.lock().await;
             if guard.subscribers.is_empty() {
                 let mut exited = false;
@@ -487,15 +525,28 @@ pub async fn run_server(
         }
     });
 
-    tracing::info!("Session server listening on {}", config.socket_path);
+    tracing::info!("Session server listening on channel {}", config.channel);
 
     // Wait for either the server to finish or the session to exit.
     let exit_code = tokio::select! {
-        result = server.serve(&config.socket_path) => {
-            result.map_err(|e| format!("serve: {e:?}"))?;
+        result = async {
+            server
+                .serve(&socket_name)
+                .await
+                .map_err(|e| format!("serve: {e:?}"))
+        } => {
+            result?;
             0
         }
-        code = &mut exit_rx => code.unwrap_or(0)
+        code = &mut exit_rx => {
+            // The polling task just queued the end-of-stream frames to each
+            // subscriber. The transport flushes them asynchronously, so give
+            // it a short grace period before the process exits — otherwise the
+            // frames are dropped with the runtime and the client never learns
+            // the session ended (it hangs waiting for output).
+            tokio::time::sleep(SESSION_EXIT_FLUSH_GRACE).await;
+            code.unwrap_or(0)
+        }
     };
 
     Ok(exit_code)

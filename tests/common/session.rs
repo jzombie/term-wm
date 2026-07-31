@@ -5,30 +5,32 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
-use term_session_server::SessionServerConfig;
-use term_session_server::run_server;
+use term_session_muxio_service_definitions::ChannelName;
+use term_session_server::{SessionServerConfig, run_server};
 
 pub const TEST_COLS: u16 = 80;
 pub const TEST_ROWS: u16 = 24;
 pub const LONG_SLEEP_MS: u64 = 60000;
 
-#[cfg(unix)]
-pub fn generate_socket_path() -> (Option<tempfile::TempDir>, String) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir
-        .path()
-        .join("term-wm-test.sock")
-        .to_string_lossy()
-        .to_string();
-    (Some(dir), path)
+pub fn test_channel(name: &str) -> ChannelName {
+    ChannelName::parse(name).expect("test channel")
 }
 
-#[cfg(windows)]
-pub fn generate_socket_path() -> (Option<tempfile::TempDir>, String) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    (None, format!(r"\\.\pipe\term-wm-test-session-{}", id))
+pub async fn spawn_server_for_channel(
+    channel: &ChannelName,
+    cmd: Vec<String>,
+    cols: u16,
+    rows: u16,
+) -> Arc<RpcIpcClient> {
+    let config = SessionServerConfig {
+        channel: channel.clone(),
+        cmd,
+        cols,
+        rows,
+    };
+    tokio::spawn(async move { run_server(config).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    connect_client_with_retry(&channel.to_string()).await
 }
 
 pub fn get_bench_bin() -> PathBuf {
@@ -86,20 +88,10 @@ pub async fn wait_for_output(
 }
 
 pub async fn spawn_session(
+    channel: &ChannelName,
     cmd: Vec<String>,
     cols: u16,
     rows: u16,
-) -> (Arc<RpcIpcClient>, tempfile::TempDir) {
-    let (tempdir, socket_path) = generate_socket_path();
-    let config = SessionServerConfig {
-        socket_path: socket_path.clone(),
-        cmd,
-        cols,
-        rows,
-    };
-    tokio::spawn(async move { run_server(config).await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let client = connect_client_with_retry(&socket_path).await;
-    let dir = tempdir.unwrap_or_else(|| tempfile::tempdir().unwrap());
-    (client, dir)
+) -> Arc<RpcIpcClient> {
+    spawn_server_for_channel(channel, cmd, cols, rows).await
 }
