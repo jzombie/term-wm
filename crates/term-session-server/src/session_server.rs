@@ -312,11 +312,19 @@ pub async fn run_server(
             async move {
                 let (id, data) = WriteInput::decode_request(&payload)
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let mut guard = state.lock().await;
-                if let Some(session) = guard.session.as_mut()
-                    && session.id == id
-                {
-                    let _ = session.pty.write_bytes(&data);
+                let writer = {
+                    let guard = state.lock().await;
+                    guard
+                        .session
+                        .as_ref()
+                        .filter(|s| s.id == id)
+                        .map(|s| s.pty.writer_handle())
+                };
+                // PTY writes are blocking I/O (kernel input buffer); offload
+                // to the blocking pool so a full buffer never stalls an async
+                // worker or holds the state lock.
+                if let Some(writer) = writer {
+                    let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
                 }
                 WriteInput::encode_response(())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -351,9 +359,15 @@ pub async fn run_server(
     let input_st = Arc::clone(&state);
     tokio::spawn(async move {
         while let Some(data) = input_rx.recv().await {
-            let mut guard = input_st.lock().await;
-            if let Some(session) = guard.session.as_mut() {
-                let _ = session.pty.write_bytes(&data);
+            let writer = {
+                let guard = input_st.lock().await;
+                guard.session.as_ref().map(|s| s.pty.writer_handle())
+            };
+            // PTY writes are blocking I/O (kernel input buffer); offload to
+            // the blocking pool so a full buffer never stalls an async worker
+            // or holds the state lock. Awaiting per chunk preserves order.
+            if let Some(writer) = writer {
+                let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
             }
         }
     });

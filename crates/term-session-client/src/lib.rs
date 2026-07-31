@@ -80,6 +80,29 @@ pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::i
     Ok(())
 }
 
+/// Disable Windows console "QuickEdit" mode so mouse clicks select nothing and
+/// never suspend the console's output. Best-effort: console-less sessions
+/// (CI, redirected stdio) simply no-op.
+#[cfg(windows)]
+fn disable_quick_edit() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Console::{
+        ENABLE_EXTENDED_FLAGS, ENABLE_QUICK_EDIT_MODE, GetConsoleMode, GetStdHandle,
+        SetConsoleMode, STD_INPUT_HANDLE,
+    };
+
+    unsafe {
+        let handle = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode: u32 = 0;
+        if GetConsoleMode(handle, &mut mode) != 0 {
+            let _ = SetConsoleMode(
+                handle,
+                (mode & !ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS,
+            );
+        }
+    }
+}
+
 /// Number of iterations to wait for initial PTY output.
 /// Windows ConPTY needs more time to initialize and flush its internal buffers.
 #[cfg(target_os = "windows")]
@@ -191,6 +214,13 @@ fn is_coalescable_mouse(
 /// for muxio IPC, then runs the synchronous crossterm event loop on the
 /// calling thread.
 pub fn run_session(socket_path: &str) -> io::Result<()> {
+    // Windows console hosts default to "QuickEdit" mode: clicking the window
+    // enters text-selection mode, during which the kernel suspends the
+    // process's console I/O until the selection is cleared (Esc). A stray
+    // click then looks exactly like a frozen terminal. Disable it up front.
+    #[cfg(windows)]
+    disable_quick_edit();
+
     // Redirect stderr to tracing so macOS AppKit/NSPasteboard noise doesn't
     // leak to the terminal display.  Best-effort: if it fails (non-Unix, etc.)
     // the session still works, just without the noise suppression.
