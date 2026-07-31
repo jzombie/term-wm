@@ -17,7 +17,9 @@ pub struct ServerSpawnConfig<'a> {
 fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
     let bin = std::env::current_exe()?;
     let mut cmd = Command::new(bin);
-    cmd.arg("--server").arg("--channel").arg(cfg.channel.to_string());
+    cmd.arg("--server")
+        .arg("--channel")
+        .arg(cfg.channel.to_string());
     cmd.arg("--cols").arg(cfg.cols.to_string());
     cmd.arg("--rows").arg(cfg.rows.to_string());
     if !cfg.cmd.is_empty() {

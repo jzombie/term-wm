@@ -15,9 +15,11 @@ impl ChannelName {
         let (ns, name) = match parts.as_slice() {
             [name] => ("default", *name),
             [ns, name] => (*ns, *name),
-            _ => return Err(format!(
-                "invalid channel format '{input}': expected 'name' or 'namespace/name'"
-            )),
+            _ => {
+                return Err(format!(
+                    "invalid channel format '{input}': expected 'name' or 'namespace/name'"
+                ));
+            }
         };
         let is_valid = |s: &str| {
             !s.is_empty()

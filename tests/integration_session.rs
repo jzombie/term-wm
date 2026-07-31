@@ -10,16 +10,21 @@ use term_session_muxio_service_definitions::{
 mod common;
 use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin};
 use common::session::{
-    TEST_COLS, TEST_ROWS, connect_client_with_retry, get_bench_bin, spawn_session,
-    test_channel, wait_for_output,
+    TEST_COLS, TEST_ROWS, connect_client_with_retry, get_bench_bin, spawn_session, test_channel,
+    wait_for_output,
 };
 use term_wm_pty_engine::clipboard::Osc52Extractor;
 
 #[tokio::test]
 async fn session_spawn_returns_id() {
     let mock = get_mock_bin();
-    let client =
-        spawn_session(&test_channel("test/spawn_returns_id"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/spawn_returns_id"),
+        vec![mock, "echo".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
     let (id, _, _) = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
         .await
         .unwrap();
@@ -29,8 +34,13 @@ async fn session_spawn_returns_id() {
 #[tokio::test]
 async fn session_input_output_roundtrip() {
     let mock = get_mock_bin();
-    let client =
-        spawn_session(&test_channel("test/input_output"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/input_output"),
+        vec![mock, "echo".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -54,8 +64,13 @@ async fn session_input_output_roundtrip() {
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let client =
-        spawn_session(&test_channel("test/mouse_forward"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/mouse_forward"),
+        vec![mock, "echo".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -95,8 +110,13 @@ async fn session_mouse_bytes_forwarded() {
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let client =
-        spawn_session(&test_channel("test/mouse_forward"), vec![mock, "capture".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/mouse_forward"),
+        vec![mock, "capture".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -125,8 +145,13 @@ async fn session_mouse_bytes_forwarded() {
 #[serial]
 async fn session_osc52_in_output() {
     let mock = get_mock_bin();
-    let client =
-        spawn_session(&test_channel("test/osc52_output"), vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/osc52_output"),
+        vec![mock, "osc52".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -148,8 +173,13 @@ async fn session_osc52_in_output() {
 #[serial]
 async fn session_osc52_via_osc52extractor() {
     let mock = get_mock_bin();
-    let client =
-        spawn_session(&test_channel("test/osc52_extractor"), vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/osc52_extractor"),
+        vec![mock, "osc52".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -204,8 +234,13 @@ async fn session_osc52_via_osc52extractor() {
 #[tokio::test]
 async fn session_resize() {
     let mock = get_mock_bin();
-    let client =
-        spawn_session(&test_channel("test/resize"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/resize"),
+        vec![mock, "echo".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     let result = ResizePty::call(&*client, (1u64, 120u16, 40u16)).await;
     assert!(result.is_ok(), "Resize should succeed: {:?}", result.err());

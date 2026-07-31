@@ -40,8 +40,8 @@ fn run_server_mode(channel: &ChannelName, cli: &Cli) -> io::Result<()> {
         cols: cli.cols,
         rows: cli.rows,
     };
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
     rt.block_on(term_session_server::run_server(config))
         .map_err(|e| io::Error::other(format!("server error: {e}")))?;
     Ok(())
