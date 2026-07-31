@@ -5,7 +5,7 @@ use crate::events::{Event, KeyEvent, KeyKind, MouseEventKind};
 use term_wm_pty_engine::input_encoding::key_to_bytes;
 use term_wm_render::RenderTarget;
 
-use std::collections::VecDeque;use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
+use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
 use crate::components::Component;
 use crate::components::Overlay;
 use crate::components::SelectionStatus;
@@ -19,6 +19,7 @@ use crate::io::FramePacer;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::TaskScheduler;
 use crate::window::{WindowKey, WindowManager};
+use std::collections::VecDeque;
 
 pub trait WindowManagerHost<
     C: Component<TermWmAction>,
