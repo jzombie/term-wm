@@ -44,7 +44,7 @@ impl Session {
                 builder.arg(arg);
             }
             if let Some(ch) = channel {
-                builder.env("TERM_WM_CHANNEL", &ch.to_string());
+                builder.env("TERM_WM_CHANNEL", ch.to_string());
             }
             if let Ok(cwd) = std::env::current_dir() {
                 builder.cwd(cwd);
@@ -53,7 +53,7 @@ impl Session {
         } else {
             let mut builder = default_shell_command();
             if let Some(ch) = channel {
-                builder.env("TERM_WM_CHANNEL", &ch.to_string());
+                builder.env("TERM_WM_CHANNEL", ch.to_string());
             }
             Pty::spawn(builder, size)?
         };

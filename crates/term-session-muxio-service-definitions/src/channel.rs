@@ -88,7 +88,7 @@ impl ChannelResolver {
             fs::set_permissions(&ns_dir, fs::Permissions::from_mode(0o700))?;
         }
         let socket_path = ns_dir.join(format!("{}.sock", channel.name));
-        let path_len = socket_path.to_string_lossy().as_bytes().len();
+        let path_len = socket_path.to_string_lossy().len();
         if path_len >= 100 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -162,6 +162,7 @@ pub fn acquire_sidecar_lock(lock_path: &Path) -> io::Result<fs::File> {
 
     let file = fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path)?;
@@ -185,6 +186,7 @@ pub fn acquire_sidecar_lock(lock_path: &Path) -> io::Result<fs::File> {
 
     let file = fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path)?;
