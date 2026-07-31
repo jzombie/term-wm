@@ -8,10 +8,6 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[[bin]]
-name = "term-session"
-path = "src/main.rs"
-
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 
