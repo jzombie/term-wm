@@ -5,39 +5,32 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
-use term_session_muxio_service_definitions::{ChannelName, ChannelResolver};
+use term_session_muxio_service_definitions::ChannelName;
 use term_session_server::{SessionServerConfig, run_server};
 
 pub const TEST_COLS: u16 = 80;
 pub const TEST_ROWS: u16 = 24;
 pub const LONG_SLEEP_MS: u64 = 60000;
 
-pub fn test_channel() -> (tempfile::TempDir, ChannelName, ChannelResolver) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let resolver = ChannelResolver::new(Some(dir.path().join("channels")));
-    let channel = ChannelName::parse("test/main").expect("test channel");
-    (dir, channel, resolver)
+pub fn test_channel(name: &str) -> ChannelName {
+    ChannelName::parse(name).expect("test channel")
 }
 
 pub async fn spawn_server_for_channel(
+    channel: &ChannelName,
     cmd: Vec<String>,
     cols: u16,
     rows: u16,
-) -> (tempfile::TempDir, ChannelName, ChannelResolver, Arc<RpcIpcClient>) {
-    let (tmpdir, channel, resolver) = test_channel();
-    let socket_path = resolver.resolve(&channel).expect("resolve");
-    let socket_str = socket_path.to_string_lossy().to_string();
+) -> Arc<RpcIpcClient> {
     let config = SessionServerConfig {
         channel: channel.clone(),
-        base_dir: Some(tmpdir.path().join("channels")),
         cmd,
         cols,
         rows,
     };
     tokio::spawn(async move { run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let client = connect_client_with_retry(&socket_str).await;
-    (tmpdir, channel, resolver, client)
+    connect_client_with_retry(&channel.to_string()).await
 }
 
 pub fn get_bench_bin() -> PathBuf {
@@ -95,23 +88,10 @@ pub async fn wait_for_output(
 }
 
 pub async fn spawn_session(
+    channel: &ChannelName,
     cmd: Vec<String>,
     cols: u16,
     rows: u16,
-) -> (Arc<RpcIpcClient>, tempfile::TempDir) {
-    let (tmpdir, channel, resolver) = test_channel();
-    let socket_path = resolver.resolve(&channel).expect("resolve socket path");
-    let socket_str = socket_path.to_string_lossy().to_string();
-    let config = SessionServerConfig {
-        channel: channel.clone(),
-        base_dir: Some(tmpdir.path().join("channels")),
-        cmd,
-        cols,
-        rows,
-    };
-    tokio::spawn(async move { run_server(config).await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let client = connect_client_with_retry(&socket_str).await;
-    let dir = tempfile::tempdir().expect("tempdir");
-    (client, dir)
+) -> Arc<RpcIpcClient> {
+    spawn_server_for_channel(channel, cmd, cols, rows).await
 }

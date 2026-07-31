@@ -10,9 +10,5 @@ publish.workspace = true
 
 [dependencies]
 bitcode = { workspace = true }
-dirs = "5.0"
-libc = { workspace = true }
+interprocess = "2.4.2"
 muxio-rpc-service = { workspace = true }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }

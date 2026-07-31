@@ -1,13 +1,9 @@
-use std::fs;
 use std::io;
-use std::path::PathBuf;
 
 use clap::Parser;
 use term_session_client::auto_spawn::{ServerSpawnConfig, connect_or_spawn_server};
 use term_session_client::run_session;
-use term_session_muxio_service_definitions::{
-    ChannelName, ChannelResolver, acquire_sidecar_lock, probe_ipc_endpoint,
-};
+use term_session_muxio_service_definitions::ChannelName;
 use term_session_server::SessionServerConfig;
 
 #[derive(Parser, Debug)]
@@ -20,10 +16,6 @@ struct Cli {
     /// Run in server daemon mode.
     #[arg(long)]
     server: bool,
-
-    /// Base directory for channel socket resolution.
-    #[arg(long)]
-    base_dir: Option<PathBuf>,
 
     /// Columns (width) of each terminal
     #[arg(long = "cols", default_value = "80")]
@@ -42,16 +34,8 @@ struct Cli {
 fn run_server_mode(channel: &ChannelName, cli: &Cli) -> io::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let resolver = ChannelResolver::new(cli.base_dir.clone());
-    let socket_path = resolver.resolve(channel)?;
-    let lock_path = socket_path.with_extension("sock.lock");
-    let _lock = acquire_sidecar_lock(&lock_path)?;
-    if socket_path.exists() && !probe_ipc_endpoint(&socket_path) {
-        fs::remove_file(&socket_path)?;
-    }
     let config = SessionServerConfig {
         channel: channel.clone(),
-        base_dir: cli.base_dir.clone(),
         cmd: cli.cmd.clone(),
         cols: cli.cols,
         rows: cli.rows,
@@ -80,18 +64,13 @@ fn main() -> io::Result<()> {
         return run_server_mode(&channel, &cli);
     }
 
-    let resolver = ChannelResolver::new(cli.base_dir.clone());
     let spawn_cfg = ServerSpawnConfig {
         channel: &channel,
-        base_dir: cli.base_dir.as_deref(),
         cols: cli.cols,
         rows: cli.rows,
         cmd: &cli.cmd,
     };
-    let socket_path = connect_or_spawn_server(&channel, &resolver, &spawn_cfg)?;
-    let socket_str = socket_path
-        .to_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8 in socket path"))?;
+    let socket_name = connect_or_spawn_server(&channel, &spawn_cfg)?;
 
-    run_session(socket_str)
+    run_session(&socket_name)
 }

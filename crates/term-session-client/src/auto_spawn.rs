@@ -1,18 +1,14 @@
-use std::io;
-use std::path::{Path, PathBuf};
+use std::io::{self, Read};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use term_session_muxio_service_definitions::{
-    ChannelName, ChannelResolver, probe_ipc_endpoint,
-};
+use term_session_muxio_service_definitions::{ChannelName, probe_ipc_endpoint};
 
 /// Parameters forwarded to the auto-spawned server process.
 #[derive(Clone, Debug)]
 pub struct ServerSpawnConfig<'a> {
     pub channel: &'a ChannelName,
-    pub base_dir: Option<&'a Path>,
     pub cols: u16,
     pub rows: u16,
     pub cmd: &'a [String],
@@ -22,9 +18,6 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
     let bin = std::env::current_exe()?;
     let mut cmd = Command::new(bin);
     cmd.arg("--server").arg("--channel").arg(cfg.channel.to_string());
-    if let Some(dir) = cfg.base_dir {
-        cmd.arg("--base-dir").arg(dir);
-    }
     cmd.arg("--cols").arg(cfg.cols.to_string());
     cmd.arg("--rows").arg(cfg.rows.to_string());
     if !cfg.cmd.is_empty() {
@@ -32,7 +25,8 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
     }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        // Keep stderr so startup failures (PTY spawn, socket bind) can be surfaced.
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -41,15 +35,30 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
     cmd.spawn()
 }
 
+/// Read the dead server's captured stderr so the real failure reason is reported.
+fn child_stderr(child: &mut Child) -> String {
+    let Some(mut stderr) = child.stderr.take() else {
+        return String::new();
+    };
+    let mut buf = String::new();
+    let _ = stderr.read_to_string(&mut buf);
+    buf
+}
+
+/// Wait for a session server to become reachable on the channel, spawning one
+/// via `current_exe() --server` if none is running.
+///
+/// Returns the channel name string, which the caller passes to the muxio IPC
+/// client. The client and server both route it through `GenericNamespaced`, so
+/// no filesystem path is involved.
 pub fn connect_or_spawn_server(
     channel: &ChannelName,
-    resolver: &ChannelResolver,
     cfg: &ServerSpawnConfig<'_>,
-) -> io::Result<PathBuf> {
-    let socket_path = resolver.resolve(channel)?;
+) -> io::Result<String> {
+    let socket_name = channel.to_string();
 
-    if probe_ipc_endpoint(&socket_path) {
-        return Ok(socket_path);
+    if probe_ipc_endpoint(channel) {
+        return Ok(socket_name);
     }
 
     let mut child = spawn_detached_server(cfg)?;
@@ -58,13 +67,24 @@ pub fn connect_or_spawn_server(
     let poll_interval = Duration::from_millis(50);
 
     while start.elapsed() < timeout {
-        if probe_ipc_endpoint(&socket_path) {
-            return Ok(socket_path);
+        if probe_ipc_endpoint(channel) {
+            return Ok(socket_name);
         }
         if let Ok(Some(status)) = child.try_wait() {
+            // The spawned server died before the socket came up. Another racer
+            // may have won the bind; re-probe before surfacing the failure.
+            if probe_ipc_endpoint(channel) {
+                return Ok(socket_name);
+            }
+            let stderr = child_stderr(&mut child);
+            let detail = if stderr.trim().is_empty() {
+                status.to_string()
+            } else {
+                format!("{status}: {}", stderr.trim())
+            };
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionRefused,
-                format!("Server exited prematurely during startup with status: {status}"),
+                format!("Session server exited during startup ({detail})"),
             ));
         }
         thread::sleep(poll_interval);

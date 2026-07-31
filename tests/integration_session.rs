@@ -18,7 +18,8 @@ use term_wm_pty_engine::clipboard::Osc52Extractor;
 #[tokio::test]
 async fn session_spawn_returns_id() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client =
+        spawn_session(&test_channel("test/spawn_returns_id"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
     let (id, _, _) = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
         .await
         .unwrap();
@@ -28,7 +29,8 @@ async fn session_spawn_returns_id() {
 #[tokio::test]
 async fn session_input_output_roundtrip() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client =
+        spawn_session(&test_channel("test/input_output"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -52,7 +54,8 @@ async fn session_input_output_roundtrip() {
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client =
+        spawn_session(&test_channel("test/mouse_forward"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -92,7 +95,8 @@ async fn session_mouse_bytes_forwarded() {
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(vec![mock, "capture".into()], TEST_COLS, TEST_ROWS).await;
+    let client =
+        spawn_session(&test_channel("test/mouse_forward"), vec![mock, "capture".into()], TEST_COLS, TEST_ROWS).await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -121,7 +125,8 @@ async fn session_mouse_bytes_forwarded() {
 #[serial]
 async fn session_osc52_in_output() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
+    let client =
+        spawn_session(&test_channel("test/osc52_output"), vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -143,7 +148,8 @@ async fn session_osc52_in_output() {
 #[serial]
 async fn session_osc52_via_osc52extractor() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
+    let client =
+        spawn_session(&test_channel("test/osc52_extractor"), vec![mock, "osc52".into()], TEST_COLS, TEST_ROWS).await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -198,7 +204,8 @@ async fn session_osc52_via_osc52extractor() {
 #[tokio::test]
 async fn session_resize() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
+    let client =
+        spawn_session(&test_channel("test/resize"), vec![mock, "echo".into()], TEST_COLS, TEST_ROWS).await;
 
     let result = ResizePty::call(&*client, (1u64, 120u16, 40u16)).await;
     assert!(result.is_ok(), "Resize should succeed: {:?}", result.err());
@@ -207,7 +214,8 @@ async fn session_resize() {
 #[tokio::test]
 async fn session_list_sessions() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(
+    let client = spawn_session(
+        &test_channel("test/list_sessions"),
         vec![mock, "sleep".into(), "60000".into()],
         TEST_COLS,
         TEST_ROWS,
@@ -222,7 +230,8 @@ async fn session_list_sessions() {
 #[tokio::test]
 async fn session_close_session() {
     let mock = get_mock_bin();
-    let (client, _dir) = spawn_session(
+    let client = spawn_session(
+        &test_channel("test/close_session"),
         vec![mock, "sleep".into(), "60000".into()],
         TEST_COLS,
         TEST_ROWS,
@@ -240,8 +249,13 @@ async fn session_close_session() {
 #[serial]
 async fn session_child_exit() {
     let mock = get_mock_bin();
-    let (client, _dir) =
-        spawn_session(vec![mock, "exit".into(), "0".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/child_exit"),
+        vec![mock, "exit".into(), "0".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -268,8 +282,13 @@ async fn session_child_exit() {
 #[serial]
 async fn session_child_exit_before_subscribe() {
     let mock = get_mock_bin();
-    let (client, _dir) =
-        spawn_session(vec![mock, "exit".into(), "0".into()], TEST_COLS, TEST_ROWS).await;
+    let client = spawn_session(
+        &test_channel("test/child_exit_early"),
+        vec![mock, "exit".into(), "0".into()],
+        TEST_COLS,
+        TEST_ROWS,
+    )
+    .await;
 
     // Give the server time to detect child exit and tear down the session
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -300,12 +319,9 @@ async fn session_child_exit_before_subscribe() {
 #[tokio::test]
 async fn session_reconnect() {
     let mock = get_mock_bin();
-    let (tmpdir, channel, resolver) = test_channel();
-    let socket_path = resolver.resolve(&channel).unwrap();
-    let socket_str = socket_path.to_string_lossy().to_string();
+    let channel = test_channel("test/reconnect");
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
-        base_dir: Some(tmpdir.path().join("channels")),
         cmd: vec![mock, "echo".into()],
         cols: TEST_COLS,
         rows: TEST_ROWS,
@@ -313,7 +329,7 @@ async fn session_reconnect() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client1 = connect_client_with_retry(&socket_str).await;
+    let client1 = connect_client_with_retry(&channel.to_string()).await;
     let (_, mut reader1) = client1
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
         .await
@@ -339,8 +355,6 @@ async fn session_reconnect() {
     writer2.send(b"two\n".to_vec()).unwrap();
     let output2 = wait_for_output(&mut reader2, b"two", Duration::from_secs(2)).await;
     assert!(output2.windows(3).any(|w| w == b"two"));
-
-    drop(tmpdir);
 }
 
 #[tokio::test]
@@ -351,7 +365,8 @@ async fn term_bench_runs_to_completion() {
         return;
     }
 
-    let (client, _dir) = spawn_session(
+    let client = spawn_session(
+        &test_channel("test/bench"),
         vec![
             bench_bin.to_string_lossy().to_string(),
             "-d".into(),
@@ -399,12 +414,9 @@ fn find_sgr_mouse_token_static() {
 #[serial]
 async fn session_multi_client_pty_constrained_to_smallest() {
     let mock = get_mock_bin();
-    let (tmpdir, channel, resolver) = test_channel();
-    let socket_path = resolver.resolve(&channel).unwrap();
-    let socket_str = socket_path.to_string_lossy().to_string();
+    let channel = test_channel("test/multi_client_smallest");
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
-        base_dir: Some(tmpdir.path().join("channels")),
         cmd: vec![mock, "echo".into()],
         cols: 120,
         rows: 40,
@@ -412,9 +424,9 @@ async fn session_multi_client_pty_constrained_to_smallest() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let c1 = connect_client_with_retry(&socket_str).await;
-    let c2 = connect_client_with_retry(&socket_str).await;
-    let c3 = connect_client_with_retry(&socket_str).await;
+    let c1 = connect_client_with_retry(&channel.to_string()).await;
+    let c2 = connect_client_with_retry(&channel.to_string()).await;
+    let c3 = connect_client_with_retry(&channel.to_string()).await;
 
     let (pid1, _, _) = Spawn::call(&*c1, (None, 120u16, 40u16)).await.unwrap();
     let (pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
@@ -457,20 +469,15 @@ async fn session_multi_client_pty_constrained_to_smallest() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-
-    drop(tmpdir);
 }
 
 #[tokio::test]
 #[serial]
 async fn session_multi_client_disconnect_expands_pty() {
     let mock = get_mock_bin();
-    let (tmpdir, channel, resolver) = test_channel();
-    let socket_path = resolver.resolve(&channel).unwrap();
-    let socket_str = socket_path.to_string_lossy().to_string();
+    let channel = test_channel("test/multi_client_expand");
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
-        base_dir: Some(tmpdir.path().join("channels")),
         cmd: vec![mock, "echo".into()],
         cols: 120,
         rows: 40,
@@ -478,9 +485,9 @@ async fn session_multi_client_disconnect_expands_pty() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let c1 = connect_client_with_retry(&socket_str).await;
-    let c2 = connect_client_with_retry(&socket_str).await;
-    let c3 = connect_client_with_retry(&socket_str).await;
+    let c1 = connect_client_with_retry(&channel.to_string()).await;
+    let c2 = connect_client_with_retry(&channel.to_string()).await;
+    let c3 = connect_client_with_retry(&channel.to_string()).await;
 
     let (pid1, _, _) = Spawn::call(&*c1, (None, 120u16, 40u16)).await.unwrap();
     let (_pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
@@ -529,20 +536,15 @@ async fn session_multi_client_disconnect_expands_pty() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-
-    drop(tmpdir);
 }
 
 #[tokio::test]
 #[serial]
 async fn session_server_start_stop_cleanly() {
     let mock = get_mock_bin();
-    let (tmpdir, channel, resolver) = test_channel();
-    let socket_path = resolver.resolve(&channel).unwrap();
-    let socket_str = socket_path.to_string_lossy().to_string();
+    let channel = test_channel("test/server_start_stop");
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
-        base_dir: Some(tmpdir.path().join("channels")),
         cmd: vec![mock, "echo".into()],
         cols: 80,
         rows: 24,
@@ -550,9 +552,7 @@ async fn session_server_start_stop_cleanly() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = connect_client_with_retry(&socket_str).await;
+    let client = connect_client_with_retry(&channel.to_string()).await;
     let sessions = ListSessions::call(&*client, ()).await.unwrap();
     assert_eq!(sessions.len(), 1);
-
-    drop(tmpdir);
 }
