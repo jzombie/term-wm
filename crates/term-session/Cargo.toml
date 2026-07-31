@@ -1,0 +1,22 @@
+[package]
+name = "term-session"
+description = "Generic terminal session reproducer: run a PTY in a detached server and attach any number of terminals, locally or over SSH."
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "term-session"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+libc = { workspace = true }
+term-session-client = { workspace = true }
+term-session-muxio-service-definitions = { workspace = true }
+term-session-server = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }

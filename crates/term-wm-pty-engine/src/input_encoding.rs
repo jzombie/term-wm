@@ -1,78 +1,11 @@
+use term_wm_events::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
-
-// Event types matching term_wm_core::events
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyCode {
-    Char(char),
-    Enter,
-    Tab,
-    Backspace,
-    Esc,
-    Left,
-    Right,
-    Up,
-    Down,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Delete,
-    Insert,
-    F(u8),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyModifiers {
-    pub shift: bool,
-    pub control: bool,
-    pub alt: bool,
-}
-
-impl KeyModifiers {
-    pub const NONE: Self = Self {
-        shift: false,
-        control: false,
-        alt: false,
-    };
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyEvent {
-    pub code: KeyCode,
-    pub modifiers: KeyModifiers,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Right,
-    Middle,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseEventKind {
-    Press(MouseButton),
-    Release(MouseButton),
-    Drag(MouseButton),
-    Moved,
-    ScrollUp,
-    ScrollDown,
-    ScrollLeft,
-    ScrollRight,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MouseEvent {
-    pub kind: MouseEventKind,
-    pub modifiers: KeyModifiers,
-    pub column: u16,
-    pub row: u16,
-}
 
 /// Convert a [`KeyEvent`] to the byte sequence to send to the PTY.
 /// Set `application_cursor_keys=true` when DECCKM (DECSET 1) is active,
 /// so unmodified arrow keys use SS3 (`\eOA`) instead of CSI (`\e[A`).
 /// Modified arrows (Shift/Ctrl/Alt) always use standard CSI regardless.
+/// Shift+Tab produces `\x1b[Z` (CSI backtab) per ANSI terminal standard.
 pub fn key_to_bytes(key: &KeyEvent, application_cursor_keys: bool) -> Vec<u8> {
     match (key.code, key.modifiers) {
         (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m.shift => {
@@ -91,6 +24,7 @@ pub fn key_to_bytes(key: &KeyEvent, application_cursor_keys: bool) -> Vec<u8> {
         (KeyCode::Enter, _) => vec![b'\r'],
         (KeyCode::Backspace, _) => vec![0x7f],
         (KeyCode::Esc, _) => vec![0x1b],
+        (KeyCode::Tab, m) if m.shift => b"\x1b[Z".to_vec(),
         (KeyCode::Tab, _) => vec![b'\t'],
         // Application Cursor Keys (DECCKM): SS3 for unmodified arrows only
         (KeyCode::Up, m) if application_cursor_keys && m == KeyModifiers::NONE => {
@@ -261,9 +195,14 @@ pub fn mouse_event_to_bytes(mouse: &MouseEvent, encoding: MouseProtocolEncoding)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use term_wm_events::KeyKind;
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
-        KeyEvent { code, modifiers }
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyKind::Press,
+        }
     }
 
     /// Test helper: calls key_to_bytes with application_cursor_keys=false.
@@ -330,6 +269,16 @@ mod tests {
     fn key_to_bytes_backtab() {
         let bt = kb(&key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(bt, b"\t");
+
+        let shift_tab = kb(&key(
+            KeyCode::Tab,
+            KeyModifiers {
+                shift: true,
+                control: false,
+                alt: false,
+            },
+        ));
+        assert_eq!(shift_tab, b"\x1b[Z");
     }
 
     #[test]
@@ -349,6 +298,23 @@ mod tests {
             },
         ));
         assert_eq!(s, b"A");
+    }
+
+    #[test]
+    fn key_to_bytes_media_keys_return_empty() {
+        for code in &[
+            KeyCode::MediaPlayPause,
+            KeyCode::MediaStop,
+            KeyCode::MediaTrackNext,
+            KeyCode::MediaTrackPrevious,
+        ] {
+            let ev = key(*code, KeyModifiers::NONE);
+            assert!(
+                key_to_bytes(&ev, false).is_empty(),
+                "Media key {:?} must produce empty bytes",
+                code
+            );
+        }
     }
 
     // --- ctrl_char ---

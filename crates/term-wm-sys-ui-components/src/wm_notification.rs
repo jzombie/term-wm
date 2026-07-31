@@ -100,10 +100,10 @@ mod tests {
         };
         let mut backend = make_backend(area);
         c.render(&mut backend, area, &ComponentContext::default(), &mut reg);
-        let result = reg.hit_test(term_wm_core::mouse_coord::MousePosition {
+        let result = reg.hit_test(term_wm_layout_engine::MousePosition {
             column: 5,
             row: 2,
-            space: term_wm_core::mouse_coord::CoordSpace::Screen,
+            space: term_wm_layout_engine::CoordSpace::Screen,
         });
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, id);
@@ -145,10 +145,10 @@ mod tests {
             },
             &mut reg,
         );
-        let result = reg.hit_test(term_wm_core::mouse_coord::MousePosition {
+        let result = reg.hit_test(term_wm_layout_engine::MousePosition {
             column: 7,
             row: 6,
-            space: term_wm_core::mouse_coord::CoordSpace::Screen,
+            space: term_wm_layout_engine::CoordSpace::Screen,
         });
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, id);

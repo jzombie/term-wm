@@ -2100,7 +2100,7 @@ mod tests {
             &mut scratch,
         );
 
-        use term_wm_core::mouse_coord::{CoordSpace, MousePosition};
+        use term_wm_layout_engine::{CoordSpace, MousePosition};
         let screen = |col, row| MousePosition {
             column: col,
             row,

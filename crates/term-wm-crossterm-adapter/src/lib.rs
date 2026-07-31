@@ -1,4 +1,4 @@
-use term_wm_core::events::{
+use term_wm_events::{
     Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 

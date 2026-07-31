@@ -1,6 +1,6 @@
 [package]
 name = "term-session-client"
-description = "IPC-based session client for term-wm. For internal usage."
+description = "Terminal client that attaches to a term-session server and renders a live, duplicated PTY session."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -8,8 +8,10 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dependencies]
-clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste"] }
 libc = { workspace = true }
@@ -21,8 +23,8 @@ muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
 portable-pty = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
-term-wm-core = { workspace = true }
 term-wm-crossterm-adapter = { workspace = true }
+term-wm-events = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

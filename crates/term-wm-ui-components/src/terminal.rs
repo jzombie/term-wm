@@ -21,64 +21,12 @@ use term_wm_core::utils::selectable_text::{
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-use term_wm_pty_engine::input_encoding::{mouse_event_allowed, mouse_event_to_bytes};
+use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
 use term_wm_pty_engine::{Pane, PtyStatus};
 
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
 const DEFAULT_SCROLLBACK_LEN: usize = 2000;
-
-// TODO: Refactor?
-/// Convert core-owned MouseEventKind to pty-engine MouseEventKind
-fn convert_mouse_event_kind(
-    kind: MouseEventKind,
-) -> term_wm_pty_engine::input_encoding::MouseEventKind {
-    match kind {
-        MouseEventKind::Press(btn) => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::Press(convert_mouse_button(btn))
-        }
-        MouseEventKind::Release(btn) => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::Release(convert_mouse_button(btn))
-        }
-        MouseEventKind::Drag(btn) => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::Drag(convert_mouse_button(btn))
-        }
-        MouseEventKind::Moved => term_wm_pty_engine::input_encoding::MouseEventKind::Moved,
-        MouseEventKind::ScrollUp => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollUp,
-        MouseEventKind::ScrollDown => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::ScrollDown
-        }
-        MouseEventKind::ScrollLeft => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::ScrollLeft
-        }
-        MouseEventKind::ScrollRight => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::ScrollRight
-        }
-    }
-}
-
-// TODO: Refactor?
-fn convert_mouse_button(btn: MouseButton) -> term_wm_pty_engine::input_encoding::MouseButton {
-    match btn {
-        MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
-        MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
-        MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
-    }
-}
-
-// TODO: Refactor?
-fn convert_pty_mouse_event(mouse: &MouseEvent) -> term_wm_pty_engine::input_encoding::MouseEvent {
-    term_wm_pty_engine::input_encoding::MouseEvent {
-        kind: convert_mouse_event_kind(mouse.kind),
-        modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
-            shift: mouse.modifiers.shift,
-            control: mouse.modifiers.control,
-            alt: mouse.modifiers.alt,
-        },
-        column: mouse.column,
-        row: mouse.row,
-    }
-}
 
 pub struct TerminalComponent {
     hitbox_id: HitboxId,
@@ -132,7 +80,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     return EventResult::Action(TermWmAction::Scroll(delta));
                 }
                 let app_cursor = self.pane.borrow().is_application_cursor_keys_active();
-                let bytes = key.to_pty_bytes(app_cursor);
+                let bytes = key_to_bytes(key, app_cursor);
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }
@@ -178,8 +126,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
 
                 let mode = screen.mouse_protocol_mode();
-                let pty_kind = convert_mouse_event_kind(mouse.kind);
-                if !mouse_event_allowed(mode, pty_kind) {
+                if !mouse_event_allowed(mode, mouse.kind) {
                     return EventResult::Ignored;
                 }
                 let Some((local_col, local_row)) =
@@ -193,8 +140,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
-                let pty_mouse = convert_pty_mouse_event(&local);
-                let bytes = mouse_event_to_bytes(&pty_mouse, encoding);
+                let bytes = mouse_event_to_bytes(&local, encoding);
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }

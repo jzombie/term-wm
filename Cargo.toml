@@ -15,7 +15,7 @@ development = ["term-bench", "term-session-client"]
 members = [
     "crates/term-bench",
     "crates/term-resize-indicator",
-    "crates/term-resize-indicator",
+    "crates/term-session",
     "crates/term-session-client",
     "crates/term-session-mock",
     "crates/term-session-muxio-service-definitions",
@@ -23,6 +23,7 @@ members = [
     "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-crossterm-adapter",
+    "crates/term-wm-events",
     "crates/term-wm-layout-engine",
     "crates/term-wm-pty-engine",
     "crates/term-wm-render",
@@ -34,7 +35,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.8.20-alpha"
+version = "0.9.0-test"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
@@ -52,19 +53,20 @@ criterion = { version = "0.8.2", default-features = false }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
+dirs = "5.0"
 hostname = "0.4.2"
 indoc = "2.0.7"
 insta = "1.48.0"
 libc = "0.2.186"
 line-ending = "1.5.1"
 linkify = "0.11.0"
-muxio-core = "0.12.0-alpha"
-muxio-rpc-service = "0.12.0-alpha"
-muxio-rpc-service-caller = "0.12.0-alpha"
-muxio-rpc-service-endpoint = "0.12.0-alpha"
-muxio-tokio-mpsc-adapter = "0.12.0-alpha"
-muxio-tokio-rpc-ipc-client = "0.12.0-alpha"
-muxio-tokio-rpc-ipc-server = "0.12.0-alpha"
+muxio-core = "0.14.0-alpha"
+muxio-rpc-service = "0.14.0-alpha"
+muxio-rpc-service-caller = "0.14.0-alpha"
+muxio-rpc-service-endpoint = "0.14.0-alpha"
+muxio-tokio-mpsc-adapter = "0.14.0-alpha"
+muxio-tokio-rpc-ipc-client = "0.14.0-alpha"
+muxio-tokio-rpc-ipc-server = "0.14.0-alpha"
 nucleo-matcher = { version = "0.3", features = ["unicode-casefold", "unicode-normalization", "unicode-segmentation"] }
 portable-pty = "0.9.0"
 proptest = "1.11.0"
@@ -75,19 +77,21 @@ serial_test = "3.5.0"
 shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
-term-session-client = { path = "crates/term-session-client", version = "0.8.20-alpha" }
-term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.8.20-alpha" }
-term-session-server = { path = "crates/term-session-server", version = "0.8.20-alpha" }
-term-wm = { path = ".", version = "0.8.20-alpha" }
-term-wm-console = { path = "crates/term-wm-console", version = "0.8.20-alpha" }
-term-wm-core = { path = "crates/term-wm-core", version = "0.8.20-alpha" }
-term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.8.20-alpha" }
-term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.8.20-alpha" }
-term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.8.20-alpha" }
-term-wm-render = { path = "crates/term-wm-render", version = "0.8.20-alpha" }
-term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.8.20-alpha" }
-term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.8.20-alpha" }
-term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.8.20-alpha" }
+term-session = { path = "crates/term-session", version = "0.9.0-test" }
+term-session-client = { path = "crates/term-session-client", version = "0.9.0-test" }
+term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.9.0-test" }
+term-session-server = { path = "crates/term-session-server", version = "0.9.0-test" }
+term-wm = { path = ".", version = "0.9.0-test" }
+term-wm-console = { path = "crates/term-wm-console", version = "0.9.0-test" }
+term-wm-core = { path = "crates/term-wm-core", version = "0.9.0-test" }
+term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.9.0-test" }
+term-wm-events = { path = "crates/term-wm-events", version = "0.9.0-test" }
+term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.9.0-test" }
+term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.9.0-test" }
+term-wm-render = { path = "crates/term-wm-render", version = "0.9.0-test" }
+term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.9.0-test" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.9.0-test" }
+term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.9.0-test" }
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
@@ -97,6 +101,13 @@ unicode-width = "0.2.2"
 vt100 = "0.16.2"
 vte = "0.15.0"
 webbrowser = "1.2.1"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+] }
 
 [[bin]]
 name = "term-wm"
@@ -105,6 +116,7 @@ required-features = ["sys-ui"]
 [features]
 default = ["sys-ui"]
 sys-ui = ["dep:term-wm-sys-ui-components"]
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }

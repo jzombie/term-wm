@@ -10,8 +10,11 @@ use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
+use crate::chrome::ChromeTarget;
+use crate::hitbox_registry::ComponentOwner;
 use crate::window::entry;
 use std::time::{Duration, Instant};
+use term_wm_layout_engine::{CoordSpace, MousePosition};
 
 /// Marker types for strongly-typed system window and overlay resolution.
 pub mod system_tags {
@@ -33,7 +36,7 @@ use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::components::{Component, ComponentAction, ComponentContext, Overlay, WmComponent};
-use crate::hitbox_registry::{ComponentOwner, HitboxRegistry};
+use crate::hitbox_registry::HitboxRegistry;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
@@ -1164,10 +1167,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
-        let pos = crate::mouse_coord::MousePosition {
+        let pos = MousePosition {
             column: col as i16,
             row: row as i16,
-            space: crate::mouse_coord::CoordSpace::Screen,
+            space: CoordSpace::Screen,
         };
         // Check if cursor is over any tiling split handle
         self.handles.iter().find(|h| pos.is_inside(h.rect)).cloned()
@@ -1180,9 +1183,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         &self,
     ) -> Option<crate::layout::floating::ResizeHandle<WindowKey>> {
         let (column, row) = self.hover?;
-        use crate::chrome::ChromeTarget;
-        use crate::hitbox_registry::ComponentOwner;
-        use crate::mouse_coord::{CoordSpace, MousePosition};
+
         let pos = MousePosition {
             column: column as i16,
             row: row as i16,
@@ -1312,7 +1313,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     #[allow(clippy::collapsible_if)]
     pub fn dispatch_mouse(
         &mut self,
-        event: &crate::events::WmEvent,
+        event: &term_wm_events::WmEvent,
     ) -> EventResult<(Option<WindowKey>, TermWmAction)> {
         use crate::events::WmEvent;
         let WmEvent::Mouse {
@@ -2414,8 +2415,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         actions: &mut VecDeque<(WindowKey, TermWmAction)>,
         ignored_overlay: Option<OverlayKey>,
     ) -> bool {
-        use crate::mouse_coord::{CoordSpace, MousePosition};
-
         let position = MousePosition {
             column: col as i16,
             row: row as i16,
@@ -4616,7 +4615,7 @@ mod tests {
         );
         wm.hitbox_registry_mut().pop_clip();
 
-        use crate::mouse_coord::{CoordSpace, MousePosition};
+        use term_wm_layout_engine::{CoordSpace, MousePosition};
         let screen = |col, row| MousePosition {
             column: col,
             row,
@@ -6612,10 +6611,10 @@ mod tests {
 
         // Verify at least one entry exists at the gap position.
         let gap = &handles[0].rect;
-        let pos = crate::mouse_coord::MousePosition {
+        let pos = term_wm_layout_engine::MousePosition {
             column: (gap.x + i32::from(gap.width) / 2) as i16,
             row: (gap.y + i32::from(gap.height) / 2) as i16,
-            space: crate::mouse_coord::CoordSpace::Screen,
+            space: term_wm_layout_engine::CoordSpace::Screen,
         };
         let hit = wm.hitbox_registry.hit_test(pos);
         assert!(hit.is_some(), "registry must contain an entry at split gap");

@@ -1,9 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use term_wm_layout_engine::LayoutRect;
+use term_wm_layout_engine::{LayoutRect, MousePosition};
 
 use crate::chrome::ChromeTarget;
-use crate::mouse_coord::MousePosition;
 use crate::window::{LayerId, OverlayKey, WindowKey};
 
 /// Globally unique opaque identifier for a clickable surface / widget.
@@ -356,7 +355,7 @@ impl Default for HitboxRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mouse_coord::CoordSpace;
+    use term_wm_layout_engine::CoordSpace;
 
     fn screen_pos(col: i16, row: i16) -> MousePosition {
         MousePosition {

@@ -38,9 +38,39 @@ pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 type StatusCallback = Arc<Mutex<Option<Box<dyn Fn(PtyStatus) + Send + Sync>>>>;
 
+/// Cloneable handle to the PTY input writer.
+///
+/// Writes to a PTY/ConPTY master are blocking synchronous I/O: when the
+/// kernel input buffer fills (fast typing, large paste, or a child that
+/// paused reading stdin), `write_all` blocks the calling thread. Callers
+/// running on an async runtime (e.g. the session server) must offload writes
+/// to a blocking thread (tokio's `spawn_blocking`) via this handle, so a
+/// full input buffer never starves a runtime worker. The internal mutex
+/// serializes concurrent writers and keeps each `write_bytes` call atomic.
+#[derive(Clone)]
+pub struct PtyWriter {
+    inner: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+impl PtyWriter {
+    fn new(writer: Box<dyn Write + Send>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(writer)),
+        }
+    }
+
+    /// Write bytes to the PTY master. Blocks until the bytes are accepted
+    /// (or the writer fails); call from a dedicated blocking thread.
+    pub fn write_bytes(&self, input: &[u8]) -> std::io::Result<()> {
+        let mut writer = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        writer.write_all(input)?;
+        writer.flush()
+    }
+}
+
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: PtyWriter,
     /// Raw bytes from the reader thread, kept for consumers that need
     /// unparsed output (e.g., session server forwarding).
     pending: Arc<Mutex<Vec<u8>>>,
@@ -113,10 +143,11 @@ impl Pty {
             .master
             .try_clone_reader()
             .map_err(|err| wrap_err("try_clone_reader", err))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|err| wrap_err("take_writer", err))?;
+        let writer = PtyWriter::new(
+            pair.master
+                .take_writer()
+                .map_err(|err| wrap_err("take_writer", err))?,
+        );
         let pending = Arc::new(Mutex::new(Vec::new()));
         let bytes_received = Arc::new(AtomicUsize::new(0));
         let last_bytes = Arc::new(Mutex::new(Vec::new()));
@@ -283,8 +314,14 @@ impl Pty {
     }
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
-        self.writer.write_all(input)?;
-        self.writer.flush()
+        self.writer.write_bytes(input)
+    }
+
+    /// Cloneable handle for offloading blocking PTY writes to a dedicated
+    /// thread (e.g. tokio's `spawn_blocking`). Never call the write from an
+    /// async worker directly: a full kernel input buffer blocks the thread.
+    pub fn writer_handle(&self) -> PtyWriter {
+        self.writer.clone()
     }
 
     pub fn write_str(&mut self, input: &str) -> std::io::Result<()> {
