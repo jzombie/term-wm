@@ -1,335 +1,149 @@
-# Plan: Add Channels to Term Server and Client
+# Plan: Merge Server + Client into Single Binary
 
 ## Summary
 
-Add a "channel" abstraction so the term server and client use namespaced channel names instead of raw socket paths. A channel represents a named IPC endpoint; the server binds to it and clients connect to it. The namespace lets you organize channels under logical paths (e.g., `workspace/session1`).
+Remove the standalone `term-session-server` binary. The `term-session-client` binary becomes `term-session` and handles both server daemon mode (`--server`) and client attach mode (default, auto-spawns server via `current_exe() --server`).
 
 ---
 
-## Current Architecture
+## Current State
 
-- **Server** (`crates/term-session-server/src/main.rs:8`): accepts `--socket <path>` (default `term-session.sock`), binds one `RpcIpcServer` to it
-- **Client** (`crates/term-session-client/src/main.rs:12`): accepts positional `<session_server_socket>` (default `term-session.sock`), connects as one of many clients
-- Both pass the raw socket path through to `run_server()`/`run_session()`
-- **Multi-client model:** One listening socket, many client connections. The kernel gives each accepted connection an independent fd with separate send/recv buffers. The `RpcIpcServer` assigns each a unique `conn_id`. Clients do **not** see each other's raw byte streams — only what the server intentionally broadcasts (PTY output to all subscribers, `OnPtyResized` individually per client).
-- No namespace or channel concept exists
+- **`crates/term-session-server/src/main.rs`** — standalone server binary with `--socket`/`--channel`, sidecar lock, stale cleanup, `run_server` call
+- **`crates/term-session-client/src/main.rs`** — standalone client binary with `--channel`, calls `connect_or_spawn_server()` + `run_session()`
+- **`crates/term-session-client/src/auto_spawn.rs`** — `spawn_detached_server` looks for sibling binary `term-session-server` via `current_exe().parent()`
+- `probe_ipc_endpoint` and `acquire_sidecar_lock` are **duplicated** in both the server `main.rs` and client `auto_spawn.rs`
 
 ---
 
-## Design
+## Changes
 
-### 0. Where to put ChannelResolver — architectural decision
+### 1. Delete `crates/term-session-server/src/main.rs`
 
-| Criterion | In muxio core crate | In term-session-muxio-service-definitions |
-|-----------|---------------------|-------------------------------------------|
-| **Reusability** | Any muxio service gets channel resolution for free | Tied to term-session services only |
-| **Standardization** | Centralized POSIX path safety (< 100 bytes, mode 0700) | Each service reinvents path rules |
-| **Dependency footprint** | Adds `dirs` + filesystem deps to core transport crate | Application-layer deps stay in app crate |
-| **Separation of concerns** | Transport/framing crate gains environment awareness | Core muxio stays pure transport |
-| **API complexity** | Needs `app_name: &str` param to avoid hardcoding "term-wm" | Can hardcode "term-wm" paths directly |
+The server crate becomes library-only. Its `lib.rs` still exports `run_server`, `SessionServerConfig`, `Session`.
 
-**Recommendation:** Keep `ChannelResolver` in `term-session-muxio-service-definitions` for now. muxio is a generic reusable RPC library; `dirs` and XDG path conventions are application-level concerns.
+### 2. Move `probe_ipc_endpoint` and `acquire_sidecar_lock` to shared location
 
-### 1. ChannelName and ChannelResolver in shared crate
-
-File: `crates/term-session-muxio-service-definitions/src/channel.rs` (NEW)
-
-**ChannelName** with input sanitization — reject path traversal (`..`, `/`, null bytes), only allow `[a-zA-Z0-9_-]`:
-
-```rust
-pub fn parse(input: &str) -> Result<Self> {
-    let input = input.trim();
-    let parts: Vec<&str> = input.split('/').collect();
-    let (ns, name) = match parts.as_slice() {
-        [name] => ("default", *name),
-        [ns, name] => (*ns, *name),
-        _ => return Err(...),
-    };
-    let is_valid = |s: &str| !s.is_empty()
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !is_valid(ns) || !is_valid(name) { return Err(...); }
-    Ok(Self { namespace: ns.to_string(), name: name.to_string() })
-}
-```
-
-**ChannelResolver** with **default dir** (with fallback for headless/CI), **path budget enforcement** (≤100 bytes), and **`0700` permissions**:
-
-```rust
-pub fn default_channels_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        dirs::data_local_dir().unwrap_or_else(|| std::env::temp_dir().join("term-wm"))
-            .join("channels")
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let uid = unsafe { libc::getuid() };
-        let base = dirs::data_dir().unwrap_or_else(|| {
-            PathBuf::from(format!("/tmp/term-wm-{}", uid))
-        });
-        base.join("term-wm").join("channels")
-    }
-}
-
-pub fn resolve(&self, channel: &ChannelName) -> Result<PathBuf> {
-    let ns_dir = self.base_dir.join(&channel.namespace);
-    fs::create_dir_all(&ns_dir)?;
-    #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&ns_dir, fs::Permissions::from_mode(0o700))?;
-    }
-    let socket_path = ns_dir.join(format!("{}.sock", channel.name));
-    let path_len = socket_path.to_string_lossy().as_bytes().len();
-    if path_len >= 100 {
-        return Err(anyhow!("Path ({path_len} bytes) exceeds POSIX 100-byte budget"));
-    }
-    Ok(socket_path)
-}
-```
-
-**Resolution scheme in practice:**
-- Linux: `$XDG_DATA_HOME/term-wm/channels/{namespace}/{name}.sock` → `~/.local/share/term-wm/channels/{ns}/{name}.sock` → `/tmp/term-wm-<uid>/term-wm/channels/{ns}/{name}.sock`
-- macOS: `~/Library/Application Support/com.term-wm/channels/{ns}/{name}.sock` → `/tmp/term-wm-<uid>/term-wm/channels/{ns}/{name}.sock`
-- Windows: `{FOLDERID_LocalAppData}/term-wm/channels/{ns}/{name}` → `{TMP}/term-wm/channels/{ns}/{name}`
-
-### 2. Auto-spawn pattern: client launches server on demand
-
-Core UX: the client resolves a channel name, probes the socket (platform-gated), and if no server is listening, spawns `term-session-server --channel <name>` as a detached background process.
-
-**Interaction pipeline:**
-
-```
-term-session-client --channel workspace/dev
-  │
-  ├── 1. Resolve "workspace/dev" → socket path
-  ├── 2. probe_ipc_endpoint(&socket_path)
-  │      ├── [OK] → Connect & run session
-  │      └── [ECONNREFUSED / ENOENT]
-  │             ├── 3. Spawn detached: term-session-server --channel workspace/dev
-  │             ├── 4. Poll (50ms loop, 3s timeout) — probe + child.try_wait()
-  │             └── 5. Connect & run session
-```
-
-**Platform-gated probe function** (`auto_spawn.rs`):
+Put them in `crates/term-session-muxio-service-definitions/src/channel.rs` as public functions, since they're channel-endpoint lifecycle utilities:
 
 ```rust
 #[cfg(unix)]
-fn probe_ipc_endpoint(path: &Path) -> bool {
-    use std::os::unix::net::UnixStream;
-    UnixStream::connect(path).is_ok()
-}
-
+pub fn probe_ipc_endpoint(path: &Path) -> bool { ... }
 #[cfg(windows)]
-fn probe_ipc_endpoint(path: &Path) -> bool {
-    // WinSock requires WSAStartup before any socket operations.
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Networking::WinSock::{
-        closesocket, connect, socket, WSAStartup, AF_UNIX, INVALID_SOCKET,
-        SOCKADDR_UN, SOCKET, WSADATA, SOCK_STREAM, WSACleanup,
-    };
-
-    let path16: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    if path16.len() > 108 {
-        return false;
-    }
-
-    unsafe {
-        let mut wsa_data: WSADATA = std::mem::zeroed();
-        if WSAStartup(0x0202, &mut wsa_data) != 0 {
-            return false;
-        }
-        let s: SOCKET = socket(AF_UNIX as i32, SOCK_STREAM as i32, 0);
-        if s == INVALID_SOCKET {
-            WSACleanup();
-            return false;
-        }
-        let mut addr: SOCKADDR_UN = std::mem::zeroed();
-        addr.sun_family = AF_UNIX as u16;
-        for (i, &b) in path.to_string_lossy().as_bytes().iter().take(107).enumerate() {
-            addr.sun_path[i] = b as i8;
-        }
-        let res = connect(s, &addr as *const _ as *const _, std::mem::size_of::<SOCKADDR_UN>() as i32);
-        closesocket(s);
-        WSACleanup();
-        res == 0
-    }
-}
+pub fn probe_ipc_endpoint(path: &Path) -> bool { ... }
+#[cfg(unix)]
+pub fn acquire_sidecar_lock(lock_path: &Path) -> io::Result<fs::File> { ... }
+#[cfg(windows)]
+pub fn acquire_sidecar_lock(lock_path: &Path) -> io::Result<fs::File> { ... }
 ```
 
-**Retain Child handle and monitor it during polling** — fail fast on premature exit:
+The definitions crate already has `libc` and `windows-sys` deps.
+
+Both `auto_spawn.rs` and the combined `main.rs` can import from there.
+
+### 3. Modify `crates/term-session-client/src/main.rs` — combined binary
+
+Add `--server` flag. In server mode, do what server main.rs did. In client mode, do what it does now.
 
 ```rust
-pub fn connect_or_spawn_server(channel: &ChannelName, resolver: &ChannelResolver) -> Result<PathBuf> {
+#[derive(Parser, Debug)]
+#[command(name = "term-session", about = "term-wm session manager")]
+struct Cli {
+    #[arg(short, long)]
+    channel: Option<String>,
+    #[arg(long)]
+    server: bool,
+    #[arg(long = "cols", default_value = "80")]
+    cols: u16,
+    #[arg(long = "rows", default_value = "24")]
+    rows: u16,
+    #[arg(num_args = 0..)]
+    cmd: Vec<String>,
+}
+
+fn run_server_mode(channel: &ChannelName, cli: &Cli) -> Result<(), ...> {
+    let resolver = ChannelResolver::new(ChannelResolver::default_channels_dir());
     let socket_path = resolver.resolve(channel)?;
-
-    if probe_ipc_endpoint(&socket_path) {
-        return Ok(socket_path);
+    let lock_path = socket_path.with_extension("sock.lock");
+    let _lock = acquire_sidecar_lock(&lock_path)?;
+    if socket_path.exists() && !probe_ipc_endpoint(&socket_path) {
+        fs::remove_file(&socket_path)?;
     }
-
-    let mut child = spawn_detached_server(channel)?;
-    let start = Instant::now();
-    let timeout = Duration::from_secs(3);
-    let poll_interval = Duration::from_millis(50);
-
-    while start.elapsed() < timeout {
-        if probe_ipc_endpoint(&socket_path) {
-            return Ok(socket_path);
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(anyhow!("Server exited prematurely during startup: {status}"));
-        }
-        thread::sleep(poll_interval);
-    }
-
-    Err(anyhow!("Timed out waiting for server on channel '{channel}'"))
-}
-```
-
-**Key details:**
-- Detach server with `stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())`
-- Windows: use `CREATE_NO_WINDOW` flag
-- **Binary resolution:** sibling binary (with platform EXE_SUFFIX) checked before `$PATH`:
-
-```rust
-fn spawn_detached_server(channel: &ChannelName) -> Result<Child> {
-    let binary_name = format!("term-session-server{}", std::env::consts::EXE_SUFFIX);
-    let server_binary = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join(&binary_name)))
-        .filter(|p| p.exists())
-        .unwrap_or_else(|| PathBuf::from(binary_name));
-
-    let mut cmd = Command::new(server_binary);
-    cmd.arg("--channel").arg(channel.to_string());
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    #[cfg(windows)] {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    cmd.spawn().map_err(|e| anyhow!("Failed to spawn server: {e}"))
-}
-```
-
-- **No client-side `unlink()`** — clients never delete socket files. See §3.
-
-**Environment inheritance:** Server exports `TERM_WM_CHANNEL="namespace/name"` into the spawned PTY child.
-
-**Files:**
-- `crates/term-session-client/src/auto_spawn.rs` — NEW module
-- `crates/term-session-client/src/lib.rs` — export auto_spawn module
-
-### 3. Server-side stale socket cleanup with sidecar lock
-
-File: `crates/term-session-server/src/main.rs`
-
-Platform-gated exclusive lock on `.sock.lock` file. Only the lock holder may `unlink()` the socket:
-
-```rust
-fn acquire_sidecar_lock(lock_path: &Path) -> Result<fs::File> {
-    let file = fs::OpenOptions::new().create(true).read(true).write(true).open(lock_path)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::io::AsRawFd;
-        let fd = file.as_raw_fd();
-        let res = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-        if res != 0 {
-            return Err(anyhow!("Another server is already running on this channel"));
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{
-            LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATE,
-        };
-        let handle = file.as_raw_handle() as _;
-        let mut overlapped = unsafe { std::mem::zeroed() };
-        let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATE;
-        let res = unsafe { LockFileEx(handle, flags, 0, 1, 0, &mut overlapped) };
-        if res == 0 {
-            return Err(anyhow!("Another server is already running on this channel"));
-        }
-    }
-
-    Ok(file)
-}
-
-// In main():
-let lock_path = socket_path.with_extension("sock.lock");
-let _lock = acquire_sidecar_lock(&lock_path)?;
-if socket_path.exists() && !probe_ipc_endpoint(&socket_path) {
-    fs::remove_file(&socket_path)?;
-}
-```
-
-Also: server's stale cleanup probe uses the same platform-gated `probe_ipc_endpoint` (shared via utility module or inline `#[cfg]`).
-
-Add `windows-sys` to workspace dependencies if not already present.
-
-### 4. Client CLI with env var fallback
-
-File: `crates/term-session-client/src/main.rs`
-
-No `default_value` — `Option<String>` enables `TERM_WM_CHANNEL` env var fallback:
-
-```rust
-#[arg(short, long)]
-channel: Option<String>,
-
-fn main() -> Result<()> {
-    let channel_input = cli.channel
-        .or_else(|| std::env::var("TERM_WM_CHANNEL").ok())
-        .unwrap_or_else(|| "default/main".to_string());
-    let channel = ChannelName::parse(&channel_input)?;
-    let socket_path = connect_or_spawn_server(&channel, &resolver)?;
-    let socket_str = socket_path.to_str()
-        .ok_or_else(|| anyhow!("Invalid UTF-8 in socket path"))?;
-    run_session(socket_str)?;
+    let config = SessionServerConfig {
+        channel: channel.clone(),
+        socket_path: socket_path.to_string_lossy().to_string(),
+        cmd: cli.cmd.clone(),
+        cols: cli.cols,
+        rows: cli.rows,
+    };
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(term_session_server::run_server(config))
+        .map_err(|e| io::Error::other(e.to_string()))?;
     Ok(())
 }
 ```
 
-### 5. Modify `run_server`
+### 4. Modify `crates/term-session-client/src/auto_spawn.rs`
 
-File: `crates/term-session-server/src/session_server.rs`
+`spawn_detached_server` re-executes `current_exe()` with `--server`:
 
-- `SessionServerConfig.socket_path` → `SessionServerConfig.channel: ChannelName`
-- `run_server()` resolves the channel name internally → keeps socket path for `RpcIpcServer`
+```rust
+fn spawn_detached_server(channel: &ChannelName) -> io::Result<Child> {
+    let bin = std::env::current_exe()?;
+    let mut cmd = Command::new(bin);
+    cmd.arg("--server").arg("--channel").arg(channel.to_string());
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)] { cmd.creation_flags(0x08000000); }
+    cmd.spawn()
+}
+```
 
-### 6. Modify `run_session`
+No more sibling binary discovery, no `EXE_SUFFIX` lookup.
 
-File: `crates/term-session-client/src/lib.rs`
+### 5. Rename binary from `term-session-client` to `term-session`
 
-- Keep signature accepting `&str` socket path — resolution is a CLI concern
+In `crates/term-session-client/Cargo.toml`, override the binary name:
 
-### 7. Tests
+```toml
+[[bin]]
+name = "term-session"
+path = "src/main.rs"
+```
 
-File: `tests/common/session.rs`
+### 6. Update `crates/term-session-client/Cargo.toml` — add server deps
 
-- `spawn_session()` can accept `ChannelName` and resolve to socket path
-- Use `tempfile::TempDir` as base directory in tests
+Add `term-session-server` and `tracing-subscriber` as dependencies (needed for server mode):
+
+```toml
+[dependencies]
+# ... existing ...
+term-session-server = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+tracing-subscriber = { workspace = true }
+```
+
+### 7. Remove duplicate `probe_ipc_endpoint` and `acquire_sidecar_lock` from `auto_spawn.rs`
+
+After moving to the definitions crate, import them:
+
+```rust
+use term_session_muxio_service_definitions::{
+    probe_ipc_endpoint, acquire_sidecar_lock, ...
+};
+```
 
 ---
 
-## Files to Modify
+## Files Modified
 
 | File | Change |
 |------|--------|
-| `crates/term-session-muxio-service-definitions/src/channel.rs` | **NEW** — `ChannelName` (sanitized parse), `ChannelResolver` (fallback dir, 0700 perms, path budget) |
-| `crates/term-session-muxio-service-definitions/src/lib.rs` | Add `mod channel;` and `pub use channel::*;` |
-| `crates/term-session-muxio-service-definitions/Cargo.toml` | Add `dirs` and `libc` dependencies |
-| `Cargo.toml` (workspace) | Add `dirs`, `libc`, and `windows-sys` (Win32_Foundation, Win32_Networking_WinSock, Win32_Storage_FileSystem, Win32_System_IO) workspace deps |
-| `crates/term-session-client/Cargo.toml` | Add `[target.'cfg(windows)'.dependencies] windows-sys` (workspace) |
-| `crates/term-session-server/Cargo.toml` | Add `[target.'cfg(windows)'.dependencies] windows-sys` (workspace) |
-| `crates/term-session-client/src/auto_spawn.rs` | **NEW** — `connect_or_spawn_server()` (platform-gated probe, retained Child handle, co-located binary first) |
-| `crates/term-session-client/src/lib.rs` | Export auto_spawn module |
-| `crates/term-session-server/src/main.rs` | `--socket` → `--channel`; sidecar lockfile for stale cleanup; export `TERM_WM_CHANNEL` env |
-| `crates/term-session-server/src/session.rs` | Include `TERM_WM_CHANNEL` in child PTY environment |
-| `crates/term-session-server/src/session_server.rs` | `socket_path` → `channel: ChannelName` in `SessionServerConfig`; resolve inside `run_server` |
-| `crates/term-session-client/src/main.rs` | Positional arg → `--channel` (Option<String> + env fallback); use `connect_or_spawn_server()` |
-| `tests/common/session.rs` | `spawn_session` adapts to use `ChannelName` |
+| `crates/term-session-server/src/main.rs` | **DELETE** |
+| `crates/term-session-muxio-service-definitions/src/channel.rs` | Add `probe_ipc_endpoint`, `acquire_sidecar_lock` (pub, platform-gated) |
+| `crates/term-session-client/src/main.rs` | Add `--server` flag; server mode calls `run_server` via tokio block_on |
+| `crates/term-session-client/src/auto_spawn.rs` | Use `current_exe() --server`; import probe/lock from definitions |
+| `crates/term-session-client/Cargo.toml` | Add `[[bin]] name = "term-session"`; add `term-session-server`, `tokio`, `tracing-subscriber` deps |
+| `Cargo.toml` (workspace) | Remove `term-session-server` from workspace member `[[bin]]` if listed (it's lib-only now) |
+| `.zed/tasks.json` | Update task name from `term-session-server` to `term-session --server` (optional) |
 
 ---
 
@@ -337,12 +151,15 @@ File: `tests/common/session.rs`
 
 ```bash
 cargo build --workspace
-cargo test --workspace
 
-# Manual smoke test
-./target/debug/term-session-server --channel default/test &
-./target/debug/term-session-client --channel default/test
+# Server daemon mode
+./target/debug/term-session --server --channel default/test &
+# Client attach mode (auto-spawns via current_exe() --server)
+./target/debug/term-session --channel default/test
 
-# Env var inheritance test
-TERM_WM_CHANNEL=workspace/dev ./target/debug/term-session-client  # no --channel flag
+# Env var fallback
+TERM_WM_CHANNEL=workspace/dev ./target/debug/term-session
+
+# Existing tests (use library, not binary)
+cargo test --test integration_session
 ```
