@@ -121,11 +121,11 @@ fn probe_ipc_endpoint(path: &Path) -> bool {
 
 #[cfg(windows)]
 fn probe_ipc_endpoint(path: &Path) -> bool {
-    // WinSock AF_UNIX: opening the NTFS reparse point succeeds on stale
-    // files too, so we must attempt an actual connect() via WinSock.
+    // WinSock requires WSAStartup before any socket operations.
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Networking::WinSock::{
-        connect, socket, AF_UNIX, SOCK_STREAM, SOCKET, INVALID_SOCKET, closesocket, SOCKADDR_UN,
+        closesocket, connect, socket, WSAStartup, AF_UNIX, INVALID_SOCKET,
+        SOCKADDR_UN, SOCKET, WSADATA, SOCK_STREAM, WSACleanup,
     };
 
     let path16: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
@@ -134,8 +134,13 @@ fn probe_ipc_endpoint(path: &Path) -> bool {
     }
 
     unsafe {
+        let mut wsa_data: WSADATA = std::mem::zeroed();
+        if WSAStartup(0x0202, &mut wsa_data) != 0 {
+            return false;
+        }
         let s: SOCKET = socket(AF_UNIX as i32, SOCK_STREAM as i32, 0);
         if s == INVALID_SOCKET {
+            WSACleanup();
             return false;
         }
         let mut addr: SOCKADDR_UN = std::mem::zeroed();
@@ -145,6 +150,7 @@ fn probe_ipc_endpoint(path: &Path) -> bool {
         }
         let res = connect(s, &addr as *const _ as *const _, size_of::<SOCKADDR_UN>() as i32);
         closesocket(s);
+        WSACleanup();
         res == 0
     }
 }
@@ -182,7 +188,28 @@ pub fn connect_or_spawn_server(channel: &ChannelName, resolver: &ChannelResolver
 **Key details:**
 - Detach server with `stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())`
 - Windows: use `CREATE_NO_WINDOW` flag
-- **Binary resolution:** `current_exe().parent()/term-session-server` checked before `$PATH` (prevent version mismatch + hijacking)
+- **Binary resolution:** sibling binary (with platform EXE_SUFFIX) checked before `$PATH`:
+
+```rust
+fn spawn_detached_server(channel: &ChannelName) -> Result<Child> {
+    let binary_name = format!("term-session-server{}", std::env::consts::EXE_SUFFIX);
+    let server_binary = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(&binary_name)))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from(binary_name));
+
+    let mut cmd = Command::new(server_binary);
+    cmd.arg("--channel").arg(channel.to_string());
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)] {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd.spawn().map_err(|e| anyhow!("Failed to spawn server: {e}"))
+}
+```
+
 - **No client-side `unlink()`** — clients never delete socket files. See §3.
 
 **Environment inheritance:** Server exports `TERM_WM_CHANNEL="namespace/name"` into the spawned PTY child.
@@ -251,13 +278,16 @@ No `default_value` — `Option<String>` enables `TERM_WM_CHANNEL` env var fallba
 #[arg(short, long)]
 channel: Option<String>,
 
-fn main() {
+fn main() -> Result<()> {
     let channel_input = cli.channel
         .or_else(|| std::env::var("TERM_WM_CHANNEL").ok())
         .unwrap_or_else(|| "default/main".to_string());
     let channel = ChannelName::parse(&channel_input)?;
     let socket_path = connect_or_spawn_server(&channel, &resolver)?;
-    run_session(&socket_path)?;
+    let socket_str = socket_path.to_str()
+        .ok_or_else(|| anyhow!("Invalid UTF-8 in socket path"))?;
+    run_session(socket_str)?;
+    Ok(())
 }
 ```
 
@@ -289,8 +319,8 @@ File: `tests/common/session.rs`
 |------|--------|
 | `crates/term-session-muxio-service-definitions/src/channel.rs` | **NEW** — `ChannelName` (sanitized parse), `ChannelResolver` (fallback dir, 0700 perms, path budget) |
 | `crates/term-session-muxio-service-definitions/src/lib.rs` | Add `mod channel;` and `pub use channel::*;` |
-| `crates/term-session-muxio-service-definitions/Cargo.toml` | Add `dirs` dependency |
-| `Cargo.toml` (workspace) | Add `dirs` workspace dep (if not present) |
+| `crates/term-session-muxio-service-definitions/Cargo.toml` | Add `dirs` and `libc` dependencies |
+| `Cargo.toml` (workspace) | Add `dirs` and `libc` workspace deps (if not present) |
 | `crates/term-session-client/src/auto_spawn.rs` | **NEW** — `connect_or_spawn_server()` (platform-gated probe, retained Child handle, co-located binary first) |
 | `crates/term-session-client/src/lib.rs` | Export auto_spawn module |
 | `crates/term-session-server/src/main.rs` | `--socket` → `--channel`; sidecar lockfile for stale cleanup; export `TERM_WM_CHANNEL` env |
