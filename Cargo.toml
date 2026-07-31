@@ -23,6 +23,7 @@ members = [
     "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-crossterm-adapter",
+    "crates/term-wm-events",
     "crates/term-wm-layout-engine",
     "crates/term-wm-pty-engine",
     "crates/term-wm-render",
@@ -84,6 +85,7 @@ term-wm = { path = ".", version = "0.9.0-test" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.9.0-test" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.9.0-test" }
 term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.9.0-test" }
+term-wm-events = { path = "crates/term-wm-events", version = "0.9.0-test" }
 term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.9.0-test" }
 term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.9.0-test" }
 term-wm-render = { path = "crates/term-wm-render", version = "0.9.0-test" }

@@ -1,5 +1,4 @@
-use crate::mouse_coord::MousePosition;
-use term_wm_layout_engine::LayoutRect;
+use term_wm_layout_engine::{CoordSpace, LayoutRect, MousePosition};
 
 // ============================================================================
 // Core-owned event types — NO crossterm dependency
@@ -329,7 +328,7 @@ pub fn core_event_to_wm(event: &Event) -> Option<WmEvent> {
             position: MousePosition {
                 column: mouse.column as i16,
                 row: mouse.row as i16,
-                space: crate::mouse_coord::CoordSpace::Screen,
+                space: CoordSpace::Screen,
             },
         }),
         Event::Resize(w, h) => Some(WmEvent::Resize(*w, *h)),

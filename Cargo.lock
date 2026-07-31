@@ -3165,6 +3165,7 @@ dependencies = [
  "slotmap",
  "smallvec",
  "strum",
+ "term-wm-events",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
  "term-wm-render",
@@ -3180,6 +3181,14 @@ dependencies = [
  "crossterm",
  "insta",
  "term-wm-core",
+]
+
+[[package]]
+name = "term-wm-events"
+version = "0.9.0-test"
+dependencies = [
+ "term-wm-layout-engine",
+ "term-wm-pty-engine",
 ]
 
 [[package]]
