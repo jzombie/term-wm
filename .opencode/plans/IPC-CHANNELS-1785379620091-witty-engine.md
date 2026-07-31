@@ -148,7 +148,7 @@ fn probe_ipc_endpoint(path: &Path) -> bool {
         for (i, &b) in path.to_string_lossy().as_bytes().iter().take(107).enumerate() {
             addr.sun_path[i] = b as i8;
         }
-        let res = connect(s, &addr as *const _ as *const _, size_of::<SOCKADDR_UN>() as i32);
+        let res = connect(s, &addr as *const _ as *const _, std::mem::size_of::<SOCKADDR_UN>() as i32);
         closesocket(s);
         WSACleanup();
         res == 0
@@ -320,7 +320,9 @@ File: `tests/common/session.rs`
 | `crates/term-session-muxio-service-definitions/src/channel.rs` | **NEW** — `ChannelName` (sanitized parse), `ChannelResolver` (fallback dir, 0700 perms, path budget) |
 | `crates/term-session-muxio-service-definitions/src/lib.rs` | Add `mod channel;` and `pub use channel::*;` |
 | `crates/term-session-muxio-service-definitions/Cargo.toml` | Add `dirs` and `libc` dependencies |
-| `Cargo.toml` (workspace) | Add `dirs` and `libc` workspace deps (if not present) |
+| `Cargo.toml` (workspace) | Add `dirs`, `libc`, and `windows-sys` (Win32_Foundation, Win32_Networking_WinSock, Win32_Storage_FileSystem, Win32_System_IO) workspace deps |
+| `crates/term-session-client/Cargo.toml` | Add `[target.'cfg(windows)'.dependencies] windows-sys` (workspace) |
+| `crates/term-session-server/Cargo.toml` | Add `[target.'cfg(windows)'.dependencies] windows-sys` (workspace) |
 | `crates/term-session-client/src/auto_spawn.rs` | **NEW** — `connect_or_spawn_server()` (platform-gated probe, retained Child handle, co-located binary first) |
 | `crates/term-session-client/src/lib.rs` | Export auto_spawn module |
 | `crates/term-session-server/src/main.rs` | `--socket` → `--channel`; sidecar lockfile for stale cleanup; export `TERM_WM_CHANNEL` env |
