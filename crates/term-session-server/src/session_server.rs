@@ -529,8 +529,13 @@ pub async fn run_server(
 
     // Wait for either the server to finish or the session to exit.
     let exit_code = tokio::select! {
-        result = server.serve(&socket_name) => {
-            result.map_err(|e| format!("serve: {e:?}"))?;
+        result = async {
+            server
+                .serve(&socket_name)
+                .await
+                .map_err(|e| format!("serve: {e:?}"))
+        } => {
+            result?;
             0
         }
         code = &mut exit_rx => {
