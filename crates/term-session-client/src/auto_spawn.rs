@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::io;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,10 +23,13 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
     if !cfg.cmd.is_empty() {
         cmd.arg("--").args(cfg.cmd);
     }
+    // All stdio is detached: a daemon must not rely on the parent reading its
+    // pipes. In particular, a piped stderr that is never drained lets the OS
+    // pipe buffer fill, blocking the server's stderr writes and deadlocking
+    // startup on every platform. Discard it instead.
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
-        // Keep stderr so startup failures (PTY spawn, socket bind) can be surfaced.
-        .stderr(Stdio::piped());
+        .stderr(Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -51,16 +54,6 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
         cmd.creation_flags(0x08000000);
     }
     cmd.spawn()
-}
-
-/// Read the dead server's captured stderr so the real failure reason is reported.
-fn child_stderr(child: &mut Child) -> String {
-    let Some(mut stderr) = child.stderr.take() else {
-        return String::new();
-    };
-    let mut buf = String::new();
-    let _ = stderr.read_to_string(&mut buf);
-    buf
 }
 
 /// Wait for a session server to become reachable on the channel, spawning one
@@ -94,15 +87,9 @@ pub fn connect_or_spawn_server(
             if probe_ipc_endpoint(channel) {
                 return Ok(socket_name);
             }
-            let stderr = child_stderr(&mut child);
-            let detail = if stderr.trim().is_empty() {
-                status.to_string()
-            } else {
-                format!("{status}: {}", stderr.trim())
-            };
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionRefused,
-                format!("Session server exited during startup ({detail})"),
+                format!("Session server exited during startup with status: {status}"),
             ));
         }
         thread::sleep(poll_interval);

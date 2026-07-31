@@ -26,6 +26,14 @@ const SESSION_ID: u64 = 1;
 /// Bounded input channel capacity — memory safety against extreme input bursts.
 const INPUT_CHANNEL_CAPACITY: usize = 128;
 
+/// Grace period to let the transport flush end-of-stream frames after the
+/// session exits, before the server process terminates.
+const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How often the output polling task wakes to re-check the session's exit
+/// status, as a fallback for a missed or raced PTY EOF notification.
+const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 pub struct SessionServerConfig {
     pub channel: ChannelName,
     pub cmd: Vec<String>,
@@ -456,12 +464,17 @@ pub async fn run_server(
     // Output polling via Notify — blocks until PTY produces output.
     // When the session exits, the exit code is sent back through this
     // channel so run_server can return it.
+    //
+    // A periodic timer also wakes the loop so a session exit is detected even
+    // when the reader thread's EOF/Exited notification is missed or raced.
     let (exit_tx, mut exit_rx) = oneshot::channel::<i32>();
     let st = Arc::clone(&state);
     tokio::spawn(async move {
         loop {
-            // Block until PTY actually produces output — 0 wakeups when idle
-            notify.notified().await;
+            tokio::select! {
+                _ = notify.notified() => {}
+                _ = tokio::time::sleep(SESSION_EXIT_POLL_INTERVAL) => {}
+            }
             let mut guard = st.lock().await;
             if guard.subscribers.is_empty() {
                 let mut exited = false;
@@ -520,7 +533,15 @@ pub async fn run_server(
             result.map_err(|e| format!("serve: {e:?}"))?;
             0
         }
-        code = &mut exit_rx => code.unwrap_or(0)
+        code = &mut exit_rx => {
+            // The polling task just queued the end-of-stream frames to each
+            // subscriber. The transport flushes them asynchronously, so give
+            // it a short grace period before the process exits — otherwise the
+            // frames are dropped with the runtime and the client never learns
+            // the session ended (it hangs waiting for output).
+            tokio::time::sleep(SESSION_EXIT_FLUSH_GRACE).await;
+            code.unwrap_or(0)
+        }
     };
 
     Ok(exit_code)

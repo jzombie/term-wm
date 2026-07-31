@@ -21,7 +21,8 @@ use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
-    OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    ChannelName, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, probe_ipc_endpoint,
 };
 use term_wm_core::events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
@@ -85,7 +86,6 @@ pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::i
 /// (CI, redirected stdio) simply no-op.
 #[cfg(windows)]
 fn disable_quick_edit() {
-    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::System::Console::{
         ENABLE_EXTENDED_FLAGS, ENABLE_QUICK_EDIT_MODE, GetConsoleMode, GetStdHandle,
         SetConsoleMode, STD_INPUT_HANDLE,
@@ -116,6 +116,13 @@ const PTY_OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const CLIPBOARD_CHANNEL_CAPACITY: usize = 64;
 /// Maximum buffered input events (covers paste bursts without over-allocating).
 const INPUT_CHANNEL_CAPACITY: usize = 64;
+
+/// How often the main loop wakes to check whether the server connection is
+/// still alive when no input or output is pending.
+const CONNECTION_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Number of connection-check wakeups between channel-endpoint liveness probes.
+const PROBE_INTERVAL_WAKEUPS: u32 = 5;
 
 /// Number of trailing bytes retained to detect OSC 52 clipboard sequences
 /// that straddle chunk boundaries.  8 bytes is enough to hold the longest
@@ -418,7 +425,13 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         render_frame(&mut out, screen, rows, cols, false)?;
     }
 
+    // The socket name doubles as the channel string; used as a liveness probe
+    // fallback so the client exits when the server dies even if the muxio
+    // transport never surfaces the disconnect (which can happen on any OS).
+    let channel = ChannelName::parse(socket_path).ok();
+
     let mut pending_input: Option<Event> = None;
+    let mut probe_wakeups = 0u32;
     loop {
         let mut force_render = false;
         let mut clear_display = false;
@@ -481,6 +494,24 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                             None
                         }
                     }
+                }
+                recv(crossbeam_channel::after(CONNECTION_CHECK_INTERVAL)) -> _ => {
+                    // Periodic wakeup so a lost connection (e.g. the server
+                    // exiting when the session ends) is noticed below even
+                    // when no input or PTY output ever arrives.
+                    probe_wakeups += 1;
+                    if probe_wakeups >= PROBE_INTERVAL_WAKEUPS {
+                        probe_wakeups = 0;
+                        // Liveness fallback: muxio's read loop does not always
+                        // surface a server disconnect. If the channel endpoint
+                        // no longer accepts connections, the server is gone.
+                        if let Some(ch) = channel.as_ref()
+                            && !probe_ipc_endpoint(ch)
+                        {
+                            return Err(io::Error::other("connection to session server lost"));
+                        }
+                    }
+                    None
                 }
             }
         };
