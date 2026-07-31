@@ -355,7 +355,7 @@ impl Default for HitboxRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mouse_coord::CoordSpace;
+    use term_wm_layout_engine::CoordSpace;
 
     fn screen_pos(col: i16, row: i16) -> MousePosition {
         MousePosition {

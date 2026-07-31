@@ -4615,7 +4615,7 @@ mod tests {
         );
         wm.hitbox_registry_mut().pop_clip();
 
-        use crate::mouse_coord::{CoordSpace, MousePosition};
+        use term_wm_layout_engine::{CoordSpace, MousePosition};
         let screen = |col, row| MousePosition {
             column: col,
             row,
@@ -6611,10 +6611,10 @@ mod tests {
 
         // Verify at least one entry exists at the gap position.
         let gap = &handles[0].rect;
-        let pos = crate::mouse_coord::MousePosition {
+        let pos = term_wm_layout_engine::MousePosition {
             column: (gap.x + i32::from(gap.width) / 2) as i16,
             row: (gap.y + i32::from(gap.height) / 2) as i16,
-            space: crate::mouse_coord::CoordSpace::Screen,
+            space: term_wm_layout_engine::CoordSpace::Screen,
         };
         let hit = wm.hitbox_registry.hit_test(pos);
         assert!(hit.is_some(), "registry must contain an entry at split gap");

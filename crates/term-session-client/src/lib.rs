@@ -22,10 +22,10 @@ use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
-use term_wm_events::{Event, KeyKind, KeyModifiers, MouseButton, MouseEventKind};
+use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
-use term_wm_pty_engine::input_encoding::mouse_event_to_bytes;
+use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
 use vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};
 
@@ -530,7 +530,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
                 {
-                    let bytes = key.to_pty_bytes(false);
+                    let bytes = key_to_bytes(key, false);
                     if !bytes.is_empty() {
                         let _ = pane.write_bytes(&bytes);
                     }
@@ -542,38 +542,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                         parser.screen().mouse_protocol_mode() != MouseProtocolMode::None
                     };
                     if mouse_active {
-                        let pty_mouse = term_wm_pty_engine::input_encoding::MouseEvent {
-                            kind: match mouse.kind {
-                                MouseEventKind::Press(btn) => term_wm_pty_engine::input_encoding::MouseEventKind::Press(match btn {
-                                    MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
-                                    MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
-                                    MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
-                                }),
-                                MouseEventKind::Release(btn) => term_wm_pty_engine::input_encoding::MouseEventKind::Release(match btn {
-                                    MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
-                                    MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
-                                    MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
-                                }),
-                                MouseEventKind::Drag(btn) => term_wm_pty_engine::input_encoding::MouseEventKind::Drag(match btn {
-                                    MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
-                                    MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
-                                    MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
-                                }),
-                                MouseEventKind::Moved => term_wm_pty_engine::input_encoding::MouseEventKind::Moved,
-                                MouseEventKind::ScrollUp => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollUp,
-                                MouseEventKind::ScrollDown => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollDown,
-                                MouseEventKind::ScrollLeft => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollLeft,
-                                MouseEventKind::ScrollRight => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollRight,
-                            },
-                            modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
-                                shift: mouse.modifiers.shift,
-                                control: mouse.modifiers.control,
-                                alt: mouse.modifiers.alt,
-                            },
-                            column: mouse.column,
-                            row: mouse.row,
-                        };
-                        let bytes = mouse_event_to_bytes(&pty_mouse, MouseProtocolEncoding::Sgr);
+                        let bytes = mouse_event_to_bytes(mouse, MouseProtocolEncoding::Sgr);
                         if !bytes.is_empty() {
                             let _ = pane.write_bytes(&bytes);
                         }
@@ -758,7 +727,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use term_wm_core::events::{KeyCode, KeyEvent, MouseButton, MouseEvent};
+    use term_wm_events::{KeyCode, KeyEvent, MouseButton, MouseEvent};
 
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,

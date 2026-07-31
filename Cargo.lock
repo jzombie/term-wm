@@ -3188,7 +3188,6 @@ name = "term-wm-events"
 version = "0.9.0-test"
 dependencies = [
  "term-wm-layout-engine",
- "term-wm-pty-engine",
 ]
 
 [[package]]
@@ -3207,6 +3206,7 @@ dependencies = [
  "ctrlc",
  "libc",
  "portable-pty",
+ "term-wm-events",
  "thiserror 2.0.19",
  "tracing",
  "vt100",

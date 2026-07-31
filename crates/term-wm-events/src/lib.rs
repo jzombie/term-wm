@@ -21,52 +21,6 @@ impl KeyEvent {
             kind,
         }
     }
-
-    /// Serialize this key event to the byte sequence to send to a PTY.
-    /// Shift+Tab produces `\x1b[Z` (CSI backtab) per ANSI terminal standard.
-    /// When `application_cursor_keys` is true (DECCKM / DECSET 1 active),
-    /// unmodified arrow keys emit SS3 sequences (`\eOA`) instead of CSI (`\e[A`).
-    pub fn to_pty_bytes(&self, application_cursor_keys: bool) -> Vec<u8> {
-        use term_wm_pty_engine::input_encoding::{
-            self, KeyCode as PtyKeyCode, KeyModifiers as PtyKeyModifiers, key_to_bytes,
-        };
-        let pty_key = input_encoding::KeyEvent {
-            code: match self.code {
-                KeyCode::Char(c) => PtyKeyCode::Char(c),
-                KeyCode::Enter => PtyKeyCode::Enter,
-                KeyCode::Tab => PtyKeyCode::Tab,
-                KeyCode::Backspace => PtyKeyCode::Backspace,
-                KeyCode::Esc => PtyKeyCode::Esc,
-                KeyCode::Left => PtyKeyCode::Left,
-                KeyCode::Right => PtyKeyCode::Right,
-                KeyCode::Up => PtyKeyCode::Up,
-                KeyCode::Down => PtyKeyCode::Down,
-                KeyCode::Home => PtyKeyCode::Home,
-                KeyCode::End => PtyKeyCode::End,
-                KeyCode::PageUp => PtyKeyCode::PageUp,
-                KeyCode::PageDown => PtyKeyCode::PageDown,
-                KeyCode::Delete => PtyKeyCode::Delete,
-                KeyCode::Insert => PtyKeyCode::Insert,
-                KeyCode::F(n) => PtyKeyCode::F(n),
-                // Media keys have no standard VT100/xterm escape sequence.
-                // Explicitly handled to prevent hitting an unmapped wildcard.
-                KeyCode::MediaPlayPause
-                | KeyCode::MediaStop
-                | KeyCode::MediaTrackNext
-                | KeyCode::MediaTrackPrevious => return Vec::new(),
-            },
-            modifiers: PtyKeyModifiers {
-                shift: self.modifiers.shift,
-                control: self.modifiers.control,
-                alt: self.modifiers.alt,
-            },
-        };
-        if pty_key.code == PtyKeyCode::Tab && pty_key.modifiers.shift {
-            b"\x1b[Z".to_vec()
-        } else {
-            key_to_bytes(&pty_key, application_cursor_keys)
-        }
-    }
 }
 
 /// Core-owned key code (independent of crossterm)
@@ -434,54 +388,5 @@ mod tests {
         let m = mouse(15, 8, MouseEventKind::Press(MouseButton::Left));
         let result = m.to_local_offset(make_screen(), 10, 5, 80, 24);
         assert_eq!(result.map(|r| (r.column, r.row)), Some((15, 8)));
-    }
-
-    // ── KeyEvent::to_pty_bytes ─────────────────────────────────────────
-
-    fn key(code: KeyCode, shift: bool) -> KeyEvent {
-        KeyEvent {
-            code,
-            modifiers: KeyModifiers {
-                shift,
-                control: false,
-                alt: false,
-            },
-            kind: KeyKind::Press,
-        }
-    }
-
-    #[test]
-    fn test_to_pty_bytes_csi_backtab() {
-        let ev = key(KeyCode::Tab, true);
-        assert_eq!(ev.to_pty_bytes(false), b"\x1b[Z");
-    }
-
-    #[test]
-    fn test_to_pty_bytes_standard_delegation() {
-        let ev = key(KeyCode::Char('a'), false);
-        assert_eq!(ev.to_pty_bytes(false), b"a");
-    }
-
-    #[test]
-    fn test_to_pty_bytes_media_keys_return_empty() {
-        for code in &[
-            KeyCode::MediaPlayPause,
-            KeyCode::MediaStop,
-            KeyCode::MediaTrackNext,
-            KeyCode::MediaTrackPrevious,
-        ] {
-            let ev = key(*code, false);
-            assert!(
-                ev.to_pty_bytes(false).is_empty(),
-                "Media key {:?} must produce empty bytes",
-                code
-            );
-        }
-    }
-
-    #[test]
-    fn test_to_pty_bytes_unmappable_returns_empty() {
-        let ev = key(KeyCode::MediaPlayPause, false);
-        assert!(ev.to_pty_bytes(false).is_empty());
     }
 }

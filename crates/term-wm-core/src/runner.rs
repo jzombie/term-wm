@@ -2,11 +2,10 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crate::events::{Event, KeyEvent, KeyKind, MouseEventKind};
+use term_wm_pty_engine::input_encoding::key_to_bytes;
 use term_wm_render::RenderTarget;
 
-use std::collections::VecDeque;
-
-use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
+use std::collections::VecDeque;use crate::actions::{ConfirmAction, EventResult, SystemTask, TermWmAction};
 use crate::components::Component;
 use crate::components::Overlay;
 use crate::components::SelectionStatus;
@@ -124,8 +123,10 @@ fn dispatch_action<
         TermWmAction::SendSuperKeyToWindow(target) => {
             let kb = app.wm().keybindings();
             if let Some(combo) = kb.first_combo(TermWmAction::OpenCommandPalette) {
-                let bytes =
-                    KeyEvent::new(combo.code, combo.mods, KeyKind::Press).to_pty_bytes(false);
+                let bytes = key_to_bytes(
+                    &KeyEvent::new(combo.code, combo.mods, KeyKind::Press),
+                    false,
+                );
                 if !bytes.is_empty() {
                     queue.push_back((target, TermWmAction::KeyToBytes(bytes)));
                 }
@@ -137,8 +138,10 @@ fn dispatch_action<
                 .keybindings()
                 .first_combo(TermWmAction::OpenCommandPalette)
             {
-                let bytes =
-                    KeyEvent::new(combo.code, combo.mods, KeyKind::Press).to_pty_bytes(false);
+                let bytes = key_to_bytes(
+                    &KeyEvent::new(combo.code, combo.mods, KeyKind::Press),
+                    false,
+                );
                 if !bytes.is_empty() {
                     queue.push_back((key, TermWmAction::KeyToBytes(bytes)));
                 }
