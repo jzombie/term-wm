@@ -62,6 +62,16 @@ struct Cli {
     cmd: Vec<String>,
 }
 
+### 3. Change `ChannelResolver::new` to accept `Option<PathBuf>`
+
+```rust
+pub fn new(base_dir: Option<PathBuf>) -> Self {
+    Self {
+        base_dir: base_dir.unwrap_or_else(Self::default_channels_dir),
+    }
+}
+```
+
 ### 3a. Update `SessionServerConfig` — remove `socket_path`, add `base_dir`
 
 `run_server` resolves the socket path internally:
@@ -77,7 +87,7 @@ pub struct SessionServerConfig {
 }
 
 pub async fn run_server(config: SessionServerConfig) -> Result<...> {
-    let resolver = ChannelResolver::new(config.base_dir)?;
+    let resolver = ChannelResolver::new(config.base_dir);
     let socket_path = resolver.resolve(&config.channel)?;
     // ... rest unchanged, binds to socket_path ...
 }
