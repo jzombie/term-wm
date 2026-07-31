@@ -10,8 +10,8 @@ use term_session_muxio_service_definitions::{
 mod common;
 use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin};
 use common::session::{
-    TEST_COLS, TEST_ROWS, connect_client_with_retry, generate_socket_path, get_bench_bin,
-    spawn_session, wait_for_output,
+    TEST_COLS, TEST_ROWS, connect_client_with_retry, get_bench_bin, spawn_session,
+    test_channel, wait_for_output,
 };
 use term_wm_pty_engine::clipboard::Osc52Extractor;
 
@@ -300,9 +300,12 @@ async fn session_child_exit_before_subscribe() {
 #[tokio::test]
 async fn session_reconnect() {
     let mock = get_mock_bin();
-    let (tempdir, socket_path) = generate_socket_path();
+    let (_tmpdir, channel, resolver) = test_channel();
+    let socket_path = resolver.resolve(&channel).unwrap();
+    let socket_str = socket_path.to_string_lossy().to_string();
     let config = term_session_server::SessionServerConfig {
-        socket_path: socket_path.clone(),
+        channel: channel.clone(),
+        socket_path: socket_str.clone(),
         cmd: vec![mock, "echo".into()],
         cols: TEST_COLS,
         rows: TEST_ROWS,
@@ -310,7 +313,7 @@ async fn session_reconnect() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client1 = connect_client_with_retry(&socket_path).await;
+    let client1 = connect_client_with_retry(&socket_str).await;
     let (_, mut reader1) = client1
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
         .await
@@ -324,7 +327,7 @@ async fn session_reconnect() {
     assert!(output1.windows(3).any(|w| w == b"one"));
     drop(client1);
 
-    let client2 = connect_client_with_retry(&socket_path).await;
+    let client2 = connect_client_with_retry(&socket_str).await;
     let (_, mut reader2) = client2
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
         .await
@@ -337,7 +340,7 @@ async fn session_reconnect() {
     let output2 = wait_for_output(&mut reader2, b"two", Duration::from_secs(2)).await;
     assert!(output2.windows(3).any(|w| w == b"two"));
 
-    drop(tempdir);
+    drop(_tmpdir);
 }
 
 #[tokio::test]
@@ -396,9 +399,12 @@ fn find_sgr_mouse_token_static() {
 #[serial]
 async fn session_multi_client_pty_constrained_to_smallest() {
     let mock = get_mock_bin();
-    let (tempdir, socket_path) = generate_socket_path();
+    let (_tmpdir, channel, resolver) = test_channel();
+    let socket_path = resolver.resolve(&channel).unwrap();
+    let socket_str = socket_path.to_string_lossy().to_string();
     let config = term_session_server::SessionServerConfig {
-        socket_path: socket_path.clone(),
+        channel: channel.clone(),
+        socket_path: socket_str.clone(),
         cmd: vec![mock, "echo".into()],
         cols: 120,
         rows: 40,
@@ -406,9 +412,9 @@ async fn session_multi_client_pty_constrained_to_smallest() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let c1 = connect_client_with_retry(&socket_path).await;
-    let c2 = connect_client_with_retry(&socket_path).await;
-    let c3 = connect_client_with_retry(&socket_path).await;
+    let c1 = connect_client_with_retry(&socket_str).await;
+    let c2 = connect_client_with_retry(&socket_str).await;
+    let c3 = connect_client_with_retry(&socket_str).await;
 
     let (pid1, _, _) = Spawn::call(&*c1, (None, 120u16, 40u16)).await.unwrap();
     let (pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
@@ -452,16 +458,19 @@ async fn session_multi_client_pty_constrained_to_smallest() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    drop(tempdir);
+    drop(_tmpdir);
 }
 
 #[tokio::test]
 #[serial]
 async fn session_multi_client_disconnect_expands_pty() {
     let mock = get_mock_bin();
-    let (tempdir, socket_path) = generate_socket_path();
+    let (_tmpdir, channel, resolver) = test_channel();
+    let socket_path = resolver.resolve(&channel).unwrap();
+    let socket_str = socket_path.to_string_lossy().to_string();
     let config = term_session_server::SessionServerConfig {
-        socket_path: socket_path.clone(),
+        channel: channel.clone(),
+        socket_path: socket_str.clone(),
         cmd: vec![mock, "echo".into()],
         cols: 120,
         rows: 40,
@@ -469,9 +478,9 @@ async fn session_multi_client_disconnect_expands_pty() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let c1 = connect_client_with_retry(&socket_path).await;
-    let c2 = connect_client_with_retry(&socket_path).await;
-    let c3 = connect_client_with_retry(&socket_path).await;
+    let c1 = connect_client_with_retry(&socket_str).await;
+    let c2 = connect_client_with_retry(&socket_str).await;
+    let c3 = connect_client_with_retry(&socket_str).await;
 
     let (pid1, _, _) = Spawn::call(&*c1, (None, 120u16, 40u16)).await.unwrap();
     let (_pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
@@ -521,16 +530,19 @@ async fn session_multi_client_disconnect_expands_pty() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    drop(tempdir);
+    drop(_tmpdir);
 }
 
 #[tokio::test]
 #[serial]
 async fn session_server_start_stop_cleanly() {
     let mock = get_mock_bin();
-    let (tempdir, socket_path) = generate_socket_path();
+    let (_tmpdir, channel, resolver) = test_channel();
+    let socket_path = resolver.resolve(&channel).unwrap();
+    let socket_str = socket_path.to_string_lossy().to_string();
     let config = term_session_server::SessionServerConfig {
-        socket_path: socket_path.clone(),
+        channel: channel.clone(),
+        socket_path: socket_str.clone(),
         cmd: vec![mock, "echo".into()],
         cols: 80,
         rows: 24,
@@ -538,9 +550,9 @@ async fn session_server_start_stop_cleanly() {
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = connect_client_with_retry(&socket_path).await;
+    let client = connect_client_with_retry(&socket_str).await;
     let sessions = ListSessions::call(&*client, ()).await.unwrap();
     assert_eq!(sessions.len(), 1);
 
-    drop(tempdir);
+    drop(_tmpdir);
 }

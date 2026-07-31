@@ -29,5 +29,8 @@ tracing = { workspace = true }
 unicode-width.workspace = true
 vt100 = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dev-dependencies]
 insta = { workspace = true }

@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+libc = { workspace = true }
 muxio-core = { workspace = true }
 muxio-rpc-service = { workspace = true }
 muxio-rpc-service-caller = { workspace = true }
@@ -22,3 +23,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 vt100 = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

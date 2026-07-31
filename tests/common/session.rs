@@ -5,30 +5,39 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muxio_tokio_rpc_ipc_client::RpcIpcClient;
-use term_session_server::SessionServerConfig;
-use term_session_server::run_server;
+use term_session_muxio_service_definitions::{ChannelName, ChannelResolver};
+use term_session_server::{SessionServerConfig, run_server};
 
 pub const TEST_COLS: u16 = 80;
 pub const TEST_ROWS: u16 = 24;
 pub const LONG_SLEEP_MS: u64 = 60000;
 
-#[cfg(unix)]
-pub fn generate_socket_path() -> (Option<tempfile::TempDir>, String) {
+pub fn test_channel() -> (tempfile::TempDir, ChannelName, ChannelResolver) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir
-        .path()
-        .join("term-wm-test.sock")
-        .to_string_lossy()
-        .to_string();
-    (Some(dir), path)
+    let resolver = ChannelResolver::new(dir.path().join("channels"));
+    let channel = ChannelName::parse("test/main").expect("test channel");
+    (dir, channel, resolver)
 }
 
-#[cfg(windows)]
-pub fn generate_socket_path() -> (Option<tempfile::TempDir>, String) {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    (None, format!(r"\\.\pipe\term-wm-test-session-{}", id))
+pub async fn spawn_server_for_channel(
+    cmd: Vec<String>,
+    cols: u16,
+    rows: u16,
+) -> (tempfile::TempDir, ChannelName, ChannelResolver, Arc<RpcIpcClient>) {
+    let (tmpdir, channel, resolver) = test_channel();
+    let socket_path = resolver.resolve(&channel).expect("resolve");
+    let socket_str = socket_path.to_string_lossy().to_string();
+    let config = SessionServerConfig {
+        channel: channel.clone(),
+        socket_path: socket_str.clone(),
+        cmd,
+        cols,
+        rows,
+    };
+    tokio::spawn(async move { run_server(config).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let client = connect_client_with_retry(&socket_str).await;
+    (tmpdir, channel, resolver, client)
 }
 
 pub fn get_bench_bin() -> PathBuf {
@@ -90,16 +99,19 @@ pub async fn spawn_session(
     cols: u16,
     rows: u16,
 ) -> (Arc<RpcIpcClient>, tempfile::TempDir) {
-    let (tempdir, socket_path) = generate_socket_path();
+    let (_tmpdir, channel, resolver) = test_channel();
+    let socket_path = resolver.resolve(&channel).expect("resolve socket path");
+    let socket_str = socket_path.to_string_lossy().to_string();
     let config = SessionServerConfig {
-        socket_path: socket_path.clone(),
+        channel: channel.clone(),
+        socket_path: socket_str.clone(),
         cmd,
         cols,
         rows,
     };
     tokio::spawn(async move { run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let client = connect_client_with_retry(&socket_path).await;
-    let dir = tempdir.unwrap_or_else(|| tempfile::tempdir().unwrap());
+    let client = connect_client_with_retry(&socket_str).await;
+    let dir = tempfile::tempdir().expect("tempdir");
     (client, dir)
 }

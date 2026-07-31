@@ -52,6 +52,7 @@ criterion = { version = "0.8.2", default-features = false }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
+dirs = "5.0"
 hostname = "0.4.2"
 indoc = "2.0.7"
 insta = "1.48.0"
@@ -97,6 +98,12 @@ unicode-width = "0.2.2"
 vt100 = "0.16.2"
 vte = "0.15.0"
 webbrowser = "1.2.1"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
 
 [[bin]]
 name = "term-wm"

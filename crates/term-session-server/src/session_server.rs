@@ -10,7 +10,7 @@ use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID,
+    ChannelName, CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID,
     SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
@@ -27,6 +27,7 @@ const SESSION_ID: u64 = 1;
 const INPUT_CHANNEL_CAPACITY: usize = 128;
 
 pub struct SessionServerConfig {
+    pub channel: ChannelName,
     pub socket_path: String,
     pub cmd: Vec<String>,
     pub cols: u16,
@@ -162,9 +163,17 @@ pub async fn run_server(
         } else {
             Some(config.cmd.clone())
         };
-        let session = Session::spawn(SESSION_ID, cmd, config.cols, config.rows)?;
+        let session = Session::spawn(
+            SESSION_ID,
+            cmd,
+            config.cols,
+            config.rows,
+            Some(&config.channel),
+        )?;
         st.set_session(session);
     }
+
+    let channel_id = config.channel.clone();
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let server = RpcIpcServer::new(Some(event_tx));
@@ -172,9 +181,11 @@ pub async fn run_server(
 
     // Register Spawn
     let st = Arc::clone(&state);
+    let ch = channel_id.clone();
     endpoint
         .register_prebuffered(Spawn::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
+            let ch = ch.clone();
             async move {
                 let mut guard = state.lock().await;
                 let (cmd, cols, rows) = Spawn::decode_request(&payload)
@@ -208,7 +219,7 @@ pub async fn run_server(
                         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 }
                 let id = SESSION_ID;
-                let session = Session::spawn(id, cmd, cols, rows)?;
+                let session = Session::spawn(id, cmd, cols, rows, Some(&ch))?;
                 guard.set_session(session);
                 // Enforce global geometric constraints on the newly instantiated PTY
                 guard.recalculate_pty_size();
@@ -487,7 +498,7 @@ pub async fn run_server(
         }
     });
 
-    tracing::info!("Session server listening on {}", config.socket_path);
+    tracing::info!("Session server listening on channel {}", config.channel);
 
     // Wait for either the server to finish or the session to exit.
     let exit_code = tokio::select! {
