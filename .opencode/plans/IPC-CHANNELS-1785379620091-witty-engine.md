@@ -52,6 +52,8 @@ struct Cli {
     channel: Option<String>,
     #[arg(long)]
     server: bool,
+    #[arg(long)]
+    base_dir: Option<PathBuf>,
     #[arg(long = "cols", default_value = "80")]
     cols: u16,
     #[arg(long = "rows", default_value = "24")]
@@ -60,8 +62,22 @@ struct Cli {
     cmd: Vec<String>,
 }
 
+// In main():
+let channel = ChannelName::parse(&channel_input)?;
+if cli.server {
+    run_server_mode(&channel, &cli)?;
+} else {
+    let resolver = ChannelResolver::new(cli.base_dir.clone());
+    let socket_path = connect_or_spawn_server(&channel, &resolver, cli.base_dir.as_deref())?;
+    let socket_str = socket_path.to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8"))?;
+    run_session(socket_str)?;
+}
+
 fn run_server_mode(channel: &ChannelName, cli: &Cli) -> Result<(), ...> {
-    let resolver = ChannelResolver::new(ChannelResolver::default_channels_dir());
+    tracing_subscriber::fmt::init();
+
+    let resolver = ChannelResolver::new(cli.base_dir.clone());
     let socket_path = resolver.resolve(channel)?;
     let lock_path = socket_path.with_extension("sock.lock");
     let _lock = acquire_sidecar_lock(&lock_path)?;
@@ -87,10 +103,13 @@ fn run_server_mode(channel: &ChannelName, cli: &Cli) -> Result<(), ...> {
 `spawn_detached_server` re-executes `current_exe()` with `--server`:
 
 ```rust
-fn spawn_detached_server(channel: &ChannelName) -> io::Result<Child> {
+fn spawn_detached_server(channel: &ChannelName, base_dir: Option<&Path>) -> io::Result<Child> {
     let bin = std::env::current_exe()?;
     let mut cmd = Command::new(bin);
     cmd.arg("--server").arg("--channel").arg(channel.to_string());
+    if let Some(dir) = base_dir {
+        cmd.arg("--base-dir").arg(dir);
+    }
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)] { cmd.creation_flags(0x08000000); }
     cmd.spawn()
@@ -121,7 +140,24 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 tracing-subscriber = { workspace = true }
 ```
 
-### 7. Remove duplicate `probe_ipc_endpoint` and `acquire_sidecar_lock` from `auto_spawn.rs`
+### 7. Update `connect_or_spawn_server` to forward `base_dir`
+
+```rust
+pub fn connect_or_spawn_server(
+    channel: &ChannelName,
+    resolver: &ChannelResolver,
+    base_dir: Option<&Path>,
+) -> io::Result<PathBuf> {
+    let socket_path = resolver.resolve(channel)?;
+    if probe_ipc_endpoint(&socket_path) {
+        return Ok(socket_path);
+    }
+    let mut child = spawn_detached_server(channel, base_dir)?;
+    // ... polling loop same as before ...
+}
+```
+
+### 8. Remove duplicate `probe_ipc_endpoint` and `acquire_sidecar_lock` from `auto_spawn.rs`
 
 After moving to the definitions crate, import them:
 
@@ -140,7 +176,7 @@ use term_session_muxio_service_definitions::{
 | `crates/term-session-server/src/main.rs` | **DELETE** |
 | `crates/term-session-muxio-service-definitions/src/channel.rs` | Add `probe_ipc_endpoint`, `acquire_sidecar_lock` (pub, platform-gated) |
 | `crates/term-session-client/src/main.rs` | Add `--server` flag; server mode calls `run_server` via tokio block_on |
-| `crates/term-session-client/src/auto_spawn.rs` | Use `current_exe() --server`; import probe/lock from definitions |
+| `crates/term-session-client/src/auto_spawn.rs` | `spawn_detached_server(channel, base_dir)`; `connect_or_spawn_server(channel, resolver, base_dir)`; import probe/lock from definitions |
 | `crates/term-session-client/Cargo.toml` | Add `[[bin]] name = "term-session"`; add `term-session-server`, `tokio`, `tracing-subscriber` deps |
 | `Cargo.toml` (workspace) | Remove `term-session-server` from workspace member `[[bin]]` if listed (it's lib-only now) |
 | `.zed/tasks.json` | Update task name from `term-session-server` to `term-session --server` (optional) |
