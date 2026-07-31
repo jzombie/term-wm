@@ -8,14 +8,29 @@ Add a "channel" abstraction so the term server and client use namespaced channel
 
 ## Current Architecture
 
-- **Server** (`crates/term-session-server/src/main.rs:8`): accepts `--socket <path>` (default `term-session.sock`)
-- **Client** (`crates/term-session-client/src/main.rs:12`): accepts positional `<session_server_socket>` (default `term-session.sock`)
+- **Server** (`crates/term-session-server/src/main.rs:8`): accepts `--socket <path>` (default `term-session.sock`), binds one `RpcIpcServer` to it
+- **Client** (`crates/term-session-client/src/main.rs:12`): accepts positional `<session_server_socket>` (default `term-session.sock`), connects as one of many clients
 - Both pass the raw socket path through to `run_server()`/`run_session()`
+- **Multi-client model:** One listening socket, many client connections. The kernel gives each accepted connection an independent fd with separate send/recv buffers. The `RpcIpcServer` assigns each a unique `conn_id`. Clients do **not** see each other's raw byte streams — only what the server intentionally broadcasts (PTY output to all subscribers, `OnPtyResized` individually per client).
 - No namespace or channel concept exists
 
 ---
 
 ## Design
+
+### 0. Where to put ChannelResolver — architectural decision
+
+Two options with a clear trade-off:
+
+| Criterion | In muxio core crate | In term-session-muxio-service-definitions |
+|-----------|---------------------|-------------------------------------------|
+| **Reusability** | Any muxio service gets channel resolution for free | Tied to term-session services only |
+| **Standardization** | Centralized POSIX path safety (< 100 bytes, mode 0700) | Each service reinvents path rules |
+| **Dependency footprint** | Adds `dirs` + filesystem deps to core transport crate | Application-layer deps stay in app crate |
+| **Separation of concerns** | Transport/framing crate gains environment awareness | Core muxio stays pure transport |
+| **API complexity** | Needs `app_name: &str` param to avoid hardcoding "term-wm" | Can hardcode "term-wm" paths directly |
+
+**Recommendation:** Keep `ChannelResolver` in `term-session-muxio-service-definitions` for now. muxio is a generic reusable RPC library; `dirs` and XDG path conventions are application-level concerns. A namespaced `ChannelName` (the data type) could migrate into muxio-core later if a second service needs it.
 
 ### 1. Add channel types to existing shared crate
 
