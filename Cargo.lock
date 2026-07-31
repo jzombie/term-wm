@@ -3060,7 +3060,6 @@ dependencies = [
  "term-wm-pty-engine",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "unicode-width",
  "vt100",
  "windows-sys 0.59.0",
@@ -3083,7 +3082,6 @@ dependencies = [
 name = "term-session-server"
 version = "0.8.20-alpha"
 dependencies = [
- "clap",
  "libc",
  "muxio-core",
  "muxio-rpc-service",
@@ -3095,7 +3093,6 @@ dependencies = [
  "term-wm-pty-engine",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "vt100",
  "windows-sys 0.59.0",
 ]
