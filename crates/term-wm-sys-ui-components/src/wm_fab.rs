@@ -202,10 +202,10 @@ mod tests {
         assert_eq!(fab.fab_rect().y, 23);
         // Hitbox should be registered
         assert!(!reg.is_empty());
-        let result = reg.hit_test(term_wm_core::mouse_coord::MousePosition {
+        let result = reg.hit_test(term_wm_layout_engine::MousePosition {
             column: 78,
             row: 23,
-            space: term_wm_core::mouse_coord::CoordSpace::Screen,
+            space: term_wm_layout_engine::CoordSpace::Screen,
         });
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, id);

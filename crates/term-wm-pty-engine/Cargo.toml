@@ -13,6 +13,7 @@ base64 = { workspace = true }
 ctrlc = { workspace = true }
 libc = { workspace = true }
 portable-pty = { workspace = true }
+term-wm-events = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }
