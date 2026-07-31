@@ -3180,7 +3180,7 @@ version = "0.9.0-test"
 dependencies = [
  "crossterm",
  "insta",
- "term-wm-core",
+ "term-wm-events",
 ]
 
 [[package]]
