@@ -1,6 +1,6 @@
 [package]
 name = "term-session"
-description = "IPC-based persistent session for term-wm. For internal usage."
+description = "Generic terminal session reproducer: run a PTY in a detached server and attach any number of terminals, locally or over SSH."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

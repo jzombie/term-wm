@@ -1,6 +1,6 @@
 [package]
 name = "term-session-client"
-description = "IPC-based session client for term-wm. For internal usage."
+description = "Terminal client that attaches to a term-session server and renders a live, duplicated PTY session."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "term-session-server"
-description = "IPC-based session server for term-wm. For internal usage."
+description = "Detached server that hosts one PTY per channel and broadcasts it to every attached terminal."
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
