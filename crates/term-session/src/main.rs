@@ -1,7 +1,7 @@
 use std::io;
 
+use crate::auto_spawn::{ServerSpawnConfig, connect_or_spawn_server};
 use clap::Parser;
-use term_session_client::auto_spawn::{ServerSpawnConfig, connect_or_spawn_server};
 use term_session_client::run_session;
 use term_session_muxio_service_definitions::ChannelName;
 use term_session_server::SessionServerConfig;

@@ -1669,9 +1669,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-core"
-version = "0.12.0-test"
+version = "0.14.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d135001ecb4ea7e72ebdb7912ef9b685271768ee36bb5817c8d535cf15c65e5"
+checksum = "b78a6c3873637a2511268e89d4b1f0d55fe9f39fdc85284f8b6c87ab4aef1e1f"
 dependencies = [
  "chrono",
  "once_cell",
@@ -1680,9 +1680,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service"
-version = "0.12.0-test"
+version = "0.14.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9277aabb5c33bccf2f0b07ea742718bd25e0af8473c9cc1a27b60fe0348813e2"
+checksum = "ef143c5ce85afa3f5e84a3177bc8908731b79433825a140c282d45e204ee9a88"
 dependencies = [
  "bitcode",
  "num_enum",
@@ -1691,9 +1691,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-caller"
-version = "0.12.0-test"
+version = "0.14.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c73c43cf7fff5ad16ca2f884f0870dec214cd12764b211ab324eaf976ab50a26"
+checksum = "669c5345e1ffff00c883a380d080010679c1cbd458810c79faf485d9a2b6194d"
 dependencies = [
  "async-trait",
  "futures",
@@ -1705,9 +1705,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-endpoint"
-version = "0.12.0-test"
+version = "0.14.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0aae63540593fe22fd8679e1bc188009de230340e18ff136e5c3caa65b685b52"
+checksum = "18dc0c8619a81e135f37786f08e5cab09e0be79d8556281f9642e6b86ae39a6d"
 dependencies = [
  "async-trait",
  "bitcode",
@@ -1721,9 +1721,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-mpsc-adapter"
-version = "0.12.0-test"
+version = "0.14.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc35bdb51c1535e29e48a2ac00678ec44d3e7751e6d575cf02fc8219f3a32313"
+checksum = "afe9b231fd23cffd2c4aed13fce61bcef64175b4eee679ee97e06287c4adc596"
 dependencies = [
  "async-trait",
  "muxio-core",
@@ -1736,9 +1736,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-client"
-version = "0.12.0-test"
+version = "0.14.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caf1d83afc1423611c136cb11fd39ab9ce24587610c690c6404c76f67441ea9a"
+checksum = "0ff12804942e841395cdd5740a47e9602f9df02869ec68fc1a93144c055f261e"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1754,9 +1754,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-server"
-version = "0.12.0-test"
+version = "0.14.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a4be5d78b692de769eee823cb8d20bbff431f13736a0d22eb8a9e5a70311e47"
+checksum = "1ec21be99fb2ff29405fedeb10dd67594fdc8034cf2c0b9d9857d1839756b6e0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3027,10 +3027,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "term-session-client"
+name = "term-session"
 version = "0.8.20-alpha"
 dependencies = [
  "clap",
+ "libc",
+ "term-session-client",
+ "term-session-muxio-service-definitions",
+ "term-session-server",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "term-session-client"
+version = "0.8.20-alpha"
+dependencies = [
  "crossbeam-channel",
  "crossterm",
  "insta",
@@ -3043,7 +3055,6 @@ dependencies = [
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
  "term-session-muxio-service-definitions",
- "term-session-server",
  "term-wm-core",
  "term-wm-crossterm-adapter",
  "term-wm-pty-engine",

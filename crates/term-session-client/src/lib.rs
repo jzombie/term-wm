@@ -1,4 +1,3 @@
-pub mod auto_spawn;
 mod remote_pane;
 
 pub use remote_pane::RemotePane;

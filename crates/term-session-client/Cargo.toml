@@ -16,7 +16,6 @@ path = "src/main.rs"
 windows-sys = { workspace = true }
 
 [dependencies]
-clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste"] }
 libc = { workspace = true }
@@ -28,7 +27,6 @@ muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
 portable-pty = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
-term-session-server = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-crossterm-adapter = { workspace = true }
 term-wm-pty-engine = { workspace = true }
