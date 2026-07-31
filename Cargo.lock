@@ -3101,11 +3101,13 @@ dependencies = [
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
  "term-session-muxio-service-definitions",
+ "term-session-server",
  "term-wm-core",
  "term-wm-crossterm-adapter",
  "term-wm-pty-engine",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "unicode-width",
  "vt100",
  "windows-sys 0.59.0",
@@ -3123,6 +3125,7 @@ dependencies = [
  "dirs",
  "libc",
  "muxio-rpc-service",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

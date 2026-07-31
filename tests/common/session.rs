@@ -14,7 +14,7 @@ pub const LONG_SLEEP_MS: u64 = 60000;
 
 pub fn test_channel() -> (tempfile::TempDir, ChannelName, ChannelResolver) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let resolver = ChannelResolver::new(dir.path().join("channels"));
+    let resolver = ChannelResolver::new(Some(dir.path().join("channels")));
     let channel = ChannelName::parse("test/main").expect("test channel");
     (dir, channel, resolver)
 }
@@ -29,7 +29,7 @@ pub async fn spawn_server_for_channel(
     let socket_str = socket_path.to_string_lossy().to_string();
     let config = SessionServerConfig {
         channel: channel.clone(),
-        socket_path: socket_str.clone(),
+        base_dir: Some(tmpdir.path().join("channels")),
         cmd,
         cols,
         rows,
@@ -99,12 +99,12 @@ pub async fn spawn_session(
     cols: u16,
     rows: u16,
 ) -> (Arc<RpcIpcClient>, tempfile::TempDir) {
-    let (_tmpdir, channel, resolver) = test_channel();
+    let (tmpdir, channel, resolver) = test_channel();
     let socket_path = resolver.resolve(&channel).expect("resolve socket path");
     let socket_str = socket_path.to_string_lossy().to_string();
     let config = SessionServerConfig {
         channel: channel.clone(),
-        socket_path: socket_str.clone(),
+        base_dir: Some(tmpdir.path().join("channels")),
         cmd,
         cols,
         rows,

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
@@ -10,8 +11,8 @@ use portable_pty::PtySize;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    ChannelName, CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
+    ChannelName, ChannelResolver, CloseSession, ListSessions, OnPtyResized, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -28,7 +29,7 @@ const INPUT_CHANNEL_CAPACITY: usize = 128;
 
 pub struct SessionServerConfig {
     pub channel: ChannelName,
-    pub socket_path: String,
+    pub base_dir: Option<PathBuf>,
     pub cmd: Vec<String>,
     pub cols: u16,
     pub rows: u16,
@@ -153,6 +154,9 @@ type SharedState = Arc<Mutex<ServerState>>;
 pub async fn run_server(
     config: SessionServerConfig,
 ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let resolver = ChannelResolver::new(config.base_dir.clone());
+    let socket_path = resolver.resolve(&config.channel)?;
+
     let notify = Arc::new(Notify::new());
     let state: SharedState = Arc::new(Mutex::new(ServerState::new(notify.clone())));
 
@@ -501,8 +505,9 @@ pub async fn run_server(
     tracing::info!("Session server listening on channel {}", config.channel);
 
     // Wait for either the server to finish or the session to exit.
+    let socket_str = socket_path.to_string_lossy();
     let exit_code = tokio::select! {
-        result = server.serve(&config.socket_path) => {
+        result = server.serve(&socket_str) => {
             result.map_err(|e| format!("serve: {e:?}"))?;
             0
         }
