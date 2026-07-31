@@ -32,45 +32,45 @@ Two options with a clear trade-off:
 
 **Recommendation:** Keep `ChannelResolver` in `term-session-muxio-service-definitions` for now. muxio is a generic reusable RPC library; `dirs` and XDG path conventions are application-level concerns. A namespaced `ChannelName` (the data type) could migrate into muxio-core later if a second service needs it.
 
-### 1. Add channel types to existing shared crate
+### 1. ChannelName and ChannelResolver in shared crate
 
-Put `ChannelName` and `ChannelResolver` into `crates/term-session-muxio-service-definitions/` — the crate already shared by both server and client. No new crate needed.
+File: `crates/term-session-muxio-service-definitions/src/channel.rs` (NEW)
+
+`ChannelName` with **input sanitization** — reject path traversal (`..`, `/`, null bytes), only allow `[a-zA-Z0-9_-]`:
 
 ```rust
-// crates/term-session-muxio-service-definitions/src/channel.rs
-
-/// A namespaced channel identifier, e.g. "default/main" or "user/work"
-pub struct ChannelName {
-    pub namespace: String,
-    pub name: String,
-}
-
-/// Resolves ChannelName to a transport-specific address (socket path).
-/// Uses a configurable base directory (~/.local/share/term-wm/channels/ by default).
-pub struct ChannelResolver {
-    base_dir: PathBuf,
-}
-
-impl ChannelResolver {
-    /// Create resolver rooted at `base_dir/channels/`
-    pub fn new(base_dir: Option<PathBuf>) -> Self;
-
-    /// Resolve "namespace/name" -> "{base_dir}/{namespace}/{name}.sock"
-    pub fn resolve(&self, channel: &ChannelName) -> PathBuf;
-
-    /// Parse "namespace/name" from a CLI string
-    pub fn parse(input: &str) -> Result<ChannelName>;
+pub fn parse(input: &str) -> Result<Self> {
+    let input = input.trim();
+    let parts: Vec<&str> = input.split('/').collect();
+    let (ns, name) = match parts.as_slice() {
+        [name] => ("default", *name),
+        [ns, name] => (*ns, *name),
+        _ => return Err(...),
+    };
+    let is_valid = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !is_valid(ns) || !is_valid(name) { return Err(...); }
+    Ok(Self { namespace: ns.to_string(), name: name.to_string() })
 }
 ```
 
-**Resolution scheme:** The channel name `namespace/name` maps to `{base_dir}/channels/{namespace}/{name}.sock`. On macOS/Linux this is a Unix domain socket; on Windows a named pipe with a similar path-based convention.
+`ChannelResolver` with **path budget enforcement** ($\le 100$ bytes) and **`0700` permissions**:
 
-**Reasonable defaults (using `dirs` crate for platform paths):**
-- Linux: `$XDG_DATA_HOME/term-wm/channels/` (falls back to `~/.local/share/term-wm/channels/`)
-- macOS: `~/Library/Application Support/com.term-wm/channels/`
-- Windows: `{FOLDERID_LocalAppData}/term-wm/channels/`
-
-Add `dirs` to workspace deps and `term-session-muxio-service-definitions`.
+```rust
+pub fn resolve(&self, channel: &ChannelName) -> Result<PathBuf> {
+    let ns_dir = self.base_dir.join("channels").join(&channel.namespace);
+    fs::create_dir_all(&ns_dir)?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&ns_dir, fs::Permissions::from_mode(0o700))?;
+    }
+    let socket_path = ns_dir.join(format!("{}.sock", channel.name));
+    let path_len = socket_path.to_string_lossy().as_bytes().len();
+    if path_len >= 100 {
+        return Err(anyhow!("Path ({path_len} bytes) exceeds POSIX 100-byte budget"));
+    }
+    Ok(socket_path)
+}
+```
 
 ### 2. Auto-spawn pattern: client launches server on demand
 
@@ -85,47 +85,66 @@ term-session-client --channel workspace/dev
   ├── 2. Probe: UnixStream::connect(socket_path)
   │      ├── [OK] → Connect & run session
   │      └── [ECONNREFUSED / ENOENT]
-  │             ├── 3. unlink() stale socket if present
-  │             ├── 4. Spawn detached: term-session-server --channel workspace/dev
-  │             ├── 5. Poll socket until ready (50ms loop, 3s timeout)
-  │             └── 6. Connect & run session
+  │             ├── 3. Spawn detached: term-session-server --channel workspace/dev
+  │             ├── 4. Poll socket until ready (50ms loop, 3s timeout)
+  │             └── 5. Connect & run session
 ```
+
+**CRITICAL: No client-side `unlink()`** — clients must never delete socket files. See §3 for server-side stale cleanup with exclusive lock.
 
 **Key details:**
 - Detach server with `stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())`
 - Windows: use `CREATE_NO_WINDOW` flag to suppress console popup
-- Server binary resolution: check `$PATH` first, fall back to `current_exe()/../term-session-server`
+- **Binary resolution:** Always prefer `current_exe().parent()/term-session-server` over `$PATH` (prevent version mismatch + hijacking)
 
 **Environment inheritance:** The server should export `TERM_WM_CHANNEL="namespace/name"` into the spawned PTY child process so that any nested `term-session-client` calls inside that shell auto-inherit the channel.
-
-**Stale socket cleanup:** On startup, the server probes the socket path — if `connect()` yields `ECONNREFUSED`, `unlink()` the stale file before binding.
 
 **Files:**
 - `crates/term-session-client/src/auto_spawn.rs` — **NEW**, module with `connect_or_spawn_server()`
 - `crates/term-session-client/src/lib.rs` — export the auto-spawn module
 
-### 3. Modify the server CLI
+### 3. Server-side stale socket cleanup with exclusive lock
 
 File: `crates/term-session-server/src/main.rs`
 
-- Replace `--socket <PATH>` with `--channel <NAMESPACE/NAME>` (default: `default/main`)
-- Add stale socket cleanup on startup
-- Export `TERM_WM_CHANNEL` in the spawned PTY session's environment
-- `SessionServerConfig` field changes: `socket_path: String` → `channel: ChannelName`
+Use a **sidecar lockfile** (`.sock.lock`) with `flock(LOCK_EX | LOCK_NB)` to guarantee single-instance safety. Only the lock holder may `unlink()` the socket:
 
-### 4. Modify `run_server`
+```rust
+let lock_path = socket_path.with_extension("sock.lock");
+let lock_file = fs::OpenOptions::new().create(true).read(true).write(true).open(&lock_path)?;
+let fd = lock_file.as_raw_fd();
+if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    return Err("Another server is already running on this channel");
+}
+// Only now: safe to unlink stale socket
+if socket_path.exists() && UnixStream::connect(&socket_path).is_err() {
+    fs::remove_file(&socket_path)?;
+}
+```
+
+### 4. Client CLI with env var fallback (no `default_value`)
+
+File: `crates/term-session-client/src/main.rs`
+
+Use `Option<String>` — no `default_value` — so absent `--channel` can fall through to `TERM_WM_CHANNEL` env var:
+
+```rust
+#[arg(short, long)]
+channel: Option<String>,
+
+// In main():
+let channel_input = cli.channel
+    .or_else(|| std::env::var("TERM_WM_CHANNEL").ok())
+    .unwrap_or_else(|| "default/main".to_string());
+let channel = ChannelName::parse(&channel_input)?;
+```
+
+### 5. Modify `run_server`
 
 File: `crates/term-session-server/src/session_server.rs`
 
 - `SessionServerConfig.socket_path` → `SessionServerConfig.channel: ChannelName`
 - `run_server()` resolves the channel name internally → keeps socket path for `RpcIpcServer`
-
-### 5. Modify the client CLI
-
-File: `crates/term-session-client/src/main.rs`
-
-- Replace positional `<session_server_socket>` with `--channel <NAMESPACE/NAME>` (default: `default/main`)
-- Use `connect_or_spawn_server()` to auto-launch if needed
 
 ### 6. Modify `run_session`
 
@@ -147,16 +166,16 @@ File: `tests/common/session.rs`
 
 | File | Change |
 |------|--------|
-| `crates/term-session-muxio-service-definitions/src/channel.rs` | **NEW** — `ChannelName`, `ChannelResolver` |
+| `crates/term-session-muxio-service-definitions/src/channel.rs` | **NEW** — `ChannelName` (sanitized parse), `ChannelResolver` (0700 perms, path budget) |
 | `crates/term-session-muxio-service-definitions/src/lib.rs` | Add `mod channel;` and `pub use channel::*;` |
 | `crates/term-session-muxio-service-definitions/Cargo.toml` | Add `dirs` dependency |
 | `Cargo.toml` (workspace) | Add `dirs` workspace dep (if not present) |
-| `crates/term-session-client/src/auto_spawn.rs` | **NEW** — `connect_or_spawn_server()` |
+| `crates/term-session-client/src/auto_spawn.rs` | **NEW** — `connect_or_spawn_server()` (no client-side unlink; co-located binary first) |
 | `crates/term-session-client/src/lib.rs` | Export auto_spawn module |
-| `crates/term-session-server/src/main.rs` | `--socket` → `--channel`; stale socket cleanup; export `TERM_WM_CHANNEL` env |
+| `crates/term-session-server/src/main.rs` | `--socket` → `--channel` (no default_value); sidecar lockfile for stale cleanup; export `TERM_WM_CHANNEL` env |
 | `crates/term-session-server/src/session.rs` | Include `TERM_WM_CHANNEL` in child PTY environment |
 | `crates/term-session-server/src/session_server.rs` | `socket_path` → `channel: ChannelName` in `SessionServerConfig`; resolve inside `run_server` |
-| `crates/term-session-client/src/main.rs` | Positional arg → `--channel`; use `connect_or_spawn_server()` |
+| `crates/term-session-client/src/main.rs` | Positional arg → `--channel` (Option<String> + env fallback); use `connect_or_spawn_server()` |
 | `tests/common/session.rs` | `spawn_session` adapts to use `ChannelName` |
 
 ---
@@ -170,4 +189,7 @@ cargo test --workspace
 # Manual smoke test
 ./target/debug/term-session-server --channel default/test &
 ./target/debug/term-session-client --channel default/test
+
+# Env var inheritance test
+TERM_WM_CHANNEL=workspace/dev ./target/debug/term-session-client  # no --channel flag
 ```
