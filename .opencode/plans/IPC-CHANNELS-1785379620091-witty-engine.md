@@ -57,10 +57,18 @@ pub fn parse(input: &str) -> Result<Self> {
 ```rust
 pub fn default_channels_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
-    let base = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir);
+    {
+        dirs::data_local_dir().unwrap_or_else(|| std::env::temp_dir().join("term-wm"))
+            .join("channels")
+    }
     #[cfg(not(target_os = "windows"))]
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    base.join("term-wm").join("channels")
+    {
+        let uid = unsafe { libc::getuid() };
+        let base = dirs::data_dir().unwrap_or_else(|| {
+            PathBuf::from(format!("/tmp/term-wm-{}", uid))
+        });
+        base.join("term-wm").join("channels")
+    }
 }
 
 pub fn resolve(&self, channel: &ChannelName) -> Result<PathBuf> {
@@ -80,8 +88,8 @@ pub fn resolve(&self, channel: &ChannelName) -> Result<PathBuf> {
 ```
 
 **Resolution scheme in practice:**
-- Linux: `$XDG_DATA_HOME/term-wm/channels/{namespace}/{name}.sock` → `~/.local/share/term-wm/channels/{ns}/{name}.sock` → `/tmp/term-wm/channels/{ns}/{name}.sock`
-- macOS: `~/Library/Application Support/com.term-wm/channels/{ns}/{name}.sock` → `/tmp/term-wm/channels/{ns}/{name}.sock`
+- Linux: `$XDG_DATA_HOME/term-wm/channels/{namespace}/{name}.sock` → `~/.local/share/term-wm/channels/{ns}/{name}.sock` → `/tmp/term-wm-<uid>/term-wm/channels/{ns}/{name}.sock`
+- macOS: `~/Library/Application Support/com.term-wm/channels/{ns}/{name}.sock` → `/tmp/term-wm-<uid>/term-wm/channels/{ns}/{name}.sock`
 - Windows: `{FOLDERID_LocalAppData}/term-wm/channels/{ns}/{name}` → `{TMP}/term-wm/channels/{ns}/{name}`
 
 ### 2. Auto-spawn pattern: client launches server on demand
@@ -113,7 +121,32 @@ fn probe_ipc_endpoint(path: &Path) -> bool {
 
 #[cfg(windows)]
 fn probe_ipc_endpoint(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok()
+    // WinSock AF_UNIX: opening the NTFS reparse point succeeds on stale
+    // files too, so we must attempt an actual connect() via WinSock.
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Networking::WinSock::{
+        connect, socket, AF_UNIX, SOCK_STREAM, SOCKET, INVALID_SOCKET, closesocket, SOCKADDR_UN,
+    };
+
+    let path16: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    if path16.len() > 108 {
+        return false;
+    }
+
+    unsafe {
+        let s: SOCKET = socket(AF_UNIX as i32, SOCK_STREAM as i32, 0);
+        if s == INVALID_SOCKET {
+            return false;
+        }
+        let mut addr: SOCKADDR_UN = std::mem::zeroed();
+        addr.sun_family = AF_UNIX as u16;
+        for (i, &b) in path.to_string_lossy().as_bytes().iter().take(107).enumerate() {
+            addr.sun_path[i] = b as i8;
+        }
+        let res = connect(s, &addr as *const _ as *const _, size_of::<SOCKADDR_UN>() as i32);
+        closesocket(s);
+        res == 0
+    }
 }
 ```
 
