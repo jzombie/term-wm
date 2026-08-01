@@ -1,193 +1,85 @@
-
 # term-wm
 
-[![made-with-rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![CodeQL][codeql-badge]][codeql-page] [![Dependabot][dependabot-badge]][dependabot-page] [![Coverage][coveralls-badge]][coveralls-page]
-
-**WORK IN PROGRESS. API SUBJECT TO CHANGE.**
-
-A cross-platform terminal multiplexer, window manager, and [Ratatui](https://crates.io/crates/ratatui) framework with a message-passing component model, event loop, and runtime.
-
-It is controllable via mouse and keyboard and works the same over SSH, Mac, Linux, and Windows.
+[![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)](#)
+[![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](#)
+[![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white)](#)
+<br>
+[![Made with Rust](https://img.shields.io/badge/Made%20with-Rust-orange?style=flat-square)](#)
+[![crates.io](https://img.shields.io/crates/v/term-wm.svg?style=flat-square)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](#)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](#)
 
 <div align="center">
-  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.8.12-alpha-mac.png?raw=true" alt="term-wm v0.8.12-alpha on macOS" /><br />
-  <em>pictured: term-wm v0.8.12-alpha on macOS</em>
+  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.0-alpha-mac.png?raw=true" alt="term-wm v0.9.0-alpha on macOS" /><br />
+  <em>pictured: term-wm v0.9.0-alpha on macOS</em>
 </div>
 
-`term-wm` serves two distinct purposes:
+**term-wm** is a modular, high-performance window manager and multiplexer that operates entirely within your terminal emulator. 
 
-- **[For Users](#for-users-the-window-manager):** A standalone, keyboard-driven window manager for your terminal shell.
-- **[For Developers](#for-developers-the-library):** A reusable library of TUI primitives for building window-managed Ratatui applications.
+Designed for Linux, macOS, and Windows, it brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line. Whether you require mathematically precise tiling for development workflows or overlapping floating windows with mouse support, `term-wm` delivers a native window management experience without requiring a display server.
 
-## Design Philosophy: Retro-Modern
+---
 
-`term-wm` is heavily inspired by the utilitarian beauty of **90's Unix user interfaces** (like [CDE](https://en.wikipedia.org/wiki/Common_Desktop_Environment)) and the cooperative tiling of **Windows 1.0**.
+## System Requirements & Compatibility
 
-It bridges the gap between standard terminal multiplexers and full desktop environments by adapting GUI metaphors to the command line.
+`term-wm` is designed to be highly resilient, running anywhere a standard terminal environment is available, but relies on modern terminal standards for its optimal presentation.
 
-Working with the terminal grid, the project aims to provide a rich window management experience despite the architectural constraints of a text-based terminal. Since terminals lack pixel-perfect positioning and rely on a rigid character cell grid, `term-wm` employs creative layout algorithms to make borders, resizing, and overlapping layers feel fluid and natural, even within the strict boundaries of ANSI/VT standards.
+* **Colors:** Truecolor (24-bit) support is highly recommended. The application will gracefully degrade its color palette in 256-color or 16-color environments, but UI themes and drop shadows are designed against 24-bit depth.
+* **Unicode & Fonts:** Requires a UTF-8 compatible environment and a font capable of rendering standard Unicode box-drawing characters to properly construct window borders and layout splits.
+* **Linux Virtual Terminals (TTY):** `term-wm` is fully usable in raw Linux VTs (e.g., accessed via `Ctrl+Alt+F1`). While the core window management and multiplexing logic remains 100% functional, visual presentation will look significantly different due to the kernel framebuffer's strict font and color limitations.
+* **Non-Standard OS Installs:** Minimal or headless OS installations must ensure a valid `terminfo` database is present and that the `LANG` environment variable is correctly set to a UTF-8 locale to prevent layout corruption.
 
-## For Users: The Window Manager
+See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for full compatibility details.
 
-As a standalone application, `term-wm` allows you to manage multiple shell sessions, panes, and floating windows with a philosophy centered on **zero-conflict key bindings** with your running applications.
+## Architecture & Core Capabilities
 
-### The "No-Conflict" Philosophy (The `Esc` Super Key)
+`term-wm` is engineered with a strict modular architecture, separating core domain logic from presentation. It features an advanced layout engine, a dedicated frame-pacing rendering pipeline via [Ratatui](https://ratatui.rs/), and a comprehensive suite of terminal UI components.
 
-Unlike other multiplexers that require complex prefix chords (like `Ctrl+b`), `term-wm` uses `Esc` as a context-aware modifier. This ensures that sub-shells and embedded apps (like `vim`, `tmux`, `screen`, etc.) retain their own keybindings without fighting the window manager.
+* **Hybrid Layout Engine:** Seamlessly mix Binary Space Partitioning (BSP) and N-ary tree tiling with a free-floating window layer. Floating windows support mouse-driven repositioning, edge-snapping, and Z-index drop shadows. 
+* **Adaptive Viewports:** Quickly switch to **Maximized** mode to fill the workspace with the focused pane, or engage **Monocle** mode to view a single window full-screen—ideal for narrow viewports or mobile SSH sessions.
+* **Detachable Sessions (via `term-session`):** `term-wm` is a pure layout and rendering engine. To achieve persistent, detachable sessions that survive the UI lifecycle, `term-wm` (or any child application) must be executed within the companion [`term-session`](https://crates.io/crates/term-session) daemon.
+* **Performance & Rendering:** The Core Engine generates a Z-ordered draw plan on every frame. A dedicated frame pacer targets a smooth 60 FPS, while a power profile tracker dynamically scales down the frame rate during idle periods to preserve battery life.
 
-> _Should_ the `Esc` key need to be sent to a child window, pressing `Esc` twice (double-`Esc`) will route it to the window as a single key press.
+## The "No-Conflict" Philosophy (`Ctrl+A` Super Key)
 
-Per-window **direct mode** (toggled via the `[D]` header button) disables all WM key interception, including `Esc`, so keyboard-driven apps receive every keystroke unfiltered. Mouse interaction and window chrome (resize, drag) continue to work.
+Traditional terminal multiplexers often collide with the keybindings of the applications running inside them. `term-wm` is deliberately **minimally invasive**: its keybindings primarily listen for the `Ctrl+A` Super Key plus a small set of scrollback navigation keys, and pass everything else straight through to the running application.
 
-> _In direct mode the double-`Esc` behavior is inverted_ — a single `Esc` is deferred, and a second `Esc` opens the WM overlay.
+* **The Super Key:** The default modifier is `Ctrl+A` (configurable via `KeyBindings`).
+* **Scrollback Keys:** Outside of Direct Mode, the WM also intercepts `PageUp` / `PageDown` / `Home` / `End` (no modifier) for scrollback when a window has scrollback available; arrow keys and other navigation fall through to the child application.
+* **Command Palette:** Press `Ctrl+A` to open the central Command Palette overlay. This fuzzy-searchable menu (powered by `nucleo` with exponential decay scoring for recency) is the primary method for executing actions, opening windows, and altering layouts.
+* **Window Navigation:** While the palette is open, press `Tab` or `Shift+Tab` to instantly cycle focus between active windows. Press `Enter` to activate the selected command.
+* **Key Passthrough:** Pressing `Ctrl+A` while the palette is already open immediately sends the `Ctrl+A` keystroke to the focused child application (`SendSuperKeyToFocusedWindow`).
 
-| Context         | Action         | Behavior                                                                 |
-|-----------------|----------------|--------------------------------------------------------------------------|
-| App Focused     | Tap Esc once   | Enters WM Mode. An overlay appears; keys now control the window manager. |
-| WM Mode         | Tap Esc once   | Dismisses overlay; focus returns to the app.                             |
-| Default         | Double-tap Esc | Routes a single `Esc` through to the focused child window.               |
-| Direct Mode     | Type normally  | All keystrokes, including `Esc`, pass through to the terminal.           |
-| Direct Mode     | Tap Esc once   | Deferred; countdown shown in panel.                                      |
-| Direct Mode     | Double-tap Esc | Opens WM overlay (inverted double-Esc).                                  |
+## Automatic Direct Mode
 
+`term-wm` features zero-configuration input routing. **Direct Mode is automatic.** Driven by the `DirectInputTracker`, `term-wm` continuously monitors the PTY state. When a child application (such as `vim`, `emacs`, or `tmux`) requests the **alternate screen buffer**, enables **mouse tracking**, or defines **custom scroll margins**, the window manager automatically steps out of the way. 
 
-## For Developers: The Library
+All keyboard and mouse events pass through to the application unfiltered, with zero latency. A brief notification toast appears to indicate the transition. The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
 
-`term-wm` exports its core logic as a crate, allowing you to build complex terminal user interface (TUI) applications without reinventing view navigation or layout engines.
+## Window Snapping with Preview
 
-`term-wm` handles the internals of Ratatui's [Immediate Mode Rendering](https://ratatui.rs/concepts/rendering/) — your components are pure functions of their own state (`render(&self, ...)`), while `term-wm` manages the draw cycle, frame pacing, event routing, focus, and the `Component` lifecycle (`handle_events` → `update` → `render`).
+Floating windows support mouse-driven snapping with a live **ghost preview**. While dragging a window by its title bar, hovering over a snap target shows a dashed outline with a shaded fill and a label describing the pending action.
 
-### Operation Modes
+* **Snap targets:** screen edges (`snap to edge`), screen corners (`snap to corner`), and the top edge (`maximize`).
+* **Auto-snap countdown:** if the pointer leaves the screen area while a snap target is active, the window snaps automatically after a short countdown (default **2 seconds**, configurable via `drag_snap_timeout`). Releasing the button over the target also snaps immediately.
+* **Micro-positioning:** to place a window at a precise position, float it first, move it where you want, then tile it.
 
-The library provides two presets via `WmConfig`:
+## Configuration & Customization
 
-- **`WmConfig::standalone()`** — Full window manager with chrome, panel, floating windows, overlays, and WM mode toggle. Used by the `term-wm` binary.
-- **`WmConfig::embedded()`** — Minimal mode: no floating window management features by default. Designed for embedding term-wm components inside another application.
+`term-wm` provides an extensive configuration system to tailor the environment to your workflow:
 
-### Integration
+* **Action Layers:** Customize keybindings across distinct contextual layers (Global, Command Palette, and Help Overlay).
+* **Theming:** Fully customizable color palettes for all UI components, borders, and system chrome.
+* **Feature Flags:** Toggle system chrome (top/bottom panels), enable/disable clipboard synchronization, toggle mouse capture, and control aesthetic features like floating window drop shadows.
 
-By using `term-wm` primitives, your application gains:
+## Project Origins & Developer API
 
-- Standardized focus cycles.
-- Z-ordering for floating components.
-- A pre-built "Command Palette" pattern for global actions.
+`term-wm` initially began as a distinct application before its underlying rendering and window management mechanics were extracted into a general-purpose multiplexer. Because the system is built as a collection of decoupled crates, its core layout engine and UI components can theoretically be embedded into other Ratatui applications. 
 
-## Build & Installation
-
-### Requirements
-
-- If building from source: [Rust toolchain (stable)](https://rust-lang.org/tools/install/)
-- A terminal emulator supporting Raw Mode and standard ANSI escape sequences (most terminal emulators support this including Windows 11 Command Prompt, macOS, and Ubuntu).
-
-### Building from Source
-
-```bash
-git clone https://github.com/jzombie/term-wm.git
-cd term-wm
-cargo build --release
-```
-
-_There is also a published Rust crate at: https://crates.io/crates/term-wm_
-
-### Running from Source
-
-The easiest way to run the latest build is via [Cargo](https://rust-lang.org/tools/install/), which handles platform differences automatically:
-
-```bash
-cargo run --release
-```
-
-### Installing from Source
-
-To install `term-wm` as an executable system command, you can install it directly to your system.
-
-```bash
-cargo install --path .
-```
-
-**To uninstall:**
-
-```bash
-cargo uninstall term-wm
-```
-
-## Performance & Benchmarking
-
-The project emphasizes high-throughput rendering. Included in the repository is [term-bench](./crates/term-bench/), a tool designed to stress-test terminal emulators and window managers.
-
-**1. Standalone (Native Terminal Performance)**
-
-```bash
-cargo run -p term-bench --release -- --duration 15 --fps 120
-```
-
-**2. Managed (Inside term-wm)** This launches the window manager and immediately feeds the benchmark into the first pane.
-
-```bash
-cargo run --release -- "./target/release/term-bench --duration 15 --fps 120"
-```
-
-_The benchmark reports frame pacing, render times (avg/1% lows), and cell-update throughput._
-
-### Power-Aware Rendering
-
-`term-wm` includes an automatic power profiling system that adjusts the event-loop poll interval based on user activity and PTY data flow, reducing CPU usage when idle:
-
-- **Interactive** (~120 fps, 8ms interval) — active when keyboard input was received within the last 100ms.
-- **Streaming** (~60 fps, 16ms interval) — active when PTY data is flowing (dirty windows pending render) or input was received within the last 500ms.
-- **PowerSaver** (blocks on channel, 3600s interval, default) — no input and no dirty windows; the event loop blocks on the channel with no CPU burn.
-
-The active profile is derived by `UnifiedEventSource::current_profile()` which calls `profile_from_activity(last_event_at, has_dirty_windows)`. The runner detects changes via `PowerProfileTracker` and propagates the new profile to `WindowManager` each frame. The bottom panel receives profile changes via `ComponentAction::SetPowerProfile`. Developers can override `current_profile()` on custom `EventSource` implementations.
-
-#### Low-Level Kernel Sleep & Hardware Interrupt Mechanics
-
-When the system satisfies the criteria for `PowerSaver` mode, user-space execution code ceases entirely, shifting execution weight directly down to the operating system kernel and physical hardware interrupts via a highly coordinated multi-layered synchronization layer:
-
-1. **User-Space Thread Parking (`futex`):** When the main thread calls `self.rx.recv_timeout()` inside `UnifiedEventSource::poll`, it delegates to the concurrency primitives of the crossbeam channel selector. Following a brief spin-lock phase to catch high-frequency back-to-back entries without context switching, the thread invokes an operating system thread-parking mechanic. On Linux, this resolves to a `futex` system call: `syscall(SYS_futex, &lock_address, FUTEX_WAIT_PRIVATE, expected_val, &timeout)`.
-
-2. **Kernel Suspension (0% CPU Burn):** The Linux kernel scheduler takes the main thread out of the CPU core's active execution run-queue and parks it in a passive wait-queue tied to that lock memory address, shifting the task state to `TASK_INTERRUPTIBLE`. At this point, the application consumes exactly 0% CPU cycles and is completely bypassed during standard scheduler cycles.
-
-3. **Hardware Interrupt & PTY Cascade:** When a user initiates hardware input (e.g., striking a key or moving a mouse), the device asserts a physical interrupt request line on the Advanced Programmable Interrupt Controller (APIC), forcing the CPU to branch to the kernel's Interrupt Descriptor Table (IDT). The kernel's input driver processes the raw device packets and pipes the character bytes into the target pseudoterminal (`PTY`) master/slave ring buffer.
-
-4. **Asynchronous Unblock:** The presence of new data in the PTY buffer triggers an active wake signal on the file descriptor being monitored via `epoll_wait`/`poll` by the background `crossterm-input` thread. This background thread awakens, parses the ANSI escape bytes into a core event structure, and drops it into the crossbeam channel via `input_tx.send()`. Recognizing that the primary event loop thread is parked, the channel primitive executes a `FUTEX_WAKE_PRIVATE` system call, shifting the main loop thread's task state back to `TASK_RUNNING` to resume instruction execution.
-
-Additionally, the runner bridges the scheduler's task deadlines into the event source via `set_max_sleep_duration()`. When a background task (e.g. a `SuperPassthrough` timeout, `DragSnap` timer) is scheduled, the runner pushes the task deadline from the `TaskScheduler` into the event source, which clamps its `poll_interval()` against it. This ensures PowerSaver's 3600s interval never blocks past a pending task deadline — the event loop wakes at exactly the right moment without busy-waiting.
-
-#### The Immediate-Mode Visual Phase Lag Illusion
-
-Due to the constraints of an immediate-mode rendering architecture, monitoring the power state via on-screen indicators (such as the status panel or debug log window) reveals a constant "Streaming" text pattern during complete idleness. This is an expected artifact of loop phase ordering, not a failure of the power manager:
-
-1. **Render Pass Execution:** The runner executes an active frame cycle and invokes `output.draw()`. The layout components query the window manager's text configurations while the global profile variable still evaluates to `Streaming`, rasterizing the yellow status indicator text bytes into the cell character grid matrix.
-
-2. **State Consumption & Calibration:** Immediately *after* the frame buffer is successfully drawn and committed, `flush_state_changes()` triggers. It executes `driver.take_dirty_windows()` to flush update vectors and evaluates `current_profile()`. Finding the inactivity thresholds crossed, it mutates the authoritative profile variable down to `PowerSaver`.
-
-3. **Instant Suspension:** The loop boundary yields control back to `EventLoop::run`, which immediately queries `self.driver.poll(poll_interval)`. Since the profile was just scaled down to `PowerSaver`, the main execution thread immediately executes its futex system wait call and drops into deep kernel sleep *before another drawing frame can render*.
-
-Consequently, the terminal cell matrix safely preserves the visual text painted during Step 1. The CPU is completely asleep at 0% utilization, but the display remains frozen on the word "Streaming". When hardware input unblocks the thread, event routing instantly elevates the engine to `Interactive` or `Streaming` *before* the subsequent frame pass, causing the on-screen status to jump from "Streaming" straight to "Interactive"—entirely skipping the visible display of the intermediate `PowerSaver` phase.
+However, the developer-facing library API is currently unsolidified and subject to rapid breaking changes. Stabilizing the developer API, refining the component lifecycle, and documenting the embedded layout engine will be the primary focus of future architectural iterations. (For a glimpse into the internal component design standards, see [AGENTS.md](./AGENTS.md)).
 
 ## License
 
 `term-wm` is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0).
 
 See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for details.
-
-[rust-src-page]: https://www.rust-lang.org/
-[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-black?logo=Rust
-
-[crates-page]: https://crates.io/crates/term-wm
-[crates-badge]: https://img.shields.io/crates/v/term-wm.svg
-
-[mit-license-page]: ./LICENSE-MIT
-[mit-license-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-
-[apache-2.0-license-page]: ./LICENSE-APACHE
-[apache-2.0-license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
-
-[codeql-page]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql
-[codeql-badge]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql/badge.svg
-
-[dependabot-page]:https://github.com/jzombie/term-wm/actions/workflows/dependabot/dependabot-updates
-[dependabot-badge]: https://github.com/jzombie/term-wm/actions/workflows/dependabot/dependabot-updates/badge.svg
-
-[coveralls-page]: https://coveralls.io/github/jzombie/term-wm?branch=main
-[coveralls-badge]: https://img.shields.io/coveralls/github/jzombie/term-wm

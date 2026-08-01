@@ -6,6 +6,9 @@ use term_session_client::run_session;
 use term_session_muxio_service_definitions::ChannelName;
 use term_session_server::SessionServerConfig;
 
+const CHANNEL_ENV_VAR: &str = "TERM_WM_CHANNEL";
+const DEFAULT_CHANNEL: &str = "default/main";
+
 #[derive(Parser, Debug)]
 #[command(name = "term-session", about = "term-wm session manager")]
 struct Cli {
@@ -47,14 +50,17 @@ fn run_server_mode(channel: &ChannelName, cli: &Cli) -> io::Result<()> {
     Ok(())
 }
 
+/// Resolve the channel from the CLI arg, falling back to the env var, then the default.
+fn resolve_channel(cli_channel: Option<String>, env_channel: Option<String>) -> String {
+    cli_channel
+        .or(env_channel)
+        .unwrap_or_else(|| DEFAULT_CHANNEL.to_string())
+}
+
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    let channel_input = cli
-        .channel
-        .clone()
-        .or_else(|| std::env::var("TERM_WM_CHANNEL").ok())
-        .unwrap_or_else(|| "default/main".to_string());
+    let channel_input = resolve_channel(cli.channel.clone(), std::env::var(CHANNEL_ENV_VAR).ok());
 
     let channel = ChannelName::parse(&channel_input).map_err(|e| {
         io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
@@ -73,4 +79,30 @@ fn main() -> io::Result<()> {
     let socket_name = connect_or_spawn_server(&channel, &spawn_cfg)?;
 
     run_session(&socket_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_channel_takes_precedence_over_env() {
+        assert_eq!(
+            resolve_channel(Some("work/dev".to_string()), Some("other/chan".to_string())),
+            "work/dev"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_env_channel() {
+        assert_eq!(
+            resolve_channel(None, Some("work/dev".to_string())),
+            "work/dev"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_default_channel() {
+        assert_eq!(resolve_channel(None, None), DEFAULT_CHANNEL);
+    }
 }

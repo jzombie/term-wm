@@ -345,7 +345,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        // Skip in direct mode so scroll passes through to the terminal
+        // Skip in Direct Mode so scroll passes through to the terminal
         // component for encoding and forwarding to the PTY app.
         if !ctx.direct_mode() {
             match mouse.kind {
@@ -1196,11 +1196,11 @@ mod tests {
         let consumed = sv.handle_events(&scroll_down, &ctx);
         assert!(
             consumed.is_ignored(),
-            "scroll must NOT be consumed in direct mode"
+            "scroll must NOT be consumed in Direct Mode"
         );
         assert!(
             sv.content.borrow().received_scroll,
-            "scroll must reach child component in direct mode"
+            "scroll must reach child component in Direct Mode"
         );
     }
 
@@ -1419,11 +1419,11 @@ mod tests {
         let result = sv.handle_events(&page_up, &ctx);
         assert!(
             result.is_ignored(),
-            "direct mode must pass all keys through"
+            "Direct Mode must pass all keys through"
         );
         assert!(
             sv.content.borrow().received_scroll,
-            "key must reach child in direct mode"
+            "key must reach child in Direct Mode"
         );
     }
 

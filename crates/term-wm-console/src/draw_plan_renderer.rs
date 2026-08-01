@@ -1111,7 +1111,7 @@ where
     (inner_bounds, chrome_registry)
 }
 
-/// Render window chrome (borders, title bar, hover-aware buttons, direct mode indicator).
+/// Render window chrome (borders, title bar, hover-aware buttons, Direct Mode indicator).
 fn render_window(buffer: &mut Buffer, rect: LayoutRect, ctx: ChromeCtx<'_>) {
     use ratatui::style::{Color, Modifier, Style};
 

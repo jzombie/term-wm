@@ -16,7 +16,7 @@ pub enum ChromeTarget {
     MaximizeButton(WindowKey),
     /// Minimize button in the window header.
     MinimizeButton(WindowKey),
-    /// Toggle direct mode button in the window header.
+    /// Toggle Direct Mode button in the window header.
 
     /// Tiling layout split handle seam.
     SplitHandle(HitboxId),
