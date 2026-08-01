@@ -1,6 +1,8 @@
 [package]
 name = "term-bench"
 description = "A simple render benchmark for terminal throughput measurements."
+keywords = ["benchmark", "terminal", "renderer", "tui"]
+categories = ["development-tools", "rendering"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

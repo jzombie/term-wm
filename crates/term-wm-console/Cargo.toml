@@ -1,6 +1,8 @@
 [package]
 name = "term-wm-console"
 description = "Concrete terminal I/O backend with event source, render target, and draw plan for term-wm."
+keywords = ["terminal", "backend", "renderer", "input"]
+categories = ["gui", "rendering", "command-line-interface"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

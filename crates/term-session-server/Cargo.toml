@@ -1,6 +1,8 @@
 [package]
 name = "term-session-server"
 description = "Detached server that hosts one PTY per channel and broadcasts it to every attached terminal."
+keywords = ["server", "async", "tokio", "rpc", "pty"]
+categories = ["network-programming", "asynchronous", "command-line-utilities"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
