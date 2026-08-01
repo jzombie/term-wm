@@ -14,6 +14,43 @@ pub enum RegionType {
     Window(WindowKey),
     /// A transient toast notification.
     Notification(Arc<str>),
+    /// A floating (draggable) window.
+    FloatingWindow(WindowKey),
+    /// System chrome (top panel, bottom panel).
+    Panel(PanelPosition),
+    /// Transient overlay (help, exit confirm).
+    Overlay,
+    /// Pulsing border highlight for tap-to-swap targeting.
+    TargetHighlight(WindowKey),
+}
+
+/// Position of a panel in the layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelPosition {
+    Top,
+    Bottom,
+}
+
+/// Strictly ordered topological layers for deterministic Z-ordering.
+/// Replaces magic-number `z_index: usize` values to prevent depth collisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ZLayer {
+    /// Unused / background fill
+    Background = 0,
+    /// Standard tiled terminal windows
+    TiledWindow = 10,
+    /// Floating (draggable) windows
+    FloatingWindow = 20,
+    /// Split handles, resize borders
+    SystemChrome = 30,
+    /// Top/bottom system panels
+    Panel = 40,
+    /// Toast notifications
+    Notification = 50,
+    /// Foreground layers
+    ForegroundLayer = 60,
+    /// Overlay components (help, exit confirm, command palette)
+    Overlay = 70,
 }
 
 /// A single render region in the draw plan.
@@ -22,12 +59,14 @@ pub enum RegionType {
 pub struct RenderRegion {
     /// Bounding box in screen coordinates
     pub bounds: LayoutRect,
-    /// Z-ordering for layering (higher = rendered on top)
-    pub z_index: usize,
+    /// Strictly ordered topological layer for rendering
+    pub layer: ZLayer,
     /// Whether this region should be dimmed (unfocused windows)
     pub dimmed: bool,
     /// Semantic discriminator — carries the key for windows, the message for notifications.
     pub region_type: RegionType,
+    /// Whether this region should be hidden (used for monocle mode culling)
+    pub hidden: bool,
 }
 
 /// The complete draw plan for a frame.
@@ -67,9 +106,9 @@ impl DrawPlan {
         &mut self.regions
     }
 
-    /// Sort regions by z-index (stable sort).
-    pub fn sort_by_z_index(&mut self) {
-        self.regions.sort_by_key(|r| r.z_index);
+    /// Sort regions by topological layer (stable sort).
+    pub fn sort_by_layer(&mut self) {
+        self.regions.sort_by_key(|r| r.layer);
     }
 
     /// Current number of regions.
@@ -86,6 +125,79 @@ impl DrawPlan {
     pub fn capacity(&self) -> usize {
         self.regions.capacity()
     }
+
+    /// Apply monocle culling: resize focused window to fill screen,
+    /// mark other windows as hidden but preserve their logical geometry.
+    /// The FAB is EXEMPT from culling — it's the sole mobile navigation mechanism.
+    pub fn apply_monocle_culling(&mut self, focused_key: WindowKey, screen: LayoutRect) {
+        for region in &mut self.regions {
+            match &region.region_type {
+                RegionType::Window(key) if *key == focused_key => {
+                    // Focused window gets FULL screen area
+                    region.bounds = screen;
+                    region.dimmed = false;
+                }
+                RegionType::Window(_) => {
+                    region.hidden = true;
+                }
+                // Hide panels in monocle mode
+                RegionType::Panel(_) => {
+                    region.hidden = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Apply monocle Z-order using stratified layering.
+    /// Partitions regions into topological layers, then concatenates
+    /// them in correct depth order. The focused window is elevated
+    /// within its layer but never above overlays.
+    pub fn apply_monocle_z_order(&mut self, focused_key: WindowKey) {
+        // Partition into strict topological layers
+        let mut hidden_tiled: Vec<RenderRegion> = Vec::new();
+        let mut focused_region: Option<RenderRegion> = None;
+        let mut other_tiled: Vec<RenderRegion> = Vec::new();
+        let mut floating: Vec<RenderRegion> = Vec::new();
+        let mut overlays: Vec<RenderRegion> = Vec::new();
+
+        for region in self.regions.drain(..) {
+            match &region.region_type {
+                RegionType::Window(key) if *key == focused_key => {
+                    focused_region = Some(region);
+                }
+                RegionType::Window(_) if region.hidden => {
+                    hidden_tiled.push(region);
+                }
+                RegionType::Window(_) => {
+                    other_tiled.push(region);
+                }
+                RegionType::FloatingWindow(_) => {
+                    floating.push(region);
+                }
+                RegionType::Panel(_) | RegionType::Overlay | RegionType::TargetHighlight(_) => {
+                    overlays.push(region);
+                }
+                _ => {
+                    other_tiled.push(region);
+                }
+            }
+        }
+
+        // Reassemble in strict depth order:
+        // 1. Hidden tiled windows (background, not rendered)
+        // 2. Other visible tiled windows
+        // 3. Focused window (elevated within tiled layer)
+        // 4. Floating windows (above tiled)
+        // 5. Overlays (panels, FAB, session manager — always on top)
+        self.regions = hidden_tiled;
+        self.regions.append(&mut other_tiled);
+        if let Some(region) = focused_region {
+            self.regions.push(region);
+        }
+        self.regions.append(&mut floating);
+        self.regions.append(&mut overlays);
+    }
 }
 
 #[cfg(test)]
@@ -99,7 +211,7 @@ pub mod tests {
         y: i32,
         width: u16,
         height: u16,
-        z_index: usize,
+        layer: ZLayer,
     ) -> RenderRegion {
         RenderRegion {
             region_type: RegionType::Window(key),
@@ -109,8 +221,9 @@ pub mod tests {
                 width,
                 height,
             },
-            z_index,
+            layer,
             dimmed: false,
+            hidden: false,
         }
     }
 
@@ -121,7 +234,7 @@ pub mod tests {
         y: i32,
         width: u16,
         height: u16,
-        z_index: usize,
+        layer: ZLayer,
     ) -> RenderRegion {
         RenderRegion {
             region_type: RegionType::Window(key),
@@ -131,8 +244,9 @@ pub mod tests {
                 width,
                 height,
             },
-            z_index,
+            layer,
             dimmed: true,
+            hidden: false,
         }
     }
 
@@ -179,13 +293,13 @@ pub mod tests {
         );
     }
 
-    /// Test helper: assert that a region has the expected z-index
-    pub fn assert_region_z_index(plan: &DrawPlan, index: usize, expected: usize) {
+    /// Test helper: assert that a region has the expected layer
+    pub fn assert_region_layer(plan: &DrawPlan, index: usize, expected: ZLayer) {
         let region = &plan.regions()[index];
         assert_eq!(
-            region.z_index, expected,
-            "Region {} z_index: expected {}, got {}",
-            index, expected, region.z_index
+            region.layer, expected,
+            "Region {} layer: expected {:?}, got {:?}",
+            index, expected, region.layer
         );
     }
 
@@ -199,14 +313,14 @@ pub mod tests {
         );
     }
 
-    /// Test helper: assert that regions are sorted by z-index
-    pub fn assert_sorted_by_z_index(plan: &DrawPlan) {
+    /// Test helper: assert that regions are sorted by layer
+    pub fn assert_sorted_by_layer(plan: &DrawPlan) {
         for window in plan.regions().windows(2) {
             assert!(
-                window[0].z_index <= window[1].z_index,
-                "Regions not sorted by z_index: {} > {}",
-                window[0].z_index,
-                window[1].z_index
+                window[0].layer <= window[1].layer,
+                "Regions not sorted by layer: {:?} > {:?}",
+                window[0].layer,
+                window[1].layer
             );
         }
     }
@@ -255,6 +369,29 @@ pub mod tests {
         }
     }
 
+    /// Test helper: create a panel render region
+    pub fn make_panel_region(
+        position: PanelPosition,
+        x: i32,
+        y: i32,
+        width: u16,
+        height: u16,
+        layer: ZLayer,
+    ) -> RenderRegion {
+        RenderRegion {
+            region_type: RegionType::Panel(position),
+            bounds: LayoutRect {
+                x,
+                y,
+                width,
+                height,
+            },
+            layer,
+            dimmed: false,
+            hidden: false,
+        }
+    }
+
     #[cfg(test)]
     #[allow(clippy::module_inception)]
     mod tests {
@@ -267,8 +404,8 @@ pub mod tests {
             let key2 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 0));
-            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
 
             assert_region_count(&plan, 2);
             assert_region_bounds(&plan, 0, 0, 0, 40, 24);
@@ -276,22 +413,22 @@ pub mod tests {
         }
 
         #[test]
-        fn test_draw_plan_z_index_sorting() {
+        fn test_draw_plan_layer_sorting() {
             let key1 = WindowKey::default();
             let key2 = WindowKey::default();
             let key3 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 20));
-            plan.push(make_region(key2, 0, 0, 80, 24, 0));
-            plan.push(make_region(key3, 0, 0, 80, 24, 10));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::Notification));
+            plan.push(make_region(key2, 0, 0, 80, 24, ZLayer::Background));
+            plan.push(make_region(key3, 0, 0, 80, 24, ZLayer::TiledWindow));
 
-            plan.sort_by_z_index();
+            plan.sort_by_layer();
 
-            assert_sorted_by_z_index(&plan);
-            assert_region_z_index(&plan, 0, 0);
-            assert_region_z_index(&plan, 1, 10);
-            assert_region_z_index(&plan, 2, 20);
+            assert_sorted_by_layer(&plan);
+            assert_region_layer(&plan, 0, ZLayer::Background);
+            assert_region_layer(&plan, 1, ZLayer::TiledWindow);
+            assert_region_layer(&plan, 2, ZLayer::Notification);
         }
 
         #[test]
@@ -300,8 +437,8 @@ pub mod tests {
             let key2 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 0));
-            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
 
             assert_no_overlap(&plan);
         }
@@ -312,8 +449,8 @@ pub mod tests {
             let key2 = WindowKey::default();
 
             let mut plan = DrawPlan::with_capacity(4);
-            plan.push(make_region(key1, 0, 0, 40, 24, 0));
-            plan.push(make_region(key2, 40, 0, 40, 24, 0));
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
 
             assert_within_screen(&plan, 80, 24);
         }
@@ -324,15 +461,192 @@ pub mod tests {
             let key = WindowKey::default();
 
             // Fill the plan
-            plan.push(make_region(key, 0, 0, 80, 24, 0));
+            plan.push(make_region(key, 0, 0, 80, 24, ZLayer::TiledWindow));
             let capacity = plan.regions.capacity();
 
             // Clear and refill
             plan.clear();
-            plan.push(make_region(key, 0, 0, 80, 24, 0));
+            plan.push(make_region(key, 0, 0, 80, 24, ZLayer::TiledWindow));
 
             // Capacity should be reused
             assert_eq!(plan.regions.capacity(), capacity);
+        }
+
+        #[test]
+        fn test_monocle_culling_resizes_focused_window() {
+            let key1 = WindowKey::default();
+            // DefaultKey::default() = null key for both => would match
+            // as focused. Use KeyData::from_ffi to create a distinct key.
+            let key2 = WindowKey::from(slotmap::KeyData::from_ffi(1));
+
+            let mut plan = DrawPlan::with_capacity(4);
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
+
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
+            plan.apply_monocle_culling(key1, screen);
+
+            // Focused window should fill the screen
+            assert_region_bounds(&plan, 0, 0, 0, 80, 24);
+            // Other window should be hidden
+            assert!(plan.regions()[1].hidden);
+        }
+
+        #[test]
+        fn test_monocle_culling_hides_panels() {
+            let key1 = WindowKey::default();
+
+            let mut plan = DrawPlan::with_capacity(4);
+            plan.push(make_region(key1, 0, 0, 80, 20, ZLayer::TiledWindow));
+            plan.push(make_panel_region(
+                PanelPosition::Top,
+                0,
+                0,
+                80,
+                2,
+                ZLayer::Panel,
+            ));
+            plan.push(make_panel_region(
+                PanelPosition::Bottom,
+                0,
+                22,
+                80,
+                2,
+                ZLayer::Panel,
+            ));
+
+            let screen = LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            };
+            plan.apply_monocle_culling(key1, screen);
+
+            // Panels should be hidden
+            assert!(plan.regions()[1].hidden);
+            assert!(plan.regions()[2].hidden);
+        }
+
+        #[test]
+        fn test_monocle_z_order_depth_ordering() {
+            let focused = WindowKey::default();
+            let other = WindowKey::from(slotmap::KeyData::from_ffi(1));
+
+            let mut plan = DrawPlan::with_capacity(8);
+            // Add in random order
+            plan.push(make_region(other, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(RenderRegion {
+                region_type: RegionType::FloatingWindow(other),
+                bounds: LayoutRect {
+                    x: 10,
+                    y: 5,
+                    width: 20,
+                    height: 10,
+                },
+                layer: ZLayer::FloatingWindow,
+                dimmed: false,
+                hidden: false,
+            });
+            plan.push(make_region(focused, 0, 0, 80, 24, ZLayer::TiledWindow));
+            plan.push(RenderRegion {
+                region_type: RegionType::Overlay,
+                bounds: LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height: 24,
+                },
+                layer: ZLayer::Overlay,
+                dimmed: false,
+                hidden: false,
+            });
+
+            plan.apply_monocle_z_order(focused);
+
+            // Expected order: hidden tiled → other tiled → focused → floating → overlays
+            let types: Vec<_> = plan.regions().iter().map(|r| &r.region_type).collect();
+            // Other tiled comes before focused
+            let other_idx = types.iter().position(|t| matches!(t, RegionType::Window(k) if *k == other && !plan.regions()[types.iter().position(|tt| tt == t).unwrap()].hidden)).unwrap();
+            let focused_idx = types
+                .iter()
+                .position(|t| matches!(t, RegionType::Window(k) if *k == focused))
+                .unwrap();
+            let floating_idx = types
+                .iter()
+                .position(|t| matches!(t, RegionType::FloatingWindow(_)))
+                .unwrap();
+            let overlay_idx = types
+                .iter()
+                .position(|t| matches!(t, RegionType::Overlay))
+                .unwrap();
+            assert!(
+                other_idx < focused_idx,
+                "other tiled should come before focused"
+            );
+            assert!(
+                focused_idx < floating_idx,
+                "focused should come before floating"
+            );
+            assert!(
+                floating_idx < overlay_idx,
+                "floating should come before overlay"
+            );
+        }
+
+        #[test]
+        fn test_zlayer_ordering() {
+            assert!(ZLayer::Background < ZLayer::TiledWindow);
+            assert!(ZLayer::TiledWindow < ZLayer::FloatingWindow);
+            assert!(ZLayer::FloatingWindow < ZLayer::SystemChrome);
+            assert!(ZLayer::SystemChrome < ZLayer::Panel);
+            assert!(ZLayer::Panel < ZLayer::Notification);
+            assert!(ZLayer::Notification < ZLayer::ForegroundLayer);
+            assert!(ZLayer::ForegroundLayer < ZLayer::Overlay);
+        }
+
+        #[test]
+        fn test_panel_position_distinct() {
+            assert_ne!(PanelPosition::Top, PanelPosition::Bottom);
+        }
+
+        #[test]
+        fn test_region_type_variants_constructible() {
+            let key = WindowKey::default();
+            let _ = RegionType::Window(key);
+            let _ = RegionType::Notification(std::sync::Arc::from("test"));
+            let _ = RegionType::FloatingWindow(key);
+            let _ = RegionType::Panel(PanelPosition::Top);
+            let _ = RegionType::Overlay;
+            let _ = RegionType::TargetHighlight(key);
+        }
+
+        #[test]
+        fn test_hidden_flag_preserved_through_sort() {
+            let key1 = WindowKey::default();
+            let key2 = WindowKey::from(slotmap::KeyData::from_ffi(1));
+            let mut plan = DrawPlan::with_capacity(4);
+            plan.push(make_region(key1, 0, 0, 40, 24, ZLayer::TiledWindow));
+            plan.push(make_region(key2, 40, 0, 40, 24, ZLayer::TiledWindow));
+            plan.apply_monocle_culling(
+                key1,
+                LayoutRect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height: 24,
+                },
+            );
+            // key2 should be hidden
+            let hidden_idx = plan.regions().iter().position(|r| r.hidden).unwrap();
+            plan.sort_by_layer();
+            // Hidden region should still be hidden after sort
+            assert!(plan.regions()[hidden_idx].hidden);
         }
     }
 }

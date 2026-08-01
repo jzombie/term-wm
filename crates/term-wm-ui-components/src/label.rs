@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use term_wm_core::actions::{EventResult, TermWmAction};
@@ -8,13 +8,14 @@ use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
-use crate::helpers::layout_rect_to_rect;
+use crate::helpers::layout_rect_to_clipped_rect;
 
 /// A single-line text label.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LabelComponent {
     text: String,
     color: Color,
+    bold: bool,
 }
 
 impl LabelComponent {
@@ -22,11 +23,17 @@ impl LabelComponent {
         Self {
             text: text.into(),
             color: Color::White,
+            bold: false,
         }
     }
 
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = color;
+        self
+    }
+
+    pub fn with_bold(mut self) -> Self {
+        self.bold = true;
         self
     }
 }
@@ -46,12 +53,13 @@ impl Component<TermWmAction> for LabelComponent {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let rect = layout_rect_to_rect(area);
+        let rect = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
-        let para = Paragraph::new(Line::from(Span::styled(
-            self.text.as_str(),
-            Style::default().fg(self.color),
-        )));
+        let mut style = Style::default().fg(self.color);
+        if self.bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        let para = Paragraph::new(Line::from(Span::styled(self.text.as_str(), style)));
         para.render(rect, &mut backend.buffer);
     }
 
@@ -114,7 +122,8 @@ mod tests {
     fn label_render_writes_text() {
         let mut label = LabelComponent::new("Status");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(
@@ -141,7 +150,8 @@ mod tests {
     fn label_render_skips_when_width_zero() {
         let mut label = LabelComponent::new("X");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(
@@ -161,7 +171,8 @@ mod tests {
     fn label_render_skips_when_height_zero() {
         let mut label = LabelComponent::new("X");
         let buffer = Buffer::empty(Rect::new(0, 0, 40, 1));
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 40, 1));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 40, 1));
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         label.render(

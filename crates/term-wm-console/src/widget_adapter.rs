@@ -23,7 +23,7 @@ type StatefulRenderFn<S> =
 /// let comp = WidgetAdapter::new(|frame, area, _ctx| {
 ///     frame.render_widget(Paragraph::new("Hello"), area);
 /// });
-/// app.register(comp);
+/// app.open_window(comp);
 /// ```
 pub struct WidgetAdapter {
     render_fn: RenderFn,
@@ -69,7 +69,7 @@ impl Component<TermWmAction> for WidgetAdapter {
 ///     let items = vec![ListItem::new("Item 1"), ListItem::new("Item 2")];
 ///     frame.render_stateful_widget(List::new(items), area, state);
 /// });
-/// app.register(comp);
+/// app.open_window(comp);
 /// ```
 pub struct StatefulWidgetAdapter<S> {
     state: RefCell<S>,

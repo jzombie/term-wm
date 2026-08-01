@@ -1,5 +1,6 @@
 use crate::rect::{LayoutRect, rect_contains};
 
+// TODO: Remove these constants; the layout engine should be agnostic to these
 /// Minimum width for a floating window (in cells).
 pub const FLOATING_MIN_WIDTH: u16 = 6;
 
@@ -171,6 +172,7 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     handles
 }
 
+// TODO: The hardcoded magic numbers have to go; the layout engine should be agnostic to these as well/
 /// Generate a drag handle for the title bar of a floating window.
 pub fn floating_header_for_region<R: Copy + Eq + Ord>(
     id: R,
