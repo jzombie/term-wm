@@ -21,8 +21,6 @@ async fn session_spawn_returns_id() {
     let client = spawn_session(
         &test_channel("test/spawn_returns_id"),
         vec![mock, "echo".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
     let (id, _, _) = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
@@ -37,8 +35,6 @@ async fn session_input_output_roundtrip() {
     let client = spawn_session(
         &test_channel("test/input_output"),
         vec![mock, "echo".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -67,8 +63,6 @@ async fn session_mouse_bytes_forwarded() {
     let client = spawn_session(
         &test_channel("test/mouse_forward"),
         vec![mock, "echo".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -113,8 +107,6 @@ async fn session_mouse_bytes_forwarded() {
     let client = spawn_session(
         &test_channel("test/mouse_forward"),
         vec![mock, "capture".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -148,8 +140,6 @@ async fn session_osc52_in_output() {
     let client = spawn_session(
         &test_channel("test/osc52_output"),
         vec![mock, "osc52".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -176,8 +166,6 @@ async fn session_osc52_via_osc52extractor() {
     let client = spawn_session(
         &test_channel("test/osc52_extractor"),
         vec![mock, "osc52".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -237,8 +225,6 @@ async fn session_resize() {
     let client = spawn_session(
         &test_channel("test/resize"),
         vec![mock, "echo".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -252,8 +238,6 @@ async fn session_list_sessions() {
     let client = spawn_session(
         &test_channel("test/list_sessions"),
         vec![mock, "sleep".into(), "60000".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -268,8 +252,6 @@ async fn session_close_session() {
     let client = spawn_session(
         &test_channel("test/close_session"),
         vec![mock, "sleep".into(), "60000".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -287,8 +269,6 @@ async fn session_child_exit() {
     let client = spawn_session(
         &test_channel("test/child_exit"),
         vec![mock, "exit".into(), "0".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -320,8 +300,6 @@ async fn session_child_exit_before_subscribe() {
     let client = spawn_session(
         &test_channel("test/child_exit_early"),
         vec![mock, "exit".into(), "0".into()],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -358,8 +336,6 @@ async fn session_reconnect() {
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
         cmd: vec![mock, "echo".into()],
-        cols: TEST_COLS,
-        rows: TEST_ROWS,
     };
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -409,8 +385,6 @@ async fn term_bench_runs_to_completion() {
             "-f".into(),
             "10".into(),
         ],
-        TEST_COLS,
-        TEST_ROWS,
     )
     .await;
 
@@ -453,8 +427,6 @@ async fn session_multi_client_pty_constrained_to_smallest() {
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
         cmd: vec![mock, "echo".into()],
-        cols: 120,
-        rows: 40,
     };
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -514,8 +486,6 @@ async fn session_multi_client_disconnect_expands_pty() {
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
         cmd: vec![mock, "echo".into()],
-        cols: 120,
-        rows: 40,
     };
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -581,8 +551,6 @@ async fn session_server_start_stop_cleanly() {
     let config = term_session_server::SessionServerConfig {
         channel: channel.clone(),
         cmd: vec![mock, "echo".into()],
-        cols: 80,
-        rows: 24,
     };
     tokio::spawn(async move { term_session_server::run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
