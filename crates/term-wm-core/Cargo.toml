@@ -12,15 +12,19 @@ default = ["pty"]
 pty = ["portable-pty"]
 
 [dependencies]
+bitflags = { workspace = true }
 console = { workspace = true }
 crossbeam-channel = { workspace = true }
 linkify = { workspace = true }
+nucleo-matcher = { workspace = true }
 portable-pty = { workspace = true, optional = true }
 slotmap = "1.1"
 smallvec = "1.15"
 strum = { workspace = true, features = ["derive"] }
+term-wm-events = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }
 textwrap = "0.16"
 tracing = { workspace = true }
+unicode-width = { workspace = true }

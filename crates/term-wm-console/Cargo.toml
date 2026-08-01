@@ -9,9 +9,21 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste"] }
 ratatui = { workspace = true }
 term-wm-core = { workspace = true }
+term-wm-crossterm-adapter = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-render = { workspace = true }
 tracing = { workspace = true }
+unicode-width = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+insta = { workspace = true }
+libc = { workspace = true }
+term-wm-pty-engine = { workspace = true }
+
+[[bench]]
+name = "blit_buffer"
+harness = false

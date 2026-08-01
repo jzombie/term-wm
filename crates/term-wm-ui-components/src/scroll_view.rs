@@ -6,7 +6,10 @@ use ratatui::prelude::Rect;
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 use term_wm_core::events::{Event, MouseEvent, MouseEventKind};
 
-use crate::helpers::layout_rect_to_rect;
+// NOTE: Only used in the render() path where coordinates are always on-screen
+// (safe to convert to unsigned Rect). Event handling paths must never use this
+// because screen_area() may contain negative coordinates.
+use crate::helpers::layout_rect_to_clipped_rect;
 use ratatui::widgets::StatefulWidget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::{ScrollBounds, ScrollHandle};
@@ -14,11 +17,16 @@ use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
+/// Minimum scrollbar thumb size in cells.
+const MIN_THUMB_SIZE: i32 = 1;
+
 // --- Scroll Logic Helpers (Public API) ---
 
 #[derive(Debug, Default, Clone)]
 pub struct ScrollbarDrag {
     pub dragging: bool,
+    /// Distance (in cells) from the top/left of the thumb to the cursor when drag started.
+    drag_anchor: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,60 +37,94 @@ pub enum ScrollbarAxis {
 
 impl ScrollbarDrag {
     pub fn new() -> Self {
-        Self { dragging: false }
+        Self::default()
     }
 
-    /// Returns Some(new_offset) if a drag event occurred.
+    /// Returns `Some(new_offset)` if a scroll event occurred.
+    ///
+    /// Track math matches ratatui's `rounding_divide` exactly: `available_track =
+    /// round(max_offset * track / total)` not `track_len - thumb_size`, so the
+    /// thumb never drifts from the cursor during drag.  The 1-cell hit-test
+    /// tolerance absorbs `rounding_divide` truncation artifacts.
     pub fn handle_mouse(
         &mut self,
         mouse: &MouseEvent,
-        area: Rect,
+        area: LayoutRect,
         total: usize,
         view: usize,
+        current_offset: usize,
         axis: ScrollbarAxis,
     ) -> Option<usize> {
-        let axis_empty = match axis {
-            ScrollbarAxis::Vertical => area.height == 0,
-            ScrollbarAxis::Horizontal => area.width == 0,
-        };
-        if total <= view || view == 0 || axis_empty {
+        let max_offset = total.saturating_sub(view);
+        if max_offset == 0 || view == 0 || area.width == 0 || area.height == 0 {
             self.dragging = false;
             return None;
         }
 
+        let (mouse_pos, area_start, track_len) = match axis {
+            ScrollbarAxis::Vertical => (i32::from(mouse.row), area.y, i32::from(area.height)),
+            ScrollbarAxis::Horizontal => (i32::from(mouse.column), area.x, i32::from(area.width)),
+        };
+
+        let thumb_size = ((view as f64 * track_len as f64) / total as f64).round() as i32;
+        let thumb_size = thumb_size.clamp(MIN_THUMB_SIZE, track_len);
+        let available_track =
+            ((max_offset as f64 * track_len as f64) / total as f64).round() as i32;
+
+        if available_track <= 0 {
+            return None;
+        }
+
+        let current_thumb_rel =
+            ((current_offset as f64 * track_len as f64) / total as f64).round() as i32;
+        let mouse_rel = mouse_pos - area_start;
+
         let on_scrollbar = match axis {
             ScrollbarAxis::Vertical => {
-                let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
-                rect_contains(area, mouse.column, mouse.row) && mouse.column == scrollbar_x
+                let sb_col = area
+                    .x
+                    .saturating_add(i32::from(area.width.saturating_sub(1)));
+                i32::from(mouse.column) == sb_col && mouse_rel >= 0 && mouse_rel < track_len
             }
             ScrollbarAxis::Horizontal => {
-                let scrollbar_y = area.y.saturating_add(area.height.saturating_sub(1));
-                rect_contains(area, mouse.column, mouse.row) && mouse.row == scrollbar_y
+                let sb_row = area
+                    .y
+                    .saturating_add(i32::from(area.height.saturating_sub(1)));
+                i32::from(mouse.row) == sb_row && mouse_rel >= 0 && mouse_rel < track_len
             }
         };
 
         match mouse.kind {
             MouseEventKind::Press(_) if on_scrollbar => {
-                self.dragging = true;
-                Some(match axis {
-                    ScrollbarAxis::Vertical => {
-                        scrollbar_offset_from_row(mouse.row, area, total, view)
-                    }
-                    ScrollbarAxis::Horizontal => {
-                        scrollbar_offset_from_col(mouse.column, area, total, view)
-                    }
-                })
-            }
-            MouseEventKind::Drag(_) if self.dragging => Some(match axis {
-                ScrollbarAxis::Vertical => scrollbar_offset_from_row(mouse.row, area, total, view),
-                ScrollbarAxis::Horizontal => {
-                    scrollbar_offset_from_col(mouse.column, area, total, view)
+                if mouse_rel >= current_thumb_rel - 1 && mouse_rel <= current_thumb_rel + thumb_size
+                {
+                    self.dragging = true;
+                    self.drag_anchor = mouse_rel - current_thumb_rel;
+                    Some(current_offset)
+                } else {
+                    self.dragging = true;
+                    self.drag_anchor = thumb_size / 2;
+                    let target_thumb_rel = (mouse_rel - self.drag_anchor).clamp(0, available_track);
+                    let new_off = ((target_thumb_rel as f64 / available_track as f64)
+                        * max_offset as f64)
+                        .round() as usize;
+                    Some(new_off.min(max_offset))
                 }
-            }),
+            }
+
+            MouseEventKind::Drag(_) if self.dragging => {
+                let target_thumb_rel = (mouse_rel - self.drag_anchor).clamp(0, available_track);
+                let new_off = ((target_thumb_rel as f64 / available_track as f64)
+                    * max_offset as f64)
+                    .round() as usize;
+                Some(new_off.min(max_offset))
+            }
+
             MouseEventKind::Release(_) if self.dragging => {
                 self.dragging = false;
                 None
             }
+
             _ => None,
         }
     }
@@ -129,37 +171,44 @@ pub fn render_scrollbar_oriented(
 
 // --- Internal Math ---
 
-fn scrollbar_offset_from_row(row: u16, area: Rect, total: usize, view: usize) -> usize {
+#[allow(dead_code)]
+fn scrollbar_offset_from_row(row: u16, area: LayoutRect, total: usize, view: usize) -> usize {
     let content_len = total.saturating_sub(view).saturating_add(1).max(1);
     let max_offset = content_len.saturating_sub(1);
     if max_offset == 0 || area.height <= 1 {
         return 0;
     }
-    let rel = row
+    let rel = i32::from(row)
         .saturating_sub(area.y)
-        .min(area.height.saturating_sub(1));
-    let ratio = rel as f64 / (area.height.saturating_sub(1)) as f64;
+        .min(i32::from(area.height.saturating_sub(1))) as u16;
+    let ratio = f64::from(rel) / f64::from(area.height.saturating_sub(1));
     (ratio * max_offset as f64).round() as usize
 }
 
-fn scrollbar_offset_from_col(col: u16, area: Rect, total: usize, view: usize) -> usize {
+#[allow(dead_code)]
+fn scrollbar_offset_from_col(col: u16, area: LayoutRect, total: usize, view: usize) -> usize {
     let content_len = total.saturating_sub(view).saturating_add(1).max(1);
     let max_offset = content_len.saturating_sub(1);
     if max_offset == 0 || area.width <= 1 {
         return 0;
     }
-    let rel = col.saturating_sub(area.x).min(area.width.saturating_sub(1));
-    let ratio = rel as f64 / (area.width.saturating_sub(1)) as f64;
+    let rel = i32::from(col)
+        .saturating_sub(area.x)
+        .min(i32::from(area.width.saturating_sub(1))) as u16;
+    let ratio = f64::from(rel) / f64::from(area.width.saturating_sub(1));
     (ratio * max_offset as f64).round() as usize
 }
 
-fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+#[allow(dead_code)]
+fn rect_contains(rect: LayoutRect, column: u16, row: u16) -> bool {
     if rect.width == 0 || rect.height == 0 {
         return false;
     }
-    let max_x = rect.x.saturating_add(rect.width);
-    let max_y = rect.y.saturating_add(rect.height);
-    column >= rect.x && column < max_x && row >= rect.y && row < max_y
+    let col = i32::from(column);
+    let row_val = i32::from(row);
+    let max_x = rect.x.saturating_add(i32::from(rect.width));
+    let max_y = rect.y.saturating_add(i32::from(rect.height));
+    col >= rect.x && col < max_x && row_val >= rect.y && row_val < max_y
 }
 
 // --- ScrollView Component Wrapper ---
@@ -211,32 +260,23 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         }
     }
 
-    pub(crate) fn compute_layout(&self, area: Rect) -> Rect {
-        // Simple reservation strategy:
-        // Use previous frame's content size to decide on scrollbars.
-        let state = self.scroll_state.borrow();
-        let content_w = state.content_width;
-        let content_h = state.content_height;
-        drop(state);
-
-        if content_w == 0 && content_h == 0 {
-            return area;
-        }
-
+    pub(crate) fn compute_layout(
+        &self,
+        area: LayoutRect,
+        needs_vertical: bool,
+        needs_horizontal: bool,
+    ) -> LayoutRect {
         let mut view_w = area.width;
         let mut view_h = area.height;
 
-        let needs_v = content_h > view_h as usize;
-        if needs_v && view_w > 0 {
+        if needs_vertical && view_w > 0 {
             view_w = view_w.saturating_sub(1);
         }
-
-        let needs_h = content_w > view_w as usize;
-        if needs_h && view_h > 0 {
+        if needs_horizontal && view_h > 0 {
             view_h = view_h.saturating_sub(1);
         }
 
-        Rect {
+        LayoutRect {
             x: area.x,
             y: area.y,
             width: view_w,
@@ -250,28 +290,32 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
         };
         let state = self.scroll_state.borrow();
         let content_h = state.content_height;
-        let view_h = state.height;
         let content_w = state.content_width;
-        let view_w = state.width;
         drop(state);
 
-        let va = ctx
-            .screen_area()
-            .map(|sa| self.compute_layout(layout_rect_to_rect(sa)))
-            .unwrap_or_default();
+        let sa = ctx.screen_area().unwrap_or_default();
+        let state = self.scroll_state.borrow();
+        let va = self.compute_layout(sa, state.last_needs_vertical, state.last_needs_horizontal);
+        drop(state);
 
         // Vertical scrollbar: assumes it is immediately to the right of viewport
-        if content_h > view_h {
-            let sb_area = Rect {
-                x: va.x.saturating_add(va.width),
+        let current_off_y = self.scroll_state.borrow().offset_y;
+        let current_off_x = { self.scroll_state.borrow().offset_x };
+        if content_h > va.height as usize {
+            let sb_area = LayoutRect {
+                x: va.x.saturating_add(i32::from(va.width)),
                 y: va.y,
                 width: 1,
                 height: va.height,
             };
-            if let Some(new_off) =
-                self.v_drag
-                    .handle_mouse(mouse, sb_area, content_h, view_h, ScrollbarAxis::Vertical)
-            {
+            if let Some(new_off) = self.v_drag.handle_mouse(
+                mouse,
+                sb_area,
+                content_h,
+                va.height as usize,
+                current_off_y,
+                ScrollbarAxis::Vertical,
+            ) {
                 let mut st = self.scroll_state.borrow_mut();
                 st.offset_y = new_off;
                 st.pending_offset_y = Some(new_off);
@@ -279,10 +323,10 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        if content_w > view_w {
-            let sb_area = Rect {
+        if content_w > va.width as usize {
+            let sb_area = LayoutRect {
                 x: va.x,
-                y: va.y.saturating_add(va.height),
+                y: va.y.saturating_add(i32::from(va.height)),
                 width: va.width,
                 height: 1,
             };
@@ -290,7 +334,8 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
                 mouse,
                 sb_area,
                 content_w,
-                view_w,
+                va.width as usize,
+                current_off_x,
                 ScrollbarAxis::Horizontal,
             ) {
                 let mut st = self.scroll_state.borrow_mut();
@@ -331,7 +376,6 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             && let Event::Key(key) = event
             && key.kind == term_wm_core::events::KeyKind::Press
         {
-            let is_full = self.keyboard_mode == ScrollKeyMode::Full;
             let kb = &ctx.config().keybindings;
 
             // Pagination-level scrolling (active in PaginationOnly and Full)
@@ -346,11 +390,16 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             } else if kb.matches(TermWmAction::ScrollEnd, key) {
                 return EventResult::Action(TermWmAction::ScrollToBottom);
             }
-            // Line-level scrolling (only in Full mode)
-            else if is_full && kb.matches(TermWmAction::ScrollUp, key) {
-                return EventResult::Action(TermWmAction::ScrollView(-1));
-            } else if is_full && kb.matches(TermWmAction::ScrollDown, key) {
-                return EventResult::Action(TermWmAction::ScrollView(1));
+
+            // Full mode also intercepts ScrollUp/ScrollDown for line scrolling.
+            // The default keybindings bind ScrollUp/ScrollDown to both
+            // Shift+Up/Down and bare Up/Down (see KeyBindings::default).
+            if self.keyboard_mode == ScrollKeyMode::Full {
+                if kb.matches(TermWmAction::ScrollUp, key) {
+                    return EventResult::Action(TermWmAction::ScrollView(-1));
+                } else if kb.matches(TermWmAction::ScrollDown, key) {
+                    return EventResult::Action(TermWmAction::ScrollView(1));
+                }
             }
         }
 
@@ -366,7 +415,6 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         ctx: &ComponentContext,
         registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
         if area.width == 0 || area.height == 0 {
             return;
@@ -374,8 +422,17 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         let max_attempts = 3;
         let mut attempt = 0;
 
+        let mut needs_vertical = {
+            let st = self.scroll_state.borrow();
+            st.last_needs_vertical
+        };
+        let mut needs_horizontal = {
+            let st = self.scroll_state.borrow();
+            st.last_needs_horizontal
+        };
+
         loop {
-            let inner_area = self.compute_layout(area);
+            let inner_area = self.compute_layout(area, needs_vertical, needs_horizontal);
 
             {
                 let mut state = self.scroll_state.borrow_mut();
@@ -401,23 +458,10 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
             // 4. Render Child
-            registry.push_clip(LayoutRect {
-                x: inner_area.x as i32,
-                y: inner_area.y as i32,
-                width: inner_area.width,
-                height: inner_area.height,
-            });
-            self.content.borrow_mut().render(
-                backend,
-                LayoutRect {
-                    x: inner_area.x as i32,
-                    y: inner_area.y as i32,
-                    width: inner_area.width,
-                    height: inner_area.height,
-                },
-                &child_ctx,
-                registry,
-            );
+            registry.push_clip(inner_area);
+            self.content
+                .borrow_mut()
+                .render(backend, inner_area, &child_ctx, registry);
             registry.pop_clip();
 
             let state = self.scroll_state.borrow();
@@ -430,9 +474,35 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             // Detect if the child's measurement triggered a sticky auto-scroll
             let offset_changed = off_x != info.offset_x || off_y != info.offset_y;
 
-            let needs_vertical = inner_area.height > 0 && content_h > inner_area.height as usize;
+            // Passive bounds for scrollbar transitions — no probe renders.
+            if needs_vertical {
+                if content_h <= inner_area.height as usize {
+                    needs_vertical = false;
+                    attempt += 1;
+                    continue;
+                }
+            } else {
+                if inner_area.height > 0 && content_h > inner_area.height as usize {
+                    needs_vertical = true;
+                    attempt += 1;
+                    continue;
+                }
+            }
+            if needs_horizontal {
+                if content_w <= inner_area.width as usize {
+                    needs_horizontal = false;
+                    attempt += 1;
+                    continue;
+                }
+            } else {
+                if inner_area.width > 0 && content_w > inner_area.width as usize {
+                    needs_horizontal = true;
+                    attempt += 1;
+                    continue;
+                }
+            }
+
             let has_vertical_reserved = inner_area.width < area.width;
-            let needs_horizontal = inner_area.width > 0 && content_w > inner_area.width as usize;
             let has_horizontal_reserved = inner_area.height < area.height;
 
             let drop_vertical = has_vertical_reserved && !needs_vertical && area.width > 0;
@@ -450,11 +520,20 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 continue;
             }
 
+            // Persist scrollbar state for next frame
+            {
+                let mut st = self.scroll_state.borrow_mut();
+                st.last_needs_vertical = needs_vertical;
+                st.last_needs_horizontal = needs_horizontal;
+            }
+
             if !ctx.direct_mode() {
+                // Clipped Rect for scrollbar rendering (ratatui Scrollbar needs unsigned Rect)
+                let area_rect = layout_rect_to_clipped_rect(area);
                 if needs_vertical {
                     let sb_area = Rect {
-                        x: area.x + area.width.saturating_sub(1),
-                        y: area.y,
+                        x: area_rect.x + area_rect.width.saturating_sub(1),
+                        y: area_rect.y,
                         width: 1,
                         height: inner_area.height,
                     };
@@ -470,8 +549,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
 
                 if needs_horizontal {
                     let sb_area = Rect {
-                        x: area.x,
-                        y: area.y + area.height.saturating_sub(1),
+                        x: area_rect.x,
+                        y: area_rect.y + area_rect.height.saturating_sub(1),
                         width: inner_area.width,
                         height: 1,
                     };
@@ -498,6 +577,12 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         match event {
             Event::Mouse(_) => self.on_mouse(event, ctx),
             Event::Key(_) => self.on_key(event, ctx),
+            Event::Paste(_) => {
+                let handle = self.scroll_handle();
+                let info = handle.info();
+                let child_ctx = ctx.with_viewport(info, Some(handle));
+                self.content.borrow_mut().handle_events(event, &child_ctx)
+            }
             _ => EventResult::Ignored,
         }
     }
@@ -557,6 +642,14 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
         self.content.borrow_mut().take_pending_title()
     }
 
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+        self.content.borrow_mut().take_alternate_screen_transition()
+    }
+
+    fn clear_selection(&mut self) {
+        self.content.borrow_mut().clear_selection();
+    }
+
     fn set_selection_enabled(&mut self, enabled: bool) {
         self.content.borrow_mut().set_selection_enabled(enabled);
     }
@@ -569,12 +662,12 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::prelude::Rect;
-    use term_wm_core::events::{MouseButton, MouseEvent, MouseEventKind};
+    use term_wm_core::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use term_wm_layout_engine::LayoutRect;
 
     #[test]
     fn scrollbar_offset_from_row_edges() {
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 5,
@@ -583,7 +676,7 @@ mod tests {
         let total = 100usize;
         let view = 10usize;
         let top = scrollbar_offset_from_row(0, area, total, view);
-        let bottom = scrollbar_offset_from_row(area.y + area.height - 1, area, total, view);
+        let bottom = scrollbar_offset_from_row(area.height - 1, area, total, view);
         assert_eq!(top, 0);
         let max_offset = total
             .saturating_sub(view)
@@ -595,7 +688,7 @@ mod tests {
     #[test]
     fn drag_handle_mouse_lifecycle() {
         let mut drag = ScrollbarDrag::new();
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 4,
@@ -603,35 +696,45 @@ mod tests {
         };
         let total = 20usize;
         let view = 5usize;
-        let scrollbar_x = area.x.saturating_add(area.width.saturating_sub(1));
+        let scrollbar_x =
+            area.x
+                .saturating_add(i32::from(area.width.saturating_sub(1))) as u16;
         use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             column: scrollbar_x,
-            row: area.y + 1,
+            row: (area.y + 1) as u16,
             modifiers: KeyModifiers::NONE,
         };
-        let resp = drag.handle_mouse(&down, area, total, view, ScrollbarAxis::Vertical);
+        let resp = drag.handle_mouse(&down, area, total, view, 0, ScrollbarAxis::Vertical);
         assert!(resp.is_some());
         assert!(drag.dragging);
+        let current_off = resp.unwrap();
 
         let drag_evt = MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: scrollbar_x,
-            row: area.y + 2,
+            row: (area.y + 2) as u16,
             modifiers: KeyModifiers::NONE,
         };
-        let resp2 = drag.handle_mouse(&drag_evt, area, total, view, ScrollbarAxis::Vertical);
+        let resp2 = drag.handle_mouse(
+            &drag_evt,
+            area,
+            total,
+            view,
+            current_off,
+            ScrollbarAxis::Vertical,
+        );
         assert!(resp2.is_some());
         assert!(drag.dragging);
 
         let up = MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
             column: scrollbar_x,
-            row: area.y + 2,
+            row: (area.y + 2) as u16,
             modifiers: KeyModifiers::NONE,
         };
-        let resp3 = drag.handle_mouse(&up, area, total, view, ScrollbarAxis::Vertical);
+        let resp3 = drag.handle_mouse(&up, area, total, view, current_off, ScrollbarAxis::Vertical);
         assert!(resp3.is_none());
         assert!(!drag.dragging);
     }
@@ -639,7 +742,7 @@ mod tests {
     #[test]
     fn horizontal_drag_handle_mouse_lifecycle() {
         let mut drag = ScrollbarDrag::new();
-        let area = Rect {
+        let area = LayoutRect {
             x: 0,
             y: 0,
             width: 8,
@@ -647,49 +750,324 @@ mod tests {
         };
         let total = 40usize;
         let view = 6usize;
-        let scrollbar_y = area.y.saturating_add(area.height.saturating_sub(1));
+        let scrollbar_y =
+            area.y
+                .saturating_add(i32::from(area.height.saturating_sub(1))) as u16;
         use term_wm_core::events::KeyModifiers;
         let down = MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: area.x + 2,
+            column: (area.x + 2) as u16,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
-        let resp = drag.handle_mouse(&down, area, total, view, ScrollbarAxis::Horizontal);
+        let resp = drag.handle_mouse(&down, area, total, view, 0, ScrollbarAxis::Horizontal);
         assert!(resp.is_some());
         assert!(drag.dragging);
+        let current_off = resp.unwrap();
 
         let drag_evt = MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
-            column: area.x + 4,
+            column: (area.x + 4) as u16,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
-        let resp2 = drag.handle_mouse(&drag_evt, area, total, view, ScrollbarAxis::Horizontal);
+        let resp2 = drag.handle_mouse(
+            &drag_evt,
+            area,
+            total,
+            view,
+            current_off,
+            ScrollbarAxis::Horizontal,
+        );
         assert!(resp2.is_some());
         assert!(drag.dragging);
 
         let up = MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
-            column: area.x + 4,
+            column: (area.x + 4) as u16,
             row: scrollbar_y,
             modifiers: KeyModifiers::NONE,
         };
-        let resp3 = drag.handle_mouse(&up, area, total, view, ScrollbarAxis::Horizontal);
+        let resp3 = drag.handle_mouse(
+            &up,
+            area,
+            total,
+            view,
+            current_off,
+            ScrollbarAxis::Horizontal,
+        );
         assert!(resp3.is_none());
+        assert!(!drag.dragging);
+    }
+
+    // ── ScrollbarDrag regression tests ────────────────────────────
+
+    const SB_TOTAL: usize = 100;
+    const SB_VIEW: usize = 20;
+    const SB_H: i32 = 30;
+
+    fn sb_area() -> LayoutRect {
+        LayoutRect {
+            x: 79,
+            y: 0,
+            width: 1,
+            height: SB_H as u16,
+        }
+    }
+
+    fn mouse_event(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn scrollbar_press_on_thumb_does_not_jump() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        // offset 30 → thumb at row 30/80 * (30-4) ≈ row 9
+        let offset = 30usize;
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 10);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert_eq!(resp, Some(offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_press_on_thumb_edge_with_tolerance_does_not_jump() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 30usize;
+        // Strict math: thumb starts at rel row 9. Click at row 8 (1 cell above, inside tolerance).
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 8);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert_eq!(
+            resp,
+            Some(offset),
+            "1-cell tolerance should absorb edge click"
+        );
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_press_outside_tolerance_jumps() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 30usize;
+        // Click at row 7 (2 cells above strict math, 1 cell outside tolerance).
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 7);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(
+            resp.is_some_and(|o| o < offset),
+            "clicking outside tolerance should jump"
+        );
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_press_in_track_jumps() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 0usize;
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 20);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(resp.is_some_and(|o| o > offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_drag_tracks_cursor_1to1() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 0usize;
+        let press = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 2);
+        let r1 = drag.handle_mouse(
+            &press,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert_eq!(r1, Some(offset));
+        let drag_evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 79, 5);
+        let r2 = drag.handle_mouse(
+            &drag_evt,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(r2.is_some_and(|o| o > offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_release_ends_drag() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let offset = 0usize;
+        let press = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 1);
+        drag.handle_mouse(
+            &press,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(drag.dragging);
+        let up = mouse_event(MouseEventKind::Release(MouseButton::Left), 79, 5);
+        let r = drag.handle_mouse(
+            &up,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Vertical,
+        );
+        assert!(r.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_drag_to_bottom_reaches_max_offset() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let total = SB_TOTAL;
+        let view = SB_VIEW;
+        let max_offset = total - view;
+        // Press on thumb at mouse_rel=2 (middleish of thumb)
+        let press = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 3);
+        let r1 = drag.handle_mouse(&press, area, total, view, 0, ScrollbarAxis::Vertical);
+        assert_eq!(r1, Some(0));
+        assert!(drag.dragging);
+        // Drag to the very bottom cell of the track (mouse_rel = SB_H - 1)
+        let drag_evt = mouse_event(
+            MouseEventKind::Drag(MouseButton::Left),
+            79,
+            (SB_H - 1) as u16,
+        );
+        let r2 = drag.handle_mouse(&drag_evt, area, total, view, 0, ScrollbarAxis::Vertical);
+        assert_eq!(
+            r2,
+            Some(max_offset),
+            "dragging to bottom should reach max_offset={max_offset}"
+        );
+    }
+
+    #[test]
+    fn scrollbar_press_outside_area_ignored() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 78, 5);
+        let resp = drag.handle_mouse(&down, area, SB_TOTAL, SB_VIEW, 0, ScrollbarAxis::Vertical);
+        assert!(resp.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_drag_without_press_ignored() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let evt = mouse_event(MouseEventKind::Drag(MouseButton::Left), 79, 5);
+        let resp = drag.handle_mouse(&evt, area, SB_TOTAL, SB_VIEW, 0, ScrollbarAxis::Vertical);
+        assert!(resp.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_no_content_no_scroll() {
+        let mut drag = ScrollbarDrag::new();
+        let area = sb_area();
+        let evt = mouse_event(MouseEventKind::Press(MouseButton::Left), 79, 5);
+        let resp = drag.handle_mouse(&evt, area, SB_VIEW, SB_VIEW, 0, ScrollbarAxis::Vertical);
+        assert!(resp.is_none());
+        assert!(!drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_horizontal_press_on_thumb_does_not_jump() {
+        let mut drag = ScrollbarDrag::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 29,
+            width: 80,
+            height: 1,
+        };
+        // offset 40 → thumb at col (40/80 * 64) = 32, size 16 → cols 32-47
+        let offset = 40usize;
+        // Click at col 40, well within the thumb
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 40, 29);
+        let resp = drag.handle_mouse(
+            &down,
+            area,
+            SB_TOTAL,
+            SB_VIEW,
+            offset,
+            ScrollbarAxis::Horizontal,
+        );
+        assert_eq!(resp, Some(offset));
+        assert!(drag.dragging);
+    }
+
+    #[test]
+    fn scrollbar_horizontal_press_outside_ignored() {
+        let mut drag = ScrollbarDrag::new();
+        let area = LayoutRect {
+            x: 0,
+            y: 29,
+            width: 80,
+            height: 1,
+        };
+        let down = mouse_event(MouseEventKind::Press(MouseButton::Left), 30, 28);
+        let resp = drag.handle_mouse(&down, area, SB_TOTAL, SB_VIEW, 0, ScrollbarAxis::Horizontal);
+        assert!(resp.is_none());
         assert!(!drag.dragging);
     }
 
     #[test]
     fn rect_contains_edge_cases() {
-        let r = Rect {
+        let r = LayoutRect {
             x: 0,
             y: 0,
             width: 0,
             height: 3,
         };
         assert!(!rect_contains(r, 0, 0));
-        let r2 = Rect {
+        let r2 = LayoutRect {
             x: 1,
             y: 1,
             width: 2,
@@ -915,7 +1293,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_view_full_mode_intercepts_all_scroll_keys() {
+    fn scroll_view_full_mode_intercepts_arrow_keys() {
         let mut sv = ScrollViewComponent::new(EventRecorder {
             received_scroll: false,
         });
@@ -930,11 +1308,45 @@ mod tests {
         ));
         let result = sv.handle_events(&up, &ctx);
         assert!(
+            !result.is_ignored(),
+            "Full mode must intercept Up for scrolling"
+        );
+        assert!(
             matches!(result, EventResult::Action(TermWmAction::ScrollView(-1))),
-            "Full mode must intercept Up"
+            "Up should produce ScrollView(-1)"
+        );
+        assert!(
+            !sv.content.borrow().received_scroll,
+            "Up must NOT reach the child component"
         );
 
         sv.content.borrow_mut().received_scroll = false;
+        let down = Event::Key(term_wm_core::events::KeyEvent::new(
+            term_wm_core::events::KeyCode::Down,
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
+        ));
+        let result = sv.handle_events(&down, &ctx);
+        assert!(!result.is_ignored(), "Full mode must intercept Down");
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::ScrollView(1))),
+            "Down should produce ScrollView(1)"
+        );
+        assert!(
+            !sv.content.borrow().received_scroll,
+            "Down must NOT reach the child component"
+        );
+    }
+
+    #[test]
+    fn scroll_view_full_mode_intercepts_pagination_keys() {
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        sv.set_keyboard_mode(ScrollKeyMode::Full);
+
+        let ctx = ComponentContext::new(true);
+
         let home = Event::Key(term_wm_core::events::KeyEvent::new(
             term_wm_core::events::KeyCode::Home,
             term_wm_core::events::KeyModifiers::NONE,
@@ -1126,6 +1538,75 @@ mod tests {
             handle.info().offset_y,
             90,
             "should stay at old bottom when sticky_bottom is false"
+        );
+    }
+
+    #[test]
+    fn delegates_alternate_screen_transition_to_child() {
+        let child = term_wm_core::window::test_component::ActionRecorder::default();
+        let mut sv = ScrollViewComponent::new(child);
+        // ActionRecorder returns None by default
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn delegates_alternate_screen_transition_returns_none() {
+        let child = term_wm_core::window::test_component::ActionRecorder::default();
+        let mut sv = ScrollViewComponent::new(child);
+        let r1 = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
+        assert_eq!(r1, None);
+        let r2 = Component::<TermWmAction>::take_alternate_screen_transition(&mut sv);
+        assert_eq!(r2, None);
+    }
+
+    #[test]
+    fn scrollbar_persistent_state_tracks_overflow() {
+        let sv = ScrollViewComponent::new(
+            term_wm_core::window::test_component::ActionRecorder::default(),
+        );
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
+
+        assert!(!sv.scroll_state.borrow().last_needs_vertical);
+
+        let inner = sv.compute_layout(area, false, false);
+        assert_eq!(inner.width, 80);
+
+        let inner = sv.compute_layout(area, true, false);
+        assert_eq!(inner.width, 79);
+    }
+
+    #[test]
+    fn scrollbar_off_transition_when_content_fits() {
+        let mut sv = ScrollViewComponent::new(
+            term_wm_core::window::test_component::ActionRecorder::default(),
+        );
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 10,
+        };
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+
+        sv.scroll_state.borrow_mut().last_needs_vertical = true;
+        sv.scroll_state.borrow_mut().content_width = 80;
+        sv.scroll_state.borrow_mut().content_height = 9;
+
+        let rect = crate::helpers::layout_rect_to_clipped_rect(area);
+        let buffer = ratatui::buffer::Buffer::empty(rect);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        sv.render(&mut backend, area, &ctx, &mut registry);
+
+        assert!(
+            !sv.scroll_state.borrow().last_needs_vertical,
+            "ScrollViewComponent::render() must flip scrollbar OFF when content fits at W-1"
         );
     }
 }

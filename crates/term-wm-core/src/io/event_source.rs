@@ -55,6 +55,11 @@ pub trait EventSource {
         Vec::new()
     }
 
+    /// Take accumulated direct-input routing transitions. Default returns empty.
+    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, bool)> {
+        Vec::new()
+    }
+
     /// Take accumulated dirty-window keys and reset the set.
     ///
     /// After a successful render the runner calls this to signal that all
@@ -63,6 +68,15 @@ pub trait EventSource {
     /// event sources that do not track dirty windows.
     fn take_dirty_windows(&mut self) -> std::collections::HashSet<crate::window::WindowKey> {
         std::collections::HashSet::new()
+    }
+
+    /// Signal that the application needs a redraw on the next frame.
+    /// Default no-op — override in concrete drivers that support it.
+    fn request_redraw(&mut self) {}
+
+    /// Consume the pending redraw flag. Override in concrete drivers.
+    fn take_redraw_request(&mut self) -> bool {
+        false
     }
 }
 
@@ -109,6 +123,18 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn take_dirty_windows(&mut self) -> std::collections::HashSet<crate::window::WindowKey> {
         (**self).take_dirty_windows()
+    }
+
+    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, bool)> {
+        (**self).take_direct_input_changed()
+    }
+
+    fn request_redraw(&mut self) {
+        (**self).request_redraw()
+    }
+
+    fn take_redraw_request(&mut self) -> bool {
+        (**self).take_redraw_request()
     }
 }
 

@@ -1,76 +1,12 @@
+use term_wm_events::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
-// Event types matching term_wm_core::events
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyCode {
-    Char(char),
-    Enter,
-    Tab,
-    Backspace,
-    Esc,
-    Left,
-    Right,
-    Up,
-    Down,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Delete,
-    Insert,
-    F(u8),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyModifiers {
-    pub shift: bool,
-    pub control: bool,
-    pub alt: bool,
-}
-
-impl KeyModifiers {
-    pub const NONE: Self = Self {
-        shift: false,
-        control: false,
-        alt: false,
-    };
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyEvent {
-    pub code: KeyCode,
-    pub modifiers: KeyModifiers,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Right,
-    Middle,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseEventKind {
-    Press(MouseButton),
-    Release(MouseButton),
-    Drag(MouseButton),
-    Moved,
-    ScrollUp,
-    ScrollDown,
-    ScrollLeft,
-    ScrollRight,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MouseEvent {
-    pub kind: MouseEventKind,
-    pub modifiers: KeyModifiers,
-    pub column: u16,
-    pub row: u16,
-}
-
 /// Convert a [`KeyEvent`] to the byte sequence to send to the PTY.
-pub fn key_to_bytes(key: &KeyEvent) -> Vec<u8> {
+/// Set `application_cursor_keys=true` when DECCKM (DECSET 1) is active,
+/// so unmodified arrow keys use SS3 (`\eOA`) instead of CSI (`\e[A`).
+/// Modified arrows (Shift/Ctrl/Alt) always use standard CSI regardless.
+/// Shift+Tab produces `\x1b[Z` (CSI backtab) per ANSI terminal standard.
+pub fn key_to_bytes(key: &KeyEvent, application_cursor_keys: bool) -> Vec<u8> {
     match (key.code, key.modifiers) {
         (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m.shift => {
             let ch = if m.shift { c.to_ascii_uppercase() } else { c };
@@ -88,7 +24,22 @@ pub fn key_to_bytes(key: &KeyEvent) -> Vec<u8> {
         (KeyCode::Enter, _) => vec![b'\r'],
         (KeyCode::Backspace, _) => vec![0x7f],
         (KeyCode::Esc, _) => vec![0x1b],
+        (KeyCode::Tab, m) if m.shift => b"\x1b[Z".to_vec(),
         (KeyCode::Tab, _) => vec![b'\t'],
+        // Application Cursor Keys (DECCKM): SS3 for unmodified arrows only
+        (KeyCode::Up, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOA".to_vec()
+        }
+        (KeyCode::Down, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOB".to_vec()
+        }
+        (KeyCode::Right, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOC".to_vec()
+        }
+        (KeyCode::Left, m) if application_cursor_keys && m == KeyModifiers::NONE => {
+            b"\x1bOD".to_vec()
+        }
+        // Normal cursor keys (CSI sequences)
         (KeyCode::Up, _) => b"\x1b[A".to_vec(),
         (KeyCode::Down, _) => b"\x1b[B".to_vec(),
         (KeyCode::Right, _) => b"\x1b[C".to_vec(),
@@ -244,25 +195,35 @@ pub fn mouse_event_to_bytes(mouse: &MouseEvent, encoding: MouseProtocolEncoding)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use term_wm_events::KeyKind;
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
-        KeyEvent { code, modifiers }
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyKind::Press,
+        }
+    }
+
+    /// Test helper: calls key_to_bytes with application_cursor_keys=false.
+    fn kb(key: &KeyEvent) -> Vec<u8> {
+        key_to_bytes(key, false)
     }
 
     // --- key_to_bytes ---
 
     #[test]
     fn key_to_bytes_char_and_controls() {
-        let b = key_to_bytes(&key(KeyCode::Char('x'), KeyModifiers::NONE));
+        let b = kb(&key(KeyCode::Char('x'), KeyModifiers::NONE));
         assert_eq!(b, b"x".to_vec());
 
-        let enter = key_to_bytes(&key(KeyCode::Enter, KeyModifiers::NONE));
+        let enter = kb(&key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(enter, vec![b'\r']);
 
-        let back = key_to_bytes(&key(KeyCode::Backspace, KeyModifiers::NONE));
+        let back = kb(&key(KeyCode::Backspace, KeyModifiers::NONE));
         assert_eq!(back, vec![0x7f]);
 
-        let ctrl_a = key_to_bytes(&key(
+        let ctrl_a = kb(&key(
             KeyCode::Char('a'),
             KeyModifiers {
                 shift: false,
@@ -275,7 +236,7 @@ mod tests {
 
     #[test]
     fn key_to_bytes_alt() {
-        let alt_x = key_to_bytes(&key(
+        let alt_x = kb(&key(
             KeyCode::Char('x'),
             KeyModifiers {
                 shift: false,
@@ -288,37 +249,47 @@ mod tests {
 
     #[test]
     fn key_to_bytes_delete_insert() {
-        let del = key_to_bytes(&key(KeyCode::Delete, KeyModifiers::NONE));
+        let del = kb(&key(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(del, b"\x1b[3~");
 
-        let ins = key_to_bytes(&key(KeyCode::Insert, KeyModifiers::NONE));
+        let ins = kb(&key(KeyCode::Insert, KeyModifiers::NONE));
         assert_eq!(ins, b"\x1b[2~");
     }
 
     #[test]
     fn key_to_bytes_fkeys() {
-        let f1 = key_to_bytes(&key(KeyCode::F(1), KeyModifiers::NONE));
+        let f1 = kb(&key(KeyCode::F(1), KeyModifiers::NONE));
         assert_eq!(f1, b"\x1bOP");
 
-        let f5 = key_to_bytes(&key(KeyCode::F(5), KeyModifiers::NONE));
+        let f5 = kb(&key(KeyCode::F(5), KeyModifiers::NONE));
         assert_eq!(f5, b"\x1b[15~");
     }
 
     #[test]
     fn key_to_bytes_backtab() {
-        let bt = key_to_bytes(&key(KeyCode::Tab, KeyModifiers::NONE));
+        let bt = kb(&key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(bt, b"\t");
+
+        let shift_tab = kb(&key(
+            KeyCode::Tab,
+            KeyModifiers {
+                shift: true,
+                control: false,
+                alt: false,
+            },
+        ));
+        assert_eq!(shift_tab, b"\x1b[Z");
     }
 
     #[test]
     fn key_to_bytes_unicode() {
-        let u = key_to_bytes(&key(KeyCode::Char('é'), KeyModifiers::NONE));
+        let u = kb(&key(KeyCode::Char('é'), KeyModifiers::NONE));
         assert_eq!(u, "é".as_bytes());
     }
 
     #[test]
     fn key_to_bytes_shift_uppercase() {
-        let s = key_to_bytes(&key(
+        let s = kb(&key(
             KeyCode::Char('a'),
             KeyModifiers {
                 shift: true,
@@ -327,6 +298,23 @@ mod tests {
             },
         ));
         assert_eq!(s, b"A");
+    }
+
+    #[test]
+    fn key_to_bytes_media_keys_return_empty() {
+        for code in &[
+            KeyCode::MediaPlayPause,
+            KeyCode::MediaStop,
+            KeyCode::MediaTrackNext,
+            KeyCode::MediaTrackPrevious,
+        ] {
+            let ev = key(*code, KeyModifiers::NONE);
+            assert!(
+                key_to_bytes(&ev, false).is_empty(),
+                "Media key {:?} must produce empty bytes",
+                code
+            );
+        }
     }
 
     // --- ctrl_char ---
@@ -458,5 +446,81 @@ mod tests {
         };
         let bytes = mouse_event_to_bytes(&m_down_ctrl, MouseProtocolEncoding::Default);
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 50, 33, 33]);
+    }
+
+    // --- key_to_bytes with DECCKM ---
+
+    #[test]
+    fn key_to_bytes_application_cursor_arrows() {
+        let up = key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(
+            key_to_bytes(&up, true),
+            b"\x1bOA",
+            "DECCKM: Up should emit SS3"
+        );
+        let down = key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(key_to_bytes(&down, true), b"\x1bOB");
+        let right = key(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(key_to_bytes(&right, true), b"\x1bOC");
+        let left = key(KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(key_to_bytes(&left, true), b"\x1bOD");
+    }
+
+    #[test]
+    fn key_to_bytes_application_cursor_off_uses_csi() {
+        let up = key(KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(
+            key_to_bytes(&up, false),
+            b"\x1b[A",
+            "Normal mode: Up should emit CSI"
+        );
+    }
+
+    #[test]
+    fn key_to_bytes_application_cursor_modified_uses_csi() {
+        // Shift+Up should always use CSI even in DECCKM mode
+        let shift_up = key(
+            KeyCode::Up,
+            KeyModifiers {
+                shift: true,
+                control: false,
+                alt: false,
+            },
+        );
+        assert_eq!(
+            key_to_bytes(&shift_up, true),
+            b"\x1b[A",
+            "Modified arrows must use CSI even when DECCKM active"
+        );
+
+        // Ctrl+Up should always use CSI
+        let ctrl_up = key(
+            KeyCode::Up,
+            KeyModifiers {
+                shift: false,
+                control: true,
+                alt: false,
+            },
+        );
+        assert_eq!(
+            key_to_bytes(&ctrl_up, true),
+            b"\x1b[A",
+            "Ctrl+Up must use CSI even when DECCKM active"
+        );
+
+        // Alt+Up should always use CSI
+        let alt_up = key(
+            KeyCode::Up,
+            KeyModifiers {
+                shift: false,
+                control: false,
+                alt: true,
+            },
+        );
+        assert_eq!(
+            key_to_bytes(&alt_up, true),
+            b"\x1b[A",
+            "Alt+Up must use CSI even when DECCKM active"
+        );
     }
 }

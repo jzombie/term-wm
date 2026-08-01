@@ -1,0 +1,11 @@
+[package]
+name = "term-wm-events"
+description = "Input event types (key, mouse, resize, paste) for term-wm."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+term-wm-layout-engine = { workspace = true }

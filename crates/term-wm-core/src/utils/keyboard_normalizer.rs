@@ -1,9 +1,16 @@
-// NOTE: This file provides `KeyboardNormalizer`, a lightweight helper for
-// normalizing raw keyboard `Event`s (e.g., converting Shift+Tab to BackTab
-// and filtering key-release events). It is _not_ a standalone keyboard
-// driver. The actual input driver behavior (queueing, `next_key`, and
-// combined keyboard/mouse handling) is implemented in
-// `src/io/console_event_source.rs` under the consolidated `EventSource` trait.
+// NOTE: `KeyboardNormalizer` enforces domain-specific event invariants (e.g., stripping
+// `KeyKind::Release` events).
+//
+// ARCHITECTURAL BOUNDARY: This logic resides in the core domain rather than the infrastructure
+// adapter (`term-wm-crossterm-adapter`) by design. The adapter is an Anti-Corruption Layer
+// strictly responsible for 1-to-1 mapping of foreign I/O types (`crossterm::event`) into
+// pure domain types (`term_wm_core::events::Event`).
+//
+// This normalizer applies business logic to those resulting domain types. Decoupling this
+// from the I/O layer guarantees consistent terminal state transitions regardless of the
+// event source (e.g., local crossterm polling, remote muxio IPC clients, or headless test mocks).
+
+#[allow(unused_imports)]
 use crate::events::{Event, KeyCode, KeyKind};
 
 #[derive(Default)]
@@ -16,20 +23,10 @@ impl KeyboardNormalizer {
 
     pub fn normalize(&mut self, evt: Event) -> Option<Event> {
         match evt {
-            Event::Key(mut key) => {
-                // Convert Shift+Tab to BackTab
-                if key.code == KeyCode::Tab && key.modifiers.shift {
-                    // Note: We don't have BackTab in our KeyCode enum, so we'll keep it as Tab
-                    // but remove the shift modifier. The keybindings system handles this.
-                    key.modifiers.shift = false;
-                }
-                if cfg!(windows) {
-                    match key.kind {
-                        KeyKind::Release => return None,
-                        KeyKind::Repeat => return None,
-                        KeyKind::Press => {}
-                    }
-                } else if key.kind == KeyKind::Release {
+            Event::Key(key) => {
+                // Shift+Tab passes through — FocusPrev keybinding matches Tab+Shift.
+                // BackTab normalization is handled in term-wm-crossterm-adapter.
+                if key.kind == KeyKind::Release {
                     return None;
                 }
                 Some(Event::Key(key))
@@ -59,21 +56,20 @@ mod tests {
         let out = norm.normalize(evt).expect("should return event");
         if let Event::Key(k) = out {
             assert!(matches!(k.code, KeyCode::Tab));
-            assert!(!k.modifiers.shift);
+            assert!(k.modifiers.shift);
         } else {
             panic!("expected key event");
         }
     }
 
     #[test]
-    fn release_key_is_ignored_on_unix() {
+    fn release_key_is_ignored() {
         let mut norm = KeyboardNormalizer::new();
         let evt = Event::Key(crate::events::KeyEvent {
             code: KeyCode::Char('a'),
             modifiers: KeyModifiers::NONE,
             kind: KeyKind::Release,
         });
-        // On non-windows this should return None
         let out = norm.normalize(evt);
         assert!(out.is_none());
     }
@@ -101,31 +97,21 @@ mod tests {
         let out = norm.normalize(evt).expect("should return event");
         if let Event::Key(k) = out {
             assert!(matches!(k.code, KeyCode::Tab));
-            assert!(!k.modifiers.shift);
+            assert!(k.modifiers.shift);
         } else {
             panic!("expected key event");
         }
     }
 
     #[test]
-    fn repeat_key_passes_through_on_unix() {
+    fn repeat_key_passes_through() {
         let mut norm = KeyboardNormalizer::new();
         let evt = Event::Key(crate::events::KeyEvent {
             code: KeyCode::Char('a'),
             modifiers: KeyModifiers::NONE,
             kind: KeyKind::Repeat,
         });
-        // On non-Windows, Repeat passes through (only Release is filtered)
-        #[cfg(not(target_os = "windows"))]
-        {
-            let out = norm.normalize(evt);
-            assert!(out.is_some(), "Repeat must pass through on Unix");
-        }
-        // On Windows, Repeat is filtered
-        #[cfg(target_os = "windows")]
-        {
-            let out = norm.normalize(evt);
-            assert!(out.is_none(), "Repeat must be filtered on Windows");
-        }
+        let out = norm.normalize(evt);
+        assert!(out.is_some(), "Repeat must pass through on all platforms");
     }
 }
