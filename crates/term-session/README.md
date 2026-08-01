@@ -2,7 +2,7 @@
 
 A generic terminal session reproducer: run one PTY in a detached server process and attach as many terminals to it as you like — on the same machine or over SSH.
 
-> term-wm uses term-session as the backbone of its terminal session persistence. The crate is not tied to term-wm, though: any terminal program can use it to persist or duplicate a live session.
+> _[term-wm](https://crates.io/crates/term-wm) uses `term-session` as the backbone of its terminal session persistence. The crate is not tied to term-wm, though: any terminal program can use it to persist or duplicate a live session._
 
 ## What it does
 
