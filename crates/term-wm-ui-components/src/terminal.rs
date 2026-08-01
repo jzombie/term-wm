@@ -3,18 +3,17 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, PtySize};
-use ratatui::{
-    layout::Rect,
-    style::{Color as TColor, Modifier, Style},
-};
+use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
 use vt100::MouseProtocolEncoding;
 
-use crate::helpers::{color_to_ratatui, decorate_link_style, layout_rect_to_rect};
+use crate::helpers::{
+    color_to_ratatui, decorate_link_style, layout_rect_to_clipped_rect, localize_coordinate,
+    localize_coordinate_clamped,
+};
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
-use term_wm_core::hitbox_registry::{HitTarget, next_component_id};
-use term_wm_core::layout::rect_contains;
+use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::utils::linkifier::{LinkHandler, LinkOverlay, Linkifier, OverlaySignature};
 use term_wm_core::utils::selectable_text::{
     LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
@@ -29,60 +28,8 @@ use term_wm_pty_engine::{Pane, PtyStatus};
 // It determines how many lines you can scroll up to see.
 const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 
-// TODO: Refactor?
-/// Convert core-owned MouseEventKind to pty-engine MouseEventKind
-fn convert_mouse_event_kind(
-    kind: MouseEventKind,
-) -> term_wm_pty_engine::input_encoding::MouseEventKind {
-    match kind {
-        MouseEventKind::Press(btn) => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::Press(convert_mouse_button(btn))
-        }
-        MouseEventKind::Release(btn) => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::Release(convert_mouse_button(btn))
-        }
-        MouseEventKind::Drag(btn) => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::Drag(convert_mouse_button(btn))
-        }
-        MouseEventKind::Moved => term_wm_pty_engine::input_encoding::MouseEventKind::Moved,
-        MouseEventKind::ScrollUp => term_wm_pty_engine::input_encoding::MouseEventKind::ScrollUp,
-        MouseEventKind::ScrollDown => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::ScrollDown
-        }
-        MouseEventKind::ScrollLeft => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::ScrollLeft
-        }
-        MouseEventKind::ScrollRight => {
-            term_wm_pty_engine::input_encoding::MouseEventKind::ScrollRight
-        }
-    }
-}
-
-// TODO: Refactor?
-fn convert_mouse_button(btn: MouseButton) -> term_wm_pty_engine::input_encoding::MouseButton {
-    match btn {
-        MouseButton::Left => term_wm_pty_engine::input_encoding::MouseButton::Left,
-        MouseButton::Right => term_wm_pty_engine::input_encoding::MouseButton::Right,
-        MouseButton::Middle => term_wm_pty_engine::input_encoding::MouseButton::Middle,
-    }
-}
-
-// TODO: Refactor?
-fn convert_pty_mouse_event(mouse: &MouseEvent) -> term_wm_pty_engine::input_encoding::MouseEvent {
-    term_wm_pty_engine::input_encoding::MouseEvent {
-        kind: convert_mouse_event_kind(mouse.kind),
-        modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
-            shift: mouse.modifiers.shift,
-            control: mouse.modifiers.control,
-            alt: mouse.modifiers.alt,
-        },
-        column: mouse.column,
-        row: mouse.row,
-    }
-}
-
 pub struct TerminalComponent {
-    id: term_wm_core::hitbox_registry::ComponentId,
+    hitbox_id: HitboxId,
     pane: RefCell<Box<dyn Pane>>,
     last_size: Cell<(u16, u16)>,
     linkifier: Linkifier,
@@ -93,6 +40,8 @@ pub struct TerminalComponent {
     selection_enabled: bool,
     last_scrollback: Cell<usize>,
     last_max_scrollback: Cell<usize>,
+    last_mode_suppressed_scroll: Cell<bool>,
+    reported_alt_screen: Cell<bool>,
     window_key: Option<term_wm_core::window::WindowKey>,
 }
 
@@ -112,12 +61,16 @@ impl Component<TermWmAction> for TerminalComponent {
     ) -> EventResult<TermWmAction> {
         match event {
             Event::Key(key) => {
+                // Standard ANSI/VT100 PTY streams are strictly unidirectional byte
+                // triggers on key-down. Key releases are dropped because standard
+                // terminal emulators do not emit release sequences, and passing them
+                // through would send duplicate bytes or corrupt child process state.
                 if key.kind == KeyKind::Release {
                     return EventResult::Ignored;
                 }
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.shift
-                    && !self.pane.borrow_mut().alternate_screen()
+                    && !ctx.direct_mode()
                 {
                     let delta = if key.code == KeyCode::PageUp {
                         10isize
@@ -126,37 +79,8 @@ impl Component<TermWmAction> for TerminalComponent {
                     };
                     return EventResult::Action(TermWmAction::Scroll(delta));
                 }
-                // TODO: Refactor?
-                // Convert core-owned KeyEvent to pty-engine KeyEvent for key_to_bytes
-                let pty_key = term_wm_pty_engine::input_encoding::KeyEvent {
-                    code: match key.code {
-                        KeyCode::Char(c) => term_wm_pty_engine::input_encoding::KeyCode::Char(c),
-                        KeyCode::Enter => term_wm_pty_engine::input_encoding::KeyCode::Enter,
-                        KeyCode::Tab => term_wm_pty_engine::input_encoding::KeyCode::Tab,
-                        KeyCode::Backspace => {
-                            term_wm_pty_engine::input_encoding::KeyCode::Backspace
-                        }
-                        KeyCode::Esc => term_wm_pty_engine::input_encoding::KeyCode::Esc,
-                        KeyCode::Left => term_wm_pty_engine::input_encoding::KeyCode::Left,
-                        KeyCode::Right => term_wm_pty_engine::input_encoding::KeyCode::Right,
-                        KeyCode::Up => term_wm_pty_engine::input_encoding::KeyCode::Up,
-                        KeyCode::Down => term_wm_pty_engine::input_encoding::KeyCode::Down,
-                        KeyCode::Home => term_wm_pty_engine::input_encoding::KeyCode::Home,
-                        KeyCode::End => term_wm_pty_engine::input_encoding::KeyCode::End,
-                        KeyCode::PageUp => term_wm_pty_engine::input_encoding::KeyCode::PageUp,
-                        KeyCode::PageDown => term_wm_pty_engine::input_encoding::KeyCode::PageDown,
-                        KeyCode::Delete => term_wm_pty_engine::input_encoding::KeyCode::Delete,
-                        KeyCode::Insert => term_wm_pty_engine::input_encoding::KeyCode::Insert,
-                        KeyCode::F(n) => term_wm_pty_engine::input_encoding::KeyCode::F(n),
-                        _ => return EventResult::Ignored, // Media keys not supported
-                    },
-                    modifiers: term_wm_pty_engine::input_encoding::KeyModifiers {
-                        shift: key.modifiers.shift,
-                        control: key.modifiers.control,
-                        alt: key.modifiers.alt,
-                    },
-                };
-                let bytes = key_to_bytes(&pty_key);
+                let app_cursor = self.pane.borrow().is_application_cursor_keys_active();
+                let bytes = key_to_bytes(key, app_cursor);
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }
@@ -164,19 +88,32 @@ impl Component<TermWmAction> for TerminalComponent {
             }
             Event::Mouse(mouse) => {
                 if !ctx.direct_mode() {
+                    // Right-click paste (Windows Cmd/PS convention).
+                    // Only in normal mode — in Direct Mode (tmux, vim, etc.)
+                    // right-click passes through to the running program.
+                    match mouse.kind {
+                        MouseEventKind::Press(MouseButton::Right)
+                        | MouseEventKind::Drag(MouseButton::Right) => {
+                            return EventResult::Consumed;
+                        }
+                        MouseEventKind::Release(MouseButton::Right) => {
+                            return EventResult::Action(TermWmAction::PasteClipboard);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !ctx.direct_mode() {
                     let selection_ready = self.selection_enabled;
                     let area = ctx.screen_area().unwrap_or_default();
                     if handle_selection_mouse(self, selection_ready, mouse, area) {
                         return EventResult::Consumed;
                     }
-                    if self.try_handle_link_click(layout_rect_to_rect(area), mouse) {
+                    if self.try_handle_link_click(area, mouse) {
                         return EventResult::Consumed;
                     }
                 }
                 let area = ctx.screen_area().unwrap_or_default();
-                if !rect_contains(area, mouse.column, mouse.row) {
-                    return EventResult::Ignored;
-                }
                 let mut pane = self.pane.borrow_mut();
                 let parser_arc = pane.shared_parser();
                 let parser = parser_arc.lock().unwrap();
@@ -189,22 +126,42 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
 
                 let mode = screen.mouse_protocol_mode();
-                let pty_kind = convert_mouse_event_kind(mouse.kind);
-                if !mouse_event_allowed(mode, pty_kind) {
+                if !mouse_event_allowed(mode, mouse.kind) {
                     return EventResult::Ignored;
                 }
+                let Some((local_col, local_row)) =
+                    localize_coordinate(area, mouse.column, mouse.row)
+                else {
+                    return EventResult::Ignored;
+                };
                 let local = MouseEvent {
-                    column: mouse.column.saturating_sub(area.x as u16),
-                    row: mouse.row.saturating_sub(area.y as u16),
+                    column: local_col,
+                    row: local_row,
                     kind: mouse.kind,
                     modifiers: mouse.modifiers,
                 };
-                let pty_mouse = convert_pty_mouse_event(&local);
-                let bytes = mouse_event_to_bytes(&pty_mouse, encoding);
+                let bytes = mouse_event_to_bytes(&local, encoding);
                 if bytes.is_empty() {
                     return EventResult::Ignored;
                 }
                 EventResult::Action(TermWmAction::MouseToBytes(bytes))
+            }
+            Event::Paste(text) => {
+                let bracketed_paste = {
+                    let mut pane = self.pane.borrow_mut();
+                    let parser = pane.shared_parser();
+                    let parser_lock = parser.lock().unwrap();
+                    parser_lock.screen().bracketed_paste()
+                };
+                let bytes = if bracketed_paste {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    wrapped
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                EventResult::Action(TermWmAction::KeyToBytes(bytes))
             }
             _ => EventResult::Ignored,
         }
@@ -213,27 +170,50 @@ impl Component<TermWmAction> for TerminalComponent {
     fn update(
         &mut self,
         action: TermWmAction,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
         _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
     ) {
         match action {
             TermWmAction::KeyToBytes(bytes) => {
                 self.selection.borrow_mut().clear();
-                if self.pane.borrow_mut().scrollback() > 0 {
-                    self.pane.borrow_mut().set_scrollback(0);
+                self.pane.borrow_mut().set_scrollback(0);
+                if let Some(handle) = ctx.scroll_handle() {
+                    handle.scroll_vertical_to(usize::MAX);
                 }
-                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal input write failed: {_err}");
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal input write failed");
                 }
             }
             TermWmAction::Scroll(delta) => {
                 self.scroll_scrollback(delta);
             }
             TermWmAction::MouseToBytes(bytes) => {
-                if let Err(_err) = self.pane.borrow_mut().write_bytes(&bytes) {
-                    #[cfg(windows)]
-                    eprintln!("terminal mouse write failed: {_err}");
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal mouse write failed");
+                }
+            }
+            TermWmAction::ClipboardPaste(text) => {
+                let bracketed_paste = {
+                    let mut pane = self.pane.borrow_mut();
+                    let parser = pane.shared_parser();
+                    let parser_lock = parser.lock().unwrap();
+                    parser_lock.screen().bracketed_paste()
+                };
+                let bytes = if bracketed_paste {
+                    let mut wrapped = b"\x1b[200~".to_vec();
+                    wrapped.extend_from_slice(text.as_bytes());
+                    wrapped.extend_from_slice(b"\x1b[201~");
+                    wrapped
+                } else {
+                    text.as_bytes().to_vec()
+                };
+                self.selection.borrow_mut().clear();
+                self.pane.borrow_mut().set_scrollback(0);
+                if let Some(handle) = ctx.scroll_handle() {
+                    handle.scroll_vertical_to(usize::MAX);
+                }
+                if let Err(err) = self.pane.borrow_mut().write_bytes(&bytes) {
+                    tracing::warn!(?err, "terminal paste write failed");
                 }
             }
             _ => {}
@@ -271,12 +251,15 @@ impl Component<TermWmAction> for TerminalComponent {
             width: area.width,
             height: area.height,
         });
-        let _screen_area = layout_rect_to_rect(screen_area_lr);
         let _exited = self.pane.borrow_mut().has_exited();
         // Register this terminal's clickable area in the hitbox registry.
         // Use screen coordinates so hit_test matches screen-space mouse positions.
         if let Some(key) = ctx.window_key() {
-            registry.register(HitTarget::Component(key, self.id), screen_area_lr);
+            registry.register(
+                self.hitbox_id,
+                term_wm_core::hitbox_registry::ComponentOwner::Window(key),
+                screen_area_lr,
+            );
         }
         self.render_screen(backend, area, ctx);
     }
@@ -308,6 +291,10 @@ impl Component<TermWmAction> for TerminalComponent {
         self.selection_text_for_range(range)
     }
 
+    fn clear_selection(&mut self) {
+        self.selection.get_mut().clear();
+    }
+
     fn paste(&mut self, text: &str) -> bool {
         if text.is_empty() {
             return false;
@@ -319,6 +306,16 @@ impl Component<TermWmAction> for TerminalComponent {
         self.pane.get_mut().take_pending_title()
     }
 
+    fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+        let current = self.pane.get_mut().alternate_screen();
+        if current != self.reported_alt_screen.get() {
+            self.reported_alt_screen.set(current);
+            Some(current)
+        } else {
+            None
+        }
+    }
+
     fn set_selection_enabled(&mut self, enabled: bool) {
         if self.selection_enabled == enabled {
             return;
@@ -327,6 +324,10 @@ impl Component<TermWmAction> for TerminalComponent {
         if !enabled {
             self.selection.get_mut().clear();
         }
+    }
+
+    fn hitbox_id(&self) -> Option<HitboxId> {
+        Some(self.hitbox_id)
     }
 }
 
@@ -350,7 +351,7 @@ impl TerminalComponent {
     /// Construct a terminal wrapper around any Pane implementation.
     pub fn from_pane(pane: Box<dyn Pane>) -> Self {
         Self {
-            id: next_component_id(),
+            hitbox_id: HitboxId::new(),
             pane: RefCell::new(pane),
             last_size: Cell::new((80, 24)),
             linkifier: Linkifier::new(),
@@ -361,6 +362,8 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            last_mode_suppressed_scroll: Cell::new(false),
+            reported_alt_screen: Cell::new(false),
             window_key: None,
         }
     }
@@ -373,7 +376,7 @@ impl TerminalComponent {
             DEFAULT_SCROLLBACK_LEN,
         )?);
         let comp = Self {
-            id: next_component_id(),
+            hitbox_id: HitboxId::new(),
             pane: RefCell::new(pane),
             last_size: Cell::new((size.cols, size.rows)),
             linkifier: Linkifier::new(),
@@ -384,6 +387,8 @@ impl TerminalComponent {
             selection_enabled: false,
             last_scrollback: Cell::new(0),
             last_max_scrollback: Cell::new(0),
+            last_mode_suppressed_scroll: Cell::new(false),
+            reported_alt_screen: Cell::new(false),
             window_key: None,
         };
         Ok(comp)
@@ -391,6 +396,17 @@ impl TerminalComponent {
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
         self.pane.get_mut().write_bytes(input)
+    }
+
+    /// Attach a callback to the underlying PTY's status event stream.
+    /// Call after `open_window` so the closure can capture the known `WindowKey`.
+    pub fn set_pty_callback<F>(&self, f: F)
+    where
+        F: Fn(term_wm_pty_engine::PtyStatus) + Send + Sync + 'static,
+    {
+        self.pane
+            .borrow_mut()
+            .set_status_callback(Some(Box::new(f)));
     }
 
     #[allow(clippy::collapsible_if)]
@@ -450,6 +466,11 @@ impl TerminalComponent {
     }
 
     #[cfg(test)]
+    pub fn last_mode_suppressed_scroll(&self) -> bool {
+        self.last_mode_suppressed_scroll.get()
+    }
+
+    #[cfg(test)]
     pub fn pane_mut(&mut self) -> &mut Box<dyn Pane> {
         self.pane.get_mut()
     }
@@ -464,60 +485,84 @@ impl TerminalComponent {
         area: LayoutRect,
         ctx: &ComponentContext,
     ) {
-        let area = layout_rect_to_rect(area);
-        // Drag maintenance via RefCell borrow_mut (safe interior mutability
-        // during the otherwise-immutable render phase).
+        let screen_area = ctx.screen_area().unwrap_or(area);
+
+        // 1. PULL EXTERNAL SCROLL STATE FIRST — apply scroll wheel changes
+        //    to internal scrollback before drag maintenance uses them.
+        let sb_before_drag = {
+            let clipped = layout_rect_to_clipped_rect(area);
+            let mut pane = self.pane.borrow_mut();
+
+            if let Some(handle) = ctx.scroll_handle() {
+                let suppress_scroll = ctx.direct_mode();
+
+                if suppress_scroll {
+                    handle.set_content_size(clipped.width as usize, clipped.height as usize);
+                    pane.set_scrollback(0);
+                    self.last_mode_suppressed_scroll.set(true);
+                } else {
+                    let used = pane.max_scrollback();
+                    handle.set_content_size(clipped.width as usize, used + clipped.height as usize);
+
+                    if self.last_mode_suppressed_scroll.get() {
+                        self.last_mode_suppressed_scroll.set(false);
+                        pane.set_scrollback(0);
+                        handle.scroll_vertical_to(usize::MAX);
+                    } else {
+                        let current_sb = pane.scrollback();
+                        let view_offset = ctx.viewport().offset_y;
+                        if current_sb == 0 {
+                            if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
+                                let target_sb = used.saturating_sub(view_offset);
+                                pane.set_scrollback(target_sb);
+                            } else {
+                                handle.scroll_vertical_to(usize::MAX);
+                            }
+                        } else if current_sb != self.last_scrollback.get() {
+                            let new_offset = used.saturating_sub(current_sb);
+                            handle.scroll_vertical_to(new_offset);
+                        } else {
+                            let target_sb = used.saturating_sub(view_offset);
+                            if target_sb != current_sb {
+                                pane.set_scrollback(target_sb);
+                            }
+                        }
+                    }
+                    self.last_max_scrollback.set(used);
+                }
+            }
+            pane.scrollback()
+        };
+
+        // 2. MAINTAIN DRAG SELECTION — using accurate, freshly-pulled scroll state
         {
-            let screen_area_lr = ctx.screen_area().unwrap_or(LayoutRect {
-                x: area.x as i32,
-                y: area.y as i32,
-                width: area.width,
-                height: area.height,
-            });
-            let _screen_area = layout_rect_to_rect(screen_area_lr);
             let mut sel_guard = self.selection.borrow_mut();
             let mut dh = RenderDragHost {
                 selection: &mut sel_guard,
                 pane: &self.pane,
+                viewport_width: area.width,
+                viewport_height: area.height,
             };
-            maintain_selection_drag(&mut dh, screen_area_lr);
+            maintain_selection_drag(&mut dh, screen_area);
         }
 
+        // 3. PUSH INTERNAL AUTO-SCROLLS back to parent ScrollView
+        //    (only if scrollback changed during drag maintenance above)
         let mut pane = self.pane.borrow_mut();
-
-        // Synchronize scroll state with the shared Viewport
-        if !pane.alternate_screen()
+        let new_sb = pane.scrollback();
+        if new_sb != sb_before_drag
+            && !ctx.direct_mode()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
-            let view_height = area.height as usize;
-            let total_height = used + view_height;
-            handle.set_content_size(area.width as usize, total_height);
-
-            let current_sb = pane.scrollback();
-            let view_offset = ctx.viewport().offset_y;
-            if current_sb == 0 {
-                if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
-                    let target_sb = used.saturating_sub(view_offset);
-                    pane.set_scrollback(target_sb);
-                } else {
-                    handle.scroll_vertical_to(usize::MAX);
-                }
-            } else if current_sb != self.last_scrollback.get() {
-                let new_offset = used.saturating_sub(current_sb);
-                handle.scroll_vertical_to(new_offset);
-            } else {
-                let target_sb = used.saturating_sub(view_offset);
-                if target_sb != current_sb {
-                    pane.set_scrollback(target_sb);
-                }
-            }
-            self.last_max_scrollback.set(used);
+            handle.scroll_vertical_to(used.saturating_sub(new_sb));
         }
+        self.last_scrollback.set(new_sb);
 
-        let scrollback_value = pane.scrollback();
-        self.last_scrollback.set(scrollback_value);
+        // 4. Shadow to clipped Rect for ratatui rendering
+        let area = layout_rect_to_clipped_rect(area);
 
+        let scrollback_value = new_sb;
         let show_cursor = scrollback_value == 0;
         let used = pane.max_scrollback();
         let selection_row_base = used.saturating_sub(scrollback_value);
@@ -716,7 +761,6 @@ impl SelectionViewport for TerminalComponent {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        let area = layout_rect_to_rect(area);
         TerminalComponent::logical_position_from_point(self, area, column, row)
     }
 
@@ -767,26 +811,18 @@ impl TerminalComponent {
 
     fn logical_position_from_point(
         &mut self,
-        area: Rect,
+        area: LayoutRect,
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
-        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
-        let clamped_col = column.clamp(area.x, max_x);
-        let clamped_row = row.clamp(area.y, max_y);
-        let local_col = clamped_col.saturating_sub(area.x) as usize;
-        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let (local_col, local_row) = localize_coordinate_clamped(area, column, row)?;
         let pane = self.pane.get_mut();
         let scrollback_value = pane.scrollback();
         let used = pane.max_scrollback();
         let row_base = used.saturating_sub(scrollback_value);
         Some(LogicalPosition::new(
-            row_base.saturating_add(local_row),
-            local_col,
+            row_base.saturating_add(local_row as usize),
+            local_col as usize,
         ))
     }
 
@@ -890,23 +926,14 @@ impl TerminalComponent {
         self.pane.get_mut().set_status_callback(cb);
     }
 
-    fn link_at_position(&self, area: Rect, mouse: &MouseEvent) -> Option<String> {
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        if mouse.column < area.x
-            || mouse.column >= area.x.saturating_add(area.width)
-            || mouse.row < area.y
-            || mouse.row >= area.y.saturating_add(area.height)
-        {
-            return None;
-        }
-        let local_x = mouse.column.saturating_sub(area.x) as usize;
-        let local_y = mouse.row.saturating_sub(area.y) as usize;
-        self.link_overlay.borrow().link_at(local_y, local_x)
+    fn link_at_position(&self, area: LayoutRect, mouse: &MouseEvent) -> Option<String> {
+        let (local_x, local_y) = localize_coordinate(area, mouse.column, mouse.row)?;
+        self.link_overlay
+            .borrow()
+            .link_at(local_y as usize, local_x as usize)
     }
 
-    fn try_handle_link_click(&mut self, area: Rect, mouse: &MouseEvent) -> bool {
+    fn try_handle_link_click(&mut self, area: LayoutRect, mouse: &MouseEvent) -> bool {
         if !matches!(mouse.kind, MouseEventKind::Press(MouseButton::Left)) {
             return false;
         }
@@ -935,11 +962,29 @@ impl TerminalComponent {
 struct RenderDragHost<'a> {
     selection: &'a mut SelectionController,
     pane: &'a RefCell<Box<dyn Pane>>,
+    viewport_width: u16,
+    viewport_height: u16,
 }
 
 impl SelectionViewport for RenderDragHost<'_> {
     fn selection_viewport(&self, area: LayoutRect) -> LayoutRect {
         area
+    }
+
+    fn selection_viewport_offsets(&self) -> (usize, usize) {
+        let mut pane = self.pane.borrow_mut();
+        let scrollback = pane.scrollback();
+        let used = pane.max_scrollback();
+        (0, used.saturating_sub(scrollback))
+    }
+
+    fn selection_content_size(&self) -> (usize, usize) {
+        let mut pane = self.pane.borrow_mut();
+        let used = pane.max_scrollback();
+        (
+            self.viewport_width as usize,
+            used + self.viewport_height as usize,
+        )
     }
 
     fn logical_position_from_point(
@@ -948,23 +993,14 @@ impl SelectionViewport for RenderDragHost<'_> {
         column: u16,
         row: u16,
     ) -> Option<LogicalPosition> {
-        let area = layout_rect_to_rect(area);
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(area.width).saturating_sub(1);
-        let max_y = area.y.saturating_add(area.height).saturating_sub(1);
-        let clamped_col = column.clamp(area.x, max_x);
-        let clamped_row = row.clamp(area.y, max_y);
-        let local_col = clamped_col.saturating_sub(area.x) as usize;
-        let local_row = clamped_row.saturating_sub(area.y) as usize;
+        let (local_col, local_row) = localize_coordinate_clamped(area, column, row)?;
         let mut pane = self.pane.borrow_mut();
         let scrollback_value = pane.scrollback();
         let used = pane.max_scrollback();
         let row_base = used.saturating_sub(scrollback_value);
         Some(LogicalPosition::new(
-            row_base.saturating_add(local_row),
-            local_col,
+            row_base.saturating_add(local_row as usize),
+            local_col as usize,
         ))
     }
 
@@ -1044,6 +1080,9 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
 
 /// Simulated terminal pane for testing scroll synchronization logic without a
 /// real PTY process.
+///
+/// Also tracks written bytes so paste-forwarding tests can verify the exact
+/// byte sequence written to the child PTY (wrapped vs. raw).
 #[cfg(test)]
 struct TestPane {
     parser: std::sync::Arc<std::sync::Mutex<vt100::Parser>>,
@@ -1052,6 +1091,7 @@ struct TestPane {
     alt_screen: bool,
     pending_title: Option<String>,
     kill_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    written_bytes: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -1064,6 +1104,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            written_bytes: Vec::new(),
         }
     }
 
@@ -1076,6 +1117,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::clone(&kill_count),
+            written_bytes: Vec::new(),
         };
         (pane, kill_count)
     }
@@ -1102,7 +1144,8 @@ impl TestPane {
 
 #[cfg(test)]
 impl Pane for TestPane {
-    fn resize(&mut self, _size: PtySize) -> term_wm_pty_engine::PtyResult<()> {
+    fn resize(&mut self, size: PtySize) -> term_wm_pty_engine::PtyResult<()> {
+        self.set_parser_size(size.rows, size.cols);
         Ok(())
     }
 
@@ -1114,6 +1157,10 @@ impl Pane for TestPane {
         self.alt_screen
     }
 
+    fn requires_app_routing(&self) -> bool {
+        self.alt_screen
+    }
+
     fn scrollback(&mut self) -> usize {
         self.current_scrollback
     }
@@ -1122,7 +1169,8 @@ impl Pane for TestPane {
         self.current_scrollback = rows.min(self.max_sb);
     }
 
-    fn write_bytes(&mut self, _input: &[u8]) -> std::io::Result<()> {
+    fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
+        self.written_bytes.extend_from_slice(input);
         Ok(())
     }
 
@@ -1151,7 +1199,7 @@ impl Pane for TestPane {
     }
 
     fn last_bytes_text(&self) -> String {
-        String::new()
+        String::from_utf8_lossy(&self.written_bytes).to_string()
     }
 
     fn kill_child(&mut self) -> term_wm_pty_engine::PtyResult<()> {
@@ -1169,6 +1217,7 @@ impl Pane for TestPane {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use std::cell::RefCell;
     use std::rc::Rc;
     use term_wm_core::component_context::ScrollHandle;
@@ -1201,6 +1250,8 @@ mod tests {
                 pending_offset_x: None,
                 pending_offset_y: None,
                 sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
             },
         ));
         (
@@ -1226,7 +1277,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         let ctx = make_ctx(view_offset, handle);
         term.render(
             &mut backend,
@@ -1258,7 +1309,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         let ctx = make_ctx(view_offset, handle);
         term.render(
             &mut backend,
@@ -1424,8 +1475,8 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
-        let ctx = make_ctx(100, handle);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        let ctx = make_ctx(100, handle).with_direct_mode(true);
         term.render(
             &mut backend,
             LayoutRect {
@@ -1438,7 +1489,7 @@ mod tests {
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
         let sb = term.pane_mut().scrollback();
-        assert_eq!(sb, 50, "scrollback should be unchanged during alt screen");
+        assert_eq!(sb, 0, "scrollback cleared during alt screen");
         assert!(
             shared.borrow().pending_offset_y.is_none(),
             "viewport should NOT be touched during alt screen"
@@ -1446,7 +1497,7 @@ mod tests {
         assert_eq!(
             shared.borrow().content_height,
             24,
-            "content size should NOT have been set during alt screen"
+            "content size set to viewport height during alt screen"
         );
     }
 
@@ -1496,7 +1547,7 @@ mod tests {
             height: 24,
         };
         let buffer = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buffer, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
         let ctx = make_ctx(0, handle);
         term.render(
             &mut backend,
@@ -1865,7 +1916,7 @@ mod tests {
     fn mouse_selection_via_dispatch_focused_event() {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
-        use term_wm_core::components::Component;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -1874,13 +1925,17 @@ mod tests {
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = AppBuilder::bare()
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(sv);
         let raw = wm.component_for_key_mut(key).unwrap();
         // The component inside the Window IS our ScrollViewComponent.
         // Verify set_selection_enabled works through the trait.
@@ -1890,7 +1945,7 @@ mod tests {
         let layout =
             term_wm_core::layout::TilingLayout::new(term_wm_core::layout::LayoutNode::leaf(key));
         wm.set_managed_layout(layout);
-        wm.register_managed_layout(LayoutRect {
+        wm.register_managed_layout(term_wm_layout_engine::LayoutRect {
             x: 0,
             y: 0,
             width: 80,
@@ -1900,7 +1955,6 @@ mod tests {
 
         // Simulate rendering to set last_area on the terminal
         use term_wm_core::components::ComponentContext;
-        use term_wm_layout_engine::LayoutRect;
         let area = wm.region(key);
         let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
             x: 0,
@@ -1908,7 +1962,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -1958,22 +2012,34 @@ mod tests {
     fn mouse_selection_skipped_in_direct_mode_via_dispatch() {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
-        use term_wm_core::components::Component;
+        use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use term_wm_pty_engine::DirectInputTracker;
+
+        struct AlwaysDirect;
+        impl DirectInputTracker for AlwaysDirect {
+            fn requires_direct_input(&self) -> bool {
+                true
+            }
+        }
 
         let (term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let mut sv = crate::scroll_view::ScrollViewComponent::new(term);
         sv.set_selection_enabled(true);
         sv.set_keyboard_mode(crate::scroll_view::ScrollKeyMode::PaginationOnly);
 
-        let mut wm = AppBuilder::bare()
+        let mut wm: term_wm_core::window::WindowManager<
+            crate::scroll_view::ScrollViewComponent<TerminalComponent>,
+            NoopWmComponent,
+            NoopOverlay,
+        > = AppBuilder::<NoopWmComponent>::bare()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(sv));
+        let key = wm.create_window(sv);
         let raw = wm.component_for_key_mut(key).unwrap();
         raw.set_selection_enabled(true);
 
@@ -1987,9 +2053,7 @@ mod tests {
             height: 24,
         });
         wm.focus_app_window(key);
-
-        // Set direct mode on the window
-        wm.set_direct_mode(key, true);
+        wm.set_window_tracker(key, Arc::new(AlwaysDirect));
         assert!(wm.direct_mode(key));
 
         // Render to set last_area
@@ -2002,7 +2066,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -2021,7 +2085,7 @@ mod tests {
             );
         }
 
-        // In direct mode: a Down+Drag must NOT be consumed by selection
+        // In Direct Mode: a Down+Drag must NOT be consumed by selection
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             column: (area.x + 1) as u16,
@@ -2031,19 +2095,19 @@ mod tests {
         let result_down = wm.dispatch_focused_event(&down);
         assert!(
             result_down.is_some(),
-            "down must route to component in direct mode, got None"
+            "down must route to component in Direct Mode, got None"
         );
         let (_, down_evt) = result_down.unwrap();
-        // In direct mode, selection is skipped, so Down is not consumed
+        // In Direct Mode, selection is skipped, so Down is not consumed
         // (it falls through to PTY forwarding, which returns Ignored for
         //  press-only mode since the test PTY hasn't enabled mouse tracking)
         assert!(
             !down_evt.is_consumed(),
-            "down must NOT be consumed in direct mode: got {:?}",
+            "down must NOT be consumed in Direct Mode: got {:?}",
             down_evt
         );
 
-        // Drag must also not be consumed (selection is skipped in direct mode)
+        // Drag must also not be consumed (selection is skipped in Direct Mode)
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: (area.x + 5) as u16,
@@ -2053,12 +2117,12 @@ mod tests {
         let result_drag = wm.dispatch_focused_event(&drag);
         assert!(
             result_drag.is_some(),
-            "drag must route to component in direct mode, got None"
+            "drag must route to component in Direct Mode, got None"
         );
         let (_, drag_evt) = result_drag.unwrap();
         assert!(
             !drag_evt.is_consumed(),
-            "drag must NOT be consumed in direct mode: got {:?}",
+            "drag must NOT be consumed in Direct Mode: got {:?}",
             drag_evt
         );
 
@@ -2069,11 +2133,11 @@ mod tests {
             .unwrap();
         assert!(
             !sel_status.active,
-            "selection should not be active after direct mode drag"
+            "selection should not be active after Direct Mode drag"
         );
     }
 
-    /// In direct mode, mouse Down must skip selection and go to PTY encoding.
+    /// In Direct Mode, mouse Down must skip selection and go to PTY encoding.
     #[test]
     fn direct_mode_mouse_down_skips_selection() {
         use term_wm_core::actions::TermWmAction;
@@ -2088,7 +2152,7 @@ mod tests {
         let mut term = TerminalComponent::from_pane(Box::new(pane));
         term.set_selection_enabled(true);
 
-        // Direct mode — selection skipped, PTY encoding expected
+        // Direct Mode — selection skipped, PTY encoding expected
         let ctx = ComponentContext::new(true)
             .with_direct_mode(true)
             .with_screen_area(LayoutRect {
@@ -2109,12 +2173,12 @@ mod tests {
         match result {
             EventResult::Action(TermWmAction::MouseToBytes(_)) => {}
             other => panic!(
-                "in direct mode, Down must produce MouseToBytes (PTY), got {:?}",
+                "in Direct Mode, Down must produce MouseToBytes (PTY), got {:?}",
                 other
             ),
         }
 
-        // Non-direct mode — selection should consume Drag
+        // Non-Direct Mode — selection should consume Drag
         let ctx_normal = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
@@ -2142,6 +2206,611 @@ mod tests {
             matches!(result_drag, EventResult::Consumed),
             "in normal mode, Drag must be consumed by selection, got {:?}",
             result_drag
+        );
+    }
+
+    // ── Right-Click Paste Tests ────────────────────────────────────────
+    //
+    // These tests verify that right-click mouse events are intercepted by
+    // TerminalComponent::handle_events and produce PasteClipboard (in
+    // normal mode) or pass through to PTY encoding (in Direct Mode).
+
+    /// Right-click Release in normal mode must produce
+    /// PasteClipboard; Press and Drag must be consumed (not forwarded
+    /// to the PTY).
+    #[test]
+    fn right_click_paste_in_normal_mode() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Right-click Press — must be consumed (intercepted before PTY)
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            matches!(press_result, EventResult::Consumed),
+            "right-click Press must be Consumed, got {:?}",
+            press_result
+        );
+
+        // Right-click Drag — must be consumed
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let drag_result = term.handle_events(&drag, &ctx);
+        assert!(
+            matches!(drag_result, EventResult::Consumed),
+            "right-click Drag must be Consumed, got {:?}",
+            drag_result
+        );
+
+        // Right-click Release — must produce PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let release_result = term.handle_events(&release, &ctx);
+        assert!(
+            matches!(
+                release_result,
+                EventResult::Action(TermWmAction::PasteClipboard)
+            ),
+            "right-click Release must produce PasteClipboard, got {:?}",
+            release_result
+        );
+    }
+
+    /// Right-click in Direct Mode must NOT produce PasteClipboard — it
+    /// must pass through to PTY encoding (MouseToBytes when the PTY has
+    /// enabled mouse tracking).
+    #[test]
+    fn right_click_in_direct_mode_passes_through() {
+        use term_wm_core::actions::TermWmAction;
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut pane = TestPane::new(2000);
+        pane.set_parser_size(24, 80);
+        pane.write_to_parser(b"Hello World");
+        // Enable mouse tracking so the event would produce MouseToBytes
+        pane.write_to_parser(b"\x1b[?1000h");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_selection_enabled(true);
+
+        let ctx = ComponentContext::new(true)
+            .with_direct_mode(true)
+            .with_screen_area(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            });
+
+        // Right-click Release in Direct Mode — must NOT be PasteClipboard
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = term.handle_events(&release, &ctx);
+        assert!(
+            !matches!(result, EventResult::Action(TermWmAction::PasteClipboard)),
+            "right-click Release in Direct Mode must NOT produce PasteClipboard, got {:?}",
+            result
+        );
+        // With mouse tracking enabled, Release should produce MouseToBytes
+        assert!(
+            matches!(result, EventResult::Action(TermWmAction::MouseToBytes(_))),
+            "right-click Release in Direct Mode should produce MouseToBytes, got {:?}",
+            result
+        );
+
+        // Right-click Press in Direct Mode — also not consumed/paste-intercepted
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let press_result = term.handle_events(&press, &ctx);
+        assert!(
+            !matches!(press_result, EventResult::Consumed),
+            "right-click Press in Direct Mode must NOT be Consumed, got {:?}",
+            press_result
+        );
+    }
+
+    // ── Bracketed Paste Tests ──────────────────────────────────────────
+    //
+    // These tests verify that TerminalComponent::handle_events correctly
+    // wraps paste text in bracketed escape sequences (\x1b[200~...\x1b[201~)
+    // only when the child PTY has explicitly enabled bracketed paste mode
+    // by sending \x1b[?2004h (DECSET 2004).
+    //
+    // If the child has NOT enabled bracketed paste, the paste text must be
+    // forwarded as raw bytes — wrapping would cause legacy shells to
+    // display rogue "~" characters (the vt100 parser consumes \x1b[200 but
+    // lets the trailing ~ through as a literal).
+
+    /// When the child PTY has bracketed paste enabled (DECSET 2004), the
+    /// paste text must be wrapped in \x1b[200~ ... \x1b[201~ so the child
+    /// (e.g. opencode, vim, nano) can recognize it as a bulk paste rather
+    /// than a keystroke flood.
+    #[test]
+    fn paste_wraps_in_bracketed_when_child_enabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Simulate the child sending \x1b[?2004h (DECSET 2004) to enable
+        // bracketed paste mode.  The vt100 parser tracks this as
+        // screen().bracketed_paste().
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("hello".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Must produce KeyToBytes with bracketed markers wrapping the text
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert_eq!(
+                    bytes, b"\x1b[200~hello\x1b[201~",
+                    "paste must be wrapped in bracketed markers when child has DECSET 2004 enabled"
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// When the child PTY has NOT enabled bracketed paste, the paste text
+    /// must be forwarded as raw bytes.  Wrapping would cause legacy shells
+    /// (bash, zsh without bracketed-paste support) to display stray "~"
+    /// characters on screen.
+    #[test]
+    fn paste_sends_raw_when_child_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+        // Deliberately do NOT send \x1b[?2004h — bracketed_paste defaults
+        // to false in the vt100 parser.
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("hello".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Must produce KeyToBytes with raw text (no bracketed wrapping)
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert_eq!(
+                    bytes, b"hello",
+                    "paste must be raw bytes when child has not enabled DECSET 2004"
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// Even when bracketed paste is enabled, the wrapping must include the
+    /// full bracketed start/end markers (including the trailing ~ in
+    /// \x1b[200~ and \x1b[201~).  A common bug is sending \x1b[200~ but
+    /// forgetting to include the final "~" tilde character.
+    #[test]
+    fn paste_wrapping_includes_trailing_tilde() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Enable bracketed paste on the child's parser
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("test".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Verify the wrapped bytes end with \x1b[201~ (including the ~)
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert!(
+                    bytes.ends_with(b"\x1b[201~"),
+                    "wrapped bytes must end with \\x1b[201~, got {:?}",
+                    bytes
+                );
+                assert!(
+                    bytes.starts_with(b"\x1b[200~"),
+                    "wrapped bytes must start with \\x1b[200~, got {:?}",
+                    bytes
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// Full pipeline test: verify that when handle_events produces a
+    /// KeyToBytes action, calling update() actually writes those bytes
+    /// to the pane (the real PTY or TestPane).
+    #[test]
+    fn paste_full_pipeline_writes_to_pane() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Enable bracketed paste on the child's parser
+        {
+            let mut pane = term.pane.borrow_mut();
+            let parser = pane.shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("data".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        // Extract the bytes from the action and feed them into update
+        if let EventResult::Action(TermWmAction::KeyToBytes(expected)) = result {
+            let mut queue = std::collections::VecDeque::new();
+            term.update(TermWmAction::KeyToBytes(expected.clone()), &ctx, &mut queue);
+
+            // Verify the pane received exactly the wrapped bytes by checking
+            // the last_written field through the Pane trait method
+            let written = term.pane.borrow_mut().last_bytes_text();
+            assert_eq!(
+                written, "\x1b[200~data\x1b[201~",
+                "wrapped paste bytes must be written to the pane"
+            );
+        } else {
+            panic!("expected Action(KeyToBytes), got {:?}", result);
+        }
+    }
+
+    /// When the child has not enabled bracketed paste, the full pipeline
+    /// must write raw bytes (no wrapping) to the pane.
+    #[test]
+    fn paste_full_pipeline_raw_when_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+        // No \x1b[?2004h — bracketed_paste defaults to false
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("raw".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        if let EventResult::Action(TermWmAction::KeyToBytes(expected)) = result {
+            let mut queue = std::collections::VecDeque::new();
+            term.update(TermWmAction::KeyToBytes(expected.clone()), &ctx, &mut queue);
+
+            let written = term.pane.borrow_mut().last_bytes_text();
+            assert_eq!(
+                written, "raw",
+                "raw bytes (no bracketed wrapping) must be written to the pane when child has not enabled DECSET 2004"
+            );
+        } else {
+            panic!("expected Action(KeyToBytes), got {:?}", result);
+        }
+    }
+
+    /// ClipboardPaste with bracketed paste enabled wraps the text in
+    /// \x1b[200~...\x1b[201~ markers before writing to the pane.
+    #[test]
+    fn clipboard_paste_wraps_when_bracketed_enabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Enable bracketed paste on the child's parser
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste("clip".to_string()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "\x1b[200~clip\x1b[201~",
+            "ClipboardPaste must wrap in bracketed markers when DECSET 2004 is enabled"
+        );
+    }
+
+    /// ClipboardPaste without bracketed paste writes raw bytes to the pane.
+    #[test]
+    fn clipboard_paste_raw_when_bracketed_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste("raw".to_string()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "raw",
+            "ClipboardPaste must write raw bytes when DECSET 2004 is not enabled"
+        );
+    }
+
+    /// ClipboardPaste with empty text is a no-op (no bytes written).
+    #[test]
+    fn clipboard_paste_empty_text_is_noop() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        let ctx = ComponentContext::default();
+        let mut queue = std::collections::VecDeque::new();
+        term.update(
+            TermWmAction::ClipboardPaste(String::new()),
+            &ctx,
+            &mut queue,
+        );
+
+        let written = term.pane.borrow_mut().last_bytes_text();
+        assert_eq!(
+            written, "",
+            "ClipboardPaste with empty text must write nothing"
+        );
+    }
+
+    #[test]
+    fn key_to_bytes_scrolls_to_bottom() {
+        let shared = Rc::new(std::cell::RefCell::new(
+            term_wm_core::component_context::ScrollBounds {
+                offset_x: 0,
+                offset_y: 50,
+                width: 80,
+                height: 24,
+                content_width: 80,
+                content_height: 200,
+                pending_offset_x: None,
+                pending_offset_y: None,
+                sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
+            },
+        ));
+        let handle = ScrollHandle {
+            scroll: shared.clone(),
+        };
+        let ctx = make_ctx(50, handle);
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let mut queue = std::collections::VecDeque::new();
+
+        term.update(TermWmAction::KeyToBytes(vec![b'a']), &ctx, &mut queue);
+
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(176),
+            "KeyToBytes must scroll viewport to bottom"
+        );
+    }
+
+    #[test]
+    fn clipboard_paste_scrolls_to_bottom() {
+        let shared = Rc::new(std::cell::RefCell::new(
+            term_wm_core::component_context::ScrollBounds {
+                offset_x: 0,
+                offset_y: 50,
+                width: 80,
+                height: 24,
+                content_width: 80,
+                content_height: 200,
+                pending_offset_x: None,
+                pending_offset_y: None,
+                sticky_bottom: false,
+                last_needs_vertical: false,
+                last_needs_horizontal: false,
+            },
+        ));
+        let handle = ScrollHandle {
+            scroll: shared.clone(),
+        };
+        let ctx = make_ctx(50, handle);
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let mut queue = std::collections::VecDeque::new();
+
+        term.update(
+            TermWmAction::ClipboardPaste("hello".into()),
+            &ctx,
+            &mut queue,
+        );
+
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(176),
+            "ClipboardPaste must scroll viewport to bottom"
+        );
+    }
+
+    #[test]
+    fn transition_returns_some_true_on_enter() {
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn transition_returns_some_false_on_exit() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.reported_alt_screen.set(true);
+        // Alt screen is false by default on TestPane
+        let result = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn transition_returns_none_when_unchanged() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        // reported_alt_screen is false, TestPane alt_screen is false
+        let r1 = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(r1, None);
+        let r2 = Component::<TermWmAction>::take_alternate_screen_transition(&mut term);
+        assert_eq!(r2, None);
+    }
+
+    #[test]
+    fn render_screen_entering_direct_mode_suppresses_scroll() {
+        let (handle, shared) = make_handle();
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let ctx = make_ctx(0, handle).with_direct_mode(true);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(shared.borrow().content_height, 24, "content = viewport");
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback cleared");
+        assert!(term.last_mode_suppressed_scroll(), "suppress flag set");
+    }
+
+    #[test]
+    fn render_screen_entering_alt_screen_suppresses_scroll() {
+        let (handle, shared) = make_handle();
+        let mut pane = TestPane::new(200);
+        pane.alt_screen = true;
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let ctx = make_ctx(0, handle).with_direct_mode(true);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(shared.borrow().content_height, 24, "content = viewport");
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback cleared");
+        assert!(term.last_mode_suppressed_scroll(), "suppress flag set");
+    }
+
+    #[test]
+    fn render_screen_exit_suppressed_mode_anchors_to_bottom() {
+        let (handle, shared) = make_handle();
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.last_mode_suppressed_scroll.set(true);
+        term.set_last_max_scrollback(200);
+        // Normal mode, no alt screen, no Direct Mode
+        let ctx = make_ctx(0, handle);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(
+            shared.borrow().pending_offset_y,
+            Some(200),
+            "scroll to bottom"
+        );
+        assert_eq!(term.pane_mut().scrollback(), 0, "scrollback at bottom");
+        assert!(!term.last_mode_suppressed_scroll(), "suppress flag cleared");
+    }
+
+    #[test]
+    fn shrink_then_expand_no_duplication() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        let area30 = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 30,
+        };
+        let area24 = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let (handle, _shared) = make_handle();
+        let ctx30 = ComponentContext::new(true).with_viewport(
+            term_wm_core::component_context::ScrollViewport {
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 30,
+            },
+            Some(handle.clone()),
+        );
+        let ctx24 = ComponentContext::new(true).with_viewport(
+            term_wm_core::component_context::ScrollViewport {
+                offset_x: 0,
+                offset_y: 0,
+                width: 80,
+                height: 24,
+            },
+            Some(handle.clone()),
+        );
+
+        let mut pane = term.pane.borrow_mut();
+        for i in 0..30 {
+            pane.write_bytes(format!("line {}\r\n", i).as_bytes()).ok();
+        }
+        pane.write_bytes(b"DUPLICHECK").ok();
+        drop(pane);
+
+        let mut render_fn = |area: LayoutRect, ctx: &ComponentContext| {
+            let rect = crate::helpers::layout_rect_to_clipped_rect(area);
+            let buffer = ratatui::buffer::Buffer::empty(rect);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+            let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+            term.render(&mut backend, area, ctx, &mut registry);
+        };
+        render_fn(area30, &ctx30);
+        render_fn(area24, &ctx24);
+        render_fn(area30, &ctx30);
+
+        let pane = term.pane_mut();
+        let shared_parser = pane.shared_parser();
+        let parser = shared_parser.lock().unwrap();
+        let count = parser.screen().contents().matches("DUPLICHECK").count();
+        assert!(
+            count < 2,
+            "marker must not be duplicated (got {count} occurrences, expected 0 or 1)"
         );
     }
 }

@@ -1,0 +1,17 @@
+---
+source: crates/term-wm-crossterm-adapter/src/lib.rs
+expression: result
+---
+Some(
+    Key(
+        KeyEvent {
+            code: Tab,
+            modifiers: KeyModifiers {
+                shift: true,
+                control: false,
+                alt: false,
+            },
+            kind: Press,
+        },
+    ),
+)

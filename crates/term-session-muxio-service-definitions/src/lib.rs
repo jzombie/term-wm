@@ -1,9 +1,9 @@
+pub mod channel;
 pub mod methods;
-pub mod push_frame;
 
+pub use channel::{ChannelName, probe_ipc_endpoint};
 pub use methods::{
-    CloseSession, ListSessions, PushOutput, ResizePty, STREAM_INPUT_METHOD_ID,
+    CloseSession, ListSessions, OnPtyResized, PushOutput, ResizePty, STREAM_INPUT_METHOD_ID,
     SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
 };
 pub use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
-pub use push_frame::SessionPushFrame;

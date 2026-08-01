@@ -1,0 +1,15 @@
+[package]
+name = "term-resize-indicator"
+description = "Draws a dotted-line border with terminal dimensions on resize."
+keywords = ["terminal", "tui", "ui"]
+categories = ["gui", "command-line-interface"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+crossterm = { workspace = true }
+ratatui = { workspace = true }

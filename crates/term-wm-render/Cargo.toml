@@ -1,6 +1,8 @@
 [package]
 name = "term-wm-render"
 description = "Rendering abstraction layer with backend and target traits for term-wm."
+keywords = ["renderer", "backend", "ui"]
+categories = ["rendering", "graphics", "gui"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

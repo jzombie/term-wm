@@ -11,32 +11,32 @@ difference between the two modes is how their resize and drag handles appear.
 Every window gets a 1-cell-thick border drawn around it with:
 
   ┌───────────────────────────────┐
-  │terminal window title  D _ ▢ ✖ │   <- header row (1 cell tall)
-  ├───────────────────────────────┤   <- separator
+  │terminal window title    _ ▢ ✖ │   <- header row (1 cell tall)
   │                               │
   │         content area          │
   │                               │
   └───────────────────────────────┘
 
   - Top edge:      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐   (1 cell tall)
-  - Header row:    │          title        D _ ▢ ✖ │   (1 cell tall)
-  - Separator:     ├ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┤   (1 cell tall)
-  - Side edges:    │                               │   (1 cell wide)
+  - Header row:    │          title          _ ▢ ✖ │   (1 cell tall)
+  - Side edges:    │                               │   (1 cell wide, from header row down to bottom border)
   - Bottom edge:   └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   (1 cell tall)
 
-Total chrome overhead PER WINDOW:
-  - Top + header + separator:  3 rows
-  - Bottom:                    1 row
-  - Left:                      1 column
-  - Right:                     1 column
-  Total: 2 columns x 4 rows occupied by chrome per window
+Total chrome overhead PER WINDOW (with borders + header enabled):
+  - Top border:    1 row
+  - Header:        1 row
+  - Bottom border: 1 row
+  - Left:          1 column
+  - Right:         1 column
+  Total: 2 columns x 3 rows occupied by chrome per window
+  (Side borders span the full height minus top + bottom borders.)
 
-Content area = window_rect - (2 columns, 4 rows)
+Content area = window_rect - (2 columns, 3 rows)
 
 1a. Focused vs. Unfocused Colors
 ---------------------------------
 
-  BORDER CORNERS & EDGES (┌ ┐ └ ┘ ─ │ ├ ┤):
+  BORDER CORNERS & EDGES (┌ ┐ └ ┘ ─ │):
     Focused:   decorator_border_active  (RGB 110, 118, 140)  -- brighter gray
     Unfocused: decorator_border         (RGB 105, 110, 125)  -- muted gray
 
@@ -54,31 +54,30 @@ Content area = window_rect - (2 columns, 4 rows)
 1b. Title Buttons (right-aligned on the header row)
 ---------------------------------------------------
 
-  LEFT TO RIGHT on the header:  D   _   ▢   ✖
-                                 |   |   |   +-- Close
-                                 |   |   +------ Maximize
-                                 |   +---------- Minimize
-                                 +-------------- Toggle direct mode
+   LEFT TO RIGHT on the header:  _   ▢   ✖
+                                  |   |   +-- Close
+                                  |   +------ Maximize
+                                  +---------- Minimize
 
-  RIGHT TO LEFT (from the border):  ✖  ▢  _  D
+   RIGHT TO LEFT (from the border):  ✖  ▢  _
 
-  4 cells on the header row, inset 1 column from the right border, with
-  1 empty column between each button.
+   3 cells on the header row (one per button), inset 1 column from the
+   right border, with 1 empty column between each button.
+   The gap constant is `HEADER_BUTTON_GAP` (= 2), which accounts for the
+   button itself plus one empty buffer column between adjacent buttons.
 
   DEFAULT STATE (not hovered):
     Close (✖):    fg = error_bg   (red,   RGB 255, 61, 61)
     Maximize (▢): fg = accent     (green, RGB   0,230,118)
     Minimize (_): fg = warning_bg (amber, RGB 255,193,  7)
-    Direct  (D):  fg = header_style (same as title); when active inverts fg/bg
 
   HOVER STATE:
     All buttons gain BOLD modifier.
     Close (✖):    bg = error_bg   (red),   fg = menu_selected_fg (dark)
     Maximize (▢): bg = accent     (green), fg = menu_selected_fg (dark)
     Minimize (_): bg = warning_bg (amber), fg = menu_selected_fg (dark)
-    Direct  (D):  bg = accent_alt (amber), fg = menu_selected_fg (dark)
 
-  The "D" cell also inverts fg <-> bg when direct mode is active (focused window).
+  (Note: The Direct Mode toggle is accessed via the menu, not as a header button.)
 
 ===============================================================================
 2. FLOATING WINDOW DRAG & RESIZE HANDLES
@@ -93,11 +92,10 @@ Content area = window_rect - (2 columns, 4 rows)
     rect.x + 1            rect.x + rect.width - 1
          |                       |
          v                       v
-   ┌─────┬────────────────────┬────────┐
-   │     │  <- drag handle ->  D _ ▢ ✖ │
-   ├─────┴────────────────────┴────────┤
-   │                                   │
-   │                                   │
+     ┌─────┬──────────────────────┬───────┐
+     │     │  <- drag handle ->   │ _ ▢ ✖ │
+     │     │                      │       │
+     │     │                      │       │
 
   Dimensions: (window_width - 2) cells wide x 1 cell tall
   Occupies:   1 row (the header row), spanning the full width between borders
@@ -113,12 +111,11 @@ Content area = window_rect - (2 columns, 4 rows)
 
   ┌─────┬─────────────────────────┬─────┐
   │ TL  │        Top              │ TR  │     TL = TopLeft  (1x1 corner)
-  ├─────┴─────────────────────────┴─────┤
-  │                                     │     L   = Left     (1 x height-2)
-  │ L                                   │
-  │                                     │     R   = Right    (1 x height-2)
-  │                                     │
-  ├─────┬─────────────────────────┬─────┤
+  │     │                         │     │
+  │ L   │                         │  R  │     L   = Left     (1 x height-2)
+  │     │                         │     │     R   = Right    (1 x height-2)
+  │     │                         │     │
+  ├─────┼─────────────────────────┼─────┤
   │ BL  │       Bottom            │ BR  │     BL = BottomLeft  (1x1 corner)
   └─────┴─────────────────────────┴─────┘     BR = BottomRight (1x1 corner)
 
@@ -143,8 +140,8 @@ Content area = window_rect - (2 columns, 4 rows)
                                  ║
     BottomLeft: ║
                 ╚══════════
-    BottomRight:                 ╝
-                                 ║
+    BottomRight:                 ║
+                              ════╝
 
   Characters used: ═ ║ ╔ ╗ ╚ ╝
   These are double-line variants of the single-line border characters.
@@ -214,10 +211,10 @@ Content area = window_rect - (2 columns, 4 rows)
 5. VISUAL SUMMARY BY MODE
 ===============================================================================
 
-                        TILED                       FLOATING
+                         TILED                       FLOATING
   --------------------  ------------------------  --------------------------
   Border style          ┌┐└┘─│ (single-line)      Same box-drawing
-  Chrome overhead       2 cols x 4 rows            2 cols x 4 rows
+  Chrome overhead       2 cols x 3 rows            2 cols x 3 rows
   Per-window chrome     All have it                All have it
   Drag handle           Header (detaches to        Header (moves in place)
                           floating on drag)
@@ -239,33 +236,40 @@ Content area = window_rect - (2 columns, 4 rows)
   ┌ ┐ └ ┘   Border corners          (single-line)
   ─         Horizontal border edge
   │         Vertical border edge
-  ├ ┤       Header separator
   ·         Split handle background  (middle dot)
   o         Split handle indicator   (normal)
   O         Split handle indicator   (hovered)
   + - |     Split handle hover frame
   ═ ║      Resize outline edge      (double-line)
   ╔ ╗ ╚ ╝  Resize outline corners   (double-line)
-  D _ ▢ ✖  Title buttons
+  _ ▢ ✖  Title buttons (Minimize, Maximize, Close)
   (space)   Header fill
 
 ===============================================================================
 7. CELL COUNT SUMMARY PER WINDOW
 ===============================================================================
 
-  Element             Cells
-  ------------------- -----
-  Top border          1 row x (width) cols
-  Header row          1 row x (width) cols
-  Separator           1 row x (width) cols
-  Bottom border       1 row x (width) cols
-  Left border         (height - 4) rows x 1 col
-  Right border        (height - 4) rows x 1 col
-                      ----------
-  Total chrome:       2 columns + 4 rows per window
+   Element             Cells
+   ------------------- -----
+   Top border          1 row x (width) cols
+   Header row          1 row x (width) cols
+   Bottom border       1 row x (width) cols
+   Left border         (height - 3) rows x 1 col
+   Right border        (height - 3) rows x 1 col
+                       ----------
+   Total chrome:       2 columns + 3 rows per window
 
-  For a standard 80x24 terminal with 2 side-by-side tiled windows:
-    Each window:     (40-2) x (24-4) = 38 x 20 = 760 cells of content
-    Chrome total:    2 x (2x40 + 4x24 - 2x4) = 256 cells of chrome
-    Split handle:    1 x 24 = 24 cells
-    Total:           760 + 760 + 256 + 24 = 1800 cells used out of 1920
+   For a standard 80x24 terminal with 2 side-by-side tiled windows
+   (separated by a 1-column split handle, usable width = 79 columns):
+
+     Window A (39x24):
+       Content: (39-2) x (24-3) = 37 x 21 = 777 cells
+       Chrome:  39 x 24 - 777 = 159 cells
+
+     Window B (40x24):
+       Content: (40-2) x (24-3) = 38 x 21 = 798 cells
+       Chrome:  40 x 24 - 798 = 162 cells
+
+     Split handle: 1 x 24 = 24 cells
+
+     Total used: 777 + 798 + 159 + 162 + 24 = 1,920 / 1,920 ✓

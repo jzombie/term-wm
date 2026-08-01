@@ -9,6 +9,7 @@ use std::time::Instant;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
+use crate::pty_state_tracker::PtyPerformAdapter;
 
 /// Size of the PTY master read buffer (single `read()` call).
 /// 64KB keeps the reader parked most of the time under heavy output
@@ -17,14 +18,12 @@ const PTY_READ_BUF_SIZE: usize = 65536;
 
 /// Number of bytes from the end of the previous chunk to carry forward
 /// for cross-boundary pattern detection (DSR, OSC 52 header).
-const HISTORY_TAIL_LEN: usize = 3;
+/// Must cover the 5-byte OSC 52 header `\x1b]52;` across chunk boundaries
+/// (needs at least 4 bytes of tail; 8 provides margin).
+const HISTORY_TAIL_LEN: usize = 8;
 
 /// Length of the DSR request sequence `\x1b[6n`.
 const DSR_PATTERN_LEN: usize = 4;
-
-/// Extra bytes to search past the prune target when looking for a newline
-/// boundary during history cap.
-const PRUNE_SEARCH_WINDOW: usize = 1024;
 
 /// Buffer size for `proc_name()` on macOS.
 #[cfg(target_os = "macos")]
@@ -39,9 +38,39 @@ pub type PtyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 type StatusCallback = Arc<Mutex<Option<Box<dyn Fn(PtyStatus) + Send + Sync>>>>;
 
+/// Cloneable handle to the PTY input writer.
+///
+/// Writes to a PTY/ConPTY master are blocking synchronous I/O: when the
+/// kernel input buffer fills (fast typing, large paste, or a child that
+/// paused reading stdin), `write_all` blocks the calling thread. Callers
+/// running on an async runtime (e.g. the session server) must offload writes
+/// to a blocking thread (tokio's `spawn_blocking`) via this handle, so a
+/// full input buffer never starves a runtime worker. The internal mutex
+/// serializes concurrent writers and keeps each `write_bytes` call atomic.
+#[derive(Clone)]
+pub struct PtyWriter {
+    inner: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+impl PtyWriter {
+    fn new(writer: Box<dyn Write + Send>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(writer)),
+        }
+    }
+
+    /// Write bytes to the PTY master. Blocks until the bytes are accepted
+    /// (or the writer fails); call from a dedicated blocking thread.
+    pub fn write_bytes(&self, input: &[u8]) -> std::io::Result<()> {
+        let mut writer = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        writer.write_all(input)?;
+        writer.flush()
+    }
+}
+
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: PtyWriter,
     /// Raw bytes from the reader thread, kept for consumers that need
     /// unparsed output (e.g., session server forwarding).
     pending: Arc<Mutex<Vec<u8>>>,
@@ -67,11 +96,15 @@ pub struct Pty {
     child: Option<Box<dyn Child + Send + Sync>>,
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
+    /// Guards against double-fire of the Exited callback from both
+    /// has_exited() and the reader thread (EOF detection race).
+    exited_emitted: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
-    /// Resize request sent from main thread to reader thread.
-    pending_resize: Arc<Mutex<Option<PtySize>>>,
     /// Status callback invoked by the reader thread on wakeup and exit.
     status_cb: StatusCallback,
+    /// Application state tracker (alternate screen, mouse tracking, margins).
+    /// Shared via Arc: reader thread writes (via PtyPerformAdapter), main thread reads.
+    pub(crate) tracker: std::sync::Arc<crate::PtyStateTracker>,
     /// Shutdown flag: when true, the reader thread exits its loop ASAP.
     /// Set by into_parts() and Drop.
     shutdown: Arc<AtomicBool>,
@@ -110,10 +143,11 @@ impl Pty {
             .master
             .try_clone_reader()
             .map_err(|err| wrap_err("try_clone_reader", err))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|err| wrap_err("take_writer", err))?;
+        let writer = PtyWriter::new(
+            pair.master
+                .take_writer()
+                .map_err(|err| wrap_err("take_writer", err))?,
+        );
         let pending = Arc::new(Mutex::new(Vec::new()));
         let bytes_received = Arc::new(AtomicUsize::new(0));
         let last_bytes = Arc::new(Mutex::new(Vec::new()));
@@ -124,19 +158,21 @@ impl Pty {
         let reader_dsr = Arc::clone(&dsr_requested);
         let status_cb: StatusCallback = Arc::new(Mutex::new(None));
         let reader_status_cb = Arc::clone(&status_cb);
+        let exited_emitted = Arc::new(AtomicBool::new(false));
+        let reader_exited_emitted = Arc::clone(&exited_emitted);
 
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
         let initial_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
+        let tracker = std::sync::Arc::new(crate::PtyStateTracker::new(size.rows));
+        let reader_tracker = std::sync::Arc::clone(&tracker);
         let shared_parser = Arc::new(Mutex::new(initial_parser));
         let dirty = Arc::new(AtomicBool::new(false));
         let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
-        let pending_resize = Arc::new(Mutex::new(None::<PtySize>));
         let shutdown = Arc::new(AtomicBool::new(false));
         let reader_parser = Arc::clone(&shared_parser);
         let reader_dirty = Arc::clone(&dirty);
         let reader_dirty_cond = Arc::clone(&dirty_cond);
-        let reader_pending_resize = Arc::clone(&pending_resize);
         let reader_pending_title = Arc::clone(&pending_title);
         let reader_handle = thread::spawn(move || {
             parser_read_loop(ParserReadLoopArgs {
@@ -148,11 +184,12 @@ impl Pty {
                 shared_parser: reader_parser,
                 dirty: reader_dirty,
                 dirty_cond: reader_dirty_cond,
-                pending_resize: reader_pending_resize,
                 pending_title: reader_pending_title,
                 status_cb: reader_status_cb,
                 scrollback_len,
                 osc52_text: None,
+                exited_emitted: reader_exited_emitted,
+                tracker: reader_tracker,
             })
         });
         Ok(Self {
@@ -169,6 +206,7 @@ impl Pty {
             shared_parser,
             dirty,
             dirty_cond,
+            tracker,
             size,
             pty_size: size,
             scrollback_len,
@@ -176,20 +214,46 @@ impl Pty {
             exited: false,
             exit_status: None,
             reader: Some(reader_handle),
-            pending_resize,
             status_cb,
+            exited_emitted,
             shutdown,
         })
     }
 
     /// Set a status callback invoked by the reader thread on data and exit.
     /// Uses `Arc<Mutex<>>` so the reader thread (which holds a clone) sees updates.
+    ///
+    /// If the child has already exited (reader thread detected EOF before the
+    /// callback was registered, or ConPTY swallowed the EOF), fires the callback
+    /// immediately so the async polling loop can process the exit state.
     pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
+        let mut fire_cb = None;
+
         if let Ok(mut guard) = self.status_cb.lock() {
-            *guard = cb;
+            if self.exited {
+                self.exited_emitted.store(true, Ordering::Release);
+                fire_cb = cb;
+                *guard = None;
+            } else if let Some(child) = self.child.as_mut()
+                && let Ok(Some(status)) = child.try_wait()
+            {
+                self.exited = true;
+                self.exit_status = Some(status);
+                self.child = None;
+                self.exited_emitted.store(true, Ordering::Release);
+                fire_cb = cb;
+                *guard = None;
+            } else {
+                *guard = cb;
+            }
         }
+
         if let Some(reader) = &self.reader {
             reader.thread().unpark();
+        }
+
+        if let Some(cb_fn) = fire_cb {
+            cb_fn(PtyStatus::Exited);
         }
     }
 
@@ -221,23 +285,43 @@ impl Pty {
         if size.rows < 2 || size.cols < 2 {
             return Ok(());
         }
-        if size == self.pty_size
-            && let Ok(guard) = self.pending_resize.lock()
-            && guard.is_none()
-        {
+        if size == self.pty_size {
             return Ok(());
+        }
+        // Lock the shared parser before resizing the OS PTY so the reader
+        // thread cannot process post-SIGWINCH bytes against stale dimensions.
+        let sp = self.shared_parser.clone();
+        let mut guard = sp.lock().unwrap();
+        let old_rows = self.pty_size.rows;
+        let new_rows = size.rows;
+        if new_rows < old_rows && !self.tracker.has_custom_margins() {
+            let (cursor_row, _) = guard.screen().cursor_position();
+            if cursor_row >= new_rows {
+                let scroll_lines = cursor_row - new_rows + 1;
+                let seq = format!("[{scroll_lines}S");
+                guard.process(seq.as_bytes());
+            }
         }
         self.master
             .resize(size)
             .map_err(|err| wrap_err("resize", err))?;
+        guard.screen_mut().set_size(size.rows, size.cols);
+        drop(guard);
+        self.tracker.resize(size.rows);
         self.pty_size = size;
-        self.apply_resize(size);
+        self.size = size;
         Ok(())
     }
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
-        self.writer.write_all(input)?;
-        self.writer.flush()
+        self.writer.write_bytes(input)
+    }
+
+    /// Cloneable handle for offloading blocking PTY writes to a dedicated
+    /// thread (e.g. tokio's `spawn_blocking`). Never call the write from an
+    /// async worker directly: a full kernel input buffer blocks the thread.
+    pub fn writer_handle(&self) -> PtyWriter {
+        self.writer.clone()
     }
 
     pub fn write_str(&mut self, input: &str) -> std::io::Result<()> {
@@ -335,8 +419,11 @@ impl Pty {
                 // reader thread blocked forever. Since this method is polled
                 // every frame, we manually synthesize the exit callback here
                 // when we detect the child process has died.
+                // Use an atomic latch so the callback fires at most once —
+                // the reader thread may also detect EOF and race to fire it.
                 if let Ok(guard) = self.status_cb.lock()
                     && let Some(ref cb) = *guard
+                    && !self.exited_emitted.swap(true, Ordering::AcqRel)
                 {
                     cb(crate::PtyStatus::Exited);
                 }
@@ -448,11 +535,11 @@ impl Pty {
         parser.screen().alternate_screen()
     }
 
-    fn apply_resize(&mut self, size: PtySize) {
-        self.size = size;
-        if let Ok(mut guard) = self.pending_resize.lock() {
-            *guard = Some(size);
-        }
+    /// Return an `Arc<dyn DirectInputTracker>` for this PTY's state tracker.
+    /// Used by the window manager to auto-enable Direct Mode when the
+    /// application enters alternate screen, enables mouse tracking, etc.
+    pub fn direct_input_tracker(&self) -> std::sync::Arc<dyn crate::DirectInputTracker> {
+        self.tracker.clone()
     }
 }
 
@@ -475,13 +562,16 @@ struct ParserReadLoopArgs {
     shared_parser: Arc<Mutex<vt100::Parser>>,
     dirty: Arc<AtomicBool>,
     dirty_cond: Arc<(std::sync::Mutex<()>, Condvar)>,
-    pending_resize: Arc<Mutex<Option<PtySize>>>,
     pending_title: Arc<Mutex<Option<String>>>,
     status_cb: StatusCallback,
     scrollback_len: usize,
+    /// Shared latch: taken once by whichever path detects exit first.
+    exited_emitted: Arc<AtomicBool>,
     /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
+    /// Application state tracker — shared via Arc with Pty.
+    tracker: std::sync::Arc<crate::PtyStateTracker>,
 }
 
 fn parser_read_loop(args: ParserReadLoopArgs) {
@@ -494,28 +584,22 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         shared_parser,
         dirty,
         dirty_cond,
-        pending_resize,
         pending_title,
         status_cb,
-        scrollback_len,
+        scrollback_len: _scrollback_len,
         osc52_text,
+        exited_emitted,
+        tracker,
     } = args;
-    let mut history: Vec<u8> = Vec::new();
+    let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
     let mut osc52 = Osc52Extractor::new();
     let mut bytes_since_render = 0usize;
+    let mut vte_parser = vte::Parser::new();
+    let tracker_for_adapter = std::sync::Arc::clone(&tracker);
+    let mut tracker_adapter = PtyPerformAdapter::new(tracker_for_adapter);
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
-        // Check for pending resize from main thread
-        if let Ok(mut resize_opt) = pending_resize.lock()
-            && let Some(size) = resize_opt.take()
-        {
-            let mut new_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
-            new_parser.process(&history);
-            let mut shared = shared_parser.lock().unwrap();
-            *shared = new_parser;
-        }
-
         match reader.read(&mut buf) {
             Ok(0) => {
                 // EOF — child exited. Send wakeup for final screen, then exited.
@@ -523,22 +607,18 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     && let Some(ref cb) = *guard
                 {
                     cb(crate::PtyStatus::Wakeup);
-                    cb(crate::PtyStatus::Exited);
+                    if !exited_emitted.swap(true, Ordering::AcqRel) {
+                        cb(crate::PtyStatus::Exited);
+                    }
                 }
                 break;
             }
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
                 bytes_since_render += n;
-                let combined = if history.is_empty() {
-                    buf[..n].to_vec()
-                } else {
-                    let end = history.len().saturating_sub(HISTORY_TAIL_LEN);
-                    let mut tmp = history[end..].to_vec();
-                    tmp.extend_from_slice(&buf[..n]);
-                    tmp
-                };
-                if combined.windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
+                // DSR detection: 65536-byte reads make cross-chunk splitting
+                // of the 4-byte \x1b[6n pattern vanishingly unlikely.
+                if buf[..n].windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
                     dsr_requested.store(true, Ordering::Relaxed);
                 }
                 if let Ok(mut last) = last_bytes.lock() {
@@ -555,19 +635,24 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     }
                 }
 
-                history.extend_from_slice(&buf[..n]);
-                // Cap history to avoid unbounded memory usage.
-                const MAX_HISTORY_CAP: usize = 2 * 1024 * 1024;
-                const PRUNE_TARGET: usize = 1024 * 1024;
-                if history.len() > MAX_HISTORY_CAP {
-                    let prune_amount = history.len() - PRUNE_TARGET;
-                    let search_end = (prune_amount + PRUNE_SEARCH_WINDOW).min(history.len());
-                    let cut_index = history[prune_amount..search_end]
-                        .iter()
-                        .position(|&b| b == b'\n')
-                        .map(|i| prune_amount + i + 1)
-                        .unwrap_or(prune_amount);
-                    history.drain(0..cut_index);
+                // Process bytes through the application state tracker
+                // (alternate screen, mouse tracking, margins — atomics, no lock).
+                let prev_routing = tracker.requires_app_routing();
+                vte_parser.advance(&mut tracker_adapter, &buf[..n]);
+                let new_routing = tracker.requires_app_routing();
+                if prev_routing != new_routing {
+                    tracing::info!(
+                        "[STAGE 1] PTY routing flipped: {} -> {}",
+                        prev_routing,
+                        new_routing
+                    );
+                    if let Ok(guard) = status_cb.lock()
+                        && let Some(ref cb) = *guard
+                    {
+                        cb(crate::PtyStatus::DirectInputChanged(new_routing));
+                    } else {
+                        tracing::error!("[STAGE 1] status_cb is NONE when transition occurred!");
+                    }
                 }
 
                 // Process bytes directly into the shared parser.
@@ -582,13 +667,20 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     *guard = Some(title);
                 }
                 // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
-                let tail = &history[history.len().saturating_sub(HISTORY_TAIL_LEN)..];
-                if let Some(text) = osc52.push(&buf[..n], tail) {
+                if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
                     let mut cb = Clipboard::new();
                     let _ = cb.set(&text);
                     if let Some(ref capture) = osc52_text {
                         *capture.lock().unwrap() = Some(text);
                     }
+                }
+
+                // Update prev_tail for next iteration's cross-chunk detection.
+                if n >= HISTORY_TAIL_LEN {
+                    prev_tail.copy_from_slice(&buf[n - HISTORY_TAIL_LEN..n]);
+                } else if n > 0 {
+                    prev_tail.rotate_left(n);
+                    prev_tail[HISTORY_TAIL_LEN - n..].copy_from_slice(&buf[..n]);
                 }
 
                 // Edge-triggered wakeup: only notify on false→true transition.
@@ -625,6 +717,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
             Err(_) => {
                 if let Ok(guard) = status_cb.lock()
                     && let Some(ref cb) = *guard
+                    && !exited_emitted.swap(true, Ordering::AcqRel)
                 {
                     cb(crate::PtyStatus::Exited);
                 }
@@ -794,6 +887,7 @@ fn get_process_name(_pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pty::StatusCallback;
     use std::io;
     use std::io::Cursor;
     use std::io::Write;
@@ -883,11 +977,12 @@ mod tests {
             shared_parser: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0))),
             dirty: Arc::new(AtomicBool::new(false)),
             dirty_cond: Arc::new((Mutex::new(()), Condvar::new())),
-            pending_resize: Arc::new(Mutex::new(None)),
             pending_title: Arc::new(Mutex::new(None)),
             status_cb: Arc::new(Mutex::new(None)),
             scrollback_len: 0,
+            exited_emitted: Arc::new(AtomicBool::new(false)),
             osc52_text: None,
+            tracker: std::sync::Arc::new(crate::PtyStateTracker::new(24)),
         }
     }
 
@@ -1098,6 +1193,85 @@ mod tests {
         assert_eq!(
             count_after_first, count_after_second,
             "has_exited() must not re-fire the Exited callback after returning true"
+        );
+    }
+
+    // ── set_status_callback with pre-exited child ────────────────────
+
+    #[test]
+    fn set_status_callback_fires_when_child_already_exited() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Kill and reap the child process, consuming the latch via has_exited().
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+        for _ in 0..250 {
+            if pty.has_exited() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let exited_fired = Arc::new(AtomicBool::new(false));
+        let exited_cb = Arc::clone(&exited_fired);
+
+        // Register a new callback — must fire immediately (self.exited branch
+        // with latch reset).
+        pty.set_status_callback(Some(Box::new(move |status| {
+            if status == PtyStatus::Exited {
+                exited_cb.store(true, Ordering::Relaxed);
+            }
+        })));
+
+        assert!(
+            exited_fired.load(Ordering::Relaxed),
+            "set_status_callback must fire PtyStatus::Exited when child already exited"
+        );
+    }
+
+    #[test]
+    fn set_status_callback_fires_via_try_wait_after_direct_kill() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        // Kill the child but do NOT call has_exited() — let the try_wait()
+        // path in set_status_callback detect the exit.
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+        for _ in 0..250 {
+            if let Some(Ok(Some(_))) = pty.child.as_mut().map(|c| c.try_wait()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let exited_fired = Arc::new(AtomicBool::new(false));
+        let exited_cb = Arc::clone(&exited_fired);
+
+        pty.set_status_callback(Some(Box::new(move |status| {
+            if status == PtyStatus::Exited {
+                exited_cb.store(true, Ordering::Relaxed);
+            }
+        })));
+
+        assert!(
+            exited_fired.load(Ordering::Relaxed),
+            "set_status_callback must fire PtyStatus::Exited via try_wait() when child killed"
         );
     }
 
@@ -1512,5 +1686,147 @@ mod tests {
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
+    }
+
+    // ── resize / set_size ──────────────────────────────────────────
+
+    #[test]
+    fn history_replay_corrupts_percent_lines_via_ansi_cursor_movements() {
+        // The old resize replayed ALL accumulated history through a new
+        // parser at the smaller width.  The raw PTY byte stream from a real
+        // session contains ANSI escape sequences (cursor positioning, clear
+        // screen, scroll regions) that were generated at the old width.
+        //
+        // When replayed at a smaller width, long lines wrap to multiple rows,
+        // shifting everything after them.  Absolute cursor positioning that
+        // was correct at the old width now lands on wrong rows, causing the
+        // SAME `%` character to appear at multiple screen positions.
+        // set_size avoids this by operating on the existing cell grid.
+
+        // Simulate command output: each iteration writes a long line (with
+        // `%`) at a specific absolute row using \x1b[row;colH.  At 80 cols
+        // each line fits on one row.  At 30 cols each line wraps to ~3 rows,
+        // so the absolute row positions overlap with prior wrapped content.
+        let mut history = Vec::new();
+        for i in 0..5 {
+            // Place a 65-char line with `%` at absolute row i+1.
+            // When replayed at 30 cols this wraps to 3 rows,
+            // pushing subsequent content down.
+            writeln!(history, "\x1b[{};1Hline {}: {} %", i + 1, i, "x".repeat(52)).unwrap();
+        }
+
+        // ── OLD: create parser at 30 cols, replay all history ──
+        let mut old = vt100::Parser::new(24, 30, 100);
+        old.process(&history);
+        let old_text = old.screen().contents();
+
+        // ── NEW: process at 80 cols, then set_size to 30 ──
+        let mut new = vt100::Parser::new(24, 80, 100);
+        new.process(&history);
+        new.screen_mut().set_size(24, 30);
+        let new_text = new.screen().contents();
+
+        // History-replay re-interprets cursor positioning at 30 cols where
+        // each line wraps to ~3 rows.  Absolute references like \x1b[2;1H
+        // land inside wrapped continuations, jamming all 5 lines into 1 row.
+        assert_eq!(
+            old_text.lines().count(),
+            1,
+            "history-replay must collapse all lines into one row"
+        );
+        assert_eq!(
+            new_text.lines().count(),
+            5,
+            "set_size must preserve 5 separate rows"
+        );
+    }
+
+    #[test]
+    fn test_exited_callback_atomic_latch_under_contention() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::thread;
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+
+        let cb: StatusCallback = Arc::new(std::sync::Mutex::new(Some(Box::new(move |status| {
+            if matches!(status, crate::PtyStatus::Exited) {
+                count_clone.fetch_add(1, Ordering::SeqCst);
+            }
+        }))));
+
+        let exited_emitted = Arc::new(AtomicBool::new(false));
+
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let cb = Arc::clone(&cb);
+                let emitted = Arc::clone(&exited_emitted);
+                thread::spawn(move || {
+                    if !emitted.swap(true, Ordering::AcqRel)
+                        && let Ok(guard) = cb.lock()
+                        && let Some(ref f) = *guard
+                    {
+                        f(crate::PtyStatus::Exited);
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "Exited callback must execute exactly once under thread contention"
+        );
+    }
+
+    #[test]
+    fn cursor_bounded_shrink_preserves_bottom_when_cursor_at_bottom() {
+        let mut parser = vt100::Parser::new(30, 80, 200);
+        for i in 0..30 {
+            parser.process(format!("line {}\r\n", i).as_bytes());
+        }
+        parser.process(b"LASTLINE");
+
+        let (cursor_row, _) = parser.screen().cursor_position();
+        let new_rows: u16 = 24;
+        assert_eq!(cursor_row, 29, "cursor at bottom");
+
+        let scroll_lines = cursor_row - new_rows + 1;
+        assert_eq!(scroll_lines, 6);
+        parser.process(format!("\x1b[{}S", scroll_lines).as_bytes());
+        parser.screen_mut().set_size(new_rows, 80);
+
+        assert!(
+            parser.screen().contents().contains("LASTLINE"),
+            "bottom content preserved when cursor at bottom"
+        );
+        assert_eq!(parser.screen().size(), (24, 80));
+    }
+
+    #[test]
+    fn cursor_bounded_shrink_skips_when_cursor_above_new_height() {
+        let mut parser = vt100::Parser::new(30, 80, 200);
+        for i in 0..10 {
+            parser.process(format!("line {}\r\n", i).as_bytes());
+        }
+        parser.process(b"MIDLINE");
+
+        let (cursor_row, _) = parser.screen().cursor_position();
+        assert!(
+            cursor_row < 24,
+            "cursor ({cursor_row}) above new viewport height"
+        );
+
+        parser.screen_mut().set_size(24, 80);
+        assert!(
+            parser.screen().contents().contains("MIDLINE"),
+            "content preserved without any SU shift"
+        );
+        assert_eq!(parser.screen().size(), (24, 80));
     }
 }

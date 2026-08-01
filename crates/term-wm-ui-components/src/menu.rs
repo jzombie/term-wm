@@ -2,20 +2,22 @@ use std::collections::VecDeque;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use term_wm_core::events::{Event, KeyKind};
+use term_wm_core::events::{Event, KeyKind, MouseEventKind};
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect, safe_set_string};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
 use term_wm_core::actions::{EventResult, TermWmAction};
-use term_wm_core::components::{Component, ComponentContext, MenuItem};
+use term_wm_core::components::{Component, ComponentContext, MenuDisplayItem, MenuItem};
 use term_wm_core::keybindings::KeyBindings;
+use term_wm_core::utils::truncate_with_ellipsis;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
 #[derive(Debug)]
 pub struct MenuComponent {
-    items: Vec<MenuItem<TermWmAction>>,
+    items: Vec<MenuDisplayItem<TermWmAction>>,
     selected: usize,
     nav_keys: KeyBindings,
+    pub show_header: bool,
 }
 
 impl MenuComponent {
@@ -24,15 +26,21 @@ impl MenuComponent {
             items: Vec::new(),
             selected: 0,
             nav_keys: KeyBindings::default(),
+            show_header: true,
         }
     }
 
     pub fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
-        self.items = items;
-        self.selected = self.selected.min(self.items.len().saturating_sub(1));
+        self.items = items.into_iter().map(MenuDisplayItem::Item).collect();
+        self.selected = clamp_selected(self.selected, &self.items);
     }
 
-    pub fn items(&self) -> &[MenuItem<TermWmAction>] {
+    pub fn set_display_items(&mut self, items: Vec<MenuDisplayItem<TermWmAction>>) {
+        self.items = items;
+        self.selected = clamp_selected(self.selected, &self.items);
+    }
+
+    pub fn items(&self) -> &[MenuDisplayItem<TermWmAction>] {
         &self.items
     }
 
@@ -41,11 +49,30 @@ impl MenuComponent {
     }
 
     pub fn set_selected(&mut self, index: usize) {
-        self.selected = index.min(self.items.len().saturating_sub(1));
+        self.selected = clamp_selected(index, &self.items);
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
-        self.items.get(self.selected).map(|item| &item.action)
+        match self.items.get(self.selected)? {
+            MenuDisplayItem::Item(item) if !item.disabled => Some(&item.action),
+            _ => None,
+        }
+    }
+
+    /// Move selection to the next non-separator index (wrapping).
+    fn advance_selection(&mut self, direction: isize) {
+        let total = self.items.len();
+        if total == 0 {
+            return;
+        }
+        let mut idx = self.selected as isize;
+        for _ in 0..total {
+            idx = (idx + direction).rem_euclid(total as isize);
+            if !matches!(self.items[idx as usize], MenuDisplayItem::Separator) {
+                self.selected = idx as usize;
+                return;
+            }
+        }
     }
 
     pub fn handle_key_event(&mut self, event: &Event) -> EventResult<TermWmAction> {
@@ -68,7 +95,15 @@ impl MenuComponent {
         {
             EventResult::Action(TermWmAction::MenuDown)
         } else if self.nav_keys.matches(TermWmAction::MenuSelect, key) {
-            EventResult::Action(TermWmAction::MenuSelect)
+            let selectable = match self.items.get(self.selected) {
+                Some(MenuDisplayItem::Item(item)) => !item.disabled,
+                _ => false,
+            };
+            if selectable {
+                EventResult::Action(TermWmAction::MenuSelect)
+            } else {
+                EventResult::Ignored
+            }
         } else {
             EventResult::Ignored
         }
@@ -94,8 +129,11 @@ impl MenuComponent {
         area: Rect,
         hovered_idx: Option<usize>,
         theme: &term_wm_core::theme::Theme,
+        offset_y: usize,
     ) {
-        if self.items.is_empty() || area.width < 3 || area.height < 3 {
+        let header_offset: u16 = if self.show_header { 1 } else { 0 };
+        let min_height = 1 + header_offset;
+        if self.items.is_empty() || area.width < 3 || area.height < min_height {
             return;
         }
         let bounds = area.intersection(buffer.area);
@@ -113,11 +151,17 @@ impl MenuComponent {
         let hovered_style = Style::default()
             .bg(color_to_ratatui(theme.panel_active_bg))
             .fg(color_to_ratatui(theme.menu_fg));
+        let disabled_style = Style::default()
+            .bg(color_to_ratatui(theme.menu_bg))
+            .fg(color_to_ratatui(theme.text_disabled));
 
         let inner_x = area.x.saturating_add(1);
         let inner_width = area.width.saturating_sub(2).max(1);
-        let visible_items = (area.height.saturating_sub(1)).min(self.items.len() as u16) as usize;
+        let visible_items = (area.height.saturating_sub(header_offset))
+            .min(self.items.len().saturating_sub(offset_y) as u16)
+            as usize;
 
+        // Clear area background
         for row in 0..area.height {
             let y = area.y.saturating_add(row);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
@@ -137,47 +181,89 @@ impl MenuComponent {
         }
 
         for idx in 0..visible_items {
-            let y = area.y.saturating_add(idx as u16 + 1);
+            let abs_idx = idx + offset_y;
+            if abs_idx >= self.items.len() {
+                break;
+            }
+            let y = area.y.saturating_add(idx as u16 + header_offset);
             if y < bounds.y || y >= bounds.y.saturating_add(bounds.height) {
                 break;
             }
-            let is_selected = idx == self.selected;
-            let is_hovered = hovered_idx == Some(idx);
-            let row_style = if is_selected {
-                selected_style
-            } else if is_hovered {
-                hovered_style
-            } else {
-                menu_style
-            };
-            for col in 0..area.width {
-                let x = area.x.saturating_add(col);
-                if x >= bounds.x.saturating_add(bounds.width) {
-                    break;
+
+            match &self.items[abs_idx] {
+                MenuDisplayItem::Separator => {
+                    let sep_style = Style::default()
+                        .bg(color_to_ratatui(theme.menu_bg))
+                        .fg(color_to_ratatui(theme.text_disabled));
+                    for col in 0..area.width {
+                        let x = area.x.saturating_add(col);
+                        if x >= bounds.x.saturating_add(bounds.width) {
+                            break;
+                        }
+                        if let Some(cell) = buffer.cell_mut((x, y)) {
+                            cell.reset();
+                            cell.set_symbol("─");
+                            cell.set_style(sep_style);
+                        }
+                    }
                 }
-                if let Some(cell) = buffer.cell_mut((x, y)) {
-                    cell.reset();
-                    cell.set_symbol(" ");
-                    cell.set_style(row_style);
+                MenuDisplayItem::Item(item) => {
+                    let is_selected = abs_idx == self.selected;
+                    let is_hovered = hovered_idx == Some(abs_idx);
+                    let row_style = if item.disabled && !is_selected {
+                        disabled_style
+                    } else if is_selected {
+                        selected_style
+                    } else if is_hovered {
+                        hovered_style
+                    } else {
+                        menu_style
+                    };
+                    for col in 0..area.width {
+                        let x = area.x.saturating_add(col);
+                        if x >= bounds.x.saturating_add(bounds.width) {
+                            break;
+                        }
+                        if let Some(cell) = buffer.cell_mut((x, y)) {
+                            cell.reset();
+                            cell.set_symbol(" ");
+                            cell.set_style(row_style);
+                        }
+                    }
+                    let marker = if is_selected {
+                        ">"
+                    } else if is_hovered {
+                        "\u{25b8}"
+                    } else {
+                        " "
+                    };
+                    let line = if let Some(icon) = item.icon {
+                        format!("{marker} {icon} {label}", label = item.label)
+                    } else {
+                        format!("{marker}   {label}", label = item.label)
+                    };
+                    let text = truncate_with_ellipsis(&line, inner_width as usize);
+                    safe_set_string(buffer, bounds, inner_x, y, &text, row_style);
                 }
             }
-            let item = &self.items[idx];
-            let marker = if is_selected {
-                ">"
-            } else if is_hovered {
-                "\u{25b8}"
-            } else {
-                " "
-            };
-            let line = if let Some(icon) = item.icon {
-                format!("{marker} {icon} {label}", label = item.label)
-            } else {
-                format!("{marker}   {label}", label = item.label)
-            };
-            let text: String = line.chars().take(inner_width as usize).collect();
-            safe_set_string(buffer, bounds, inner_x, y, &text, row_style);
         }
     }
+}
+
+/// Clamp selection index to a valid non-separator position.
+fn clamp_selected(mut idx: usize, items: &[MenuDisplayItem<TermWmAction>]) -> usize {
+    if items.is_empty() {
+        return 0;
+    }
+    idx = idx.min(items.len().saturating_sub(1));
+    // If the clamped position is a separator, move up until we find an item.
+    while matches!(items.get(idx), Some(MenuDisplayItem::Separator)) {
+        if idx == 0 {
+            break;
+        }
+        idx -= 1;
+    }
+    idx
 }
 
 impl Component<TermWmAction> for MenuComponent {
@@ -188,16 +274,67 @@ impl Component<TermWmAction> for MenuComponent {
         ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
-        self.render_items(&mut backend.buffer, area, None, &ctx.config().theme);
+        let offset_y = ctx.viewport().offset_y;
+        let header_offset: u16 = if self.show_header { 1 } else { 0 };
+        let hovered_idx = ctx.hover_pos().and_then(|(mx, my)| {
+            if mx < area.x || mx >= area.x.saturating_add(area.width) {
+                return None;
+            }
+            if my < area.y.saturating_add(header_offset) || my >= area.y.saturating_add(area.height)
+            {
+                return None;
+            }
+            let idx = (my.saturating_sub(area.y).saturating_sub(header_offset)) as usize + offset_y;
+            (idx < self.items.len()).then_some(idx)
+        });
+
+        self.render_items(
+            &mut backend.buffer,
+            area,
+            hovered_idx,
+            &ctx.config().theme,
+            offset_y,
+        );
     }
 
     fn handle_events(
         &mut self,
         event: &Event,
-        _ctx: &ComponentContext,
+        ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Press(_))
+        {
+            if let Some(area) = ctx.screen_area() {
+                let offset_y = ctx.viewport().offset_y;
+                let header_offset: u16 = if self.show_header { 1 } else { 0 };
+                let mx = mouse.column;
+                let my = mouse.row;
+                if mx >= area.x.max(0) as u16
+                    && mx < (area.x.max(0) as u16).saturating_add(area.width)
+                    && my >= (area.y.max(0) as u16).saturating_add(header_offset)
+                    && my < (area.y.max(0) as u16).saturating_add(area.height)
+                {
+                    let visual_idx =
+                        (my.saturating_sub(area.y.max(0) as u16)
+                            .saturating_sub(header_offset)) as usize;
+                    let idx = visual_idx + offset_y;
+                    if idx < self.items.len() {
+                        self.selected = idx;
+                        match &self.items[idx] {
+                            MenuDisplayItem::Separator => return EventResult::Consumed,
+                            MenuDisplayItem::Item(item) if item.disabled => {
+                                return EventResult::Consumed;
+                            }
+                            _ => return EventResult::Action(TermWmAction::MenuSelect),
+                        }
+                    }
+                }
+            }
+            return EventResult::Ignored;
+        }
         self.handle_key_event(event)
     }
 
@@ -209,20 +346,10 @@ impl Component<TermWmAction> for MenuComponent {
     ) {
         match action {
             TermWmAction::MenuUp | TermWmAction::MenuPrev => {
-                let total = self.items.len();
-                if total > 0 {
-                    self.selected = if self.selected == 0 {
-                        total - 1
-                    } else {
-                        self.selected - 1
-                    };
-                }
+                self.advance_selection(-1);
             }
             TermWmAction::MenuDown | TermWmAction::MenuNext => {
-                let total = self.items.len();
-                if total > 0 {
-                    self.selected = (self.selected + 1) % total;
-                }
+                self.advance_selection(1);
             }
             _ => {}
         }
@@ -239,7 +366,9 @@ impl Default for MenuComponent {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
-    use term_wm_core::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
+    use term_wm_core::events::{
+        Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     fn key_event(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE, KeyKind::Press))
@@ -258,18 +387,21 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "First",
+                label: "First".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
-                label: "Second",
+                label: "Second".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
-                label: "Third",
+                label: "Third".into(),
                 action: TermWmAction::OpenHelp,
+                disabled: false,
             },
         ]);
         assert_eq!(menu.selected(), 0);
@@ -296,23 +428,25 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "One",
+                label: "One".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
-                label: "Two",
+                label: "Two".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
         ]);
         assert_eq!(menu.selected(), 0);
 
-        // j = MenuNext
-        process(&mut menu, &key_event(KeyCode::Char('j')));
+        // Down arrow = MenuDown
+        process(&mut menu, &key_event(KeyCode::Down));
         assert_eq!(menu.selected(), 1);
 
-        // k = MenuPrev
-        process(&mut menu, &key_event(KeyCode::Char('k')));
+        // Up arrow = MenuUp
+        process(&mut menu, &key_event(KeyCode::Up));
         assert_eq!(menu.selected(), 0);
     }
 
@@ -322,13 +456,15 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "Zero",
+                label: "Zero".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: None,
-                label: "One",
+                label: "One".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
         ]);
         assert_eq!(menu.selected_action(), Some(&TermWmAction::Quit));
@@ -351,13 +487,15 @@ mod tests {
         menu.set_items(vec![
             MenuItem {
                 icon: None,
-                label: "Item A",
+                label: "Item A".into(),
                 action: TermWmAction::Quit,
+                disabled: false,
             },
             MenuItem {
                 icon: Some("\u{2713}"),
-                label: "Item B",
+                label: "Item B".into(),
                 action: TermWmAction::NewWindow,
+                disabled: false,
             },
         ]);
         let area = Rect {
@@ -367,7 +505,7 @@ mod tests {
             height: 10,
         };
         let buf = Buffer::empty(area);
-        let mut backend = term_wm_console::RatatuiBackend::new(buf, area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, area);
         let ctx = ComponentContext::new(true);
         menu.render(
             &mut backend,
@@ -380,5 +518,144 @@ mod tests {
             &ctx,
             &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
         );
+    }
+
+    #[test]
+    fn selected_action_returns_none_for_disabled_item() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        assert_eq!(menu.selected_action(), Some(&TermWmAction::Quit));
+        menu.set_selected(1);
+        assert_eq!(menu.selected_action(), None);
+    }
+
+    #[test]
+    fn enter_on_disabled_item_returns_ignored() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        menu.set_selected(1);
+        let result = menu.handle_key_event(&key_event(KeyCode::Enter));
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn enter_on_enabled_item_returns_menu_select() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        let result = menu.handle_key_event(&key_event(KeyCode::Enter));
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
+    }
+
+    #[test]
+    fn mouse_click_on_disabled_item_returns_consumed() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        let ctx = ComponentContext::new(false).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = menu.handle_events(&event, &ctx);
+        assert!(matches!(result, EventResult::Consumed));
+        assert_eq!(menu.selected(), 1);
+    }
+
+    #[test]
+    fn mouse_click_on_enabled_item_returns_menu_select() {
+        let mut menu = MenuComponent::new();
+        menu.set_items(vec![
+            MenuItem {
+                icon: None,
+                label: "Enabled".into(),
+                action: TermWmAction::Quit,
+                disabled: false,
+            },
+            MenuItem {
+                icon: None,
+                label: "Disabled".into(),
+                action: TermWmAction::NewWindow,
+                disabled: true,
+            },
+        ]);
+        let ctx = ComponentContext::new(false).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 10,
+        });
+        let event = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = menu.handle_events(&event, &ctx);
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::MenuSelect)
+        ));
+        assert_eq!(menu.selected(), 0);
     }
 }

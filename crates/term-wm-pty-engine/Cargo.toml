@@ -1,6 +1,8 @@
 [package]
 name = "term-wm-pty-engine"
 description = "PTY engine for term-wm."
+keywords = ["pty", "terminal", "vt100", "conpty", "cross-platform"]
+categories = ["emulators", "os", "external-ffi-bindings", "concurrency"]
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,5 +15,8 @@ base64 = { workspace = true }
 ctrlc = { workspace = true }
 libc = { workspace = true }
 portable-pty = { workspace = true }
+term-wm-events = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 vt100 = { workspace = true }
+vte = { workspace = true }
