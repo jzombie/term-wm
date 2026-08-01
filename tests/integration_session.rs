@@ -222,11 +222,7 @@ async fn session_osc52_via_osc52extractor() {
 #[tokio::test]
 async fn session_resize() {
     let mock = get_mock_bin();
-    let client = spawn_session(
-        &test_channel("test/resize"),
-        vec![mock, "echo".into()],
-    )
-    .await;
+    let client = spawn_session(&test_channel("test/resize"), vec![mock, "echo".into()]).await;
 
     let result = ResizePty::call(&*client, (1u64, 120u16, 40u16)).await;
     assert!(result.is_ok(), "Resize should succeed: {:?}", result.err());
