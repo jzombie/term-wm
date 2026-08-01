@@ -89,7 +89,7 @@ impl Component<TermWmAction> for TerminalComponent {
             Event::Mouse(mouse) => {
                 if !ctx.direct_mode() {
                     // Right-click paste (Windows Cmd/PS convention).
-                    // Only in normal mode — in direct mode (tmux, vim, etc.)
+                    // Only in normal mode — in Direct Mode (tmux, vim, etc.)
                     // right-click passes through to the running program.
                     match mouse.kind {
                         MouseEventKind::Press(MouseButton::Right)
@@ -2085,7 +2085,7 @@ mod tests {
             );
         }
 
-        // In direct mode: a Down+Drag must NOT be consumed by selection
+        // In Direct Mode: a Down+Drag must NOT be consumed by selection
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             column: (area.x + 1) as u16,
@@ -2095,19 +2095,19 @@ mod tests {
         let result_down = wm.dispatch_focused_event(&down);
         assert!(
             result_down.is_some(),
-            "down must route to component in direct mode, got None"
+            "down must route to component in Direct Mode, got None"
         );
         let (_, down_evt) = result_down.unwrap();
-        // In direct mode, selection is skipped, so Down is not consumed
+        // In Direct Mode, selection is skipped, so Down is not consumed
         // (it falls through to PTY forwarding, which returns Ignored for
         //  press-only mode since the test PTY hasn't enabled mouse tracking)
         assert!(
             !down_evt.is_consumed(),
-            "down must NOT be consumed in direct mode: got {:?}",
+            "down must NOT be consumed in Direct Mode: got {:?}",
             down_evt
         );
 
-        // Drag must also not be consumed (selection is skipped in direct mode)
+        // Drag must also not be consumed (selection is skipped in Direct Mode)
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: (area.x + 5) as u16,
@@ -2117,12 +2117,12 @@ mod tests {
         let result_drag = wm.dispatch_focused_event(&drag);
         assert!(
             result_drag.is_some(),
-            "drag must route to component in direct mode, got None"
+            "drag must route to component in Direct Mode, got None"
         );
         let (_, drag_evt) = result_drag.unwrap();
         assert!(
             !drag_evt.is_consumed(),
-            "drag must NOT be consumed in direct mode: got {:?}",
+            "drag must NOT be consumed in Direct Mode: got {:?}",
             drag_evt
         );
 
@@ -2133,11 +2133,11 @@ mod tests {
             .unwrap();
         assert!(
             !sel_status.active,
-            "selection should not be active after direct mode drag"
+            "selection should not be active after Direct Mode drag"
         );
     }
 
-    /// In direct mode, mouse Down must skip selection and go to PTY encoding.
+    /// In Direct Mode, mouse Down must skip selection and go to PTY encoding.
     #[test]
     fn direct_mode_mouse_down_skips_selection() {
         use term_wm_core::actions::TermWmAction;
@@ -2152,7 +2152,7 @@ mod tests {
         let mut term = TerminalComponent::from_pane(Box::new(pane));
         term.set_selection_enabled(true);
 
-        // Direct mode — selection skipped, PTY encoding expected
+        // Direct Mode — selection skipped, PTY encoding expected
         let ctx = ComponentContext::new(true)
             .with_direct_mode(true)
             .with_screen_area(LayoutRect {
@@ -2173,12 +2173,12 @@ mod tests {
         match result {
             EventResult::Action(TermWmAction::MouseToBytes(_)) => {}
             other => panic!(
-                "in direct mode, Down must produce MouseToBytes (PTY), got {:?}",
+                "in Direct Mode, Down must produce MouseToBytes (PTY), got {:?}",
                 other
             ),
         }
 
-        // Non-direct mode — selection should consume Drag
+        // Non-Direct Mode — selection should consume Drag
         let ctx_normal = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
@@ -2213,7 +2213,7 @@ mod tests {
     //
     // These tests verify that right-click mouse events are intercepted by
     // TerminalComponent::handle_events and produce PasteClipboard (in
-    // normal mode) or pass through to PTY encoding (in direct mode).
+    // normal mode) or pass through to PTY encoding (in Direct Mode).
 
     /// Right-click Release in normal mode must produce
     /// PasteClipboard; Press and Drag must be consumed (not forwarded
@@ -2278,7 +2278,7 @@ mod tests {
         );
     }
 
-    /// Right-click in direct mode must NOT produce PasteClipboard — it
+    /// Right-click in Direct Mode must NOT produce PasteClipboard — it
     /// must pass through to PTY encoding (MouseToBytes when the PTY has
     /// enabled mouse tracking).
     #[test]
@@ -2304,7 +2304,7 @@ mod tests {
                 height: 24,
             });
 
-        // Right-click Release in direct mode — must NOT be PasteClipboard
+        // Right-click Release in Direct Mode — must NOT be PasteClipboard
         let release = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Right),
             column: 10,
@@ -2314,17 +2314,17 @@ mod tests {
         let result = term.handle_events(&release, &ctx);
         assert!(
             !matches!(result, EventResult::Action(TermWmAction::PasteClipboard)),
-            "right-click Release in direct mode must NOT produce PasteClipboard, got {:?}",
+            "right-click Release in Direct Mode must NOT produce PasteClipboard, got {:?}",
             result
         );
         // With mouse tracking enabled, Release should produce MouseToBytes
         assert!(
             matches!(result, EventResult::Action(TermWmAction::MouseToBytes(_))),
-            "right-click Release in direct mode should produce MouseToBytes, got {:?}",
+            "right-click Release in Direct Mode should produce MouseToBytes, got {:?}",
             result
         );
 
-        // Right-click Press in direct mode — also not consumed/paste-intercepted
+        // Right-click Press in Direct Mode — also not consumed/paste-intercepted
         let press = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Right),
             column: 10,
@@ -2334,7 +2334,7 @@ mod tests {
         let press_result = term.handle_events(&press, &ctx);
         assert!(
             !matches!(press_result, EventResult::Consumed),
-            "right-click Press in direct mode must NOT be Consumed, got {:?}",
+            "right-click Press in Direct Mode must NOT be Consumed, got {:?}",
             press_result
         );
     }
@@ -2726,7 +2726,7 @@ mod tests {
         let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
         term.last_mode_suppressed_scroll.set(true);
         term.set_last_max_scrollback(200);
-        // Normal mode, no alt screen, no direct mode
+        // Normal mode, no alt screen, no Direct Mode
         let ctx = make_ctx(0, handle);
         let area = Rect::new(0, 0, 80, 24);
         let buffer = Buffer::empty(area);

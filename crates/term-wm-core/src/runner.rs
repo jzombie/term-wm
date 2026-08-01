@@ -363,7 +363,7 @@ where
                 let status = if enabled { "enabled" } else { "disabled" };
                 let title = app.wm().window_title(key);
                 app.wm().push_notification(
-                    format!("Direct mode {} for {}", status, title),
+                    format!("Direct Mode {} for {}", status, title),
                     Duration::from_secs(3),
                 );
             }
@@ -611,14 +611,14 @@ where
                     return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
-                // Layer 2c: Direct mode check — forward key events straight to PTY
+                // Layer 2c: Direct Mode check — forward key events straight to PTY
                 if let Event::Key(key) = &evt {
                     let focus_id = app.wm().focused_window();
                     if app.wm().direct_mode(focus_id)
                         && !app.wm().command_menu_visible()
                         && matches!(key.kind, KeyKind::Press | KeyKind::Repeat)
                     {
-                        // Direct mode — forward to terminal immediately.
+                        // Direct Mode — forward to terminal immediately.
                         let _ = handle_focused_app_event(&evt, app);
                         update_selection_snapshot(app);
                         return flush_state_changes(
@@ -1154,7 +1154,7 @@ mod tests {
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(
             consumed,
-            "Repeat event must route through handle_focused_app_event in direct mode"
+            "Repeat event must route through handle_focused_app_event in Direct Mode"
         );
     }
 
