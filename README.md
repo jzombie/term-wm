@@ -20,6 +20,48 @@ Designed for Linux, macOS, and Windows, it brings the spatial organization of a 
 
 ---
 
+## Usage
+
+### Quick Start
+
+Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
+
+```sh
+git clone https://github.com/jzombie/term-wm
+cd term-wm
+cargo run --release
+```
+
+This opens a new workspace with two terminal windows by default. Pass programs as arguments to open them in new windows:
+
+```sh
+cargo run --release -- vim
+cargo run --release -- -n 4              # open 4 windows
+cargo run --release -- -n 3 -- ls -la    # 3 windows; the first runs `ls -la`
+```
+
+Options (`term-wm -h`):
+
+- `-n, --count <N>` — number of windows to open (default 2; min 1)
+- `--embedded` — bare/embedded mode: no system chrome, panels, or floating windows
+- `-h, --help`, `-V, --version`
+
+New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
+
+### Keybindings Quick Reference
+
+| Action | Key |
+|---|---|
+| Open Command Palette (Super Key) | `Ctrl+A` |
+| Send `Ctrl+A` to the focused app | `Ctrl+A` while the palette is open |
+| Cycle focus between windows | `Tab` / `Shift+Tab` (palette open) |
+| Scrollback navigation | `PageUp` / `PageDown` / `Home` / `End` |
+| Scroll one line | `Shift+Up` / `Shift+Down` |
+| Select text (mouse) | Click and drag; release copies |
+| Paste | Right-click |
+
+`term-wm` automatically enters **Direct Mode** (zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
+
 ## System Requirements & Compatibility
 
 `term-wm` is designed to be highly resilient, running anywhere a standard terminal environment is available, but relies on modern terminal standards for its optimal presentation.

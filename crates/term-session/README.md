@@ -6,11 +6,15 @@ A layout-agnostic, headless terminal session host and multiplexer.
 
 ## Usage
 
+Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
+
 ```sh
-term-session                     # attach to default/main (spawning a server if needed)
-term-session --channel work/dev  # attach to (or spawn) work/dev
-term-session --server --channel work/dev -- vim foo.txt   # start a server running a program
+cargo run --release --bin term-session -- term-wm                        # attach to default/main, auto-spawning a server
+cargo run --release --bin term-session -- --channel work -- vim          # attach to (or spawn) the "work" channel
+cargo run --release --bin term-session -- --server --channel work -- vim # start a dedicated server daemon
 ```
+
+Multiple terminals can attach to the same channel to share one session.
 
 In client mode `term-session` first probes the channel for a live server and, if none is running, spawns a detached one automatically (`connect_or_spawn_server`). The program to run and the PTY size are forwarded to the server at spawn time. The channel can also be set via the `TERM_WM_CHANNEL` environment variable.
 
