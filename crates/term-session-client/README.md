@@ -2,6 +2,14 @@
 
 The client half of [term-session](https://crates.io/crates/term-session): attaches a local terminal to a server-hosted PTY session and renders it live.
 
+> **Library only.** This crate provides the client-side library for the supported
+> functionality; it ships no binary of its own. The runnable binary is currently
+> provided by the [`term-session`](https://crates.io/crates/term-session) crate,
+> which depends on this library. Like the rest of the `term-session` stack, it
+> reuses much of `term-wm`'s internal machinery (the PTY engine, input event
+> types, and the crossterm input adapter) — but it does **not** produce the window
+> manager.
+
 `run_session` connects to a session server over Muxio IPC, attaches to the shared PTY, and:
 
 - renders the PTY screen locally with a `vt100` parser and full-frame ANSI output (Synchronized Output, wide-char handling);
@@ -10,7 +18,7 @@ The client half of [term-session](https://crates.io/crates/term-session): attach
 - captures OSC 52 clipboard sequences from the output stream;
 - cleans up the terminal (leaves alternate screen, restores raw mode) on exit.
 
-Used by term-wm as the backbone of its terminal session persistence, but usable from any terminal program.
+Designed to work alongside term-wm: run `term-wm` as a child process inside `term-session` for persistent, detachable workspaces. Usable from any terminal program.
 
 ## Known limitation
 

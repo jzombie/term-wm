@@ -83,7 +83,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -94,7 +94,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -381,9 +381,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.4"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91e0c145792ef73a6ad36d27c75ac09f1832222a3c209689d90f534685ee5b7"
+checksum = "301b56658598e48f3648647ac6fc887be7e7108eddfa4e9b63fcf3ec58c0cadf"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -391,9 +391,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.6.2"
+version = "4.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
+checksum = "94a65403d1a1bd28f7dc68eb8506e8874808ee5eecb59298de588e2e1407a078"
 dependencies = [
  "anstream",
  "anstyle",
@@ -799,7 +799,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1364,9 +1364,9 @@ dependencies = [
 
 [[package]]
 name = "interprocess"
-version = "2.4.2"
+version = "2.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "069323743400cb7ab06a8fe5c1ed911d36b6919ec531661d034c89083629595b"
+checksum = "798de1433ba514cc6c04c4144c2469af81396e4906195218737c776d47769572"
 dependencies = [
  "doctest-file",
  "futures-core",
@@ -1829,7 +1829,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2595,7 +2595,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2890,7 +2890,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3005,12 +3005,12 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
 name = "term-bench"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3020,7 +3020,7 @@ dependencies = [
 
 [[package]]
 name = "term-resize-indicator"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3028,7 +3028,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "clap",
  "libc",
@@ -3041,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3071,7 +3071,7 @@ version = "0.0.0"
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3080,7 +3080,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3099,7 +3099,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3136,7 +3136,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3176,7 +3176,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3185,21 +3185,21 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "term-wm-layout-engine",
 ]
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.0",
@@ -3215,11 +3215,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3235,7 +3235,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -3260,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.9.0-test"
+version = "0.9.1-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3278,7 +3278,7 @@ dependencies = [
  "parking_lot",
  "rustix",
  "signal-hook",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4040,7 +4040,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -248,7 +248,7 @@ impl ComponentContext {
         self.overlay
     }
 
-    /// Returns whether the component's window is in direct mode.
+    /// Returns whether the component's window is in Direct Mode.
     pub const fn direct_mode(&self) -> bool {
         self.direct_mode
     }

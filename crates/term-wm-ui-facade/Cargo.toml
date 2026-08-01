@@ -1,6 +1,8 @@
 [package]
 name = "term-wm-ui-facade"
 description = "Built-in component registry for term-wm."
+keywords = ["ui", "components", "registry", "tui"]
+categories = ["gui", "command-line-interface", "rust-patterns"]
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

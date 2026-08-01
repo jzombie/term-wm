@@ -536,7 +536,7 @@ impl Pty {
     }
 
     /// Return an `Arc<dyn DirectInputTracker>` for this PTY's state tracker.
-    /// Used by the window manager to auto-enable direct mode when the
+    /// Used by the window manager to auto-enable Direct Mode when the
     /// application enters alternate screen, enables mouse tracking, etc.
     pub fn direct_input_tracker(&self) -> std::sync::Arc<dyn crate::DirectInputTracker> {
         self.tracker.clone()

@@ -77,7 +77,7 @@ Content area = window_rect - (2 columns, 3 rows)
     Maximize (▢): bg = accent     (green), fg = menu_selected_fg (dark)
     Minimize (_): bg = warning_bg (amber), fg = menu_selected_fg (dark)
 
-  (Note: The direct mode toggle is accessed via the menu, not as a header button.)
+  (Note: The Direct Mode toggle is accessed via the menu, not as a header button.)
 
 ===============================================================================
 2. FLOATING WINDOW DRAG & RESIZE HANDLES

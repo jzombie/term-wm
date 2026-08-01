@@ -1,6 +1,8 @@
 [package]
 name = "term-session-muxio-service-definitions"
 description = "Shared Muxio wire definitions (spawn, subscribe output, stream input, channel handling) for term-session."
+keywords = ["rpc", "protocol", "serde", "client-server"]
+categories = ["network-programming", "encoding", "rust-patterns"]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -10,5 +12,5 @@ publish.workspace = true
 
 [dependencies]
 bitcode = { workspace = true }
-interprocess = "2.4.2"
+interprocess = { workspace = true }
 muxio-rpc-service = { workspace = true }

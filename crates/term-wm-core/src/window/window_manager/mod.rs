@@ -655,7 +655,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .unwrap_or_else(|| self.default_cascading_rect(index))
     }
 
-    /// Direct mode: purely automatic from the PTY state tracker.
+    /// Direct Mode: purely automatic from the PTY state tracker.
     /// Returns true when the application requires unfiltered input
     /// (alternate screen, mouse tracking, custom margins).
     pub fn direct_mode(&self, key: WindowKey) -> bool {
@@ -5559,7 +5559,7 @@ mod tests {
         });
 
         let result = wm.dispatch_focused_event(&click);
-        // In direct mode, content clicks bypass chrome and reach the component.
+        // In Direct Mode, content clicks bypass chrome and reach the component.
         assert!(result.is_some(), "event must route to window component");
     }
 
@@ -5704,7 +5704,7 @@ mod tests {
         wm.focus_app_window(keys[1]);
 
         let win_key = keys[1];
-        assert!(!wm.direct_mode(win_key), "direct mode is off");
+        assert!(!wm.direct_mode(win_key), "Direct Mode is off");
 
         let content = wm.region_for_key(win_key);
         let click = Event::Mouse(MouseEvent {
