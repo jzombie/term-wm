@@ -9,14 +9,13 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, bounded};
 
-use term_wm_core::events::{
-    Event, KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use term_wm_core::events::{Event, KeyEvent, MouseEvent};
 use term_wm_core::io::EventSource;
 use term_wm_core::io::frame_pacer::FramePacer;
 use term_wm_core::power_profile::PowerProfile;
 use term_wm_core::utils::KeyboardNormalizer;
 use term_wm_core::window::WindowKey;
+use term_wm_crossterm_adapter;
 
 /// Capacity of the crossbeam channel between event producers and the event
 /// loop. Generous capacity since wakeup gating (dirty.swap) prevents flooding.
@@ -35,6 +34,8 @@ pub enum UnifiedEvent {
     PtyWakeup(WindowKey),
     /// A PTY child process has exited. Sent from the reader thread on EOF.
     AppExited(WindowKey),
+    /// Application direct-input routing state changed (alt screen, mouse tracking, margins).
+    DirectInputChanged(WindowKey, bool),
     /// An OS signal was received (SIGINT, SIGTERM).
     Signal,
     /// Periodic tick for timing.
@@ -57,6 +58,8 @@ pub struct UnifiedEventSource {
     dirty_windows: HashSet<WindowKey>,
     /// Accumulated window exit notifications since the last drain.
     exited_windows: Vec<WindowKey>,
+    /// Accumulated direct-input routing transitions since the last drain.
+    direct_input_changed: Vec<(WindowKey, bool)>,
     /// Cached input event (poll returned true, waiting for read).
     pending_event: Option<Event>,
     /// Buffer for input events drained during `drain_pending` so none are lost.
@@ -80,6 +83,10 @@ pub struct UnifiedEventSource {
     /// [`poll`]: EventSource::poll
     /// [`set_max_sleep_duration`]: EventSource::set_max_sleep_duration
     max_sleep_duration: Option<Duration>,
+    /// Global dirty bit — set by `request_redraw()`, consumed by
+    /// `take_redraw_request()` in the runner's `None` branch to arm
+    /// the FramePacer for non-input-driven state changes.
+    pending_redraw: bool,
 }
 
 impl UnifiedEventSource {
@@ -129,6 +136,8 @@ impl UnifiedEventSource {
             shutdown,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -165,6 +174,15 @@ impl UnifiedEventSource {
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
                 }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    tracing::info!(
+                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
                 }
@@ -188,92 +206,16 @@ impl UnifiedEventSource {
 /// Translate a crossterm event to a core-owned event.
 fn translate_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
     match evt {
-        crossterm::event::Event::Key(key) => Some(Event::Key(translate_key_event(key))),
-        crossterm::event::Event::Mouse(mouse) => Some(Event::Mouse(translate_mouse_event(mouse))),
+        crossterm::event::Event::Key(key) => {
+            term_wm_crossterm_adapter::try_translate_key_event(key).map(Event::Key)
+        }
+        crossterm::event::Event::Mouse(mouse) => Some(Event::Mouse(
+            term_wm_crossterm_adapter::translate_mouse_event(mouse),
+        )),
         crossterm::event::Event::Resize(w, h) => Some(Event::Resize(w, h)),
         crossterm::event::Event::FocusGained => Some(Event::FocusGained),
         crossterm::event::Event::FocusLost => Some(Event::FocusLost),
         crossterm::event::Event::Paste(text) => Some(Event::Paste(text)),
-    }
-}
-
-fn translate_key_event(key: crossterm::event::KeyEvent) -> KeyEvent {
-    let mut modifiers = translate_key_modifiers(key.modifiers);
-    // macOS sends BackTab for Shift+Tab — set shift
-    if matches!(key.code, crossterm::event::KeyCode::BackTab) {
-        modifiers.shift = true;
-    }
-    KeyEvent {
-        code: translate_key_code(key.code),
-        modifiers,
-        kind: match key.kind {
-            crossterm::event::KeyEventKind::Press => KeyKind::Press,
-            crossterm::event::KeyEventKind::Repeat => KeyKind::Repeat,
-            crossterm::event::KeyEventKind::Release => KeyKind::Release,
-        },
-    }
-}
-
-fn translate_key_code(code: crossterm::event::KeyCode) -> KeyCode {
-    match code {
-        crossterm::event::KeyCode::Char(c) => KeyCode::Char(c),
-        crossterm::event::KeyCode::Enter => KeyCode::Enter,
-        crossterm::event::KeyCode::Tab => KeyCode::Tab,
-        crossterm::event::KeyCode::BackTab => KeyCode::Tab,
-        crossterm::event::KeyCode::Backspace => KeyCode::Backspace,
-        crossterm::event::KeyCode::Esc => KeyCode::Esc,
-        crossterm::event::KeyCode::Left => KeyCode::Left,
-        crossterm::event::KeyCode::Right => KeyCode::Right,
-        crossterm::event::KeyCode::Up => KeyCode::Up,
-        crossterm::event::KeyCode::Down => KeyCode::Down,
-        crossterm::event::KeyCode::Home => KeyCode::Home,
-        crossterm::event::KeyCode::End => KeyCode::End,
-        crossterm::event::KeyCode::PageUp => KeyCode::PageUp,
-        crossterm::event::KeyCode::PageDown => KeyCode::PageDown,
-        crossterm::event::KeyCode::Delete => KeyCode::Delete,
-        crossterm::event::KeyCode::Insert => KeyCode::Insert,
-        crossterm::event::KeyCode::F(n) => KeyCode::F(n),
-        _ => KeyCode::Esc, // Fallback for unrecognized keys
-    }
-}
-
-fn translate_key_modifiers(mods: crossterm::event::KeyModifiers) -> KeyModifiers {
-    KeyModifiers {
-        shift: mods.contains(crossterm::event::KeyModifiers::SHIFT),
-        control: mods.contains(crossterm::event::KeyModifiers::CONTROL),
-        alt: mods.contains(crossterm::event::KeyModifiers::ALT),
-    }
-}
-
-fn translate_mouse_event(mouse: crossterm::event::MouseEvent) -> MouseEvent {
-    MouseEvent {
-        kind: match mouse.kind {
-            crossterm::event::MouseEventKind::Down(btn) => {
-                MouseEventKind::Press(translate_button(btn))
-            }
-            crossterm::event::MouseEventKind::Up(btn) => {
-                MouseEventKind::Release(translate_button(btn))
-            }
-            crossterm::event::MouseEventKind::Drag(btn) => {
-                MouseEventKind::Drag(translate_button(btn))
-            }
-            crossterm::event::MouseEventKind::Moved => MouseEventKind::Moved,
-            crossterm::event::MouseEventKind::ScrollUp => MouseEventKind::ScrollUp,
-            crossterm::event::MouseEventKind::ScrollDown => MouseEventKind::ScrollDown,
-            crossterm::event::MouseEventKind::ScrollLeft => MouseEventKind::ScrollLeft,
-            crossterm::event::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
-        },
-        modifiers: translate_key_modifiers(mouse.modifiers),
-        column: mouse.column,
-        row: mouse.row,
-    }
-}
-
-fn translate_button(btn: crossterm::event::MouseButton) -> MouseButton {
-    match btn {
-        crossterm::event::MouseButton::Left => MouseButton::Left,
-        crossterm::event::MouseButton::Right => MouseButton::Right,
-        crossterm::event::MouseButton::Middle => MouseButton::Middle,
     }
 }
 
@@ -293,25 +235,25 @@ impl EventSource for UnifiedEventSource {
         // deadline is set, so recv_timeout would block for the full
         // PowerSaver interval.
         if !self.dirty_windows.is_empty() {
-            self.frame_pacer.notify_pending();
+            self.frame_pacer.notify_pending(Instant::now());
         }
 
         // Clamp remaining to the frame deadline so we never block
         // longer than 16ms when there are unprocessed dirty windows.
-        if self.frame_pacer.try_expire() {
+        if self.frame_pacer.try_expire(Instant::now()) {
             return Ok(false);
         }
         let mut remaining = timeout;
-        if let Some(t) = self.frame_pacer.time_until_deadline() {
+        if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
             remaining = remaining.min(t);
         }
 
         while remaining > Duration::ZERO {
             // Check frame deadline before each blocking call.
-            if self.frame_pacer.try_expire() {
+            if self.frame_pacer.try_expire(Instant::now()) {
                 return Ok(false);
             }
-            if let Some(t) = self.frame_pacer.time_until_deadline() {
+            if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
                 remaining = remaining.min(t);
                 if remaining <= Duration::ZERO {
                     self.frame_pacer.reset();
@@ -328,26 +270,37 @@ impl EventSource for UnifiedEventSource {
                         return Ok(true);
                     }
                     // Event filtered out — update remaining and continue.
-                    if let Some(t) = self.frame_pacer.time_until_deadline() {
+                    if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
                         remaining = remaining.min(t);
                     }
                     continue;
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
                     self.dirty_windows.insert(key);
-                    self.frame_pacer.notify_pending();
-                    if self.frame_pacer.try_expire() {
+                    self.frame_pacer.notify_pending(Instant::now());
+                    if self.frame_pacer.try_expire(Instant::now()) {
                         return Ok(false);
                     }
-                    if let Some(t) = self.frame_pacer.time_until_deadline() {
+                    if let Some(t) = self.frame_pacer.time_until_deadline(Instant::now()) {
                         remaining = remaining.min(t);
                     }
                     continue;
                 }
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
-                    self.frame_pacer.notify_pending();
+                    self.frame_pacer.notify_pending(Instant::now());
                     continue;
+                }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    tracing::info!(
+                        "[STAGE 3] recv_timeout collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                    self.frame_pacer.notify_pending(Instant::now());
+                    return Ok(false);
                 }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
@@ -358,7 +311,7 @@ impl EventSource for UnifiedEventSource {
                 }
                 Err(_) => {
                     // Check if the frame deadline expired during the wait.
-                    if self.frame_pacer.try_expire() {
+                    if self.frame_pacer.try_expire(Instant::now()) {
                         return Ok(false);
                     }
                     break;
@@ -399,6 +352,15 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
                 }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    tracing::info!(
+                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})",
+                        key,
+                        enabled
+                    );
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
                 }
@@ -428,6 +390,11 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
                 }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                    continue;
+                }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
                 Err(_) => {
@@ -454,6 +421,11 @@ impl EventSource for UnifiedEventSource {
                 Ok(UnifiedEvent::PtyWakeup(_)) => {}
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
+                }
+                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    self.dirty_windows.insert(key);
+                    self.direct_input_changed.push((key, enabled));
+                    continue;
                 }
                 Ok(UnifiedEvent::Signal) => self.signal_received = true,
                 Ok(UnifiedEvent::Tick) => {}
@@ -517,8 +489,20 @@ impl EventSource for UnifiedEventSource {
         std::mem::take(&mut self.exited_windows)
     }
 
+    fn take_direct_input_changed(&mut self) -> Vec<(WindowKey, bool)> {
+        std::mem::take(&mut self.direct_input_changed)
+    }
+
     fn take_dirty_windows(&mut self) -> HashSet<WindowKey> {
         std::mem::take(&mut self.dirty_windows)
+    }
+
+    fn request_redraw(&mut self) {
+        self.pending_redraw = true;
+    }
+
+    fn take_redraw_request(&mut self) -> bool {
+        std::mem::replace(&mut self.pending_redraw, false)
     }
 }
 
@@ -533,6 +517,17 @@ mod tests {
     use super::*;
     use crate::events::{KeyCode, KeyKind, KeyModifiers};
 
+    #[test]
+    fn test_translate_crossterm_event_drops_unsupported_keys() {
+        let caps_lock = crossterm::event::Event::Key(crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::CapsLock,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        });
+        assert!(translate_crossterm_event(caps_lock).is_none());
+    }
+
     /// Input events drained by `drain_pending` must be preserved in
     /// `input_buffer` so `poll()/read()` can process every event.
     #[test]
@@ -545,6 +540,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -635,6 +632,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -668,12 +667,10 @@ mod tests {
 
         source.drain_pending();
 
-        // Count surviving events — Release is always filtered, Repeat only on Windows
-        let expected = if cfg!(windows) { 2 } else { 3 };
         assert_eq!(
             source.input_buffer.len(),
-            expected,
-            "Release must be filtered; on non-Windows Repeat survives"
+            3,
+            "Only Release events should be filtered by normalization"
         );
 
         // Verify Release event (index 1) is absent
@@ -712,6 +709,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -754,6 +753,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -811,6 +812,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: set,
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -837,6 +840,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -861,6 +866,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -895,6 +902,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: vec![key],
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -935,6 +944,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: set,
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -967,6 +978,8 @@ mod tests {
             shutdown: Arc::new(AtomicBool::new(false)),
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,

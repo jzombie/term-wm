@@ -1,5 +1,6 @@
 use portable_pty::{CommandBuilder, PtySize};
-use term_wm_pty_engine::{Pty, PtyResult};
+use term_session_muxio_service_definitions::ChannelName;
+use term_wm_pty_engine::{Pty, PtyResult, PtyStatus};
 
 pub struct Session {
     pub id: u64,
@@ -24,7 +25,13 @@ fn default_shell_command() -> CommandBuilder {
 }
 
 impl Session {
-    pub fn spawn(id: u64, cmd: Option<Vec<String>>, cols: u16, rows: u16) -> PtyResult<Self> {
+    pub fn spawn(
+        id: u64,
+        cmd: Option<Vec<String>>,
+        cols: u16,
+        rows: u16,
+        channel: Option<&ChannelName>,
+    ) -> PtyResult<Self> {
         let size = PtySize {
             rows,
             cols,
@@ -36,12 +43,19 @@ impl Session {
             for arg in &cmd_parts[1..] {
                 builder.arg(arg);
             }
+            if let Some(ch) = channel {
+                builder.env("TERM_WM_CHANNEL", ch.to_string());
+            }
             if let Ok(cwd) = std::env::current_dir() {
                 builder.cwd(cwd);
             }
             Pty::spawn(builder, size)?
         } else {
-            Pty::spawn(default_shell_command(), size)?
+            let mut builder = default_shell_command();
+            if let Some(ch) = channel {
+                builder.env("TERM_WM_CHANNEL", ch.to_string());
+            }
+            Pty::spawn(builder, size)?
         };
         Ok(Self {
             id,
@@ -91,5 +105,9 @@ impl Session {
 
     pub fn generate_snapshot(&mut self) -> Vec<u8> {
         self.pty.generate_snapshot()
+    }
+
+    pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
+        self.pty.set_status_callback(cb);
     }
 }

@@ -1,8 +1,16 @@
 # term-session-client
 
-IPC-based session client for term-wm. For internal usage.
+The client half of [term-session](https://crates.io/crates/term-session): attaches a local terminal to a server-hosted PTY session and renders it live.
 
-See the main [term-wm](https://crates.io/crates/term-wm) crate for documentation.
+`run_session` connects to a session server over Muxio IPC, attaches to the shared PTY, and:
+
+- renders the PTY screen locally with a `vt100` parser and full-frame ANSI output (Synchronized Output, wide-char handling);
+- forwards keystrokes, mouse events (SGR 1006), and bracketed pastes back into the shared session, so every attached terminal sees the same live view and can type into it;
+- follows server-driven geometry changes and reports local resize requests to the server;
+- captures OSC 52 clipboard sequences from the output stream;
+- cleans up the terminal (leaves alternate screen, restores raw mode) on exit.
+
+Used by term-wm as the backbone of its terminal session persistence, but usable from any terminal program.
 
 ## Known limitation
 

@@ -1,10 +1,11 @@
+use crate::components::{Component, Overlay, WmComponent};
 use crate::events::{Event, MouseEventKind};
 
 use super::WindowManager;
 use crate::actions::{EventResult, TermWmAction};
 use crate::window::WindowKey;
 
-impl WindowManager {
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn set_focus_order(&mut self, order: Vec<WindowKey>) {
         self.focus.set_order(order);
     }
@@ -42,17 +43,60 @@ impl WindowManager {
     }
 
     pub fn focus_app_window(&mut self, key: WindowKey) {
-        self.focus.set_current(key);
-        self.bring_to_front_key(key);
-        self.mark_layout_dirty();
+        self.focus_window_key(key);
     }
 
     pub fn focus_window_key(&mut self, key: WindowKey) {
-        // Focus shifts must not mutate geometry — maximized floating windows
-        // retain their size regardless of Z-order changes.
+        // If the currently focused window is maximized and we are switching to
+        // a different window, unmaximize it so the target window is not hidden
+        // behind the full-area floating overlay.
+        let prev_focus = *self.focus.current();
+        if prev_focus != key && self.window(prev_focus).is_some_and(|w| w.is_maximized()) {
+            self.toggle_maximize(prev_focus);
+        }
+
         self.focus.set_current(key);
         self.bring_to_front_key(key);
         self.mark_layout_dirty();
+
+        // If the command palette is open, rebuild its items with the new
+        // focus state so "Switch to" and window management buttons reflect
+        // the currently focused window.
+        if !self.command_menu_visible() {
+            return;
+        }
+        let Some(palette_key) =
+            self.get_overlay::<crate::window::window_manager::system_tags::CommandPalette>()
+        else {
+            return;
+        };
+
+        // Build fresh items BEFORE accessing the overlay (borrow checker).
+        use crate::components::MenuDisplayItem;
+        let items = self.wm_menu_items();
+        let supported = &self.supported_menu_actions;
+        let filtered: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = items
+            .into_iter()
+            .filter(|entry| match entry {
+                MenuDisplayItem::Item(item) => {
+                    supported.contains(&item.action)
+                        || matches!(
+                            item.action,
+                            crate::actions::TermWmAction::FocusWindow(_)
+                                | crate::actions::TermWmAction::MaximizeWindow(_)
+                                | crate::actions::TermWmAction::MinimizeWindow(_)
+                                | crate::actions::TermWmAction::CloseWindow(_)
+                                | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
+                                | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
+                        )
+                }
+                MenuDisplayItem::Separator => true,
+            })
+            .collect();
+
+        if let Some(overlay) = self.overlays.get_mut(palette_key) {
+            overlay.set_menu_items(filtered);
+        }
     }
 
     #[expect(dead_code)]
@@ -73,7 +117,7 @@ impl WindowManager {
                 self.clear_floating_rect(key);
             }
             if let Some(w) = self.windows.get_mut(key) {
-                w.is_maximized = false;
+                w.set_maximized(true);
             }
         }
     }
@@ -105,9 +149,16 @@ impl WindowManager {
         if self.focus.order().is_empty() {
             return;
         }
+        // Capture the pre-advance focus so we can unmaximize it if the
+        // focus actually changes to a different window below.
+        let prev_focus = *self.focus.current();
         self.focus.advance(forward);
         let focused = *self.focus.current();
+        if prev_focus != focused && self.window(prev_focus).is_some_and(|w| w.is_maximized()) {
+            self.toggle_maximize(prev_focus);
+        }
         self.focus_window_key(focused);
+        self.set_tab_outline_mode(crate::constants::TAB_OUTLINE_DURATION);
     }
 
     pub(super) fn select_fallback_focus(&mut self) {
@@ -146,8 +197,7 @@ impl WindowManager {
                                 &self.managed_draw_order,
                             );
                             if let Some(key) = hit {
-                                self.focus.set_current(key);
-                                self.bring_floating_to_front_key(key);
+                                self.focus_window_key(key);
                                 return true;
                             }
                             return false;
@@ -155,10 +205,7 @@ impl WindowManager {
                         let hit =
                             self.hit_test_region(mouse.column, mouse.row, &self.managed_draw_order);
                         if let Some(hit) = hit {
-                            self.focus.set_current(hit);
-                            if self.config.wm_command_menu_enabled {
-                                self.bring_floating_to_front_key(hit);
-                            }
+                            self.focus_window_key(hit);
                             true
                         } else {
                             false

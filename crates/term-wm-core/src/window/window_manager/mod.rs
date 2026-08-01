@@ -2,28 +2,41 @@ mod chrome;
 mod command_menu;
 mod drag;
 mod focus;
+pub(crate) mod layer_manager;
 mod layout;
 mod overlays;
 
-use std::collections::BTreeMap;
+use std::any::TypeId;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
+
+use crate::chrome::ChromeTarget;
+use crate::hitbox_registry::ComponentOwner;
+use crate::window::entry;
 use std::time::{Duration, Instant};
+use term_wm_layout_engine::{CoordSpace, MousePosition};
+
+/// Marker types for strongly-typed system window and overlay resolution.
+pub mod system_tags {
+    pub struct DebugLog;
+    pub struct SystemPanel;
+    pub struct CommandPalette;
+    pub struct HelpOverlay;
+    pub struct ExitConfirm;
+}
 
 use crate::Rect;
-use crate::events::{
-    Event, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use crate::events::{Event, MouseEvent, MouseEventKind};
 use slotmap::SlotMap;
 
+use super::ComponentKey;
+use super::OverlayKey;
 use super::WindowKey;
-use super::decorator::WindowDecorator;
 use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
-use crate::components::{
-    Component, ComponentAction, ComponentContext, MenuItem, Overlay, WmComponent,
-};
-use crate::hitbox_registry::{HitTarget, HitboxRegistry};
+use crate::components::{Component, ComponentAction, ComponentContext, Overlay, WmComponent};
+use crate::hitbox_registry::HitboxRegistry;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
@@ -31,6 +44,8 @@ use crate::notification::NotificationQueue;
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
+#[cfg(test)]
+use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
 use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
@@ -84,9 +99,13 @@ pub(crate) enum MouseCaptureState {
     /// A Press hit a Window or Component target — subsequent Drag/Release/Moved
     /// events are forwarded to that component until the Up releases.
     ComponentInteraction {
-        key: WindowKey,
+        /// The component that owns this interaction. Direct dispatch —
+        /// no layer array scan or equality checks needed.
+        owner: ComponentOwner,
         /// Immutable snapshot of the hitbox area at Press time.
         screen_area: LayoutRect,
+        /// The exact HitboxId of the component that initiated the capture.
+        hitbox_id: crate::hitbox_registry::HitboxId,
     },
     /// A Press hit a tiling layout split handle — Drag/Release events route to
     /// `TilingLayout::handle_event()` for split-ratio adjustment.
@@ -111,12 +130,62 @@ pub(crate) enum SnapPreviewState {
     VoidInsert(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OverlayId {
-    Help,
-    Keybindings,
-    ExitConfirm,
-    SelectionPreview,
+/// Cached snap preview state to avoid recalculating the full
+/// position-based layout on every drag frame.
+/// Invalidates when the cursor exits the cached rect or crosses
+/// a quadrant boundary.
+struct SnapPreviewCache {
+    positions: Vec<(WindowKey, Rect)>,
+    cached_rect: Option<Rect>,
+    cached_quadrant: Option<(bool, bool)>,
+    dragged_key: Option<WindowKey>,
+}
+
+impl SnapPreviewCache {
+    fn needs_recalc(&self, mouse_x: u16, mouse_y: u16, dragged: WindowKey) -> bool {
+        let Some(rect) = self.cached_rect else {
+            return true;
+        };
+        if self.dragged_key != Some(dragged) {
+            return true;
+        }
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        let right = rect.x.saturating_add(i32::from(rect.width));
+        let bottom = rect.y.saturating_add(i32::from(rect.height));
+        let out_of_bounds = mx < rect.x || mx >= right || my < rect.y || my >= bottom;
+        let cur_q = (
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        );
+        out_of_bounds || self.cached_quadrant != Some(cur_q)
+    }
+
+    fn update(
+        &mut self,
+        mouse_x: u16,
+        mouse_y: u16,
+        rect: Rect,
+        dragged: WindowKey,
+        pos: Vec<(WindowKey, Rect)>,
+    ) {
+        let mx = mouse_x as i32;
+        let my = mouse_y as i32;
+        self.cached_quadrant = Some((
+            mx >= rect.x.saturating_add(i32::from(rect.width) / 2),
+            my >= rect.y.saturating_add(i32::from(rect.height) / 2),
+        ));
+        self.cached_rect = Some(rect);
+        self.dragged_key = Some(dragged);
+        self.positions = pos;
+    }
+
+    fn clear(&mut self) {
+        self.cached_rect = None;
+        self.cached_quadrant = None;
+        self.dragged_key = None;
+        self.positions.clear();
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -152,17 +221,6 @@ impl ScrollState {
     }
 }
 
-/// Result of a double-Esc press check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SuperPressResult {
-    /// Second press of WmToggleOverlay within passthrough window → open overlay.
-    DoubleSuper,
-    /// First press of WmToggleOverlay — deferred until timeout or second press.
-    Pending,
-    /// Not a WmToggleOverlay key — forward immediately.
-    Forward,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct WindowSurface {
     pub full: Rect,
@@ -189,23 +247,65 @@ pub enum DrawTask {
     App(WindowDrawContext),
 }
 
-pub struct WindowManager {
+/// Monocle display mode. Cycling: Auto → On → Off → Auto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonocleMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl MonocleMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            MonocleMode::Auto => MonocleMode::On,
+            MonocleMode::On => MonocleMode::Off,
+            MonocleMode::Off => MonocleMode::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MonocleMode::Auto => "Auto",
+            MonocleMode::On => "On",
+            MonocleMode::Off => "Off",
+        }
+    }
+
+    /// Action-oriented label for the command palette — describes what clicking will do.
+    pub fn action_label(self) -> &'static str {
+        match self {
+            MonocleMode::Auto => "Enable Monocle Mode",
+            MonocleMode::On => "Disable Monocle Mode",
+            MonocleMode::Off => "Set Monocle Mode Auto",
+        }
+    }
+}
+
+pub struct WindowManager<
+    C: Component<TermWmAction>,
+    L: WmComponent = crate::components::NoopWmComponent,
+    O: Overlay<TermWmAction> = crate::components::NoopOverlay,
+> {
+    #[allow(dead_code)]
     focus: FocusRing<WindowKey>,
+    #[allow(dead_code)]
+    macro_focus: layer_manager::MacroFocus,
+    pub(crate) layer_manager: layer_manager::LayerManager<L>,
     windows: SlotMap<WindowKey, Window>,
+    /// Dense arena storing all window-root components inline.
+    components: SlotMap<ComponentKey, C>,
     pub(crate) regions: RegionMap<WindowKey>,
     scroll: BTreeMap<WindowKey, ScrollState>,
     pub(crate) handles: Vec<SplitHandle>,
-    pub(crate) resize_handles: Vec<ResizeHandle<WindowKey>>,
-    pub(crate) floating_headers: Vec<DragHandle<WindowKey>>,
     pub(crate) managed_draw_order: Vec<WindowKey>,
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
-    closed_windows: Vec<WindowKey>,
     pub(crate) managed_area: Rect,
+    pub(crate) monocle_mode: MonocleMode,
+    monocle_width_threshold: u16,
+    last_terminal_width: u16,
     pub(crate) hitbox_registry: HitboxRegistry,
     app_ctx: Arc<AppContext>,
-    top_component: Option<Box<dyn WmComponent>>,
-    bottom_component: Option<Box<dyn WmComponent>>,
-    command_menu_component: Option<Box<dyn WmComponent>>,
     #[allow(dead_code)]
     supported_menu_actions: Vec<TermWmAction>,
     top_claimed: Rect,
@@ -222,20 +322,12 @@ pub struct WindowManager {
     window_selection_dirty: bool,
     clipboard_enabled: bool,
     clipboard_dirty: bool,
-    command_menu_visible: bool,
     selection_active: bool,
     selection_dragging: bool,
     selection_text: Option<String>,
     config: WmConfig,
     hint_visibility: HintVisibility,
     command_menu_opened_at: Option<Instant>,
-    /// The pending super-key event (no timer — managed by the TaskScheduler).
-    super_pending_event: Option<KeyEvent>,
-    /// Timestamp when the super-key timer was armed, used for panel countdown
-    /// display only.  The actual expiry is handled by the TaskScheduler.
-    super_pending_at: Option<Instant>,
-    /// ID of the super-passthrough timer in the TaskScheduler, for cancellation.
-    super_timer_id: Option<TaskId>,
     /// ID of the drag-snap timer in the TaskScheduler, for cancellation.
     drag_timer_id: Option<TaskId>,
     /// ID of the temporal-dwell tick timer, for cancellation and guard.
@@ -244,7 +336,16 @@ pub struct WindowManager {
     /// system-level timers (super-passthrough, drag-snap).
     system_task_handle: Option<TaskHandle<SystemTask>>,
     pub(crate) last_frame_area: LayoutRect,
-    overlays: BTreeMap<OverlayId, Box<dyn Overlay<TermWmAction>>>,
+    overlays: SlotMap<OverlayKey, O>,
+    /// TypeId-keyed registries for strongly-typed system window/overlay resolution.
+    pub system_windows: HashMap<TypeId, WindowKey>,
+    pub system_overlays: HashMap<TypeId, OverlayKey>,
+    /// When `Some(instant)`, tab outline mode is active until that instant.
+    pub(crate) tab_outline_until: Option<Instant>,
+    /// Tracks last cell coordinate passed to `update_snap_preview` for
+    /// deduplication — skip the BSP projection when the cursor hasn't
+    /// moved to a new grid cell (pure function of u16 × u16).
+    last_snap_cursor: Option<(u16, u16)>,
     scroll_keyboard_enabled_default: bool,
     floating_resize_offscreen: bool,
     pub(crate) z_order: Vec<WindowKey>,
@@ -254,9 +355,8 @@ pub struct WindowManager {
     /// Cache for BSP dry-run projection to avoid deep-cloning the layout
     /// tree on every drag frame. Keyed by (target, position, area).
     snap_projection_cache: Option<(SnapPreviewState, Rect, Option<Rect>)>,
+    snap_preview_cache: SnapPreviewCache,
     drag_last_event: Option<Instant>,
-    // No separate component map — components live on the Window struct
-    // in the SlotMap.  See `Window.component`.
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
@@ -268,37 +368,42 @@ pub struct WindowManager {
     layout_dirty: bool,
     /// Active toast notifications
     notification_queue: NotificationQueue,
+    /// Universal input mode state machine
+    pub(crate) input_mode: crate::actions::WmInputMode,
+    /// Whether the FAB component is enabled
+    pub(crate) fab_enabled: bool,
+    /// Namespaced semantic registry for programmatic component lookup.
+    /// Hotkeys and structural routing query this instead of hardcoded fields.
+    pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
+    /// Tap-swap targeting state
+    pub(crate) tap_swap_state: Option<TapSwapState>,
+    // Chrome metrics managers (pure synchronous pipelines, zero allocation).
+    // resize_map/drag_map/split_ids removed — chrome routing now uses
+    // ComponentOwner::Chrome(target) directly from HitboxRegistry.
 }
 
-impl WindowManager {
+/// State for tap-to-swap targeting mode.
+#[derive(Debug, Clone)]
+pub(crate) struct TapSwapState {
+    /// The source window being moved
+    pub source_key: WindowKey,
+    /// The target window to swap with (highlighted)
+    pub target_key: Option<WindowKey>,
+}
+
+impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     /// Allocate a new window entry in the SlotMap and return its key.
     /// The window starts with default state (no title, not floating, etc.).
-    pub fn create_window(
-        &mut self,
-        component: Box<dyn crate::components::Component<TermWmAction>>,
-    ) -> WindowKey {
+    pub fn create_window(&mut self, component: C) -> WindowKey {
         let order = self.next_window_seq;
         self.next_window_seq = self.next_window_seq.saturating_add(1);
+        let component_key = self.components.insert(component);
         tracing::debug!(seq = order, "opened window");
-        self.windows.insert(Window::new(order, component))
+        self.windows.insert(Window::new(order, component_key))
     }
 
     /// Register a component and invoke its `on_mount` hook with the assigned key.
-    /// Prefer this over `create_window` for components that need their WindowKey.
-    pub fn spawn<C>(&mut self, component: C) -> WindowKey
-    where
-        C: Component<TermWmAction> + 'static,
-    {
-        let app_ctx = self.app_ctx().clone();
-        let key = self.create_window(Box::new(component));
-        if let Some(comp) = self.component_for_key_mut(key) {
-            comp.on_mount(key, &app_ctx);
-        }
-        key
-    }
-
-    /// Register a pre-boxed component and invoke its `on_mount` hook.
-    pub fn spawn_boxed(&mut self, component: Box<dyn Component<TermWmAction>>) -> WindowKey {
+    pub fn spawn(&mut self, component: C) -> WindowKey {
         let app_ctx = self.app_ctx().clone();
         let key = self.create_window(component);
         if let Some(comp) = self.component_for_key_mut(key) {
@@ -307,10 +412,30 @@ impl WindowManager {
         key
     }
 
+    /// Atomic open transaction: spawn, map, place (tile or float), and focus.
+    /// Encapsulates the full window lifecycle so callers don't need to
+    /// manually drive state transitions or spatial placement.
+    pub fn open_window(&mut self, component: C) -> WindowKey {
+        let key = self.spawn(component);
+        self.transition_window(key, WindowState::Mapped);
+        if !self.try_spawn_floating_default(key) {
+            self.tile_window_key(key);
+        }
+        self.focus_window_key(key);
+        key
+    }
+
     /// Returns true if the key references a live window in the SlotMap.
     /// O(1) — no component extraction or vtable resolution.
     pub fn has_window(&self, key: WindowKey) -> bool {
         self.windows.contains_key(key)
+    }
+
+    /// Set the close policy for a window (Destroy or Unmap).
+    pub fn set_close_policy(&mut self, key: WindowKey, policy: entry::ClosePolicy) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.set_close_policy(policy);
+        }
     }
 
     /// Access the Reaper for async child-process teardown.
@@ -329,7 +454,7 @@ impl WindowManager {
     }
 
     pub fn window_state(&self, key: WindowKey) -> Option<WindowState> {
-        self.window(key).map(|w| w.state)
+        self.window(key).map(|w| w.state())
     }
 
     /// Validate that a state transition is legal.
@@ -352,7 +477,7 @@ impl WindowManager {
     pub fn transition_window(&mut self, key: WindowKey, new_state: WindowState) {
         // Step 1: Read old state (immutable borrow, immediately dropped)
         let old_state = match self.window(key) {
-            Some(w) => w.state,
+            Some(w) => w.state(),
             None => {
                 tracing::warn!("transition_window: unknown key {:?}", key);
                 return;
@@ -369,7 +494,7 @@ impl WindowManager {
         );
 
         // Step 2: Mutate state (brief mutable borrow, immediately dropped)
-        self.window_mut(key).state = new_state;
+        self.window_mut(key).set_state(new_state);
 
         // Step 3: Side-effects — full &mut self available
         match (old_state, new_state) {
@@ -379,7 +504,6 @@ impl WindowManager {
                 self.focus_add(key);
             }
             (WindowState::Mapped, WindowState::Iconic) => {
-                self.z_order.retain(|x| *x != key);
                 self.managed_draw_order.retain(|x| *x != key);
                 if *self.focus.current() == key {
                     self.select_fallback_focus();
@@ -393,11 +517,29 @@ impl WindowManager {
                 if !self.managed_draw_order.contains(&key) {
                     self.managed_draw_order.push(key);
                 }
-                self.reattach_to_tiling_layout(key);
+
+                let has_other_floating = self
+                    .windows
+                    .values()
+                    .any(|w| w.state() == WindowState::Mapped && w.is_floating());
+
+                if !self.is_window_floating(key) && has_other_floating {
+                    let index = self.windows.len().saturating_sub(1);
+                    let fallback = self.default_cascading_rect(index);
+                    self.set_floating_rect(
+                        key,
+                        Some(crate::window::FloatRectSpec::Absolute(fallback)),
+                    );
+                } else if !self.is_window_floating(key) {
+                    self.reattach_to_tiling_layout(key);
+                }
+
                 self.focus_add(key);
+                self.bring_to_front_key(key);
             }
             (_, WindowState::Unmapped) => {
-                self.clear_floating_rect(key);
+                // Preserve floating_rect so re-mapping restores previous
+                // geometry and placement mode (ClosePolicy::Unmap windows).
                 self.z_order.retain(|x| *x != key);
                 self.managed_draw_order.retain(|x| *x != key);
                 self.regions.remove(key);
@@ -415,8 +557,25 @@ impl WindowManager {
                 if !self.managed_draw_order.contains(&key) {
                     self.managed_draw_order.push(key);
                 }
-                self.reattach_to_tiling_layout(key);
+
+                let has_other_floating = self
+                    .windows
+                    .values()
+                    .any(|w| w.state() == WindowState::Mapped && w.is_floating());
+
+                if !self.is_window_floating(key) && has_other_floating {
+                    let index = self.windows.len().saturating_sub(1);
+                    let fallback = self.default_cascading_rect(index);
+                    self.set_floating_rect(
+                        key,
+                        Some(crate::window::FloatRectSpec::Absolute(fallback)),
+                    );
+                } else if !self.is_window_floating(key) {
+                    self.reattach_to_tiling_layout(key);
+                }
+
                 self.focus_add(key);
+                self.bring_to_front_key(key);
             }
             (WindowState::Mapped, WindowState::Shaded) => {
                 // Keep in z-order and draw order so chrome renders,
@@ -432,7 +591,7 @@ impl WindowManager {
     }
 
     fn floating_rect(&self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
-        self.window(key).and_then(|window| window.floating_rect)
+        self.window(key).and_then(|window| window.floating_rect())
     }
 
     pub fn set_floating_rect(
@@ -441,13 +600,14 @@ impl WindowManager {
         rect: Option<crate::window::FloatRectSpec>,
     ) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.floating_rect = rect;
+            w.set_floating_rect(rect);
         }
     }
 
     fn clear_floating_rect(&mut self, key: WindowKey) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.floating_rect = None;
+            w.set_floating_rect(None);
+            w.set_maximized(false);
         }
     }
 
@@ -457,31 +617,63 @@ impl WindowManager {
         rect: Option<crate::window::FloatRectSpec>,
     ) {
         if let Some(w) = self.windows.get_mut(key) {
-            w.prev_floating_rect = rect;
+            w.set_prev_floating_rect(rect);
         }
     }
 
     fn take_prev_floating_rect(&mut self, key: WindowKey) -> Option<crate::window::FloatRectSpec> {
-        self.windows.get_mut(key)?.prev_floating_rect.take()
+        self.windows.get_mut(key)?.take_prev_floating_rect()
     }
 
     pub fn is_window_floating(&self, key: WindowKey) -> bool {
         self.window(key).is_some_and(|window| window.is_floating())
     }
 
-    pub fn direct_mode(&self, key: WindowKey) -> bool {
-        self.window(key).is_some_and(|window| window.direct_mode)
-    }
-
-    pub fn set_direct_mode(&mut self, key: WindowKey, value: bool) {
-        if let Some(w) = self.windows.get_mut(key) {
-            w.direct_mode = value;
+    /// Compute a centered, cascading fallback rectangle for unrendered floating
+    /// windows using core workspace constants.
+    pub fn default_cascading_rect(&self, index: usize) -> Rect {
+        let area = self.managed_area;
+        let w = crate::constants::DEFAULT_FLOAT_WIDTH
+            .min(area.width)
+            .max(crate::constants::MIN_FLOAT_WIDTH);
+        let h = crate::constants::DEFAULT_FLOAT_HEIGHT
+            .min(area.height)
+            .max(crate::constants::MIN_FLOAT_HEIGHT);
+        let offset = (index as i32) * crate::constants::CASCADE_OFFSET_STEP;
+        Rect {
+            x: area.x + (area.width.saturating_sub(w) / 2) as i32 + offset,
+            y: area.y + (area.height.saturating_sub(h) / 2) as i32 + offset,
+            width: w,
+            height: h,
         }
     }
 
-    pub fn toggle_direct_mode(&mut self, key: WindowKey) {
-        let current = self.direct_mode(key);
-        self.set_direct_mode(key, !current);
+    /// Return the cached region for a window, or compute a safe cascading fallback.
+    pub fn region_or_fallback(&self, key: WindowKey, index: usize) -> Rect {
+        self.regions
+            .get(key)
+            .unwrap_or_else(|| self.default_cascading_rect(index))
+    }
+
+    /// Direct mode: purely automatic from the PTY state tracker.
+    /// Returns true when the application requires unfiltered input
+    /// (alternate screen, mouse tracking, custom margins).
+    pub fn direct_mode(&self, key: WindowKey) -> bool {
+        self.windows
+            .get(key)
+            .map(|w| w.requires_direct_input())
+            .unwrap_or(false)
+    }
+
+    /// Set the automatic direct-input tracker for a window.
+    pub fn set_window_tracker(
+        &mut self,
+        key: WindowKey,
+        tracker: std::sync::Arc<dyn term_wm_pty_engine::DirectInputTracker>,
+    ) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.set_tracker(tracker);
+        }
     }
 
     pub fn window_title(&self, key: WindowKey) -> String {
@@ -522,7 +714,7 @@ impl WindowManager {
                 .window(oid)
                 .map(|w| w.title_or_default(oid))
                 .unwrap_or_else(|| format!("{:?}", oid));
-            let set_order = self.window(oid).and_then(|w| w.title_set_order);
+            let set_order = self.window(oid).and_then(|w| w.title_set_order());
             groups.entry(base).or_default().push((oid, set_order));
         }
         for group in groups.values_mut() {
@@ -548,18 +740,17 @@ impl WindowManager {
 
     fn clear_all_floating(&mut self) {
         for (_key, window) in self.windows.iter_mut() {
-            window.floating_rect = None;
-            window.prev_floating_rect = None;
+            window.set_floating_rect(None);
+            window.set_prev_floating_rect(None);
         }
     }
 
     pub fn with_config(
         config: WmConfig,
         app_ctx: Arc<AppContext>,
-        top_component: Option<Box<dyn WmComponent>>,
-        bottom_component: Option<Box<dyn WmComponent>>,
-        command_menu_component: Option<Box<dyn WmComponent>>,
         supported_menu_actions: Option<Vec<TermWmAction>>,
+        layer_manager: layer_manager::LayerManager<L>,
+        semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     ) -> Self {
         let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
             vec![
@@ -572,6 +763,8 @@ impl WindowManager {
                 TermWmAction::ToggleSystemPanel,
                 TermWmAction::Help,
                 TermWmAction::ExitUi,
+                TermWmAction::ToggleMonocle,
+                TermWmAction::ToggleTiling,
             ]
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
@@ -582,21 +775,23 @@ impl WindowManager {
                 /* placeholder, will be set on first window */
                 slotmap::DefaultKey::default(),
             ),
-            windows: SlotMap::with_capacity(32),
+            macro_focus: layer_manager::MacroFocus::FocusRing(slotmap::DefaultKey::default()),
+            layer_manager,
+            windows: SlotMap::with_capacity(crate::constants::INITIAL_WINDOW_CAPACITY),
+            components: SlotMap::<ComponentKey, C>::with_capacity_and_key(
+                crate::constants::INITIAL_COMPONENT_CAPACITY,
+            ),
             regions: RegionMap::default(),
             scroll: BTreeMap::new(),
             handles: Vec::new(),
-            resize_handles: Vec::new(),
-            floating_headers: Vec::new(),
             managed_draw_order: Vec::new(),
             managed_layout: None,
-            closed_windows: Vec::new(),
             managed_area: Rect::default(),
+            monocle_mode: MonocleMode::Auto,
+            monocle_width_threshold: crate::constants::MONOCLE_WIDTH_THRESHOLD,
+            last_terminal_width: 0,
             hitbox_registry: HitboxRegistry::new(),
             app_ctx,
-            top_component,
-            bottom_component,
-            command_menu_component,
             supported_menu_actions,
             top_claimed: Rect::default(),
             bottom_claimed: Rect::default(),
@@ -609,7 +804,6 @@ impl WindowManager {
             mouse_capture_dirty: false,
             clipboard_enabled: config.clipboard_enabled,
             clipboard_dirty: false,
-            command_menu_visible: false,
             selection_active: false,
             selection_dragging: false,
             selection_text: None,
@@ -618,20 +812,22 @@ impl WindowManager {
             hint_visibility: config.hint_visibility,
             config,
             command_menu_opened_at: None,
-            super_pending_event: None,
-            super_pending_at: None,
-            super_timer_id: None,
             drag_timer_id: None,
             temporal_timer_id: None,
             system_task_handle: None,
             last_frame_area: Rect::default(),
-            overlays: BTreeMap::new(),
             scroll_keyboard_enabled_default: true,
             floating_resize_offscreen,
             z_order: Vec::new(),
             drag_snap: None,
             snap_preview: None,
             snap_projection_cache: None,
+            snap_preview_cache: SnapPreviewCache {
+                positions: Vec::new(),
+                cached_rect: None,
+                cached_quadrant: None,
+                dragged_key: None,
+            },
             drag_last_event: None,
             next_window_seq: 0,
             next_title_seq: 0,
@@ -642,7 +838,34 @@ impl WindowManager {
             quit_requested: false,
             layout_dirty: true,
             notification_queue: NotificationQueue::default(),
+            semantic_registry,
+            overlays: SlotMap::with_key(),
+            system_windows: HashMap::new(),
+            system_overlays: HashMap::new(),
+            tab_outline_until: None,
+            last_snap_cursor: None,
+            input_mode: crate::actions::WmInputMode::Passthrough,
+            fab_enabled: true,
+            tap_swap_state: None,
         }
+    }
+
+    // === TypeId registry accessors ===
+
+    pub fn register_system_window<T: 'static>(&mut self, key: WindowKey) {
+        self.system_windows.insert(TypeId::of::<T>(), key);
+    }
+
+    pub fn get_system_window<T: 'static>(&self) -> Option<WindowKey> {
+        self.system_windows.get(&TypeId::of::<T>()).copied()
+    }
+
+    pub fn register_overlay<T: 'static>(&mut self, key: OverlayKey) {
+        self.system_overlays.insert(TypeId::of::<T>(), key);
+    }
+
+    pub fn get_overlay<T: 'static>(&self) -> Option<OverlayKey> {
+        self.system_overlays.get(&TypeId::of::<T>()).copied()
     }
 
     /// Request a clean shutdown on the next idle tick.
@@ -670,6 +893,96 @@ impl WindowManager {
         self.layout_dirty = false;
     }
 
+    /// Get the current input mode.
+    pub fn input_mode(&self) -> crate::actions::WmInputMode {
+        self.input_mode
+    }
+
+    /// Set the input mode.
+    pub fn set_input_mode(&mut self, mode: crate::actions::WmInputMode) {
+        self.input_mode = mode;
+    }
+
+    /// Check if the FAB is enabled.
+    pub fn fab_enabled(&self) -> bool {
+        self.fab_enabled
+    }
+
+    /// Set the FAB enabled state.
+    pub fn set_fab_enabled(&mut self, enabled: bool) {
+        self.fab_enabled = enabled;
+    }
+
+    /// Get a mutable reference to the FAB component.
+    /// Uniform, open-ended component locator via semantic tag.
+    /// Replaces all hardcoded `*_component_mut()` methods.
+    pub fn get_semantic_component_mut(
+        &mut self,
+        tag: layer_manager::ComponentTag,
+    ) -> Option<&mut L> {
+        self.semantic_registry
+            .get(&tag)
+            .copied()
+            .and_then(|id| self.layer_manager.get_mut(id))
+    }
+
+    /// Immutable component locator via semantic tag.
+    pub fn get_semantic_component(&self, tag: layer_manager::ComponentTag) -> Option<&L> {
+        self.semantic_registry
+            .get(&tag)
+            .copied()
+            .and_then(|id| self.layer_manager.get(id))
+    }
+
+    /// Begin tap-to-swap targeting for the given window.
+    pub fn begin_tap_swap(&mut self, source_key: WindowKey) {
+        self.tap_swap_state = Some(TapSwapState {
+            source_key,
+            target_key: None,
+        });
+        self.input_mode = crate::actions::WmInputMode::TapToSwapTargeting;
+    }
+
+    /// Select a target window for tap-to-swap.
+    pub fn select_tap_swap_target(&mut self, target_key: WindowKey) {
+        if let Some(ref mut state) = self.tap_swap_state {
+            state.target_key = Some(target_key);
+        }
+    }
+
+    /// Execute the tap-to-swap operation.
+    pub fn execute_tap_swap(&mut self, target_key: WindowKey) {
+        if let Some(state) = self.tap_swap_state.take() {
+            // Swap the nodes in the layout tree
+            if let Some(ref mut layout) = self.managed_layout {
+                layout.swap_nodes(&state.source_key, &target_key);
+            }
+            self.input_mode = crate::actions::WmInputMode::Passthrough;
+            self.mark_layout_dirty();
+        }
+    }
+
+    /// Cancel the tap-to-swap operation.
+    pub fn cancel_tap_swap(&mut self) {
+        self.tap_swap_state = None;
+        self.input_mode = crate::actions::WmInputMode::Passthrough;
+    }
+
+    /// Check if tap-swap is active.
+    pub fn tap_swap_active(&self) -> bool {
+        self.tap_swap_state.is_some()
+    }
+
+    /// Get the tap-swap source key.
+    pub fn tap_swap_source(&self) -> Option<WindowKey> {
+        self.tap_swap_state.as_ref().map(|s| s.source_key)
+    }
+
+    /// Get the tap-swap target key.
+    pub fn tap_swap_target(&self) -> Option<WindowKey> {
+        self.tap_swap_state.as_ref().and_then(|s| s.target_key)
+    }
+
     /// Remove a key from the focus ring's order (called after closing a window).
     fn remove_from_focus_ring(&mut self, key: WindowKey) {
         let order: Vec<WindowKey> = self
@@ -689,11 +1002,12 @@ impl WindowManager {
             order.push(key);
             self.focus.set_order(order);
         }
-        self.focus.set_current(key);
-    }
-
-    pub fn take_closed_windows(&mut self) -> Vec<WindowKey> {
-        std::mem::take(&mut self.closed_windows)
+        // Only set current if the current focus points to an invalid key
+        // (e.g. initial startup). Defer real focus changes to focus_window_key
+        // so the previous focus is preserved for auto-unmaximize checks.
+        if !self.windows.contains_key(*self.focus.current()) {
+            self.focus.set_current(key);
+        }
     }
 
     pub fn take_synthetic_event(&mut self) -> Option<Event> {
@@ -737,28 +1051,24 @@ impl WindowManager {
     }
 
     /// Create a [`ComponentContext`] for a specific window, including the
-    /// window's direct-mode state so children (scroll view, terminal) can
-    /// adapt their rendering and event handling automatically.
+    /// window's resolved direct-mode state so children (scroll view, terminal)
+    /// can adapt their rendering and event handling automatically.
+    /// Resolves the manual override (`None` = auto) against the automatic
+    /// PTY heuristic (alternate screen, mouse tracking, margins).
     pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
-        self.component_context(focused)
-            .with_direct_mode(self.direct_mode(key))
+        let resolved = self.direct_mode(key);
+        let mut ctx = self
+            .component_context(focused)
+            .with_direct_mode(resolved)
             .with_window_key(key)
-            .with_screen_area(self.region(key))
-    }
-
-    /// Number of overlays that will be rendered this frame.
-    pub fn visible_overlay_count(&self) -> usize {
-        let mut n = 0usize;
-        if self.command_menu_visible() {
-            n += 1;
+            .with_screen_area(self.region(key));
+        // Inject the window's active keyboard focus into the context.
+        if let Some(window) = self.windows.get(key)
+            && let Some(focus_id) = window.active_keyboard_focus()
+        {
+            ctx = ctx.with_keyboard_focus_id(focus_id);
         }
-        if self.overlays.contains_key(&OverlayId::ExitConfirm) {
-            n += 1;
-        }
-        if self.overlays.contains_key(&OverlayId::Help) {
-            n += 1;
-        }
-        n
+        ctx
     }
 
     /// Normalised z-depth [0.0–1.0] for a drawable at `position` in a
@@ -772,12 +1082,13 @@ impl WindowManager {
     }
 
     pub fn begin_frame(&mut self) {
-        if let Some(p) = &mut self.top_component {
+        if let Some(p) = self.get_semantic_component_mut(layer_manager::ComponentTag::TopPanel) {
             p.begin_frame();
         }
-        if let Some(p) = &mut self.bottom_component {
+        let power_profile = self.power_profile;
+        if let Some(p) = self.get_semantic_component_mut(layer_manager::ComponentTag::BottomPanel) {
             p.begin_frame();
-            p.process_action(&ComponentAction::SetPowerProfile(self.power_profile));
+            p.process_action(&ComponentAction::SetPowerProfile(power_profile));
         }
         if !self.config.wm_command_menu_enabled {
             self.clear_capture();
@@ -792,8 +1103,6 @@ impl WindowManager {
     pub fn prepare_draw(&mut self) {
         self.regions = RegionMap::default();
         self.handles.clear();
-        self.resize_handles.clear();
-        self.floating_headers.clear();
         self.managed_draw_order.clear();
         self.hitbox_registry.clear();
     }
@@ -814,33 +1123,84 @@ impl WindowManager {
     }
 
     /// Return the currently hovered tiling split handle, if any.
+    /// Checks geometric occlusion against panels, overlays, and floating windows
+    /// (synchronous — does not depend on the hitbox registry, which is cleared
+    /// before handles are rendered).
     pub fn hovered_tiling_handle(&self) -> Option<crate::layout::tiling::SplitHandle> {
         let (col, row) = self.hover?;
-        let pos = crate::mouse_coord::MousePosition {
+        let pos_x = col as i32;
+        let pos_y = row as i32;
+
+        let in_rect = |x: i32, y: i32, w: u16, h: u16| -> bool {
+            pos_x >= x
+                && pos_x < x.saturating_add(w as i32)
+                && pos_y >= y
+                && pos_y < y.saturating_add(h as i32)
+        };
+
+        if in_rect(
+            self.top_claimed.x,
+            self.top_claimed.y,
+            self.top_claimed.width,
+            self.top_claimed.height,
+        ) || in_rect(
+            self.bottom_claimed.x,
+            self.bottom_claimed.y,
+            self.bottom_claimed.width,
+            self.bottom_claimed.height,
+        ) {
+            return None;
+        }
+
+        // 2. Overlay occlusion — any visible overlay suppresses handle hover
+        //    (overlays are modal with full-screen dimmed backdrops).
+        if !self.overlays.is_empty() {
+            return None;
+        }
+
+        for key in &self.z_order {
+            if self.is_window_floating(*key)
+                && let Some(crate::window::FloatRectSpec::Absolute(r)) = self.floating_rect(*key)
+                && in_rect(r.x, r.y, r.width, r.height)
+            {
+                return None;
+            }
+        }
+
+        let pos = MousePosition {
             column: col as i16,
             row: row as i16,
-            space: crate::mouse_coord::CoordSpace::Screen,
+            space: CoordSpace::Screen,
         };
-        if let Some((crate::hitbox_registry::HitTarget::LayoutHandle, _)) =
-            self.hitbox_registry.hit_test(pos)
-        {
-            self.managed_layout
-                .as_ref()?
-                .hovered_handle(self.managed_area)
-        } else {
-            None
-        }
+        // Check if cursor is over any tiling split handle
+        self.handles.iter().find(|h| pos.is_inside(h.rect)).cloned()
     }
 
     /// Return the currently hovered floating resize handle, if any.
+    /// Queries the hitbox registry directly (console registers ChromeTarget::Resize
+    /// hitboxes during the render pass).
     pub fn hovered_resize_handle(
         &self,
-    ) -> Option<&crate::layout::floating::ResizeHandle<WindowKey>> {
+    ) -> Option<crate::layout::floating::ResizeHandle<WindowKey>> {
         let (column, row) = self.hover?;
-        let topmost = self.hit_test_region_topmost(column, row, &self.managed_draw_order);
-        self.resize_handles.iter().find(|handle| {
-            crate::layout::rect_contains(handle.rect, column, row) && topmost == Some(handle.key)
-        })
+
+        let pos = MousePosition {
+            column: column as i16,
+            row: row as i16,
+            space: CoordSpace::Screen,
+        };
+        if let Some((_, ComponentOwner::Chrome(ChromeTarget::Resize(key, edge)), area)) =
+            self.hitbox_registry.hit_test(pos)
+        {
+            Some(crate::layout::floating::ResizeHandle {
+                key,
+                rect: area,
+                edge,
+                hitbox_id: crate::hitbox_registry::HitboxId::new(),
+            })
+        } else {
+            None
+        }
     }
 
     /// Return the window region map (for resize outline rendering).
@@ -898,7 +1258,7 @@ impl WindowManager {
     pub fn floating_panes(&self) -> Vec<(WindowKey, crate::window::FloatRectSpec)> {
         self.windows
             .iter()
-            .filter_map(|(key, window)| window.floating_rect.map(|rect| (key, rect)))
+            .filter_map(|(key, window)| window.floating_rect().map(|rect| (key, rect)))
             .collect()
     }
 
@@ -916,8 +1276,9 @@ impl WindowManager {
     pub fn set_mouse_captured(&mut self, captured: bool) {
         self.mouse_capture = if captured {
             Some(MouseCaptureState::ComponentInteraction {
-                key: WindowKey::default(),
+                owner: ComponentOwner::Test,
                 screen_area: LayoutRect::default(),
+                hitbox_id: crate::hitbox_registry::HitboxId::default(),
             })
         } else {
             None
@@ -929,18 +1290,12 @@ impl WindowManager {
         &mut self.hitbox_registry
     }
 
-    /// Split borrow: return a mutable ref to the hitbox registry and
-    /// a mutable ref to the top component simultaneously.
-    pub fn top_and_registry(&mut self) -> (&mut Option<Box<dyn WmComponent>>, &mut HitboxRegistry) {
-        (&mut self.top_component, &mut self.hitbox_registry)
-    }
-
-    /// Split borrow: return a mutable ref to the hitbox registry and
-    /// a mutable ref to the bottom component simultaneously.
-    pub fn bottom_and_registry(
-        &mut self,
-    ) -> (&mut Option<Box<dyn WmComponent>>, &mut HitboxRegistry) {
-        (&mut self.bottom_component, &mut self.hitbox_registry)
+    /// Return the persistent content hitbox ID for a window.
+    pub fn window_content_hitbox_id(
+        &self,
+        key: WindowKey,
+    ) -> Option<crate::hitbox_registry::HitboxId> {
+        self.windows.get(key).map(|w| w.content_hitbox_id())
     }
 
     /// Dispatch a mouse event through the hitbox registry.
@@ -958,10 +1313,9 @@ impl WindowManager {
     #[allow(clippy::collapsible_if)]
     pub fn dispatch_mouse(
         &mut self,
-        event: &crate::events::WmEvent,
+        event: &term_wm_events::WmEvent,
     ) -> EventResult<(Option<WindowKey>, TermWmAction)> {
         use crate::events::WmEvent;
-        use crate::window::decorator::HeaderAction;
         let WmEvent::Mouse {
             kind,
             modifiers,
@@ -981,6 +1335,10 @@ impl WindowManager {
         // Phase 1 — Active capture: extract-operate-restore pattern.
         if !matches!(kind, MouseEventKind::Press(_)) {
             if let Some(mut capture) = self.mouse_capture.take() {
+                // Stores an action generated during active capture (e.g., button
+                // release inside a captured component) that must be returned to
+                // the runner rather than swallowed.
+                let mut capture_action: Option<(Option<WindowKey>, TermWmAction)> = None;
                 let (result, restore) = match &mut capture {
                     MouseCaptureState::DraggingWindow {
                         key,
@@ -1001,7 +1359,7 @@ impl WindowManager {
                             let dx = col.abs_diff(*anchor_x);
                             let dy = row.abs_diff(*anchor_y);
                             let is_maximized =
-                                self.windows.get(*key).is_some_and(|w| w.is_maximized);
+                                self.windows.get(*key).is_some_and(|w| w.is_maximized());
 
                             if dx + dy <= 2 {
                                 // Deadzone guard: ignore micro-nudges
@@ -1016,8 +1374,25 @@ impl WindowManager {
                                     if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
                                         self.floating_rect(*key)
                                     {
-                                        *initial_x = fr.x;
-                                        *initial_y = fr.y;
+                                        // Reposition window so the cursor lands on
+                                        // the header (row 1 of the frame), not the
+                                        // top border.
+                                        let new_x = col as i32 - fr.width as i32 / 2;
+                                        let new_y = row as i32
+                                            - i32::from(crate::chrome::TOP_BORDER_HEIGHT);
+                                        self.set_floating_rect(
+                                            *key,
+                                            Some(crate::window::FloatRectSpec::Absolute(
+                                                crate::window::FloatRect {
+                                                    x: new_x,
+                                                    y: new_y,
+                                                    width: fr.width,
+                                                    height: fr.height,
+                                                },
+                                            )),
+                                        );
+                                        *initial_x = new_x;
+                                        *initial_y = new_y;
                                         *start_x = col;
                                         *start_y = row;
                                         *prev_col = col;
@@ -1037,23 +1412,40 @@ impl WindowManager {
                                 // If the window is not yet floating, this is the
                                 // first Drag event that breached the kinetic
                                 // deadzone — install the floating rect now.
-                                // start_x/start_y/initial_x/initial_y were
-                                // already set at Press time and must NOT be
-                                // touched here — they anchor the cursor-to-
-                                // window offset for move_floating.
+                                // Borders will render (floating mode has
+                                // show_borders: true), so expand the frame
+                                // rect so the content area stays in the same
+                                // visual position as the tiled frame.
                                 if !self.is_window_floating(*key) {
                                     let rect = self.visible_region_for_key(*key);
+
+                                    let left_border = i32::from(crate::chrome::LEFT_BORDER_WIDTH);
+                                    let top_border = i32::from(crate::chrome::TOP_BORDER_HEIGHT);
+
+                                    let expanded = crate::window::FloatRect {
+                                        x: rect.x - left_border,
+                                        y: rect.y - top_border,
+                                        width: rect.width.saturating_add(
+                                            crate::chrome::LEFT_BORDER_WIDTH
+                                                + crate::chrome::RIGHT_BORDER_WIDTH,
+                                        ),
+                                        height: rect.height.saturating_add(
+                                            crate::chrome::TOP_BORDER_HEIGHT
+                                                + crate::chrome::BOTTOM_BORDER_HEIGHT,
+                                        ),
+                                    };
+
                                     self.set_floating_rect(
                                         *key,
-                                        Some(crate::window::FloatRectSpec::Absolute(
-                                            crate::window::FloatRect {
-                                                x: rect.x,
-                                                y: rect.y,
-                                                width: rect.width.max(1),
-                                                height: rect.height.max(1),
-                                            },
-                                        )),
+                                        Some(crate::window::FloatRectSpec::Absolute(expanded)),
                                     );
+
+                                    // Synchronize the in-flight drag anchor
+                                    // so the next MouseMove doesn't snap back
+                                    // to the old unexpanded origin.
+                                    *initial_x = expanded.x;
+                                    *initial_y = expanded.y;
+
                                     self.bring_to_front_key(*key);
                                 }
 
@@ -1090,7 +1482,15 @@ impl WindowManager {
                                     let dx_total = col.abs_diff(*start_x);
                                     let dy_total = row.abs_diff(*start_y);
                                     if dx_total + dy_total > 2 {
-                                        self.update_snap_preview(*key, col, row, detach_coordinate);
+                                        if self.last_snap_cursor != Some((col, row)) {
+                                            self.update_snap_preview(
+                                                *key,
+                                                col,
+                                                row,
+                                                detach_coordinate,
+                                            );
+                                            self.last_snap_cursor = Some((col, row));
+                                        }
                                     } else {
                                         self.drag_snap = None;
                                     }
@@ -1122,6 +1522,7 @@ impl WindowManager {
                                 let drag_dist = col.abs_diff(*anchor_x) + row.abs_diff(*anchor_y);
                                 if drag_dist > 0 {
                                     self.detach_from_tiling_layout(*key);
+                                    self.execute_float_all(*key);
                                 }
                             }
                             // else: snap was already applied by Moved handler — the
@@ -1129,6 +1530,7 @@ impl WindowManager {
                             // NOT detach it again.
                             self.snap_preview = None;
                             self.snap_projection_cache = None;
+                            self.last_snap_cursor = None;
                             // Only clear the double-click timer if a drag actually
                             // occurred.  A click-only release preserves the timer so
                             // a subsequent click can still be detected as a
@@ -1192,27 +1594,72 @@ impl WindowManager {
                         MouseEventKind::Release(_) => (true, false),
                         _ => (false, true),
                     },
-                    MouseCaptureState::ComponentInteraction { key, screen_area } => {
-                        let focused = *self.focus.current() == *key;
-                        let ctx = self
-                            .component_context_for(focused, *key)
-                            .with_screen_area(*screen_area);
+                    MouseCaptureState::ComponentInteraction {
+                        owner,
+                        screen_area,
+                        hitbox_id,
+                    } => {
                         let core_event = Event::Mouse(MouseEvent {
                             kind: *kind,
                             column: col,
                             row,
                             modifiers: *modifiers,
                         });
-                        let consumed = if let Some(comp) = self.component_for_key_mut(*key) {
-                            let result = comp.handle_events(&core_event, &ctx);
-                            let was_consumed = !result.is_ignored();
-                            if let Some(action) = result.into_action() {
-                                self.process_action(*key, action);
+
+                        let consumed = match owner {
+                            ComponentOwner::Window(key) => {
+                                if !self.windows.contains_key(*key) {
+                                    false
+                                } else {
+                                    let focused = *self.focus.current() == *key;
+                                    let ctx = self
+                                        .component_context_for(focused, *key)
+                                        .with_screen_area(*screen_area)
+                                        .with_active_hitbox(*hitbox_id);
+                                    if let Some(comp) = self.component_for_key_mut(*key) {
+                                        let res = comp.handle_events(&core_event, &ctx);
+                                        if let Some(action) = res.clone().into_action() {
+                                            capture_action = Some((Some(*key), action));
+                                        }
+                                        !res.is_ignored()
+                                    } else {
+                                        false
+                                    }
+                                }
                             }
-                            was_consumed
-                        } else {
-                            false
+                            ComponentOwner::Overlay(key) => {
+                                let ctx = self
+                                    .component_context(false)
+                                    .with_screen_area(*screen_area)
+                                    .with_active_hitbox(*hitbox_id);
+                                if let Some(overlay) = self.overlays.get_mut(*key) {
+                                    let res = overlay.handle_events(&core_event, &ctx);
+                                    if let Some(action) = res.clone().into_action() {
+                                        capture_action = Some((None, action));
+                                    }
+                                    !res.is_ignored()
+                                } else {
+                                    false
+                                }
+                            }
+                            ComponentOwner::Layer(id) => {
+                                let ctx = self
+                                    .component_context(false)
+                                    .with_screen_area(*screen_area)
+                                    .with_active_hitbox(*hitbox_id);
+                                if let Some(layer_comp) = self.layer_manager.get_mut(*id) {
+                                    let res = layer_comp.handle_events(&core_event, &ctx);
+                                    if let Some(action) = res.clone().into_action() {
+                                        capture_action = Some((None, action));
+                                    }
+                                    !res.is_ignored()
+                                } else {
+                                    false
+                                }
+                            }
+                            ComponentOwner::Chrome(_) | ComponentOwner::Test => false,
                         };
+
                         (consumed, !matches!(kind, MouseEventKind::Release(_)))
                     }
                     MouseCaptureState::LayoutHandle => match kind {
@@ -1236,6 +1683,11 @@ impl WindowManager {
                 if restore {
                     self.mouse_capture = Some(capture);
                 }
+                // If active capture produced an action (e.g., button release),
+                // return it to the runner rather than swallowing it.
+                if let Some((capture_key, capture_act)) = capture_action {
+                    return EventResult::Action((capture_key, capture_act));
+                }
                 return if result {
                     EventResult::Consumed
                 } else {
@@ -1244,83 +1696,25 @@ impl WindowManager {
             }
         }
 
-        // Phase 2 — Scroll events: hover-to-scroll to the window under cursor.
-        if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
-            // Use registry hit-test for scroll dispatch.
-            if let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position)
-                && let HitTarget::Window(key) | HitTarget::Component(key, ..) = target
-            {
-                let focused = *self.focus.current() == key;
-                let ctx = self
-                    .component_context_for(focused, key)
-                    .with_screen_area(hit_rect);
-                let core_event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                if let Some(comp) = self.component_for_key_mut(key) {
-                    let result = comp.handle_events(&core_event, &ctx);
-                    return result.map(|action| (Some(key), action));
-                }
-            }
-            return EventResult::Ignored;
-        }
+        // Phase 2 — Unified hit-test dispatch: single pass, exhaustive match.
+        //
+        // After this point, NO event routing is based on content_hitbox_id
+        // equality checks, layer iteration, or handle list scanning.
+        //
+        // 1. Chrome maps (O(1) — resize, drag, split) intercept before
+        //    the owner match, because these require WindowManager-level
+        //    MouseCaptureState management.
+        // 2. Exhaustive match on ComponentOwner routes to the exact
+        //    component that registered the hitbox during rendering.
 
-        // Phase 3 — Moved events: forward to component.
-        if matches!(kind, MouseEventKind::Moved) {
-            if let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position)
-                && let HitTarget::Window(key) | HitTarget::Component(key, ..) = target
-            {
-                let focused = *self.focus.current() == key;
-                let ctx = self
-                    .component_context_for(focused, key)
-                    .with_screen_area(hit_rect);
-                let core_event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                if let Some(comp) = self.component_for_key_mut(key) {
-                    let result = comp.handle_events(&core_event, &ctx);
-                    return result.map(|action| (Some(key), action));
-                }
-            }
-            // Forward Moved to tiling layout for hover feedback on split handles.
-            // Always forward so the hover state stays current regardless of
-            // which hit target was found (window, overlay, etc.).
-            {
-                let event = Event::Mouse(MouseEvent {
-                    kind: *kind,
-                    column: col,
-                    row,
-                    modifiers: *modifiers,
-                });
-                if let Some(layout) = self.managed_layout.as_mut() {
-                    layout.handle_event(&event, self.managed_area);
-                }
-            }
-            return EventResult::Ignored;
-        }
-
-        // Phase 4 — Press events hit-test the registry.
-        if !matches!(kind, MouseEventKind::Press(_)) {
-            return EventResult::Ignored;
-        }
-
-        // Hover already recorded at function entry.
-
-        let Some((target, hit_rect)) = self.hitbox_registry.hit_test(*position) else {
-            // No hitbox — try focus-on-click, then fall through
-            if self.config.wm_command_menu_enabled {
+        let Some((hitbox_id, owner, hit_rect)) = self.hitbox_registry.hit_test(*position) else {
+            // No hitbox — try focus-on-click for Press events, then fall through
+            if matches!(kind, MouseEventKind::Press(_)) && self.config.wm_command_menu_enabled {
                 self.focus_window_at(col, row);
             }
             return EventResult::Ignored;
         };
 
-        // Build core Event for Component::handle_events.
         let core_event = Event::Mouse(MouseEvent {
             kind: *kind,
             column: col,
@@ -1328,179 +1722,252 @@ impl WindowManager {
             modifiers: *modifiers,
         });
 
-        match target {
-            HitTarget::Window(key) | HitTarget::Component(key, ..) => {
+        // --- Chrome interception ---
+        // Match directly on ComponentOwner::Chrome(target) for O(1) routing.
+        // Only Press events initiate capture state. Moved events forward to layout.
+        if matches!(kind, MouseEventKind::Press(_)) {
+            if let ComponentOwner::Chrome(target) = &owner {
+                return match target {
+                    crate::chrome::ChromeTarget::Resize(_, _) => {
+                        let crate::chrome::ChromeTarget::Resize(h_key, h_edge) = target else {
+                            unreachable!()
+                        };
+                        if self.is_monocle()
+                            || !self.config.floating_windows_enabled
+                            || !self.is_window_floating(*h_key)
+                        {
+                            return EventResult::Ignored;
+                        }
+                        self.bring_floating_to_front_key(*h_key);
+                        // Unset maximized so further resize/move isn't restricted,
+                        // but keep the current rect so the cursor stays on the handle.
+                        if let Some(w) = self.windows.get_mut(*h_key) {
+                            w.set_maximized(false);
+                        }
+                        let rect = self.full_region_for_key(*h_key);
+                        let (start_x, start_y, start_width, start_height) =
+                            if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
+                                self.floating_rect(*h_key)
+                            {
+                                (fr.x, fr.y, fr.width, fr.height)
+                            } else {
+                                (rect.x, rect.y, rect.width, rect.height)
+                            };
+                        self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
+                            key: *h_key,
+                            edge: *h_edge,
+                            start_rect: rect,
+                            start_col: col,
+                            start_row: row,
+                            start_x,
+                            start_y,
+                            start_width,
+                            start_height,
+                        });
+                        EventResult::Consumed
+                    }
+                    crate::chrome::ChromeTarget::Drag(key) => {
+                        Self::init_window_drag(self, *key, col, row)
+                    }
+                    crate::chrome::ChromeTarget::CloseButton(key) => {
+                        if matches!(kind, MouseEventKind::Press(_)) {
+                            self.close_window(*key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        } else {
+                            EventResult::Ignored
+                        }
+                    }
+                    crate::chrome::ChromeTarget::MaximizeButton(key) => {
+                        if matches!(kind, MouseEventKind::Press(_)) {
+                            self.toggle_maximize(*key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        } else {
+                            EventResult::Ignored
+                        }
+                    }
+                    crate::chrome::ChromeTarget::MinimizeButton(key) => {
+                        if matches!(kind, MouseEventKind::Press(_)) {
+                            self.minimize_window(*key);
+                            self.last_header_click = None;
+                            EventResult::Consumed
+                        } else {
+                            EventResult::Ignored
+                        }
+                    }
+                    crate::chrome::ChromeTarget::SplitHandle(_id) => {
+                        self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
+                        if let Some(layout) = self.managed_layout.as_mut() {
+                            let _ = layout.handle_event(&core_event, self.managed_area);
+                        }
+                        EventResult::Consumed
+                    }
+                    crate::chrome::ChromeTarget::EmptyStatePlaceholder => {
+                        EventResult::Action((None, TermWmAction::OpenCommandPalette))
+                    }
+                };
+            }
+        }
+
+        // Forward Moved events to tiling layout for hover feedback on split
+        // handles.  When higher-Z elements (panels, overlays, floating windows,
+        // non-split chrome) obscure the handle, send a synthetic off-screen
+        // event to clear the layout's internal hover state rather than silently
+        // dropping — silently dropping would trap the layout in a stale hover.
+        if matches!(kind, MouseEventKind::Moved) {
+            let obscured = match &owner {
+                crate::hitbox_registry::ComponentOwner::Layer(_)
+                | crate::hitbox_registry::ComponentOwner::Overlay(_) => true,
+                crate::hitbox_registry::ComponentOwner::Window(key)
+                    if self.is_window_floating(*key) =>
+                {
+                    true
+                }
+                crate::hitbox_registry::ComponentOwner::Chrome(target)
+                    if !matches!(target, crate::chrome::ChromeTarget::SplitHandle(_)) =>
+                {
+                    true
+                }
+                _ => false,
+            } || !self.overlays.is_empty();
+            if let Some(layout) = self.managed_layout.as_mut() {
+                if obscured {
+                    let clear_event = crate::events::Event::Mouse(crate::events::MouseEvent {
+                        kind: crate::events::MouseEventKind::Moved,
+                        column: u16::MAX,
+                        row: u16::MAX,
+                        modifiers: crate::events::KeyModifiers::NONE,
+                    });
+                    layout.handle_event(&clear_event, self.managed_area);
+                } else {
+                    layout.handle_event(&core_event, self.managed_area);
+                }
+            }
+        }
+
+        // --- Exhaustive owner match ---
+        // Every hitbox has exactly one owner. No iteration, no fallback.
+        match owner {
+            ComponentOwner::Window(key) => {
+                // Z-stack elevation: clicking a floating window brings it to front
+                if matches!(kind, MouseEventKind::Press(_)) && self.is_window_floating(key) {
+                    self.bring_floating_to_front_key(key);
+                }
                 let focused = *self.focus.current() == key;
                 let ctx = self
                     .component_context_for(focused, key)
-                    .with_screen_area(hit_rect);
-                let result = if let Some(comp) = self.component_for_key_mut(key) {
-                    comp.handle_events(&core_event, &ctx)
+                    .with_screen_area(hit_rect)
+                    .with_active_hitbox(hitbox_id);
+                if let Some(comp) = self.component_for_key_mut(key) {
+                    let result = comp.handle_events(&core_event, &ctx);
+                    if !result.is_ignored() && matches!(kind, MouseEventKind::Press(_)) {
+                        self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                            owner: ComponentOwner::Window(key),
+                            screen_area: hit_rect,
+                            hitbox_id,
+                        });
+                    }
+                    result.map(|action| (Some(key), action))
                 } else {
                     EventResult::Ignored
-                };
-                // Only capture on Press events when consumed
-                if !result.is_ignored() {
-                    self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
-                        key,
-                        screen_area: hit_rect,
-                    });
                 }
-                result.map(|action| (Some(key), action))
             }
-            HitTarget::ChromeHeader(key, action) => match action {
-                HeaderAction::Close => {
-                    self.close_window(key);
-                    self.last_header_click = None;
-                    EventResult::Consumed
-                }
-                HeaderAction::Maximize => {
-                    self.toggle_maximize(key);
-                    self.last_header_click = None;
-                    EventResult::Consumed
-                }
-                HeaderAction::Minimize => {
-                    self.minimize_window(key);
-                    self.last_header_click = None;
-                    EventResult::Consumed
-                }
-                HeaderAction::ToggleDirectMode => {
-                    self.toggle_direct_mode(key);
-                    self.last_header_click = None;
-                    EventResult::Consumed
-                }
-                HeaderAction::Drag => {
-                    let now = Instant::now();
-                    if let Some((prev_key, prev)) = self.last_header_click
-                        && prev_key == key
-                        && now.duration_since(prev) <= Duration::from_millis(500)
-                    {
-                        self.toggle_maximize(key);
-                        self.last_header_click = None;
-                        return EventResult::Consumed;
-                    }
-                    self.last_header_click = Some((key, now));
-
-                    if self.is_window_floating(key) {
-                        self.bring_floating_to_front_key(key);
-                    }
-
-                    let rect = self.visible_region_for_key(key);
-                    let (initial_x, initial_y) =
-                        if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                            self.floating_rect(key)
-                        {
-                            (fr.x, fr.y)
-                        } else {
-                            (rect.x, rect.y)
-                        };
-                    self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
-                        key,
-                        resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
-                        anchor_x: col,
-                        anchor_y: row,
-                        initial_x,
-                        initial_y,
-                        start_x: col,
-                        start_y: row,
-                        prev_col: col,
-                        prev_row: row,
-                        prev_time_ns: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_nanos() as u64)
-                            .unwrap_or(0),
-                        detach_coordinate: None,
-                        snap_applied: false,
-                    });
-                    self.drag_last_event = Some(Instant::now());
-                    self.arm_drag_snap_timer();
-                    EventResult::Consumed
-                }
-            },
-            HitTarget::ChromeResize(key, edge) => {
-                if !self.config.floating_windows_enabled || !self.is_window_floating(key) {
-                    return EventResult::Ignored;
-                }
-                self.bring_floating_to_front_key(key);
-                let rect = self.full_region_for_key(key);
-                let (start_x, start_y, start_width, start_height) =
-                    if let Some(crate::window::FloatRectSpec::Absolute(fr)) =
-                        self.floating_rect(key)
-                    {
-                        (fr.x, fr.y, fr.width, fr.height)
-                    } else {
-                        (rect.x, rect.y, rect.width, rect.height)
-                    };
-                self.mouse_capture = Some(MouseCaptureState::ResizingWindow {
-                    key,
-                    edge,
-                    start_rect: rect,
-                    start_col: col,
-                    start_row: row,
-                    start_x,
-                    start_y,
-                    start_width,
-                    start_height,
-                });
-                EventResult::Consumed
-            }
-            HitTarget::TopPanel => {
-                if self.config.wm_command_menu_enabled && self.panel_active() {
-                    let panel_handled = self.handle_panel_click(col, row);
-                    if panel_handled {
-                        return EventResult::Consumed;
-                    }
-                }
-                if self.config.wm_command_menu_enabled {
-                    self.focus_window_at(col, row);
-                }
-                EventResult::Ignored
-            }
-            HitTarget::BottomPanel => {
-                let ctx = self.component_context(false);
-                if let Some(p) = &mut self.bottom_component
-                    && let crate::actions::EventResult::Action(action) =
-                        p.handle_events(&core_event, &ctx)
-                    && let Some(combo) = self.keybindings().first_combo(action)
-                {
-                    self.synthetic_event = Some(Event::Key(KeyEvent {
-                        code: combo.code,
-                        modifiers: combo.mods,
-                        kind: KeyKind::Press,
-                    }));
-                    return EventResult::Consumed;
-                }
-                EventResult::Ignored
-            }
-            HitTarget::Overlay(id) => {
+            ComponentOwner::Overlay(key) => {
                 let ctx = self
-                    .component_context_for(false, slotmap::DefaultKey::default())
-                    .with_screen_area(hit_rect);
-                if let Some(overlay) = self.overlays.get_mut(&id) {
+                    .component_context(false)
+                    .with_screen_area(hit_rect)
+                    .with_active_hitbox(hitbox_id);
+                if let Some(overlay) = self.overlays.get_mut(key) {
                     let result = overlay.handle_events(&core_event, &ctx);
+                    if !result.is_ignored() && matches!(kind, MouseEventKind::Press(_)) {
+                        self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                            owner: ComponentOwner::Overlay(key),
+                            screen_area: hit_rect,
+                            hitbox_id,
+                        });
+                    }
                     result.map(|action| (None, action))
                 } else {
                     EventResult::Ignored
                 }
             }
-            HitTarget::LayoutHandle => {
-                self.mouse_capture = Some(MouseCaptureState::LayoutHandle);
-                if let Some(layout) = self.managed_layout.as_mut() {
-                    let consumed = layout.handle_event(&core_event, self.managed_area);
-                    if consumed {
-                        EventResult::Consumed
-                    } else {
-                        EventResult::Ignored
+            ComponentOwner::Layer(layer_id) => {
+                let ctx = self
+                    .component_context(false)
+                    .with_screen_area(hit_rect)
+                    .with_active_hitbox(hitbox_id);
+                if let Some(layer_comp) = self.layer_manager.get_mut(layer_id) {
+                    let result = layer_comp.handle_events(&core_event, &ctx);
+                    if !result.is_ignored() && matches!(kind, MouseEventKind::Press(_)) {
+                        self.mouse_capture = Some(MouseCaptureState::ComponentInteraction {
+                            owner: ComponentOwner::Layer(layer_id),
+                            screen_area: hit_rect,
+                            hitbox_id,
+                        });
                     }
+                    result.map(|action| (None, action))
                 } else {
                     EventResult::Ignored
                 }
             }
-            HitTarget::Notification => {
-                // Swallow all mouse events over notification area — no passthrough.
-                EventResult::Consumed
-            }
+            ComponentOwner::Chrome(_) | ComponentOwner::Test => EventResult::Ignored,
         }
+    }
+
+    /// Initialize window drag capture state.
+    /// Extracted as a helper so both `ChromeTarget::Drag` and `ChromeTarget::Button(Drag)`
+    /// can share the same logic.
+    fn init_window_drag(
+        &mut self,
+        key: WindowKey,
+        col: u16,
+        row: u16,
+    ) -> EventResult<(Option<WindowKey>, TermWmAction)> {
+        if self.is_monocle() {
+            return EventResult::Ignored;
+        }
+        let now = Instant::now();
+        if let Some((prev_key, prev)) = self.last_header_click
+            && prev_key == key
+            && now.duration_since(prev) <= Duration::from_millis(500)
+        {
+            self.toggle_maximize(key);
+            self.last_header_click = None;
+            return EventResult::Consumed;
+        }
+        self.last_header_click = Some((key, now));
+        if self.is_window_floating(key) {
+            self.bring_floating_to_front_key(key);
+        }
+        let rect = self.visible_region_for_key(key);
+        let (initial_x, initial_y) =
+            if let Some(crate::window::FloatRectSpec::Absolute(fr)) = self.floating_rect(key) {
+                (fr.x, fr.y)
+            } else {
+                (rect.x, rect.y)
+            };
+        self.mouse_capture = Some(MouseCaptureState::DraggingWindow {
+            key,
+            resistance: term_wm_layout_engine::EdgeResistance::default_tui(),
+            anchor_x: col,
+            anchor_y: row,
+            initial_x,
+            initial_y,
+            start_x: col,
+            start_y: row,
+            prev_col: col,
+            prev_row: row,
+            prev_time_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0),
+            detach_coordinate: None,
+            snap_applied: false,
+        });
+        self.drag_last_event = Some(Instant::now());
+        self.arm_drag_snap_timer();
+        EventResult::Consumed
     }
 
     fn reset_drag_snap_timer(&mut self) {
@@ -1568,61 +2035,6 @@ impl WindowManager {
         }
     }
 
-    /// Handle clicks on top-panel icons (menu, mouse capture, selection, etc.).
-    /// Returns true if the click was consumed.
-    fn handle_panel_click(&mut self, col: u16, row: u16) -> bool {
-        if self.top_component.is_none() {
-            return false;
-        }
-        if !crate::layout::rect_contains(self.top_claimed, col, row) {
-            return false;
-        }
-        // Use handle_event which routes through all hit-test methods
-        let down_event = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: col,
-            row,
-            modifiers: KeyModifiers::NONE,
-        });
-        let ctx = self.component_context(false);
-        let Some(p) = self.top_component.as_mut() else {
-            return false;
-        };
-        match p.handle_events(&down_event, &ctx) {
-            crate::actions::EventResult::Action(action) => match action {
-                TermWmAction::WmToggleOverlay => {
-                    if self.command_menu_visible() {
-                        self.close_command_menu();
-                    } else {
-                        self.open_command_menu();
-                    }
-                    true
-                }
-                TermWmAction::ToggleMouseCapture => {
-                    self.toggle_mouse_capture();
-                    true
-                }
-                TermWmAction::ToggleWindowSelection => {
-                    self.toggle_window_selection();
-                    true
-                }
-                TermWmAction::ToggleClipboardMode => {
-                    self.toggle_clipboard_enabled();
-                    true
-                }
-                TermWmAction::FocusWindow(key) => {
-                    if self.window_state(key) == Some(WindowState::Iconic) {
-                        self.transition_window(key, WindowState::Mapped);
-                    }
-                    self.focus_window_key(key);
-                    true
-                }
-                _ => false,
-            },
-            _ => false,
-        }
-    }
-
     pub fn arm_capture(&mut self, timeout: Duration) {
         self.capture_deadline = Some(Instant::now() + timeout);
         self.pending_deadline = None;
@@ -1635,19 +2047,16 @@ impl WindowManager {
     pub fn clear_capture(&mut self) {
         self.capture_deadline = None;
         self.pending_deadline = None;
-        self.command_menu_visible = false;
+        self.close_command_menu();
         self.command_menu_opened_at = None;
-        self.super_pending_event = None;
-        self.super_pending_at = None;
-        if let Some(handle) = &self.system_task_handle {
-            if let Some(id) = self.super_timer_id.take() {
-                handle.cancel(id);
-            }
-            if let Some(id) = self.drag_timer_id.take() {
-                handle.cancel(id);
-            }
+        if let Some(handle) = &self.system_task_handle
+            && let Some(id) = self.drag_timer_id.take()
+        {
+            handle.cancel(id);
         }
-        if let Some(menu) = &mut self.command_menu_component {
+        if let Some(menu) =
+            self.get_semantic_component_mut(layer_manager::ComponentTag::CommandPalette)
+        {
             menu.process_action(&ComponentAction::Restore);
         }
     }
@@ -1656,7 +2065,7 @@ impl WindowManager {
         if !self.mouse_capture_enabled {
             return false;
         }
-        if self.config.wm_command_menu_enabled && self.command_menu_visible {
+        if self.config.wm_command_menu_enabled && self.command_menu_visible() {
             return true;
         }
         self.refresh_capture();
@@ -1672,6 +2081,16 @@ impl WindowManager {
     /// effects, no deadline pruning.  Safe to call from the render path.
     pub fn is_mouse_captured(&self) -> bool {
         self.mouse_capture.is_some()
+    }
+
+    /// Returns `true` when a window drag is in progress (not resize,
+    /// component interaction, or layout handle).  Used by FramePacer to
+    /// select a throttled 30 FPS interval during drag.
+    pub(crate) fn is_dragging_window(&self) -> bool {
+        matches!(
+            self.mouse_capture,
+            Some(MouseCaptureState::DraggingWindow { .. })
+        )
     }
 
     pub fn keyboard_focus_enabled(&self) -> bool {
@@ -1815,8 +2234,7 @@ impl WindowManager {
         self.clipboard_enabled = enabled;
         self.clipboard_dirty = true;
         for overlay in self.overlays.values_mut() {
-            let o: &mut dyn crate::components::Overlay<TermWmAction> = &mut **overlay;
-            o.set_selection_enabled(enabled);
+            overlay.set_selection_enabled(enabled);
         }
     }
 
@@ -1838,40 +2256,18 @@ impl WindowManager {
         }
     }
 
-    /// Register a component directly on a window in the SlotMap.
-    /// Creates the SlotMap entry, stores the component, and returns the
-    /// WindowKey.  The App or runner retrieves the component via
-    /// Helper to create a window with a WM-owned component (debug log, etc.).
-    /// The component is stored directly in the Window struct, NOT in
-    /// an app-sidecar HashMap. Callers that need post-creation access
-    /// should configure the component before boxing it.
-    pub fn set_system_window(
-        &mut self,
-        component: Box<dyn crate::components::Component<TermWmAction>>,
-    ) -> WindowKey {
-        let key = self.create_window(component);
-        if let Some(w) = self.windows.get_mut(key) {
-            w.is_system_window = true;
-        }
-        key
-    }
-
     /// Render-phase access: borrow component immutably.
-    pub fn component_for_key(
-        &self,
-        key: WindowKey,
-    ) -> Option<&dyn crate::components::Component<TermWmAction>> {
+    /// Returns &C — no vtable cast. Callers in generic context get static dispatch.
+    pub fn component_for_key(&self, key: WindowKey) -> Option<&C> {
         let w = self.windows.get(key)?;
-        Some(w.component.as_ref())
+        self.components.get(w.component_key())
     }
 
     /// Event/update-phase access: borrow component mutably.
-    pub fn component_for_key_mut(
-        &mut self,
-        key: WindowKey,
-    ) -> Option<&mut dyn crate::components::Component<TermWmAction>> {
+    /// Returns &mut C — no vtable cast. Callers in generic context get static dispatch.
+    pub fn component_for_key_mut(&mut self, key: WindowKey) -> Option<&mut C> {
         let w = self.windows.get_mut(key)?;
-        Some(w.component.as_mut())
+        self.components.get_mut(w.component_key())
     }
 
     /// Return all window keys currently in the SlotMap.
@@ -1888,7 +2284,7 @@ impl WindowManager {
     pub fn mapped_windows(&self) -> Vec<WindowKey> {
         self.windows
             .iter()
-            .filter(|(_, w)| w.state == WindowState::Mapped)
+            .filter(|(_, w)| w.state() == WindowState::Mapped)
             .map(|(key, _)| key)
             .collect()
     }
@@ -1899,62 +2295,200 @@ impl WindowManager {
             .and_then(|c| c.take_pending_title())
     }
 
-    pub fn open_overlay(&mut self, id: OverlayId, overlay: Option<Box<dyn Overlay<TermWmAction>>>) {
-        if let Some(o) = overlay {
-            self.overlays.insert(id, o);
-        }
+    /// Returns `Some(bool)` when the pane's alternate screen state transitions.
+    pub fn take_alternate_screen_transition(&mut self, key: WindowKey) -> Option<bool> {
+        self.component_for_key_mut(key)
+            .and_then(|c| c.take_alternate_screen_transition())
+    }
+
+    pub fn overlay_for_key_mut(&mut self, key: OverlayKey) -> Option<&mut O> {
+        self.overlays.get_mut(key)
+    }
+
+    pub fn close_overlay(&mut self, key: OverlayKey) {
+        self.overlays.remove(key);
+    }
+
+    pub fn overlay_keys(&self) -> Vec<OverlayKey> {
+        self.overlays.keys().collect()
+    }
+
+    pub fn open_help_overlay(&mut self, overlay: O) {
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::HelpOverlay>(key);
+        self.input_mode = crate::actions::WmInputMode::Help;
+    }
+
+    pub fn open_exit_confirm_overlay(&mut self, overlay: O) {
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::ExitConfirm>(key);
+    }
+
+    pub fn open_command_palette_overlay(&mut self, overlay: O) {
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::CommandPalette>(key);
+        self.input_mode = crate::actions::WmInputMode::CommandPalette;
     }
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
         self.scroll_keyboard_enabled_default = enabled;
     }
 
+    /// Enter tab outline mode — palette becomes dim overlay, panels hide in monocle.
+    pub fn set_tab_outline_mode(&mut self, duration: Duration) {
+        let expires = Instant::now() + duration;
+        self.tab_outline_until = Some(expires);
+        if let Some(key) = self.get_overlay::<system_tags::CommandPalette>()
+            && let Some(overlay) = self.overlays.get_mut(key)
+        {
+            overlay.set_tab_outline(Some(expires));
+        }
+        if let Some(handle) = &self.system_task_handle {
+            let _ = handle.schedule_once(duration, crate::actions::SystemTask::ClearTabOutline);
+        }
+    }
+
+    /// Clear tab outline mode — restore palette/panels to normal.
+    pub fn clear_tab_outline(&mut self) {
+        self.tab_outline_until = None;
+        if let Some(key) = self.get_overlay::<system_tags::CommandPalette>()
+            && let Some(overlay) = self.overlays.get_mut(key)
+        {
+            overlay.set_tab_outline(None);
+        }
+    }
+
+    /// Whether tab outline mode is currently active.
+    pub fn is_tab_outline_active(&self) -> bool {
+        self.tab_outline_until
+            .is_some_and(|until| Instant::now() < until)
+    }
+
     pub fn panel_active(&self) -> bool {
-        self.config.panel_enabled && self.top_component.as_ref().is_some_and(|p| p.visible())
+        if self.is_monocle_cramped() {
+            return false;
+        }
+        self.config.panels_enabled
+            && self
+                .get_semantic_component(layer_manager::ComponentTag::TopPanel)
+                .is_some_and(|p| p.visible())
     }
 
     /// Register panel hitboxes (top and bottom) into the draw-time registry.
     /// Called before the window loop so panels are at the lowest Z-order.
-    pub fn register_panel_hitboxes(&self, registry: &mut HitboxRegistry) {
-        if self.top_component.is_some() && !self.top_claimed.is_empty() {
-            registry.register(HitTarget::TopPanel, self.top_claimed);
+    pub fn register_panel_hitboxes(
+        &mut self,
+        top_owner: ComponentOwner,
+        bottom_owner: ComponentOwner,
+    ) {
+        if let Some(top) = self.get_semantic_component(layer_manager::ComponentTag::TopPanel)
+            && !self.top_claimed.is_empty()
+            && let Some(id) = top.hitbox_id()
+        {
+            self.hitbox_registry
+                .register(id, top_owner, self.top_claimed);
         }
-        if self.bottom_component.is_some() && !self.bottom_claimed.is_empty() {
-            registry.register(HitTarget::BottomPanel, self.bottom_claimed);
+        if let Some(bottom) = self.get_semantic_component(layer_manager::ComponentTag::BottomPanel)
+            && !self.bottom_claimed.is_empty()
+            && let Some(id) = bottom.hitbox_id()
+        {
+            self.hitbox_registry
+                .register(id, bottom_owner, self.bottom_claimed);
         }
     }
 
-    /// Register tiling layout split handle hitboxes.
-    /// Called after panel registration, before the window loop, so handles sit
-    /// below windows in Z-order (floating windows correctly occlude them).
-    pub fn register_layout_handle_hitboxes(&self, registry: &mut HitboxRegistry) {
-        for handle in &self.handles {
-            registry.register(HitTarget::LayoutHandle, handle.rect);
+    /// Handles a mouse click landing outside the command palette upon dismissal.
+    ///
+    /// Inspects ALL hitboxes at (col, row) in Z-order with priority:
+    /// 1. Layer components (TopPanel, BottomPanel, FAB) — dispatch event
+    /// 2. Non-palette Overlays — dispatch event
+    /// 3. Window Chrome (titlebar, buttons, resize handles) — focus window
+    /// 4. Window body — focus window
+    ///
+    /// Returns `true` if any hitbox was handled. Panel/overlay actions are
+    /// pushed to `actions` for the caller to dispatch.
+    pub fn handle_outside_click(
+        &mut self,
+        col: u16,
+        row: u16,
+        event: &Event,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        ignored_overlay: Option<OverlayKey>,
+    ) -> bool {
+        let position = MousePosition {
+            column: col as i16,
+            row: row as i16,
+            space: CoordSpace::Screen,
+        };
+        let hits: Vec<_> = self.hitbox_registry.hit_test_all(position).collect();
+
+        for (hitbox_id, owner, hit_rect) in hits {
+            match owner {
+                ComponentOwner::Layer(layer_id) => {
+                    let ctx = self
+                        .component_context(false)
+                        .with_screen_area(hit_rect)
+                        .with_active_hitbox(hitbox_id);
+                    if let Some(layer_comp) = self.layer_manager.get_mut(layer_id) {
+                        match layer_comp.handle_events(event, &ctx) {
+                            EventResult::Action(action) => {
+                                actions.push_back((self.focused_window(), action));
+                                return true;
+                            }
+                            EventResult::Consumed => return true,
+                            EventResult::Ignored => {}
+                        }
+                    }
+                }
+                ComponentOwner::Overlay(key) if Some(key) != ignored_overlay => {
+                    if let Some(overlay) = self.overlays.get_mut(key) {
+                        let ctx = ComponentContext::new(true).with_screen_area(hit_rect);
+                        match overlay.handle_events(event, &ctx) {
+                            EventResult::Action(action) => {
+                                actions.push_back((self.focused_window(), action));
+                                return true;
+                            }
+                            EventResult::Consumed => return true,
+                            EventResult::Ignored => {}
+                        }
+                    }
+                }
+                ComponentOwner::Chrome(target) => {
+                    let win_key = match target {
+                        crate::chrome::ChromeTarget::Resize(k, _)
+                        | crate::chrome::ChromeTarget::Drag(k)
+                        | crate::chrome::ChromeTarget::CloseButton(k)
+                        | crate::chrome::ChromeTarget::MaximizeButton(k)
+                        | crate::chrome::ChromeTarget::MinimizeButton(k) => Some(k),
+                        _ => None,
+                    };
+                    if let Some(k) = win_key {
+                        self.focus_app_window(k);
+                        return true;
+                    }
+                }
+                ComponentOwner::Window(key) => {
+                    self.focus_app_window(key);
+                    return true;
+                }
+                _ => {}
+            }
         }
+
+        false
     }
 
-    /// Register chrome hitboxes (resize handles + header) for a specific window.
-    /// Called after `composite_window` so chrome is on top of content.
-    pub fn register_window_chrome_hitboxes(&self, key: WindowKey, registry: &mut HitboxRegistry) {
-        for handle in &self.resize_handles {
-            if handle.key == key {
-                registry.register(
-                    HitTarget::ChromeResize(handle.key, handle.edge),
-                    handle.rect,
-                );
-            }
-        }
-        for header in &self.floating_headers {
-            if header.key == key {
-                registry.register(
-                    HitTarget::ChromeHeader(
-                        header.key,
-                        crate::window::decorator::HeaderAction::Drag,
-                    ),
-                    header.rect,
-                );
-            }
-        }
+    /// No-op: chrome hitbox registration is now handled by the console
+    /// during the rendering pass. See `render_window_chrome` in
+    /// `term-wm-console/src/draw_plan_renderer.rs`.
+    pub fn register_layout_handle_hitboxes(&mut self) {
+        // Handled by console during render
+    }
+
+    /// No-op: chrome hitbox registration is now handled by the console
+    /// during the rendering pass.
+    pub fn register_window_chrome_hitboxes(&mut self, _key: WindowKey) {
+        // Handled by console during render
     }
 
     /// Process a `TermWmAction` produced by a component's `handle_events`.
@@ -1966,9 +2500,16 @@ impl WindowManager {
         let mut queue = VecDeque::new();
         queue.push_back((key, action));
         while let Some((k, act)) = queue.pop_front() {
-            let ctx = self.component_context_for(true, k);
-            if let Some(comp) = self.component_for_key_mut(k) {
-                comp.update(act, &ctx, &mut queue);
+            match &act {
+                TermWmAction::RequestKeyboardFocus(id) => {
+                    self.set_keyboard_focus(k, *id);
+                }
+                _ => {
+                    let ctx = self.component_context_for(true, k);
+                    if let Some(comp) = self.component_for_key_mut(k) {
+                        comp.update(act, &ctx, &mut queue);
+                    }
+                }
             }
         }
     }
@@ -1977,81 +2518,6 @@ impl WindowManager {
     /// timers.  Called once by the runner during startup.
     pub fn set_system_task_handle(&mut self, handle: TaskHandle<SystemTask>) {
         self.system_task_handle = Some(handle);
-    }
-
-    /// Unified double-Esc press handler.
-    /// - `Pending`: first press of WmToggleOverlay — deferred, timeout will forward.
-    /// - `DoubleSuper`: second press within window — caller should open overlay.
-    /// - `Forward`: not a WmToggleOverlay key — forward immediately.
-    ///
-    /// Timer registration and cancellation are handled via the
-    /// `system_task_handle`.
-    pub fn handle_super_press(
-        &mut self,
-        key: &KeyEvent,
-        is_wm_toggle_key: bool,
-    ) -> SuperPressResult {
-        if is_wm_toggle_key {
-            if self.super_pending_at.is_some()
-                && self
-                    .super_pending_at
-                    .is_some_and(|at| at.elapsed() < self.config.super_passthrough_window)
-            {
-                // Second press within window — cancel timer, clear state
-                if let Some(handle) = &self.system_task_handle
-                    && let Some(id) = self.super_timer_id.take()
-                {
-                    handle.cancel(id);
-                }
-                self.super_pending_event = None;
-                self.super_pending_at = None;
-                return SuperPressResult::DoubleSuper;
-            }
-            // First press — register timer via scheduler
-            self.super_pending_event = Some(*key);
-            self.super_pending_at = Some(Instant::now());
-            if let Some(handle) = &self.system_task_handle {
-                if let Some(old) = self.super_timer_id.take() {
-                    handle.cancel(old);
-                }
-                self.super_timer_id = Some(handle.schedule_once(
-                    self.config.super_passthrough_window,
-                    SystemTask::SuperPassthrough {
-                        event: Event::Key(*key),
-                    },
-                ));
-            }
-            SuperPressResult::Pending
-        } else {
-            // Non-toggle key — clear pending state
-            if let Some(handle) = &self.system_task_handle
-                && let Some(id) = self.super_timer_id.take()
-            {
-                handle.cancel(id);
-            }
-            self.super_pending_event = None;
-            self.super_pending_at = None;
-            SuperPressResult::Forward
-        }
-    }
-
-    /// Clear the pending super-key state (called by the runner when the
-    /// scheduler fires a `SuperPassthrough` task).
-    pub fn clear_super_pending(&mut self) {
-        self.super_pending_event = None;
-        self.super_pending_at = None;
-        self.super_timer_id = None;
-    }
-
-    /// Time remaining for the panel countdown display.
-    /// Returns `None` when no super-key is pending or the timer has expired.
-    pub fn super_pending_remaining(&self) -> Option<Duration> {
-        let at = self.super_pending_at?;
-        let elapsed = at.elapsed();
-        if elapsed >= self.config.super_passthrough_window {
-            return None;
-        }
-        Some(self.config.super_passthrough_window.saturating_sub(elapsed))
     }
 
     /// Time remaining before the drag snap preview is auto-applied.
@@ -2093,52 +2559,10 @@ impl WindowManager {
         self.snap_projection_cache = None;
     }
 
-    pub fn super_passthrough_active(&self) -> bool {
-        self.super_passthrough_remaining().is_some()
-    }
-
-    pub fn super_passthrough_remaining(&self) -> Option<Duration> {
-        if !self.command_menu_visible() {
-            return None;
-        }
-        let opened_at = self.command_menu_opened_at?;
-        let elapsed = opened_at.elapsed();
-        if elapsed >= self.config.super_passthrough_window {
-            return None;
-        }
-        Some(self.config.super_passthrough_window.saturating_sub(elapsed))
-    }
-
     // ── Event Routing & Update Accessors ─────────────────────────────
 
-    pub fn top_component_mut(&mut self) -> &mut Option<Box<dyn WmComponent>> {
-        &mut self.top_component
-    }
-
-    pub fn bottom_component_mut(&mut self) -> &mut Option<Box<dyn WmComponent>> {
-        &mut self.bottom_component
-    }
-
-    pub fn command_menu_component_mut(&mut self) -> &mut Option<Box<dyn WmComponent>> {
-        &mut self.command_menu_component
-    }
-
-    pub fn overlays_mut(&mut self) -> &mut BTreeMap<OverlayId, Box<dyn Overlay<TermWmAction>>> {
+    pub fn overlays_mut(&mut self) -> &mut SlotMap<OverlayKey, O> {
         &mut self.overlays
-    }
-
-    // ── Immutable state queries (used by both rendering and event dispatch) ─
-
-    pub fn top_component(&self) -> Option<&dyn WmComponent> {
-        self.top_component.as_deref()
-    }
-
-    pub fn bottom_component(&self) -> Option<&dyn WmComponent> {
-        self.bottom_component.as_deref()
-    }
-
-    pub fn command_menu_component(&self) -> Option<&dyn WmComponent> {
-        self.command_menu_component.as_deref()
     }
 
     pub fn top_claimed_area(&self) -> LayoutRect {
@@ -2153,20 +2577,12 @@ impl WindowManager {
         self.managed_area
     }
 
-    pub fn overlays(&self) -> &BTreeMap<OverlayId, Box<dyn Overlay<TermWmAction>>> {
+    pub fn overlays(&self) -> &SlotMap<OverlayKey, O> {
         &self.overlays
     }
 
     pub fn supported_menu_actions(&self) -> &[TermWmAction] {
         &self.supported_menu_actions
-    }
-
-    pub fn resize_handles(&self) -> &[ResizeHandle<WindowKey>] {
-        &self.resize_handles
-    }
-
-    pub fn floating_headers(&self) -> &[DragHandle<WindowKey>] {
-        &self.floating_headers
     }
 
     /// Push a notification and schedule its auto-dismiss via the system task scheduler.
@@ -2196,75 +2612,272 @@ impl WindowManager {
     pub fn notifications(&self) -> &NotificationQueue {
         &self.notification_queue
     }
+
+    /// Set the notification area component (called during app init).
+    /// Pushes into LayerManager with ZPlane::Foreground.
+    pub fn set_notification_component(&mut self, comp: L) {
+        let id = self
+            .layer_manager
+            .insert(comp, layer_manager::ZPlane::Foreground);
+        self.semantic_registry
+            .insert(layer_manager::ComponentTag::NotificationArea, id);
+    }
+
+    /// Get a mutable reference to the notification component.
+    pub fn notification_component_mut(&mut self) -> Option<&mut L> {
+        self.semantic_registry
+            .get(&layer_manager::ComponentTag::NotificationArea)
+            .copied()
+            .and_then(|id| self.layer_manager.get_mut(id))
+    }
+
+    /// Set the keyboard focus for a window. Called when a component returns
+    /// `RequestKeyboardFocus` action.
+    pub fn set_keyboard_focus(
+        &mut self,
+        key: WindowKey,
+        hitbox_id: crate::hitbox_registry::HitboxId,
+    ) {
+        if let Some(window) = self.windows.get_mut(key) {
+            window.set_active_keyboard_focus(Some(hitbox_id));
+        }
+    }
+
+    /// Returns the window management buttons appropriate for the current mode.
+    /// In monocle mode, minimize/maximize are excluded (meaningless when
+    /// the focused window fills the screen). All window-specific buttons are
+    /// excluded when there is no focused window.
+    pub fn window_management_buttons(&self) -> Vec<WmButton> {
+        let focused = self.focused_window();
+        if !self.windows.contains_key(focused) {
+            return Vec::new();
+        }
+        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
+        let mut btns = vec![WmButton {
+            action: TermWmAction::CloseWindow(focused),
+            label: "Close Window",
+            symbol: "X",
+        }];
+        if !self.is_monocle() {
+            btns.push(WmButton {
+                action: TermWmAction::MaximizeWindow(focused),
+                label: if is_maxed {
+                    "Restore Window"
+                } else {
+                    "Maximize Window"
+                },
+                symbol: if is_maxed { "─" } else { "▢" },
+            });
+            btns.push(WmButton {
+                action: TermWmAction::MinimizeWindow(focused),
+                label: "Minimize Window",
+                symbol: "_",
+            });
+        }
+        btns
+    }
+
+    pub fn wm_menu_items(
+        &self,
+    ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        use crate::window::WindowState;
+        use crate::window::window_manager::system_tags;
+
+        let debug_log_visible = self
+            .get_system_window::<system_tags::DebugLog>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+        let system_panel_visible = self
+            .get_system_window::<system_tags::SystemPanel>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+
+        let mouse_label = if self.mouse_capture_enabled {
+            "Mouse: Disable Capture"
+        } else {
+            "Mouse: Enable Capture"
+        };
+        let clipboard_label = if self.clipboard_enabled {
+            "Clipboard: Disable"
+        } else {
+            "Clipboard: Enable"
+        };
+        let selection_label = if self.window_selection_enabled {
+            "Clipboard: Disable Selection"
+        } else {
+            "Clipboard: Enable Selection"
+        };
+        let debug_label = if debug_log_visible {
+            "System: Disable Debug Log"
+        } else {
+            "System: Enable Debug Log"
+        };
+        let panel_label = if system_panel_visible {
+            "System: Disable Panel"
+        } else {
+            "System: Enable Panel"
+        };
+
+        fn mi(
+            label: &'static str,
+            icon: Option<&'static str>,
+            action: crate::actions::TermWmAction,
+        ) -> MenuDisplayItem<crate::actions::TermWmAction> {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon,
+                action,
+                disabled: false,
+            })
+        }
+
+        let focused = self.focused_window();
+        let has_active = self.windows.contains_key(focused);
+
+        let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = vec![
+            // Top group
+            mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
+            mi(
+                "New Window",
+                Some("+"),
+                crate::actions::TermWmAction::NewWindow,
+            ),
+            MenuDisplayItem::Separator,
+        ];
+
+        // Window management group (directly below top group)
+        {
+            if has_active {
+                let raw_title = self.window_title(focused);
+                let title = crate::utils::truncate_with_ellipsis(&raw_title, 25);
+                let super_key = self
+                    .keybindings()
+                    .combos_for(crate::actions::TermWmAction::OpenCommandPalette)
+                    .first()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "Super".to_string());
+
+                // Send SUPER key to window
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Send {} to {}", super_key, title).into(),
+                    icon: Some("S"),
+                    action: crate::actions::TermWmAction::SendSuperKeyToWindow(focused),
+                    disabled: false,
+                }));
+
+                // Close window
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Close {}", title).into(),
+                    icon: Some("X"),
+                    action: crate::actions::TermWmAction::CloseWindow(focused),
+                    disabled: false,
+                }));
+
+                // Maximize / Restore
+                let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
+                if !self.is_monocle() {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: (if is_maxed {
+                            format!("Restore {}", title)
+                        } else {
+                            format!("Maximize {}", title)
+                        })
+                        .into(),
+                        icon: Some(if is_maxed { "─" } else { "▢" }),
+                        action: crate::actions::TermWmAction::MaximizeWindow(focused),
+                        disabled: false,
+                    }));
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Minimize {}", title).into(),
+                        icon: Some("_"),
+                        action: crate::actions::TermWmAction::MinimizeWindow(focused),
+                        disabled: false,
+                    }));
+                }
+
+                // Switch to windows
+                for (key, switch_title) in self.window_titles() {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Switch to: {}", switch_title).into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::FocusWindow(key),
+                        disabled: key == focused,
+                    }));
+                }
+            }
+        }
+
+        // View group
+        {
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi(
+                self.monocle_mode.action_label(),
+                Some("▢"),
+                crate::actions::TermWmAction::ToggleMonocle,
+            ));
+            {
+                let label = if self.managed_layout.is_some() {
+                    "View: Float Windows"
+                } else {
+                    "View: Tile Windows"
+                };
+                let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
+                if self.is_monocle()
+                    && let MenuDisplayItem::Item(ref mut mi) = item
+                {
+                    mi.disabled = true;
+                }
+                items.push(item);
+            }
+        }
+
+        // Settings group
+        {
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi(
+                mouse_label,
+                Some("◆"),
+                crate::actions::TermWmAction::ToggleMouseCapture,
+            ));
+            items.push(mi(
+                clipboard_label,
+                Some("■"),
+                crate::actions::TermWmAction::ToggleClipboardMode,
+            ));
+            items.push(mi(
+                selection_label,
+                Some("●"),
+                crate::actions::TermWmAction::ToggleWindowSelection,
+            ));
+            items.push(mi(
+                debug_label,
+                Some("≣"),
+                crate::actions::TermWmAction::ToggleDebugWindow,
+            ));
+            items.push(mi(
+                panel_label,
+                Some("*"),
+                crate::actions::TermWmAction::ToggleSystemPanel,
+            ));
+
+            // Help/Exit as last group
+            items.push(MenuDisplayItem::Separator);
+            items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
+            items.push(mi(
+                "Exit UI",
+                Some("⏻"),
+                crate::actions::TermWmAction::ExitUi,
+            ));
+        }
+
+        items
+    }
 }
 
-pub fn wm_menu_items(
-    mouse_capture_enabled: bool,
-    clipboard_enabled: bool,
-    window_selection_enabled: bool,
-) -> Vec<MenuItem<crate::actions::TermWmAction>> {
-    let mouse_label = if mouse_capture_enabled {
-        "Mouse Capture: On"
-    } else {
-        "Mouse Capture: Off"
-    };
-    let clipboard_label = if clipboard_enabled {
-        "Clipboard Mode: On"
-    } else {
-        "Clipboard Mode: Off"
-    };
-    let selection_label = if window_selection_enabled {
-        "Window Selection: On"
-    } else {
-        "Window Selection: Off"
-    };
-    vec![
-        MenuItem {
-            label: "Resume",
-            icon: Some("▶"),
-            action: crate::actions::TermWmAction::CloseMenu,
-        },
-        MenuItem {
-            label: mouse_label,
-            icon: Some("◆"),
-            action: crate::actions::TermWmAction::ToggleMouseCapture,
-        },
-        MenuItem {
-            label: clipboard_label,
-            icon: Some("■"),
-            action: crate::actions::TermWmAction::ToggleClipboardMode,
-        },
-        MenuItem {
-            label: selection_label,
-            icon: Some("●"),
-            action: crate::actions::TermWmAction::ToggleWindowSelection,
-        },
-        MenuItem {
-            label: "New Window",
-            icon: Some("+"),
-            action: crate::actions::TermWmAction::NewWindow,
-        },
-        MenuItem {
-            label: "Debug Log",
-            icon: Some("≣"),
-            action: crate::actions::TermWmAction::ToggleDebugWindow,
-        },
-        MenuItem {
-            label: "System Panel",
-            icon: Some("⚙"),
-            action: crate::actions::TermWmAction::ToggleSystemPanel,
-        },
-        MenuItem {
-            label: "Help",
-            icon: Some("?"),
-            action: crate::actions::TermWmAction::Help,
-        },
-        MenuItem {
-            label: "Exit UI",
-            icon: Some("⏻"),
-            action: crate::actions::TermWmAction::ExitUi,
-        },
-    ]
+#[derive(Clone)]
+pub struct WmButton {
+    pub action: TermWmAction,
+    pub label: &'static str,
+    pub symbol: &'static str,
 }
 
 fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
@@ -2320,16 +2933,14 @@ fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
             direction,
             children,
             weights,
-            constraints,
             resizable,
         } => LayoutNode::Split {
             direction: *direction,
             children: children.iter().map(map_layout_node).collect(),
             weights: weights.clone(),
-            constraints: constraints.clone(),
             resizable: *resizable,
         },
-        LayoutNode::Void(id) => LayoutNode::Void(*id),
+        LayoutNode::Void(key) => LayoutNode::Void(*key),
     }
 }
 
@@ -2346,16 +2957,24 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
 }
 
 #[cfg(test)]
-fn make_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
+fn make_keys<L: WmComponent, O: Overlay<TermWmAction>>(
+    wm: &mut WindowManager<TestComponent, L, O>,
+    n: usize,
+) -> Vec<WindowKey> {
     (0..n)
-        .map(|_| wm.create_window(Box::new(crate::components::NoopComponent)))
+        .map(|_| wm.create_window(TestComponent::Noop(crate::components::NoopComponent)))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Constraint, Direction};
+    use crate::components::NoopOverlay;
+    use crate::components::NoopWmComponent;
+    use crate::events::{KeyModifiers, MouseButton};
+    use crate::hitbox_registry::HitboxId;
+    use crate::layout::Direction;
+    use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
 
@@ -2441,15 +3060,14 @@ mod tests {
 
     #[test]
     fn map_layout_node_maps_leaf_to_windowkey() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         let node = LayoutNode::leaf(key);
         let mapped = map_layout_node(&node);
         match mapped {
@@ -2474,13 +3092,12 @@ mod tests {
     #[test]
     fn click_focusing_topmost_window() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -2522,15 +3139,68 @@ mod tests {
     }
 
     #[test]
-    fn enforce_min_visible_margin_horizontal() {
-        use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+    fn handle_mouse_focus_click_skipped_in_monocle() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        let key_a = keys[0];
+        let key_b = keys[1];
+
+        // Set up managed_layout so is_monocle() works
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(key_a),
+        ));
+        wm.update_monocle_mode(50);
+        assert!(wm.is_monocle(), "monocle must be active (width 50 < 80)");
+
+        wm.managed_draw_order = vec![key_a, key_b];
+        wm.z_order = vec![key_a, key_b];
+        wm.regions.set(
+            key_a,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 25,
+                height: 24,
+            },
+        );
+        wm.regions.set(
+            key_b,
+            LayoutRect {
+                x: 25,
+                y: 0,
+                width: 25,
+                height: 24,
+            },
+        );
+
+        wm.focus_app_window(key_a);
+        assert_eq!(*wm.focus.current(), key_a);
+
+        // Click at coordinate that would match key_b's region
+        wm.handle_mouse_focus_click(30, 12);
+
+        assert_eq!(
+            *wm.focus.current(),
+            key_a,
+            "monocle mode must prevent mouse focus switching"
+        );
+    }
+
+    #[test]
+    fn enforce_min_visible_margin_horizontal() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2564,13 +3234,12 @@ mod tests {
     #[test]
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2601,13 +3270,12 @@ mod tests {
     #[test]
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.register_managed_layout(LayoutRect {
@@ -2634,15 +3302,1085 @@ mod tests {
     }
 
     #[test]
-    fn minimize_and_restore_preserves_floating_rect() {
-        use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+    fn maximize_tiled_then_focus_other_unmaximizes_and_retiles() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, crate::window::entry::WindowState::Mapped);
+        }
+        // Two-window horizontal tiling layout.
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        // Focus keys[0] explicitly — last-created window is default focus
+        wm.focus_window_key(keys[0]);
+        assert!(!wm.is_window_floating(keys[0]), "starts tiled");
+        assert_eq!(wm.focused_window(), keys[0]);
+
+        // Maximize the tiled window
+        wm.toggle_maximize(keys[0]);
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "is_maximized set"
+        );
+
+        // Focus the other tiled window → triggers auto-unmaximize
+        wm.focus_window_key(keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
+
+        // Original window should be unmaximized and back in the tiling layout
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized(), "should no longer be maximized");
+        assert!(!w0.is_floating(), "should be tiled (not floating)");
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "should be in tiling layout"
+        );
+    }
+
+    #[test]
+    fn maximize_floating_then_focus_other_unmaximizes_and_refloats() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
             None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, crate::window::entry::WindowState::Mapped);
+        }
+        // Single-leaf tiling layout so register_managed_layout works
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        // Make keys[0] floating at a known position
+        let float_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        });
+        wm.set_floating_rect(keys[0], Some(float_rect));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        // Focus keys[0] (floating)
+        wm.focus_window_key(keys[0]);
+        assert!(wm.is_window_floating(keys[0]), "starts floating");
+
+        // Maximize the floating window
+        wm.toggle_maximize(keys[0]);
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "is_maximized set"
+        );
+
+        // Focus the tiled window → triggers auto-unmaximize
+        wm.focus_window_key(keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
+
+        // Original window should be unmaximized and still floating at its
+        // pre-maximize position
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized(), "should no longer be maximized");
+        assert!(w0.is_floating(), "should remain floating (not tiled)");
+        // Its floating rect should be the original pre-maximize rect
+        let restored = wm.floating_rect(keys[0]);
+        assert_eq!(restored, Some(float_rect), "floating rect restored");
+    }
+
+    // ── Tiled maximize/unmaximize toggle ──────────────────────────────
+
+    #[test]
+    fn tiled_maximize_toggle_unmaximize() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
             None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        // Record original region for position check
+        let orig_region = wm.region(keys[0]);
+
+        // Maximize
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+        assert!(wm.windows.get(keys[0]).unwrap().void_id().is_some());
+
+        // Toggle back (unmaximize directly)
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized(), "unmaximized");
+        assert!(w0.void_id().is_none(), "void_id cleared");
+        assert!(!w0.is_floating(), "not floating");
+        // Should be back in tree at original position
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "back in tree"
+        );
+        let restored = wm.region(keys[0]);
+        assert_eq!(restored, orig_region, "same region as before maximize");
+    }
+
+    #[test]
+    fn tiled_maximize_void_id_set() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
             None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(
+            w0.void_id().is_some(),
+            "void_id set after maximizing tiled window"
+        );
+        // Tree should contain a Void, not a Leaf(keys[0])
+        assert!(
+            !wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "leaf replaced by void in tree"
+        );
+    }
+
+    // ── Floating maximize/unmaximize toggle ───────────────────────────
+
+    #[test]
+    fn floating_maximize_toggle_unmaximize() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        let float_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        });
+        wm.set_floating_rect(keys[0], Some(float_rect));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize floating window
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(w0.is_maximized());
+        // Window still has floating_rect (now = full), so is_floating is true
+
+        // Toggle back
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized(), "unmaximized");
+        assert!(w0.is_floating(), "still floating");
+        let restored = wm.floating_rect(keys[0]);
+        assert_eq!(restored, Some(float_rect), "original rect restored");
+    }
+
+    // ── Focus cycling triggers auto-unmaximize ────────────────────────
+
+    #[test]
+    fn tiled_maximize_then_advance_focus_unmaximizes() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize keys[0], then advance focus to keys[1]
+        wm.toggle_maximize(keys[0]);
+        wm.advance_focus(true);
+
+        assert_eq!(wm.focused_window(), keys[1], "focus moved to keys[1]");
+        assert!(
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "keys[0] unmaximized by focus shift"
+        );
+    }
+
+    #[test]
+    fn tiled_maximize_then_mouse_click_focus_unmaximizes() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize keys[0], then simulate mouse click on keys[1]'s region
+        wm.toggle_maximize(keys[0]);
+        let r1 = wm.region(keys[1]);
+        wm.handle_mouse_focus_click(r1.x as u16, r1.y as u16);
+
+        assert_eq!(
+            wm.focused_window(),
+            keys[1],
+            "focus moved to clicked window"
+        );
+        assert!(
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "keys[0] unmaximized by mouse click"
+        );
+    }
+
+    // ── Edge cases: single window, three windows, minimize ────────────
+
+    #[test]
+    fn tiled_maximize_single_window() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+        // Tree should be Void (single leaf replaced)
+        assert!(matches!(
+            wm.managed_layout.as_ref().unwrap().root(),
+            LayoutNode::Void(_)
+        ));
+
+        wm.toggle_maximize(keys[0]);
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized(), "unmaximized");
+        // Back to a leaf at root
+        assert_eq!(
+            wm.managed_layout.as_ref().unwrap().root().unwrap_leaf(),
+            Some(keys[0])
+        );
+    }
+
+    #[test]
+    fn tiled_maximize_three_windows() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 3);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::Leaf(keys[0]),
+                LayoutNode::Leaf(keys[1]),
+                LayoutNode::Leaf(keys[2]),
+            ],
+            weights: vec![1u16, 1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[1]);
+
+        // Maximize middle window
+        wm.toggle_maximize(keys[1]);
+        assert!(wm.windows.get(keys[1]).unwrap().is_maximized());
+        // Other windows still in tree
+        let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
+        assert_eq!(
+            leaves,
+            vec![keys[0], keys[2]],
+            "other windows still in tree"
+        );
+        // 3 children still (void preserves position)
+        if let LayoutNode::Split { children, .. } = wm.managed_layout.as_ref().unwrap().root() {
+            assert_eq!(children.len(), 3, "void placeholder preserves split slot");
+        } else {
+            panic!("expected split");
+        }
+    }
+
+    #[test]
+    fn tiled_maximize_then_minimize_and_restore() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+
+        // Minimize (Iconic) then restore (Mapped)
+        wm.minimize_window(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Iconic));
+        wm.restore_minimized(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
+
+        // Still maximized after restore
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "still maximized"
+        );
+    }
+
+    // ── BUG 1: minimize+restore then focus-other causes window to disappear ──────
+
+    #[test]
+    fn tiled_maximize_minimize_restore_focus_other_stays_in_tree() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize tiled window
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+
+        // Minimize (void removed, void_id cleared)
+        wm.minimize_window(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Iconic));
+
+        // Restore (comes back maximized floating — is_window_floating returns true)
+        wm.restore_minimized(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
+
+        // Focus the OTHER window → triggers auto-unmaximize on keys[0]
+        wm.focus_window_key(keys[1]);
+        assert_eq!(wm.focused_window(), keys[1]);
+
+        // After auto-unmaximize, keys[0] should NOT be maximized or floating
+        let w0 = wm.windows.get(keys[0]).unwrap();
+        assert!(!w0.is_maximized(), "should no longer be maximized");
+        assert!(!w0.is_floating(), "should be tiled (not floating)");
+
+        // After auto-unmaximize, keys[0] MUST still be in the tiling layout tree
+        // (this assertion FAILS on current code — Bug 1)
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "must remain in tiling layout after unmaximize"
+        );
+    }
+
+    // ── BUG 2: minimize+restore single tiled window creates half-screen void ────
+
+    #[test]
+    fn minimize_restore_single_tiled_window_takes_full_area() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Minimize (Leaf becomes Void, managed_layout stays Some(Void))
+        wm.minimize_window(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Iconic));
+
+        // Restore (reattach_to_tiling_layout called)
+        wm.restore_minimized(keys[0]);
+        assert_eq!(wm.window_state(keys[0]), Some(WindowState::Mapped));
+
+        // After restore, the tree should have the window as a single Leaf root
+        // (this assertion FAILS on current code — Bug 2 creates a 50/50 split with Void)
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().unwrap_leaf() == Some(keys[0])),
+            "single window should be a Leaf root, not a split with Void"
+        );
+    }
+
+    // ── No-op safety ──────────────────────────────────────────────────
+
+    #[test]
+    fn toggle_maximize_already_maximized() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]); // maximize
+        wm.toggle_maximize(keys[0]); // unmaximize
+        wm.toggle_maximize(keys[0]); // maximize again
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "can re-maximize"
+        );
+    }
+
+    #[test]
+    fn focus_same_window_when_maximized() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        wm.toggle_maximize(keys[0]);
+        // Calling focus_window_key with the same (already focused) window
+        // should NOT unmaximize it
+        wm.focus_window_key(keys[0]);
+        assert!(
+            wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "focus same window should not unmaximize"
+        );
+    }
+
+    // ── Teardown / Lifecycle ──────────────────────────────────────────
+
+    #[test]
+    fn close_maximized_tiled_removes_void() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.toggle_maximize(keys[0]);
+
+        // Close the maximized window
+        wm.close_window(keys[0]);
+
+        // The other window should have its leaf still in the tree (no orphan void)
+        let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
+        assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
+        assert!(!wm.windows.contains_key(keys[0]), "window removed");
+    }
+
+    #[test]
+    fn close_maximized_floating_restores_normally() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.transition_window(keys[0], WindowState::Mapped);
+        let float_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        });
+        wm.set_floating_rect(keys[0], Some(float_rect));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Maximize floating, then close
+        wm.toggle_maximize(keys[0]);
+        wm.close_window(keys[0]);
+        assert!(!wm.windows.contains_key(keys[0]), "window removed");
+    }
+
+    #[test]
+    fn unmap_maximized_tiled_removes_void() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        for &k in &keys {
+            wm.transition_window(k, WindowState::Mapped);
+        }
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.managed_layout = Some(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.toggle_maximize(keys[0]);
+
+        // Unmap (transition_window instead of close)
+        wm.transition_window(keys[0], WindowState::Unmapped);
+
+        // Void should be removed from tree
+        let leaves: Vec<_> = wm.managed_layout.as_ref().unwrap().root().collect_leaves();
+        assert_eq!(leaves, vec![keys[1]], "only remaining window in tree");
+        assert!(
+            wm.windows.get(keys[0]).unwrap().void_id().is_none(),
+            "void_id cleared"
+        );
+    }
+
+    #[test]
+    fn try_spawn_floating_default_behavior_matrix() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 3);
+
+        // Case 1: Tiling layout present → must return false
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.set_managed_layout(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(keys[0]),
+        ));
+        assert!(
+            !wm.try_spawn_floating_default(keys[0]),
+            "must return false when tiling layout exists"
+        );
+
+        // Case 2: No layout, all windows floating → returns true
+        wm.transition_window(keys[0], WindowState::Mapped);
+        wm.set_managed_layout_none();
+        wm.set_floating_rect(
+            keys[0],
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 10,
+                    y: 5,
+                    width: 30,
+                    height: 15,
+                },
+            )),
+        );
+        assert!(
+            wm.try_spawn_floating_default(keys[1]),
+            "must return true when all mapped windows are floating"
+        );
+        assert!(wm.is_window_floating(keys[1]));
+
+        // Case 3: Non-floating mapped window present → returns false
+        wm.transition_window(keys[2], WindowState::Mapped);
+        wm.clear_floating_rect(keys[0]);
+        assert!(
+            !wm.try_spawn_floating_default(keys[2]),
+            "must return false when non-floating mapped window exists"
+        );
+    }
+
+    #[test]
+    fn focus_add_preserves_existing_valid_focus() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+
+        // Initial state: placeholder key in focus.current() — invalid
+        assert!(!wm.windows.contains_key(*wm.focus.current()));
+
+        // First focus_add sets current (old key was invalid)
+        wm.focus_add(keys[0]);
+        assert_eq!(*wm.focus.current(), keys[0]);
+
+        // Second focus_add must append to order but PRESERVE focus
+        wm.focus_add(keys[1]);
+        assert_eq!(*wm.focus.current(), keys[0]);
+        assert!(wm.focus.order().contains(&keys[1]));
+    }
+
+    #[test]
+    fn advance_focus_cycles_order_forward_and_backward() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 3);
+        // Directly set focus ring to bypass focus_window_key side effects
+        wm.focus.set_order(keys.clone());
+        wm.focus.set_current(keys[0]);
+
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), keys[1], "forward 0→1");
+
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), keys[2], "forward 1→2");
+
+        wm.advance_focus(true);
+        assert_eq!(wm.focused_window(), keys[0], "wraps 2→0");
+
+        wm.advance_focus(false);
+        assert_eq!(wm.focused_window(), keys[2], "backward 0→2");
+    }
+
+    #[test]
+    fn take_synthetic_event_clears_on_take() {
+        use crate::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        assert!(wm.take_synthetic_event().is_none());
+
+        wm.synthetic_event = Some(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        )));
+
+        assert!(
+            wm.take_synthetic_event().is_some(),
+            "first take returns Some"
+        );
+        assert!(
+            wm.take_synthetic_event().is_none(),
+            "second take returns None"
+        );
+    }
+
+    #[test]
+    fn select_fallback_focus_handles_empty_and_populated_ring() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        // Empty order → no panic
+        wm.focus.set_order(Vec::new());
+        wm.select_fallback_focus();
+
+        // Populated order → selects first item
+        let keys = make_keys(&mut wm, 2);
+        wm.focus.set_order(vec![keys[1], keys[0]]);
+        wm.select_fallback_focus();
+        assert_eq!(*wm.focus.current(), keys[1]);
+    }
+
+    // ── Open window while maximized ───────────────────────────────────
+
+    #[test]
+    fn open_window_when_tiled_window_is_maximized_unmaximizes_and_shows_both() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = mapped_keys(&mut wm, 2);
+        // Verify focus_add didn't steal focus from keys[0]
+        assert_eq!(wm.focused_window(), keys[0], "focus starts on keys[0]");
+
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        wm.focus_window_key(keys[0]);
+
+        // Maximize keys[0] (was tiled)
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+
+        // Simulate what open_window does manuallly to see where it breaks
+        let b = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        // focus.current() should still be keys[0] after create_window
+        assert_eq!(
+            wm.focused_window(),
+            keys[0],
+            "focus still on keys[0] after create"
+        );
+
+        wm.transition_window(b, WindowState::Mapped);
+        // focus_add should NOT have changed focus to b
+        assert_eq!(
+            wm.focused_window(),
+            keys[0],
+            "focus still on keys[0] after transition"
+        );
+
+        // try_spawn_floating_default
+        let spawned_float = wm.try_spawn_floating_default(b);
+        assert!(!spawned_float, "should not spawn floating in tiling mode");
+
+        // tile_window_key then focus_window_key
+        wm.tile_window_key(b);
+        assert_eq!(wm.focused_window(), b, "focus moved to new window");
+        assert!(
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "keys[0] unmaximized by focus shift"
+        );
+        assert!(
+            wm.managed_layout
+                .as_ref()
+                .is_some_and(|l| l.root().subtree_any(|k| k == keys[0])),
+            "keys[0] in tree"
+        );
+    }
+
+    #[test]
+    fn open_window_when_floating_window_is_maximized_unmaximizes_and_shows_both() {
+        use crate::layout::{LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = mapped_keys(&mut wm, 2);
+        // Put keys[1] in a single-leaf tiling layout first, THEN float keys[0]
+        // (set_managed_layout calls clear_all_floating which would clear it)
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
+        let orig_float = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 5,
+            width: 30,
+            height: 15,
+        });
+        wm.set_floating_rect(keys[0], Some(orig_float));
+        wm.register_managed_layout(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        assert_eq!(wm.focused_window(), keys[0], "focus on keys[0]");
+
+        // Maximize keys[0] (was floating)
+        wm.toggle_maximize(keys[0]);
+        assert!(wm.windows.get(keys[0]).unwrap().is_maximized());
+        assert_eq!(
+            wm.focused_window(),
+            keys[0],
+            "focus still keys[0] after maximize"
+        );
+
+        // Simulate open_window manually
+        let b = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        assert_eq!(
+            wm.focused_window(),
+            keys[0],
+            "focus still keys[0] after create"
+        );
+
+        wm.transition_window(b, WindowState::Mapped);
+        assert_eq!(
+            wm.focused_window(),
+            keys[0],
+            "focus still keys[0] after transition"
+        );
+
+        let spawned_float = wm.try_spawn_floating_default(b);
+        assert!(
+            !spawned_float,
+            "should not spawn floating when managed_layout exists"
+        );
+
+        wm.tile_window_key(b);
+        assert!(
+            !wm.windows.get(keys[0]).unwrap().is_maximized(),
+            "keys[0] unmaximized by focus shift"
+        );
+        // B gets tiled (managed_layout exists with keys[1])
+        assert!(!wm.is_window_floating(b), "new window is tiled");
+        let restored = wm.floating_rect(keys[0]);
+        assert_eq!(
+            restored,
+            Some(orig_float),
+            "original floating rect restored"
+        );
+    }
+
+    // ── select_fallback_focus ─────────────────────────────────────────
+
+    #[test]
+    fn select_fallback_focus_handles_empty_ring_safely() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Empty focus ring — select_fallback_focus should not panic
+        wm.select_fallback_focus();
+
+        // Add a window, focus it, then remove it
+        let keys = mapped_keys(&mut wm, 1);
+        wm.focus_window_key(keys[0]);
+        wm.close_window(keys[0]);
+
+        // Fallback on an empty ring — should not panic
+        wm.select_fallback_focus();
+    }
+
+    #[test]
+    fn minimize_and_restore_preserves_floating_rect() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         // Map all windows first — minimize requires Mapped state
@@ -2695,13 +4433,12 @@ mod tests {
     #[test]
     fn localize_event_converts_to_local_coords() {
         use crate::events::{MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         let target_rect = LayoutRect {
@@ -2732,8 +4469,8 @@ mod tests {
             .localize_event_to_app(keys[1], &event)
             .expect("content-local event");
         if let Event::Mouse(local) = content_local {
-            assert_eq!(local.column, 4);
-            assert_eq!(local.row, 2);
+            assert_eq!(local.column, 5);
+            assert_eq!(local.row, 3);
         } else {
             panic!("expected mouse event");
         }
@@ -2743,13 +4480,12 @@ mod tests {
     fn localize_event_handles_negative_origin() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2798,15 +4534,120 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_uses_visible_bounds_for_floating_windows() {
+    fn floating_window_offscreen_click_past_right_edge_hits_window_behind() {
         use crate::window::{FloatRect, FloatRectSpec};
-        let mut wm = WindowManager::with_config(
+
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 100);
+        wm.set_floating_resize_offscreen(true);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        // Float key[1]: 50-col window, 30 columns off-screen left.
+        // Visible portion: cols 0–19 (20 columns). Right edge at x=20.
+        wm.set_floating_rect(
+            keys[1],
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: -30,
+                y: 0,
+                width: 50,
+                height: 20,
+            })),
+        );
+        // key[2] stays tiled behind it at the full managed area.
+        wm.regions.set(
+            keys[2],
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        wm.managed_draw_order = vec![keys[2], keys[1]];
+
+        // Simulate render pipeline: tiled (back) first, floating (front) last.
+        // Tiled window behind (registered first = lower z-order)
+        wm.hitbox_registry_mut().register(
+            HitboxId::new(),
+            ComponentOwner::Window(keys[2]),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+
+        // Floating window on top (registered last = higher z-order),
+        // hitboxes clipped to visible area by the active clip rect.
+        let managed = wm.managed_area();
+        wm.hitbox_registry_mut().push_clip(managed);
+        wm.hitbox_registry_mut().register(
+            HitboxId::new(),
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(keys[1])),
+            Rect {
+                x: 0,
+                y: 1,
+                width: 19,
+                height: 1,
+            },
+        );
+        wm.hitbox_registry_mut().register(
+            HitboxId::new(),
+            ComponentOwner::Window(keys[1]),
+            Rect {
+                x: 0,
+                y: 2,
+                width: 19,
+                height: 17,
+            },
+        );
+        wm.hitbox_registry_mut().pop_clip();
+
+        use term_wm_layout_engine::{CoordSpace, MousePosition};
+        let screen = |col, row| MousePosition {
+            column: col,
+            row,
+            space: CoordSpace::Screen,
+        };
+
+        // Click past floating window's right edge (19) → must hit tiled window
+        let hit = wm.hitbox_registry.hit_test(screen(25, 10));
+        assert!(
+            matches!(hit, Some((_, ComponentOwner::Window(k), _)) if k == keys[2]),
+            "click at col 25 (past floating window's right edge) should hit tiled window keys[2], got {:?}",
+            hit,
+        );
+
+        // Click inside floating window's area → must hit floating window
+        let hit_inside = wm.hitbox_registry.hit_test(screen(10, 10));
+        assert!(
+            matches!(hit_inside, Some((_, ComponentOwner::Window(k), _)) if k == keys[1]),
+            "click at col 10 (inside floating window) should hit floating window keys[1], got {:?}",
+            hit_inside,
+        );
+    }
+
+    #[test]
+    fn hit_test_uses_visible_bounds_for_floating_windows() {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_floating_resize_offscreen(true);
@@ -2842,15 +4683,13 @@ mod tests {
 
     #[test]
     fn hover_targets_respects_occlusion() {
-        use crate::layout::floating::{ResizeEdge, ResizeHandle};
         use crate::layout::tiling::SplitHandle;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.regions.set(
@@ -2872,32 +4711,6 @@ mod tests {
             },
         );
         wm.managed_draw_order = vec![keys[1], keys[2]];
-        let overlapping = Rect {
-            x: 2,
-            y: 1,
-            width: 1,
-            height: 1,
-        };
-        wm.resize_handles.push(ResizeHandle {
-            key: keys[1],
-            rect: overlapping,
-            edge: ResizeEdge::Left,
-        });
-        wm.resize_handles.push(ResizeHandle {
-            key: keys[2],
-            rect: overlapping,
-            edge: ResizeEdge::Left,
-        });
-        wm.resize_handles.push(ResizeHandle {
-            key: keys[1],
-            rect: Rect {
-                x: 8,
-                y: 1,
-                width: 1,
-                height: 1,
-            },
-            edge: ResizeEdge::Right,
-        });
         wm.handles.push(SplitHandle {
             rect: Rect {
                 x: 15,
@@ -2908,31 +4721,18 @@ mod tests {
             path: Vec::new(),
             index: 0,
             direction: Direction::Horizontal,
+            hitbox_id: crate::hitbox_registry::HitboxId::new(),
         });
 
         wm.hover = Some((2, 1));
-        let (handle_hover, resize_hover) = wm.hover_targets();
+        let handle_hover = wm.hover_targets();
         assert!(
             handle_hover.is_none(),
             "floating window should mask layout handles"
         );
-        assert_eq!(
-            resize_hover.map(|handle| handle.key),
-            Some(keys[2]),
-            "topmost window should own the hover"
-        );
-
-        wm.hover = Some((8, 1));
-        let (_, resize_hover) = wm.hover_targets();
-        assert_eq!(
-            resize_hover.map(|handle| handle.key),
-            Some(keys[1]),
-            "background window should hover once it is exposed"
-        );
 
         wm.hover = Some((15, 1));
-        let (handle_hover, resize_hover) = wm.hover_targets();
-        assert!(resize_hover.is_none());
+        let handle_hover = wm.hover_targets();
         assert!(
             handle_hover.is_some(),
             "layout handles should respond off-window"
@@ -2940,46 +4740,16 @@ mod tests {
     }
 
     #[test]
-    fn system_window_header_drag_detaches_to_floating() {
+    fn drag_hitbox_detaches_to_floating() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::LayoutNode;
-
-        struct DummyComponent;
-        impl crate::components::Component<TermWmAction> for DummyComponent {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut std::collections::VecDeque<(super::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let debug_key = wm.set_system_window(Box::new(DummyComponent));
+        let debug_key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -2988,34 +4758,37 @@ mod tests {
             width: 80,
             height: 24,
         });
-
-        let header_rect = wm
-            .floating_headers
-            .iter()
-            .find(|handle| handle.key == debug_key)
-            .expect("debug header present")
-            .rect;
         assert!(!wm.is_window_floating(debug_key));
 
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(debug_key, crate::window::decorator::HeaderAction::Drag),
-            header_rect,
+        let start_rect = wm.full_region(debug_key);
+        let header_pos = start_rect.x.saturating_add(5) as u16;
+
+        // Simulate console registering a Drag hitbox in the header area
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(debug_key)),
+            Rect {
+                x: i32::from(header_pos),
+                y: start_rect.y,
+                width: 5,
+                height: 1,
+            },
         );
 
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: header_rect.x as u16,
-            row: header_rect.y as u16,
+            column: header_pos,
+            row: start_rect.y as u16,
             modifiers: KeyModifiers::NONE,
         });
         let wm_down = crate::events::core_event_to_wm(&down).unwrap();
         assert!(wm.dispatch_mouse(&wm_down).is_consumed());
         // Floating rect is deferred — Press alone must not decouple.
         assert!(!wm.is_window_floating(debug_key));
-        let start_rect = wm.full_region(debug_key);
 
-        let drag_col = header_rect.x.saturating_add(5) as u16;
-        let drag_row = header_rect.y.saturating_add(1) as u16;
+        let drag_col = header_pos.saturating_add(5);
+        let drag_row = (start_rect.y as u16).saturating_add(1);
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: drag_col,
@@ -3030,8 +4803,26 @@ mod tests {
             crate::window::FloatRectSpec::Absolute(fr) => fr,
             _ => panic!("expected absolute rect"),
         };
-        assert_eq!(moved.x, start_rect.x + 5);
-        assert_eq!(moved.y, start_rect.y + 1);
+        assert_eq!(moved.x, start_rect.x + 4);
+        assert_eq!(moved.y, start_rect.y);
+
+        // Second drag tick — confirms the anchor sync didn't snap back.
+        let drag2_col = drag_col.saturating_add(3);
+        let drag2_row = drag_row.saturating_add(2);
+        let drag2 = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag2_col,
+            row: drag2_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        let wm_drag2 = crate::events::core_event_to_wm(&drag2).unwrap();
+        assert!(wm.dispatch_mouse(&wm_drag2).is_consumed());
+        let moved2 = match wm.floating_rect(debug_key).expect("floating rect present") {
+            crate::window::FloatRectSpec::Absolute(fr) => fr,
+            _ => panic!("expected absolute rect"),
+        };
+        assert_eq!(moved2.x, start_rect.x + 7);
+        assert_eq!(moved2.y, start_rect.y + 2);
 
         let up = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
@@ -3050,13 +4841,12 @@ mod tests {
         use crate::layout::InsertPosition;
         use crate::window::{FloatRect, FloatRectSpec};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3131,13 +4921,12 @@ mod tests {
         use crate::layout::{Direction, LayoutNode, TilingLayout};
         use crate::window::{FloatRect, FloatRectSpec};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
@@ -3146,8 +4935,7 @@ mod tests {
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[1]), LayoutNode::Leaf(keys[2])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.managed_layout = Some(TilingLayout::new(split));
@@ -3279,7 +5067,12 @@ mod tests {
             width: 80,
             height: 24,
         };
-        let regions = wm.managed_layout.as_ref().unwrap().root().layout(area);
+        let regions = wm
+            .managed_layout
+            .as_ref()
+            .unwrap()
+            .root()
+            .layout_rects(area);
         assert_eq!(regions.len(), 2, "layout must produce 2 regions");
 
         // Verify no overlapping regions.
@@ -3302,13 +5095,12 @@ mod tests {
     #[test]
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         let full = Rect {
@@ -3344,13 +5136,12 @@ mod tests {
     #[test]
     fn hover_scroll_routes_to_non_focused_window() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3392,13 +5183,12 @@ mod tests {
     #[test]
     fn hover_scroll_over_focused_window_routes_normally() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3436,13 +5226,12 @@ mod tests {
     #[test]
     fn hover_scroll_outside_all_windows_routes_to_focused() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
 
@@ -3479,244 +5268,44 @@ mod tests {
 
     #[test]
     fn direct_mode_defaults_to_false() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.focus_app_window(keys[0]);
-        let focus = wm.focused_window();
-        assert!(!wm.direct_mode(focus));
-    }
-
-    #[test]
-    fn direct_mode_toggle_cycles_state() {
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.focus_app_window(keys[0]);
-        let focus = wm.focused_window();
-
-        assert!(!wm.direct_mode(focus));
-        wm.toggle_direct_mode(focus);
-        assert!(wm.direct_mode(focus));
-        wm.toggle_direct_mode(focus);
-        assert!(!wm.direct_mode(focus));
-    }
-
-    #[test]
-    fn direct_mode_set_get_roundtrip() {
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
-        let keys = make_keys(&mut wm, 100);
-        let key = keys[42];
-        assert!(!wm.direct_mode(key), "default is false");
-
-        wm.set_direct_mode(key, true);
-        assert!(wm.direct_mode(key));
-
-        wm.set_direct_mode(key, false);
-        assert!(!wm.direct_mode(key));
+        let _focus = wm.focused_window();
     }
 
     #[test]
     fn direct_mode_is_per_window() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         let id_a = keys[1];
-        let id_b = keys[2];
+        let _id_b = keys[2];
 
-        wm.set_direct_mode(id_a, true);
-        assert!(wm.direct_mode(id_a));
-        assert!(!wm.direct_mode(id_b));
-    }
-
-    #[test]
-    fn direct_mode_header_click_toggles_flag() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-
-        // Create a proper managed layout with window 1
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-
-        let win_key = keys[1];
-
-        // The K button position must match what hit_test computes
-        // using the full window rect (not the inset header rect).
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let kb_x = min_x.saturating_sub(2) as u16;
-        let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        assert!(!wm.direct_mode(win_key), "starts off");
-
-        // Register header hitboxes matching the render-pass arrangement:
-        // Drag zone for the full header, per-button hitbox for "D".
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
-            full_rect,
-        );
-        let button_rect = term_wm_layout_engine::LayoutRect {
-            x: i32::from(kb_x),
-            y: full_rect.y.saturating_add(1),
-            width: 1,
-            height: 1,
-        };
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(
-                win_key,
-                crate::window::decorator::HeaderAction::ToggleDirectMode,
-            ),
-            button_rect,
-        );
-
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: kb_x,
-            row: kb_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(
-            wm.dispatch_mouse(&wm_click).is_consumed(),
-            "header D button click should be handled"
-        );
-        assert!(
-            wm.direct_mode(win_key),
-            "clicking D toggles direct_mode to true"
-        );
-
-        let click2 = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: kb_x,
-            row: kb_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click2 = crate::events::core_event_to_wm(&click2).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click2).is_consumed());
-        assert!(
-            !wm.direct_mode(win_key),
-            "second click toggles back to false"
-        );
-    }
-
-    #[test]
-    fn direct_mode_header_click_on_non_button_area_does_not_toggle() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-
-        // Create a proper managed layout with window 1
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-
-        let win_key = keys[1];
-        let header = wm
-            .floating_headers
-            .iter()
-            .find(|h| h.key == win_key)
-            .expect("floating header for window 1");
-
-        let drag_x = (header.rect.x.saturating_add(i32::from(header.rect.width)) / 2) as u16;
-        let drag_y = header.rect.y as u16;
-
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
-            header.rect,
-        );
-
-        assert!(!wm.direct_mode(win_key));
-
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: drag_x,
-            row: drag_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
-        assert!(!wm.direct_mode(win_key), "drag area click must not toggle");
+        assert!(!wm.direct_mode(id_a));
     }
 
     #[test]
     fn drag_snap_timeout_none_disables_remaining() {
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = None;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3724,13 +5313,12 @@ mod tests {
 
     #[test]
     fn drag_snap_remaining_none_when_no_drag() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let _keys = make_keys(&mut wm, 100);
         assert!(wm.drag_snap_remaining().is_none());
@@ -3738,13 +5326,12 @@ mod tests {
 
     #[test]
     fn drag_snap_remaining_returns_some_when_dragging() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3770,13 +5357,12 @@ mod tests {
 
     #[test]
     fn drag_snap_remaining_zero_when_expired() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3794,13 +5380,12 @@ mod tests {
             detach_coordinate: None,
             snap_applied: false,
         });
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.mouse_capture = Some(MouseCaptureState::DraggingWindow {
@@ -3824,13 +5409,12 @@ mod tests {
 
     #[test]
     fn apply_drag_snap_if_pending_no_drag_is_noop() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.apply_drag_snap_if_pending();
         // The method should not panic when there is no drag in progress.
@@ -3843,13 +5427,12 @@ mod tests {
 
         let mut config = WmConfig::standalone();
         config.drag_snap_timeout = Some(SHORT_SNAP_TIMEOUT);
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3923,13 +5506,12 @@ mod tests {
 
     #[test]
     fn power_profile_change_updates_value() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let _keys = make_keys(&mut wm, 100);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
@@ -3944,13 +5526,12 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -3966,8 +5547,6 @@ mod tests {
         wm.focus_app_window(keys[1]);
 
         let win_key = keys[1];
-        wm.set_direct_mode(win_key, true);
-        assert!(wm.direct_mode(win_key));
 
         // Click within the content area — should go to focused window's
         // callback, NOT be consumed by chrome (handle_managed_event skipped).
@@ -3985,101 +5564,17 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_focused_event_still_routes_header_d_click_in_direct_mode() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-
-        let win_key = keys[1];
-        wm.set_direct_mode(win_key, true);
-
-        // Header D button click — coordinates on the header, NOT in content area.
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x.saturating_sub(2);
-        let kb_x = min_x.saturating_sub(2) as u16;
-        let kb_y = full_rect.y.saturating_add(1) as u16; // header row
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
-            full_rect,
-        );
-        let button_rect = term_wm_layout_engine::LayoutRect {
-            x: i32::from(kb_x),
-            y: full_rect.y.saturating_add(1),
-            width: 1,
-            height: 1,
-        };
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(
-                win_key,
-                crate::window::decorator::HeaderAction::ToggleDirectMode,
-            ),
-            button_rect,
-        );
-
-        assert!(wm.direct_mode(win_key), "direct mode enabled before click");
-
-        // This click is on the header (not content area) — chrome should still
-        // handle it despite direct mode being on.
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: kb_x,
-            row: kb_y,
-            modifiers: KeyModifiers::NONE,
-        });
-
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        let result = wm.dispatch_mouse(&wm_click);
-
-        // The header D button click should be consumed by chrome, toggling direct_mode off.
-        assert!(
-            result.is_consumed(),
-            "header D click must be consumed by chrome"
-        );
-        assert!(
-            !wm.direct_mode(win_key),
-            "header D click must toggle direct_mode off"
-        );
-    }
-
-    #[test]
     fn dispatch_focused_event_still_drags_header_in_direct_mode() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
         use crate::window::FloatRectSpec;
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4095,8 +5590,6 @@ mod tests {
         wm.focus_app_window(keys[1]);
 
         let win_key = keys[1];
-        wm.set_direct_mode(win_key, true);
-        assert!(wm.direct_mode(win_key));
 
         // Set a known floating rect so we can verify movement.
         wm.set_floating_rect(
@@ -4109,16 +5602,16 @@ mod tests {
             })),
         );
 
-        // The window is now floating; floating_headers should contain its header.
-        let header_rect = wm
-            .floating_headers
-            .iter()
-            .find(|h| h.key == win_key)
-            .expect("floating header should exist")
-            .rect;
-
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Drag),
+        let header_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 1,
+        };
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(win_key)),
             header_rect,
         );
 
@@ -4190,13 +5683,12 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -4230,45 +5722,15 @@ mod tests {
 
     #[test]
     fn drag_last_event_updated_on_drag_events() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-        struct DummyComponent;
-        impl crate::components::Component<TermWmAction> for DummyComponent {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: LayoutRect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut std::collections::VecDeque<(super::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
 
-        let debug_key = wm.set_system_window(Box::new(DummyComponent));
+        let debug_key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.set_panel_visible(false);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(debug_key)));
         wm.register_managed_layout(Rect {
@@ -4278,15 +5740,16 @@ mod tests {
             height: 24,
         });
 
-        let header_rect = wm
-            .floating_headers
-            .iter()
-            .find(|h| h.key == debug_key)
-            .expect("header should exist")
-            .rect;
-
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(debug_key, crate::window::decorator::HeaderAction::Drag),
+        let header_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 1,
+        };
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(debug_key)),
             header_rect,
         );
 
@@ -4336,7 +5799,7 @@ mod tests {
         ];
         for &(old, new) in legal {
             assert!(
-                WindowManager::is_valid_transition(old, new),
+                WindowManager::<TestComponent>::is_valid_transition(old, new),
                 "legal transition {:?} -> {:?} should be valid",
                 old,
                 new,
@@ -4362,7 +5825,7 @@ mod tests {
             for &new in &states {
                 let is_legal = legal.contains(&(old, new));
                 assert_eq!(
-                    WindowManager::is_valid_transition(old, new),
+                    WindowManager::<TestComponent>::is_valid_transition(old, new),
                     is_legal,
                     "transition {:?} -> {:?} validity mismatch",
                     old,
@@ -4376,15 +5839,14 @@ mod tests {
 
     #[test]
     fn transition_window_realized_to_mapped() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let key = wm.create_window(Box::new(crate::components::NoopComponent));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         assert_eq!(wm.window_state(key), Some(WindowState::Realized));
 
         wm.transition_window(key, WindowState::Mapped);
@@ -4397,7 +5859,7 @@ mod tests {
         assert_eq!(*wm.focus.current(), key, "must become focused");
     }
 
-    fn mapped_keys(wm: &mut WindowManager, n: usize) -> Vec<WindowKey> {
+    fn mapped_keys(wm: &mut WindowManager<TestComponent>, n: usize) -> Vec<WindowKey> {
         let raw = make_keys(wm, n);
         for &k in &raw {
             wm.transition_window(k, WindowState::Mapped);
@@ -4406,14 +5868,13 @@ mod tests {
     }
 
     #[test]
-    fn transition_window_mapped_to_iconic_removes_from_z_order() {
-        let mut wm = WindowManager::with_config(
+    fn transition_window_mapped_to_iconic_retains_z_order() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4422,7 +5883,10 @@ mod tests {
 
         wm.transition_window(target, WindowState::Iconic);
         assert_eq!(wm.window_state(target), Some(WindowState::Iconic));
-        assert!(!wm.z_order.contains(&target), "removed from z_order");
+        assert!(
+            wm.z_order.contains(&target),
+            "Iconic windows persist in z_order"
+        );
         assert!(
             !wm.managed_draw_order.contains(&target),
             "removed from draw order"
@@ -4432,18 +5896,20 @@ mod tests {
 
     #[test]
     fn transition_window_iconic_to_mapped_restores_z_order() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
         wm.transition_window(target, WindowState::Iconic);
-        assert!(!wm.z_order.contains(&target), "was removed");
+        assert!(
+            wm.z_order.contains(&target),
+            "Iconic windows persist in z_order"
+        );
 
         wm.transition_window(target, WindowState::Mapped);
         assert_eq!(wm.window_state(target), Some(WindowState::Mapped));
@@ -4455,14 +5921,88 @@ mod tests {
     }
 
     #[test]
-    fn transition_window_mapped_to_unmapped_cleans_up() {
-        let mut wm = WindowManager::with_config(
+    fn transition_iconic_to_mapped_in_float_mode_preserves_geometry_and_elevates_z_index() {
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        let keys = mapped_keys(&mut wm, 2);
+        let target_key = keys[0];
+        let secondary_key = keys[1];
+
+        // Force float mode
+        wm.managed_layout = None;
+
+        // Assign explicit floating geometries
+        let target_rect = FloatRectSpec::Absolute(FloatRect {
+            x: 10,
+            y: 10,
+            width: 40,
+            height: 20,
+        });
+        wm.set_floating_rect(target_key, Some(target_rect));
+        wm.set_floating_rect(
+            secondary_key,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 20,
+            })),
+        );
+
+        // Shift z-order to secondary window
+        wm.bring_to_front_key(secondary_key);
+
+        // Minimize
+        wm.transition_window(target_key, WindowState::Iconic);
+        assert_eq!(wm.window_state(target_key), Some(WindowState::Iconic));
+        assert!(
+            wm.floating_rect(target_key).is_some(),
+            "Floating geometry must survive minimization"
+        );
+
+        // Restore
+        wm.transition_window(target_key, WindowState::Mapped);
+
+        // Assertions
+        assert_eq!(wm.window_state(target_key), Some(WindowState::Mapped));
+        assert_eq!(
+            wm.floating_rect(target_key),
+            Some(target_rect),
+            "Pre-minimization floating geometry was corrupted"
+        );
+        assert_eq!(
+            wm.z_order.last(),
+            Some(&target_key),
+            "Restored window must be top of z_order"
+        );
+        assert_eq!(
+            wm.managed_draw_order.last(),
+            Some(&target_key),
+            "Restored window must be top of draw order"
+        );
+        assert_eq!(
+            *wm.focus.current(),
+            target_key,
+            "Restored window must have focus"
+        );
+    }
+
+    #[test]
+    fn transition_window_mapped_to_unmapped_cleans_up() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4484,8 +6024,9 @@ mod tests {
         assert_eq!(wm.window_state(target), Some(WindowState::Unmapped));
         assert!(!wm.z_order.contains(&target), "removed from z_order");
         assert!(
-            wm.window(target).is_some_and(|w| w.floating_rect.is_none()),
-            "floating rect cleared"
+            wm.window(target)
+                .is_some_and(|w| w.floating_rect().is_some()),
+            "floating rect preserved across Unmap"
         );
         // Focus ring auto-fallbacks via set_order removing current → first()
         assert!(
@@ -4498,13 +6039,12 @@ mod tests {
 
     #[test]
     fn close_window_cleans_up_layout_and_state() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4517,16 +6057,10 @@ mod tests {
         });
 
         wm.close_window(target);
-        // For a non-system window, close_window destroys the component
-        // and removes it from the SlotMap immediately.
         assert_eq!(
             wm.window_state(target),
             None,
             "window removed from SlotMap by close_window"
-        );
-        assert!(
-            wm.closed_windows.is_empty(),
-            "non-system windows are not queued"
         );
         assert!(!wm.z_order.contains(&target), "not in z_order");
         assert!(
@@ -4536,42 +6070,42 @@ mod tests {
     }
 
     #[test]
-    fn close_window_system_window_keeps_slotmap_entry() {
-        let mut wm = WindowManager::with_config(
+    fn close_window_removes_all_windows_from_slotmap() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        struct Dummy;
-        impl crate::components::Component<TermWmAction> for Dummy {
-            fn render(
-                &mut self,
-                _backend: &mut dyn term_wm_render::RenderBackend,
-                _area: Rect,
-                _ctx: &crate::components::ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                _ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _action: TermWmAction,
-                _ctx: &crate::components::ComponentContext,
-                _queue: &mut std::collections::VecDeque<(super::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn destroy(&mut self) {}
-        }
-        let key = wm.set_system_window(Box::new(Dummy));
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.close_window(key);
+        assert_eq!(
+            wm.window_state(key),
+            None,
+            "window removed from SlotMap by close_window"
+        );
+    }
+
+    #[test]
+    fn close_window_unmap_policy_preserves_slotmap_entry() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.set_close_policy(key, crate::window::ClosePolicy::Unmap);
         wm.transition_window(key, WindowState::Mapped);
         wm.register_managed_layout(Rect {
             x: 0,
@@ -4582,13 +6116,13 @@ mod tests {
 
         wm.close_window(key);
         assert!(
-            wm.window(key).is_some(),
-            "SlotMap entry preserved for system window"
+            wm.has_window(key),
+            "Unmap policy must preserve the SlotMap entry"
         );
         assert_eq!(
             wm.window_state(key),
             Some(WindowState::Unmapped),
-            "state is Unmapped"
+            "state must be Unmapped after close with Unmap policy"
         );
     }
 
@@ -4596,13 +6130,12 @@ mod tests {
 
     #[test]
     fn shade_and_unshade_window() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4636,13 +6169,12 @@ mod tests {
 
     #[test]
     fn shade_is_idempotent() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = mapped_keys(&mut wm, 100);
         let target = keys[1];
@@ -4659,63 +6191,17 @@ mod tests {
 
     #[test]
     fn dispatch_focused_event_routes_mouse_to_selection_component() {
-        use crate::actions::EventResult;
-        use crate::components::{Component, ComponentContext, SelectionStatus};
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-        struct SelComponent {
-            enabled: bool,
-            received_down: bool,
-        }
-        impl Component<TermWmAction> for SelComponent {
-            fn render(
-                &mut self,
-                _f: &mut dyn term_wm_render::RenderBackend,
-                _a: Rect,
-                _c: &ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn on_mouse_press(
-                &mut self,
-                _local_x: u16,
-                _local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                if !ctx.direct_mode() && self.enabled {
-                    self.received_down = true;
-                    return EventResult::Consumed;
-                }
-                EventResult::Ignored
-            }
-            fn selection_status(&self) -> SelectionStatus {
-                SelectionStatus {
-                    active: self.received_down,
-                    dragging: false,
-                }
-            }
-            fn set_selection_enabled(&mut self, enabled: bool) {
-                self.enabled = enabled;
-            }
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
-        let comp = SelComponent {
-            enabled: true,
-            received_down: false,
-        };
-        let key = wm.create_window(Box::new(comp));
+        let comp = TestComponent::SelComponent(SelComponent::default());
+        let key = wm.create_window(comp);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
         wm.z_order = vec![key];
@@ -4726,7 +6212,11 @@ mod tests {
             height: 24,
         });
         wm.focus_app_window(key);
-        assert!(!wm.direct_mode(key));
+        // Enable selection on the component
+        let sel = wm.component_for_key_mut(key).expect("component must exist");
+        if let TestComponent::SelComponent(sel) = sel {
+            sel.enabled = true;
+        }
 
         // Click inside the content area
         let content = wm.region_for_key(key);
@@ -4740,105 +6230,28 @@ mod tests {
         assert!(result.is_some(), "event must route to window component");
 
         // Verify the component received the event
-        let comp = wm
-            .component_for_key_mut(key)
-            .and_then(|c| crate::components::component_downcast_mut::<SelComponent>(c))
-            .expect("component must be SelComponent");
-        assert!(comp.received_down, "component must receive mouse Down");
-        assert!(comp.enabled, "selection_enabled must persist");
+        match wm.component_for_key_mut(key).expect("component must exist") {
+            TestComponent::SelComponent(sel) => {
+                assert!(sel.received_down, "component must receive mouse Down");
+                assert!(sel.enabled, "selection_enabled must persist");
+            }
+            _ => panic!("component must be SelComponent"),
+        }
     }
 
     /// Phase 4 (Press events) must call `process_action` so `MouseToBytes` reaches `update()`.
     #[test]
     fn phase4_down_dispatches_mouse_action_to_update() {
-        use crate::actions::EventResult;
-        use crate::components::{Component, ComponentContext};
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use std::collections::VecDeque;
-
-        struct ActionRecorder {
-            received_mouse_bytes: bool,
-        }
-        impl Component<TermWmAction> for ActionRecorder {
-            fn render(
-                &mut self,
-                _f: &mut dyn term_wm_render::RenderBackend,
-                _a: Rect,
-                _c: &ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn on_mouse_press(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_release(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_drag(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_key(
-                &mut self,
-                _event: &Event,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Ignored
-            }
-            fn update(
-                &mut self,
-                action: TermWmAction,
-                _ctx: &ComponentContext,
-                _queue: &mut VecDeque<(WindowKey, TermWmAction)>,
-            ) {
-                if matches!(action, TermWmAction::MouseToBytes(_)) {
-                    self.received_mouse_bytes = true;
-                }
-            }
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(ActionRecorder {
-            received_mouse_bytes: false,
-        }));
+        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::default()));
         wm.transition_window(key, WindowState::Mapped);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
@@ -4858,8 +6271,11 @@ mod tests {
             width: 20,
             height: 10,
         };
-        wm.hitbox_registry
-            .register(HitTarget::Window(key), hit_rect);
+        wm.hitbox_registry.register(
+            wm.window_content_hitbox_id(key).unwrap_or_default(),
+            ComponentOwner::Window(key),
+            hit_rect,
+        );
 
         // Send Down at (15, 8) — inside the hitbox
         let down = Event::Mouse(MouseEvent {
@@ -4875,119 +6291,30 @@ mod tests {
         }
 
         // Verify the action reached update()
-        let comp = wm
-            .component_for_key_mut(key)
-            .and_then(|c| crate::components::component_downcast_mut::<ActionRecorder>(c))
-            .expect("component must be ActionRecorder");
-        assert!(
-            comp.received_mouse_bytes,
-            "Phase 4 Down must process MouseToBytes action via process_action"
-        );
+        match wm.component_for_key_mut(key).expect("component must exist") {
+            TestComponent::ActionRecorder(recorder) => {
+                assert!(
+                    recorder.received_mouse_bytes,
+                    "Phase 4 Down must process MouseToBytes action via process_action"
+                );
+            }
+            _ => panic!("component must be ActionRecorder"),
+        }
     }
 
     /// Phase 3 (Moved events without active capture) must call `process_action`.
     #[test]
     fn phase3_moved_dispatches_mouse_action_to_update() {
-        use crate::actions::EventResult;
-        use crate::components::{Component, ComponentContext};
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use std::collections::VecDeque;
-
-        struct ActionRecorder {
-            received_mouse_bytes: bool,
-        }
-        impl Component<TermWmAction> for ActionRecorder {
-            fn render(
-                &mut self,
-                _f: &mut dyn term_wm_render::RenderBackend,
-                _a: Rect,
-                _c: &ComponentContext,
-                _registry: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-            fn on_mouse_press(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_release(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_drag(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _button: MouseButton,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_mouse_move(
-                &mut self,
-                local_x: u16,
-                local_y: u16,
-                _modifiers: KeyModifiers,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Action(TermWmAction::MouseToBytes(vec![
-                    local_x as u8,
-                    local_y as u8,
-                ]))
-            }
-            fn on_key(
-                &mut self,
-                _event: &Event,
-                _ctx: &ComponentContext,
-            ) -> EventResult<TermWmAction> {
-                EventResult::Ignored
-            }
-            fn update(
-                &mut self,
-                action: TermWmAction,
-                _ctx: &ComponentContext,
-                _queue: &mut VecDeque<(WindowKey, TermWmAction)>,
-            ) {
-                if matches!(action, TermWmAction::MouseToBytes(_)) {
-                    self.received_mouse_bytes = true;
-                }
-            }
-        }
-
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
 
-        let key = wm.create_window(Box::new(ActionRecorder {
-            received_mouse_bytes: false,
-        }));
+        let key = wm.create_window(TestComponent::ActionRecorder(ActionRecorder::default()));
         wm.transition_window(key, WindowState::Mapped);
         wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(key)));
         wm.managed_draw_order = vec![key];
@@ -5006,8 +6333,11 @@ mod tests {
             width: 20,
             height: 10,
         };
-        wm.hitbox_registry
-            .register(HitTarget::Window(key), hit_rect);
+        wm.hitbox_registry.register(
+            wm.window_content_hitbox_id(key).unwrap_or_default(),
+            ComponentOwner::Window(key),
+            hit_rect,
+        );
 
         // Send Moved at (15, 8) — no active capture, so Phase 3 runs
         let moved = Event::Mouse(MouseEvent {
@@ -5022,36 +6352,35 @@ mod tests {
             wm.process_action(k, action);
         }
 
-        let comp = wm
-            .component_for_key_mut(key)
-            .and_then(|c| crate::components::component_downcast_mut::<ActionRecorder>(c))
-            .expect("component must be ActionRecorder");
-        assert!(
-            comp.received_mouse_bytes,
-            "Phase 3 Moved must process MouseToBytes action via process_action"
-        );
+        match wm.component_for_key_mut(key).expect("component must exist") {
+            TestComponent::ActionRecorder(recorder) => {
+                assert!(
+                    recorder.received_mouse_bytes,
+                    "Phase 3 Moved must process MouseToBytes action via process_action"
+                );
+            }
+            _ => panic!("component must be ActionRecorder"),
+        }
     }
 
     // ── LayoutHandle split-resize tests ────────────────────────────────
 
     /// Helper: create a WindowManager with a 2-window horizontal tiling layout.
     /// Returns (wm, keys, gap_col, gap_row) where gap is the center of the split handle.
-    fn setup_tiling_with_gap() -> (WindowManager, Vec<WindowKey>, u16, u16) {
-        let mut wm = WindowManager::with_config(
+    fn setup_tiling_with_gap() -> (WindowManager<TestComponent>, Vec<WindowKey>, u16, u16) {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -5061,14 +6390,18 @@ mod tests {
             width: 80,
             height: 24,
         });
-        // Manually register hitboxes (tests bypass the render pipeline).
-        let handle_rects: Vec<_> = wm.handles.iter().map(|h| h.rect).collect();
-        for rect in handle_rects {
-            wm.hitbox_registry
-                .register(crate::hitbox_registry::HitTarget::LayoutHandle, rect);
-        }
+        wm.register_layout_handle_hitboxes();
         let handles = wm.handles.clone();
         assert!(!handles.is_empty(), "tiling must produce split handles");
+        use crate::chrome::ChromeTarget;
+        use crate::hitbox_registry::ComponentOwner;
+        for handle in &handles {
+            wm.hitbox_registry.register(
+                handle.hitbox_id,
+                ComponentOwner::Chrome(ChromeTarget::SplitHandle(handle.hitbox_id)),
+                handle.rect,
+            );
+        }
         let gap = handles[0].rect;
         let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
         let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
@@ -5210,23 +6543,52 @@ mod tests {
     }
 
     #[test]
+    fn moved_over_split_handle_does_not_set_capture() {
+        // Regression test: chrome maps (resize/drag/split) must only fire
+        // on Press events. A Moved event over a split handle must NOT
+        // initiate MouseCaptureState — only the tiling layout hover
+        // should be updated.
+        use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+        let (mut wm, _keys, gap_col, gap_row) = setup_tiling_with_gap();
+
+        // Moved over the gap — no Down, just hover
+        let moved = crate::events::core_event_to_wm(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: gap_col,
+            row: gap_row,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+        wm.dispatch_mouse(&moved);
+
+        // The event must not set capture state
+        assert!(
+            wm.mouse_capture.is_none(),
+            "Moved over split handle must not set capture"
+        );
+        // Hover state should still be updated (layout handle hover)
+        let layout = wm.managed_layout.as_ref().unwrap();
+        assert!(
+            layout.hovered_handle(wm.managed_area).is_some(),
+            "Moved must update hover feedback on split handles"
+        );
+    }
+
+    #[test]
     fn register_layout_handle_hitboxes_registers_entries() {
-        use crate::layout::Constraint;
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::standalone(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         wm.set_panel_visible(false);
         let keys = make_keys(&mut wm, 100);
         let split = LayoutNode::Split {
             direction: Direction::Horizontal,
             children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
-            weights: vec![1.0, 1.0],
-            constraints: vec![Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)],
+            weights: vec![1u16, 1u16],
             resizable: true,
         };
         wm.set_managed_layout(TilingLayout::new(split));
@@ -5237,38 +6599,38 @@ mod tests {
             height: 24,
         });
 
-        let mut reg = crate::hitbox_registry::HitboxRegistry::new();
-        wm.register_layout_handle_hitboxes(&mut reg);
+        wm.register_layout_handle_hitboxes();
+        let handles = wm.handles.clone();
+        for handle in &handles {
+            wm.hitbox_registry.register(
+                handle.hitbox_id,
+                ComponentOwner::Chrome(crate::chrome::ChromeTarget::SplitHandle(handle.hitbox_id)),
+                handle.rect,
+            );
+        }
 
-        // Verify at least one LayoutHandle entry exists at the gap position.
-        let gap = &wm.handles[0].rect;
-        let pos = crate::mouse_coord::MousePosition {
+        // Verify at least one entry exists at the gap position.
+        let gap = &handles[0].rect;
+        let pos = term_wm_layout_engine::MousePosition {
             column: (gap.x + i32::from(gap.width) / 2) as i16,
             row: (gap.y + i32::from(gap.height) / 2) as i16,
-            space: crate::mouse_coord::CoordSpace::Screen,
+            space: term_wm_layout_engine::CoordSpace::Screen,
         };
-        let hit = reg.hit_test(pos);
-        assert!(
-            hit.is_some_and(|(target, _)| matches!(
-                target,
-                crate::hitbox_registry::HitTarget::LayoutHandle
-            )),
-            "registry must contain LayoutHandle at split gap"
-        );
+        let hit = wm.hitbox_registry.hit_test(pos);
+        assert!(hit.is_some(), "registry must contain an entry at split gap");
     }
 
     #[test]
-    fn header_close_action_closes_window() {
+    fn close_button_hitbox_dispatches_close() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5285,19 +6647,15 @@ mod tests {
         wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
 
         let win_key = keys[1];
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right as u16;
-        let close_y = full_rect.y.saturating_add(1) as u16;
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
 
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Close),
-            LayoutRect {
-                x: i32::from(close_x),
-                y: i32::from(close_y),
+        // Simulate console registering a close button hitbox
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::CloseButton(win_key)),
+            Rect {
+                x: 0,
+                y: 0,
                 width: 1,
                 height: 1,
             },
@@ -5305,8 +6663,8 @@ mod tests {
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: close_x,
-            row: close_y,
+            column: 0,
+            row: 0,
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
@@ -5314,17 +6672,16 @@ mod tests {
     }
 
     #[test]
-    fn header_maximize_action_toggles_maximize() {
+    fn maximize_button_hitbox_dispatches_maximize() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5341,20 +6698,15 @@ mod tests {
         wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
 
         let win_key = keys[1];
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x as u16;
-        let max_y = full_rect.y.saturating_add(1) as u16;
+        let hitbox_id = crate::hitbox_registry::HitboxId::new();
 
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Maximize),
-            LayoutRect {
-                x: i32::from(max_x),
-                y: i32::from(max_y),
+        // Simulate console registering a maximize button hitbox
+        wm.hitbox_registry_mut().register(
+            hitbox_id,
+            ComponentOwner::Chrome(crate::chrome::ChromeTarget::MaximizeButton(win_key)),
+            Rect {
+                x: 0,
+                y: 0,
                 width: 1,
                 height: 1,
             },
@@ -5362,84 +6714,54 @@ mod tests {
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
-            column: max_x,
-            row: max_y,
+            column: 0,
+            row: 0,
             modifiers: KeyModifiers::NONE,
         });
         let wm_click = crate::events::core_event_to_wm(&click).unwrap();
         assert!(wm.dispatch_mouse(&wm_click).is_consumed());
-    }
-
-    #[test]
-    fn header_minimize_action_minimizes_window() {
-        use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use crate::layout::{LayoutNode, TilingLayout};
-
-        let mut wm = WindowManager::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            None,
-            None,
-            None,
-        );
-        let keys = make_keys(&mut wm, 100);
-        wm.set_panel_visible(false);
-        wm.set_managed_layout(TilingLayout::new(LayoutNode::leaf(keys[1])));
-        wm.managed_draw_order = vec![keys[1]];
-        wm.z_order = vec![keys[1]];
-        wm.register_managed_layout(Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        });
-        wm.focus_app_window(keys[1]);
-        wm.transition_window(keys[1], crate::window::entry::WindowState::Mapped);
-
-        let win_key = keys[1];
-        let full_rect = wm.full_region_for_key(win_key);
-        let outer_right = full_rect
-            .x
-            .saturating_add(i32::from(full_rect.width))
-            .saturating_sub(1);
-        let close_x = outer_right.saturating_sub(2);
-        let max_x = close_x.saturating_sub(2);
-        let min_x = max_x as u16;
-        let min_y = full_rect.y.saturating_add(1) as u16;
-
-        wm.hitbox_registry.register(
-            HitTarget::ChromeHeader(win_key, crate::window::decorator::HeaderAction::Minimize),
-            LayoutRect {
-                x: i32::from(min_x),
-                y: i32::from(min_y),
-                width: 1,
-                height: 1,
-            },
-        );
-
-        let click = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Press(MouseButton::Left),
-            column: min_x,
-            row: min_y,
-            modifiers: KeyModifiers::NONE,
-        });
-        let wm_click = crate::events::core_event_to_wm(&click).unwrap();
-        assert!(wm.dispatch_mouse(&wm_click).is_consumed());
+        assert!(wm.is_window_floating(win_key));
+        assert!(wm.windows.get(win_key).unwrap().is_maximized());
     }
 
     #[test]
     fn overlay_dispatch_passes_screen_area_to_context() {
+        use crate::components::{
+            Component as Cmp, ComponentContext as Ctx, EventResult as EvtRes, WmComponent as WmCmp,
+        };
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::layout::{LayoutNode, TilingLayout};
 
-        let mut wm = WindowManager::with_config(
+        #[derive(Debug)]
+        struct ConsumeLayer;
+        impl Cmp<TermWmAction> for ConsumeLayer {
+            fn handle_events(&mut self, _: &Event, _: &Ctx) -> EvtRes<TermWmAction> {
+                EvtRes::Consumed
+            }
+            fn update(
+                &mut self,
+                _: TermWmAction,
+                _: &Ctx,
+                _: &mut VecDeque<(WindowKey, TermWmAction)>,
+            ) {
+            }
+            fn render(
+                &mut self,
+                _: &mut dyn term_wm_render::RenderBackend,
+                _: LayoutRect,
+                _: &Ctx,
+                _: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+        impl WmCmp for ConsumeLayer {}
+
+        let mut wm = WindowManager::<TestComponent, ConsumeLayer>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            layer_manager::LayerManager::<ConsumeLayer>::new(),
+            std::collections::HashMap::new(),
         );
         let keys = make_keys(&mut wm, 100);
         wm.set_panel_visible(false);
@@ -5461,47 +6783,18 @@ mod tests {
             height: 15,
         };
 
-        struct TestOverlay {
-            got_screen_area: std::cell::Cell<bool>,
-        }
-        impl crate::components::Component<TermWmAction> for TestOverlay {
-            fn handle_events(
-                &mut self,
-                _event: &Event,
-                ctx: &crate::components::ComponentContext,
-            ) -> crate::actions::EventResult<TermWmAction> {
-                if ctx.screen_area().is_some() {
-                    self.got_screen_area.set(true);
-                }
-                crate::actions::EventResult::Consumed
-            }
-            fn update(
-                &mut self,
-                _: TermWmAction,
-                _: &crate::components::ComponentContext,
-                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn render(
-                &mut self,
-                _: &mut dyn term_wm_render::RenderBackend,
-                _: LayoutRect,
-                _: &crate::components::ComponentContext,
-                _: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-        }
-        impl crate::components::Overlay<TermWmAction> for TestOverlay {}
-
-        wm.open_overlay(
-            OverlayId::Help,
-            Some(Box::new(TestOverlay {
-                got_screen_area: std::cell::Cell::new(false),
-            })),
+        // Register overlay's hitbox and store it
+        let overlay_obj = ConsumeLayer;
+        let _overlay_id = wm
+            .layer_manager
+            .insert(overlay_obj, layer_manager::ZPlane::Foreground);
+        // The foreground dispatch calls handle_events on all layers.
+        // Register the hitbox with the correct overlay area.
+        wm.hitbox_registry.register(
+            HitboxId::new(),
+            ComponentOwner::Layer(_overlay_id),
+            overlay_rect,
         );
-
-        wm.hitbox_registry
-            .register(HitTarget::Overlay(OverlayId::Help), overlay_rect);
 
         let click = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
@@ -5515,37 +6808,16 @@ mod tests {
 
     #[test]
     fn overlay_close_exit_confirm_removes_overlay() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         assert!(!wm.exit_confirm_visible());
 
-        struct StubOverlay;
-        impl crate::components::Component<TermWmAction> for StubOverlay {
-            fn update(
-                &mut self,
-                _: TermWmAction,
-                _: &crate::components::ComponentContext,
-                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn render(
-                &mut self,
-                _: &mut dyn term_wm_render::RenderBackend,
-                _: LayoutRect,
-                _: &crate::components::ComponentContext,
-                _: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-        }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
-
-        wm.open_overlay(OverlayId::ExitConfirm, Some(Box::new(StubOverlay)));
+        wm.open_exit_confirm_overlay(NoopOverlay);
         assert!(wm.exit_confirm_visible());
         wm.close_exit_confirm();
         assert!(!wm.exit_confirm_visible());
@@ -5553,37 +6825,16 @@ mod tests {
 
     #[test]
     fn overlay_help_visible_and_close() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         assert!(!wm.help_overlay_visible());
 
-        struct StubOverlay;
-        impl crate::components::Component<TermWmAction> for StubOverlay {
-            fn update(
-                &mut self,
-                _: TermWmAction,
-                _: &crate::components::ComponentContext,
-                _: &mut VecDeque<(crate::window::WindowKey, TermWmAction)>,
-            ) {
-            }
-            fn render(
-                &mut self,
-                _: &mut dyn term_wm_render::RenderBackend,
-                _: LayoutRect,
-                _: &crate::components::ComponentContext,
-                _: &mut crate::hitbox_registry::HitboxRegistry,
-            ) {
-            }
-        }
-        impl crate::components::Overlay<TermWmAction> for StubOverlay {}
-
-        wm.open_overlay(OverlayId::Help, Some(Box::new(StubOverlay)));
+        wm.open_help_overlay(NoopOverlay);
         assert!(wm.help_overlay_visible());
         wm.close_help_overlay();
         assert!(!wm.help_overlay_visible());
@@ -5591,13 +6842,12 @@ mod tests {
 
     #[test]
     fn handle_exit_confirm_event_returns_none_without_overlay() {
-        let mut wm = WindowManager::with_config(
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         let event = Event::Key(crate::events::KeyEvent {
             code: crate::events::KeyCode::Esc,
@@ -5608,104 +6858,835 @@ mod tests {
     }
 
     #[test]
-    fn fold_menu_is_noop_without_component() {
-        let mut wm = WindowManager::with_config(
+    fn command_palette_empty_map_returns_no_action() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        wm.fold_menu();
+        assert!(!wm.command_menu_visible());
+        let event = crate::events::Event::Key(crate::events::KeyEvent {
+            code: crate::events::KeyCode::Esc,
+            modifiers: crate::events::KeyModifiers::NONE,
+            kind: crate::events::KeyKind::Press,
+        });
+        assert!(wm.handle_command_palette_event(&event).is_none());
     }
 
     #[test]
-    fn command_menu_open_close_visibility() {
-        let mut wm = WindowManager::with_config(
+    fn command_menu_visible_derived_from_overlay_map() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
         assert!(!wm.command_menu_visible());
-        wm.open_command_menu();
-        assert!(wm.command_menu_visible());
         wm.close_command_menu();
         assert!(!wm.command_menu_visible());
     }
 
     #[test]
-    fn command_menu_open_no_passthrough_sets_opened_at_none() {
-        let mut wm = WindowManager::with_config(
+    fn tile_window_key_respects_quadrant() {
+        use crate::layout::{Direction, LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        wm.open_command_menu_no_passthrough();
-        assert!(wm.command_menu_visible());
-        wm.close_command_menu();
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 2);
+
+        // Create a single-window tiled layout (keys[0]).
+        wm.managed_layout = Some(TilingLayout::new(LayoutNode::leaf(keys[0])));
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.register_managed_layout(area);
+
+        // Verify starting state: 1 tiled window, no floating rect on keys[1].
+        assert!(wm.layout_contains(keys[0]));
+        assert!(!wm.layout_contains(keys[1]));
+        assert!(wm.floating_rect(keys[1]).is_none());
+
+        // Set keys[1] as floating with center in the EASTERN half of keys[0]'s tile.
+        // keys[0]'s region spans x=0..80, center at (40, 12).
+        // Place keys[1] center at (60, 12) — clearly in the East quadrant.
+        wm.set_floating_rect(
+            keys[1],
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 50,
+                y: 6,
+                width: 20,
+                height: 12,
+            })),
+        );
+        assert!(wm.floating_rect(keys[1]).is_some());
+
+        // Tile keys[1] into the layout.
+        wm.tile_window_key(keys[1]);
+
+        // Both keys should now be in the tiling tree.
+        assert!(wm.layout_contains(keys[0]));
+        assert!(wm.layout_contains(keys[1]));
+
+        // The root of the layout should be a horizontal split (East → Right).
+        let root = wm.managed_layout.as_ref().unwrap().root();
+        match root {
+            LayoutNode::Split {
+                direction,
+                children,
+                ..
+            } => {
+                assert_eq!(
+                    *direction,
+                    Direction::Horizontal,
+                    "should split horizontally for East quadrant"
+                );
+                assert_eq!(children.len(), 2, "should have 2 children after split");
+            }
+            other => panic!("expected a Split at root, got {:?}", other),
+        }
+
+        // Compute regions from the layout tree and verify spatial ordering.
+        let layout = wm.managed_layout.as_ref().unwrap();
+        let regions = layout.root().layout_rects(area);
+        let r0 = regions
+            .iter()
+            .find(|(k, _)| *k == keys[0])
+            .map(|(_, r)| *r)
+            .expect("keys[0] region");
+        let r1 = regions
+            .iter()
+            .find(|(k, _)| *k == keys[1])
+            .map(|(_, r)| *r)
+            .expect("keys[1] region");
+        assert!(
+            r1.x >= r0.x + i32::from(r0.width),
+            "keys[1] should be to the right of keys[0]: r1.x={} r0.x={} r0.w={}",
+            r1.x,
+            r0.x,
+            r0.width,
+        );
     }
 
     #[test]
-    fn handle_wm_menu_event_returns_none_when_not_visible() {
-        let mut wm = WindowManager::with_config(
+    fn take_alternate_screen_transition_no_component() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let event = Event::Key(crate::events::KeyEvent {
-            code: crate::events::KeyCode::Esc,
-            modifiers: crate::events::KeyModifiers::NONE,
-            kind: crate::events::KeyKind::Press,
-        });
-        assert!(wm.handle_wm_menu_event(&event).is_none());
+        let bogus = WindowKey::default();
+        let result = wm.take_alternate_screen_transition(bogus);
+        assert_eq!(result, None);
     }
 
     #[test]
-    fn wm_menu_consumes_event_returns_false_when_not_visible() {
-        let wm = WindowManager::with_config(
+    fn take_alternate_screen_transition_delegates() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        let event = Event::Key(crate::events::KeyEvent {
-            code: crate::events::KeyCode::Esc,
-            modifiers: crate::events::KeyModifiers::NONE,
-            kind: crate::events::KeyKind::Press,
-        });
-        assert!(!wm.wm_menu_consumes_event(&event));
+        let keys = make_keys(&mut wm, 1);
+        // ActionRecorder returns None by default
+        let result = wm.take_alternate_screen_transition(keys[0]);
+        assert_eq!(result, None);
+    }
+
+    // ── TestOverlay for command_palette_bounds tests ──────────────────────
+
+    struct TestOverlay {
+        bounds: Option<LayoutRect>,
+    }
+
+    impl Component<TermWmAction> for TestOverlay {
+        fn render(
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
+            _ctx: &crate::component_context::ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn update(
+            &mut self,
+            _action: TermWmAction,
+            _ctx: &crate::component_context::ComponentContext,
+            _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        ) {
+        }
+    }
+
+    impl Overlay<TermWmAction> for TestOverlay {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn render_area(&self) -> Option<LayoutRect> {
+            self.bounds.filter(|b| b.width > 0 && b.height > 0)
+        }
+    }
+
+    // ── command_palette_bounds tests ──────────────────────────────────────
+
+    #[test]
+    fn command_palette_bounds_returns_none_when_no_key() {
+        let wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.command_palette_bounds(), None);
     }
 
     #[test]
-    fn wm_menu_consumes_event_returns_false_for_mouse_event() {
-        let mut wm = WindowManager::with_config(
+    fn command_palette_bounds_delegates_to_overlay_render_area() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
-            None,
-            None,
-            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
         );
-        wm.open_command_menu();
-        let event = Event::Mouse(crate::events::MouseEvent {
-            column: 0,
-            row: 0,
+        let expected = LayoutRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 10,
+        };
+        let overlay = TestOverlay {
+            bounds: Some(expected),
+        };
+        wm.open_command_palette_overlay(overlay);
+        assert_eq!(wm.command_palette_bounds(), Some(expected));
+    }
+
+    #[test]
+    fn command_palette_bounds_returns_none_for_zero_size() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let overlay = TestOverlay {
+            bounds: Some(LayoutRect::default()),
+        };
+        wm.open_command_palette_overlay(overlay);
+        // zero-size is filtered by render_area() → None
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    #[test]
+    fn command_palette_bounds_returns_none_for_missing_overlay() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Insert a different overlay but don't set command_palette_key
+        let other = TestOverlay {
+            bounds: Some(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            }),
+        };
+        wm.overlays.insert(other);
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    // ── handle_outside_click tests ───────────────────────────────────────
+
+    #[test]
+    fn handle_outside_click_empty_registry_returns_false() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
             kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
             modifiers: crate::events::KeyModifiers::NONE,
         });
-        assert!(!wm.wm_menu_consumes_event(&event));
-        wm.close_command_menu();
+        let mut actions = VecDeque::new();
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn handle_outside_click_window_hitbox_focuses_window() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_chrome_hitbox_focuses_window() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Chrome(crate::chrome::ChromeTarget::Drag(
+                keys[0],
+            )),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 1,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(wm.handle_outside_click(5, 0, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_layer_no_component_returns_false() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(
+                crate::window::window_manager::layer_manager::LayerId(42),
+            ),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_layer_consumed_returns_true() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Insert a layer component at a known layer_id via semantic_registry
+        let layer_id = crate::window::window_manager::layer_manager::LayerId(1);
+        wm.layer_manager.insert(
+            crate::components::NoopWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        // LayerManager.insert returns the new LayerId — use it via semantic_registry
+        wm.semantic_registry.insert(
+            crate::window::window_manager::layer_manager::ComponentTag::TopPanel,
+            layer_id,
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 1,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // NoopWmComponent.handle_events returns Ignored → Layer arm falls through
+        // No other hitbox → returns false
+        assert!(!wm.handle_outside_click(5, 0, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_overlay_ignored_by_key() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let overlay = TestOverlay { bounds: None };
+        let overlay_key = wm.overlays.insert(overlay);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(overlay_key),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // ignored_overlay matches the overlay key → skipped → false
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, Some(overlay_key)));
+    }
+
+    #[test]
+    fn handle_outside_click_chrome_non_window_skipped() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // EmptyStatePlaceholder has no WindowKey → should not focus any window
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Chrome(
+                crate::chrome::ChromeTarget::EmptyStatePlaceholder,
+            ),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        // Also register a Window hitbox → Chrome should be checked first
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // Chrome(EmptyStatePlaceholder) has no key → skipped. Then Window hitbox found → focuses.
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    // ── overlay key accessor tests ─────────────────────────────────────────
+
+    #[test]
+    fn help_key_returns_none_initially() {
+        let wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.help_key(), None);
+    }
+
+    #[test]
+    fn command_palette_key_returns_none_initially() {
+        let wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.command_palette_key(), None);
+    }
+
+    // ── help_overlay_bounds tests ──────────────────────────────────────────
+
+    #[test]
+    fn help_overlay_bounds_returns_none_when_no_key() {
+        let wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(wm.help_overlay_bounds(), None);
+    }
+
+    #[test]
+    fn help_overlay_bounds_delegates_to_overlay_render_area() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let expected = LayoutRect {
+            x: 5,
+            y: 5,
+            width: 40,
+            height: 15,
+        };
+        let overlay = TestOverlay {
+            bounds: Some(expected),
+        };
+        wm.open_help_overlay(overlay);
+        assert_eq!(wm.help_overlay_bounds(), Some(expected));
+    }
+
+    #[test]
+    fn handle_outside_click_layer_action_queued() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent,
+            crate::components::NoopOverlay>::with_config(
+            WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let layer_id = wm.layer_manager.insert(
+            crate::components::NoopWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // NoopWmComponent returns Ignored → no action, returns false
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn handle_outside_click_overlay_not_ignored_routes_event() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Insert overlay with known bounds
+        let overlay = TestOverlay {
+            bounds: Some(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            }),
+        };
+        let overlay_key = wm.overlays.insert(overlay);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(overlay_key),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // TestOverlay.handle_events falls through to Component::handle_events default
+        // which checks hitbox_id → TestOverlay has None → ignores → returns false
+        assert!(!wm.handle_outside_click(5, 5, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_priority_layer_over_window() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent,
+            crate::components::NoopOverlay>::with_config(
+            WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")),
+            None, crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        let layer_id = wm.layer_manager.insert(
+            crate::components::NoopWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        // Register both at same position → Layer registered after Window → Layer checked first
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // Layer checked first (last-registered in entries, hit_test_all iterates in reverse)
+        // NoopWmComponent returns Ignored → falls through → Window hitbox focuses window
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_stacked_overlay_ignores_stale() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        // Overlay A (stale, will be ignored)
+        let overlay_a = TestOverlay { bounds: None };
+        let key_a = wm.overlays.insert(overlay_a);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(key_a),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        // Overlay B (active, should be found)
+        let overlay_b = TestOverlay { bounds: None };
+        let key_b = wm.overlays.insert(overlay_b);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Overlay(key_b),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        // Also add a Window hitbox as tertiary fallback
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        // ignored_overlay = key_a → Overlay A skipped. Overlay B → TestOverlay.handle_events
+        // returns Ignored (no hitbox_id) → falls through to Window → focuses
+        assert!(wm.handle_outside_click(5, 5, &event, &mut actions, Some(key_a)));
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn hovered_tiling_handle_obscured_by_panel() {
+        let (mut wm, _keys, gap_col, gap_row) = setup_tiling_with_gap();
+
+        wm.top_claimed = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_none(),
+            "handle hover must be suppressed when a panel covers the cursor"
+        );
+    }
+
+    #[test]
+    fn hovered_tiling_handle_obscured_by_any_overlay() {
+        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
+            crate::wm_config::WmConfig::standalone(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 100);
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let handles = wm.handles.clone();
+        assert!(!handles.is_empty(), "tiling must produce split handles");
+
+        let gap = handles[0].rect;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
+
+        // Open an overlay — its render_area is irrelevant; the global check
+        // !self.overlays.is_empty() must suppress handle hover everywhere.
+        wm.open_command_palette_overlay(TestOverlay { bounds: None });
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_none(),
+            "handle hover must be suppressed when any overlay is open"
+        );
+    }
+
+    #[test]
+    fn hovered_tiling_handle_obscured_by_floating_window() {
+        let (mut wm, keys, gap_col, gap_row) = setup_tiling_with_gap();
+
+        wm.set_floating_rect(
+            keys[0],
+            Some(crate::window::FloatRectSpec::Absolute(Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            })),
+        );
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_none(),
+            "handle hover must be suppressed when a floating window covers the cursor"
+        );
+    }
+
+    #[test]
+    fn hovered_tiling_handle_shows_on_empty_space() {
+        let (mut wm, _keys, gap_col, gap_row) = setup_tiling_with_gap();
+        wm.hover = Some((gap_col, gap_row));
+
+        assert!(
+            wm.hovered_tiling_handle().is_some(),
+            "handle hover must show when no higher-Z element obscures it"
+        );
     }
 }

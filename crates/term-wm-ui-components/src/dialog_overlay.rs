@@ -5,7 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use term_wm_core::events::{Event, MouseEventKind};
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_rect};
+use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect};
 use ratatui::widgets::Widget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
@@ -33,7 +33,7 @@ impl Component<TermWmAction> for DialogOverlayComponent {
         _ctx: &ComponentContext,
         _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        let area = layout_rect_to_rect(area);
+        let area = layout_rect_to_clipped_rect(area);
         if !self.visible || area.width == 0 || area.height == 0 {
             return;
         }
@@ -69,7 +69,7 @@ impl Component<TermWmAction> for DialogOverlayComponent {
     ) -> EventResult<TermWmAction> {
         let screen_area = ctx
             .screen_area()
-            .map(layout_rect_to_rect)
+            .map(layout_rect_to_clipped_rect)
             .unwrap_or_default();
         if self.handle_click_outside(event, screen_area) {
             EventResult::Consumed
@@ -177,8 +177,8 @@ impl DialogOverlayComponent {
         area: LayoutRect,
         exclude: Option<LayoutRect>,
     ) {
-        let area = layout_rect_to_rect(area);
-        let exclude = exclude.map(layout_rect_to_rect);
+        let area = layout_rect_to_clipped_rect(area);
+        let exclude = exclude.map(layout_rect_to_clipped_rect);
         if !self.dim_backdrop || area.width == 0 || area.height == 0 {
             return;
         }
@@ -429,7 +429,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -461,7 +461,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -490,7 +490,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -521,7 +521,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -554,7 +554,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -582,7 +582,7 @@ mod tests {
             width: 80,
             height: 24,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,
@@ -609,7 +609,7 @@ mod tests {
             width: 2,
             height: 1,
         });
-        let mut backend = term_wm_console::RatatuiBackend::new(
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
             buffer,
             ratatui::prelude::Rect {
                 x: 0,

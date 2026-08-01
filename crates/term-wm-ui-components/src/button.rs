@@ -9,10 +9,10 @@ use term_wm_core::events::MouseButton;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 
-use crate::helpers::layout_rect_to_rect;
+use crate::helpers::layout_rect_to_clipped_rect;
 
 /// A clickable button rendered as styled borders + label.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ButtonComponent {
     label: String,
     action: TermWmAction,
@@ -42,7 +42,7 @@ impl Component<TermWmAction> for ButtonComponent {
         if area.width == 0 || area.height < 3 {
             return;
         }
-        let rect = layout_rect_to_rect(area);
+        let rect = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
 
         // Top border
@@ -134,7 +134,7 @@ mod tests {
 
     fn make_backend() -> term_wm_console::RatatuiBackend {
         let buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
-        term_wm_console::RatatuiBackend::new(buffer, Rect::new(0, 0, 80, 24))
+        term_wm_console::RatatuiBackend::new_simple(buffer, Rect::new(0, 0, 80, 24))
     }
 
     #[test]

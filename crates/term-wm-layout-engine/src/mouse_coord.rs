@@ -1,5 +1,4 @@
-// TODO: Move this module to layout engine
-use term_wm_layout_engine::LayoutRect;
+use crate::LayoutRect;
 
 /// A mouse cursor position with an explicit coordinate space tag.
 ///
@@ -20,7 +19,7 @@ pub struct MousePosition {
 /// Distinguishes coordinate spaces to prevent accidental mixing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordSpace {
-    /// Absolute position on the terminal grid (0,0 = top-left).
+    /// Absolute position on the screen (0,0 = top-left).
     /// All dispatched mouse events use this space.
     Screen,
 }

@@ -3,3 +3,7 @@ target/
 lcov.info
 *.save
 samply.json
+
+DEBUG.sh
+*.log
+
