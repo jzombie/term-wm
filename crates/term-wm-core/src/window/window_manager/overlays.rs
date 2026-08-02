@@ -32,10 +32,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.get_overlay::<system_tags::HelpOverlay>()
     }
 
-    pub fn command_palette_key(&self) -> Option<OverlayKey> {
-        self.get_overlay::<system_tags::CommandPalette>()
-    }
-
     pub fn close_help_overlay(&mut self) {
         if let Some(key) = self
             .system_overlays
@@ -99,51 +95,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .handle_confirm_event(event)
     }
 
-    pub fn command_palette_visible(&self) -> bool {
-        self.system_overlays
-            .contains_key(&TypeId::of::<system_tags::CommandPalette>())
-    }
-
-    pub fn command_palette_bounds(&self) -> Option<LayoutRect> {
-        self.get_overlay::<system_tags::CommandPalette>()
-            .and_then(|key| self.overlays.get(key))
-            .and_then(|o| o.render_area())
-    }
-
     pub fn help_overlay_bounds(&self) -> Option<LayoutRect> {
         self.get_overlay::<system_tags::HelpOverlay>()
             .and_then(|key| self.overlays.get(key))
             .and_then(|o| o.render_area())
-    }
-
-    pub fn close_command_palette(&mut self) {
-        if let Some(key) = self
-            .system_overlays
-            .remove(&TypeId::of::<system_tags::CommandPalette>())
-        {
-            self.overlays.remove(key);
-        }
-        self.input_mode = crate::actions::WmInputMode::Passthrough;
-    }
-
-    pub fn handle_command_palette_event(&mut self, event: &Event) -> Option<TermWmAction> {
-        if let Event::Mouse(mouse) = event {
-            self.hover = Some((mouse.column, mouse.row));
-        }
-        let ctx = self
-            .component_context(false)
-            .with_overlay(true)
-            .with_screen_area(self.managed_area())
-            .with_hover_pos(self.hover);
-
-        let key = self.get_overlay::<system_tags::CommandPalette>()?;
-        let palette = self.overlays.get_mut(key)?;
-        match palette.handle_events(event, &ctx) {
-            EventResult::Action(action) => {
-                self.close_command_palette();
-                Some(action)
-            }
-            _ => None,
-        }
     }
 }
