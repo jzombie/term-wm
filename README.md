@@ -110,14 +110,6 @@ Floating windows support mouse-driven snapping with a live **ghost preview**. Wh
 * **Auto-snap countdown:** if the pointer leaves the screen area while a snap target is active, the window snaps automatically after a short countdown (default **2 seconds**, configurable via `drag_snap_timeout`). Releasing the button over the target also snaps immediately.
 * **Micro-positioning:** to place a window at a precise position, float it first, move it where you want, then tile it.
 
-## Configuration & Customization
-
-`term-wm` provides an extensive configuration system to tailor the environment to your workflow:
-
-* **Action Layers:** Customize keybindings across distinct contextual layers (Global, Command Palette, and Help Overlay).
-* **Theming:** Fully customizable color palettes for all UI components, borders, and system chrome.
-* **Feature Flags:** Toggle system chrome (top/bottom panels), enable/disable clipboard synchronization, toggle mouse capture, and control aesthetic features like floating window drop shadows.
-
 ## Project Origins & Developer API
 
 `term-wm` initially began as a distinct application before its underlying rendering and window management mechanics were extracted into a general-purpose multiplexer. Because the system is built as a collection of decoupled crates, its core layout engine and UI components can theoretically be embedded into other Ratatui applications. 
