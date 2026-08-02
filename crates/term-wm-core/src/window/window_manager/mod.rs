@@ -320,6 +320,14 @@ pub struct WindowManager<
     mouse_capture_dirty: bool,
     window_selection_enabled: bool,
     window_selection_dirty: bool,
+    /// Consumer-layer feature toggle: whether mouse selections may be copied
+    /// to the clipboard.  Driven by the command palette (`ToggleClipboardMode`)
+    /// and propagated to components via `set_selection_enabled`.  This is
+    /// **not** a
+    /// [`ClipboardConfig`](crate::clipboard::ClipboardConfig) flag — it only
+    /// gates whether the WM calls
+    /// [`crate::clipboard::Clipboard::set`], and has no effect on
+    /// the clipboard subsystem's backends.
     clipboard_enabled: bool,
     clipboard_dirty: bool,
     selection_active: bool,
@@ -360,6 +368,13 @@ pub struct WindowManager<
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
+    /// Handle to the clipboard subsystem in `term-wm-pty-engine`
+    /// ([`crate::clipboard::Clipboard`]).  The WM is a *consumer*: it drives
+    /// the handle through the public API only and never configures its
+    /// [`ClipboardConfig`](crate::clipboard::ClipboardConfig) (built with
+    /// defaults).  This field is unrelated to the
+    /// [`clipboard_enabled`](Self::clipboard_enabled) selection toggle, which
+    /// is consumer-layer policy and does not affect this handle's backends.
     clipboard: Option<crate::clipboard::Clipboard>,
     power_profile: PowerProfile,
     pub(crate) reaper: Reaper,

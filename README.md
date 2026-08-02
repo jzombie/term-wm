@@ -47,24 +47,36 @@ cargo run --release -- -n 3 -- ls -la    # 3 windows; the first runs `ls -la`
 Options (`term-wm -h`):
 
 - `-n, --count <N>` — number of windows to open (default 2; min 1)
-- `--embedded` — bare/embedded mode: no system chrome, panels, or floating windows
 - `-h, --help`, `-V, --version`
 
 New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
 
 ### Keybindings Quick Reference
 
-| Action | Key |
+| Action | Key
 |---|---|
 | Open Command Palette (Super Key) | `Ctrl+A` |
-| Send `Ctrl+A` to the focused app | `Ctrl+A` while the palette is open |
-| Cycle focus between windows | `Tab` / `Shift+Tab` (palette open) |
-| Scrollback navigation | `PageUp` / `PageDown` / `Home` / `End` |
-| Scroll one line | `Shift+Up` / `Shift+Down` |
-| Select text (mouse) | Click and drag; release copies |
-| Paste | Right-click |
+| Send `Ctrl+A` to the focused app | `Ctrl+A` (When Command Palette is open)
+| Cycle focus between windows | `Tab` / `Shift+Tab` (When Command Palette is open)
 
-`term-wm` automatically enters **Direct Mode** (zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
+## Direct Mode Keybindings
+
+`term-wm` automatically enters **Direct Mode** (unfiltered, zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
+
+This mode is application-specific and different windows running different applications can be in different modes at once.
+
+In Direct Mode, the following keybindings **are not-effective**, and are contingent upon the app running inside the window to handle them.
+
+## Non-Direct Mode Keybindings
+
+| Action | Keybinding / Input |
+| --- | --- |
+| **Scrollback Navigation** | `PageUp` / `PageDown` / `Home` / `End` |
+| **Scroll One Line** | `Shift + Up` / `Shift + Down` |
+| **Select & Copy Text** | Mouse Click & Drag (release to copy) |
+| **Paste** | Mouse Right-Click |
+
+> **Note on Clipboard Sync:** Clipboard behavior depends on your host OS and terminal emulator. Standard keyboard shortcuts (e.g., `Cmd+C`/`Cmd+V` on macOS, `Ctrl+Shift+C`/`Ctrl+Shift+V` on Linux/Windows) may work depending on your terminal's pass-through rules, but are not guaranteed.
 
 ## System Requirements & Compatibility
 

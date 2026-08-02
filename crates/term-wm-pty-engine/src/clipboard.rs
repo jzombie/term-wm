@@ -1,57 +1,71 @@
 //! Cross-platform clipboard helper utilities.
 //!
-//! This module provides three clipboard back-ends:
+//! This module provides three clipboard back-ends, orchestrated as a fixed
+//! pipeline:
 //!
-//! 1. **OSC 52** – writes the clipboard via the terminal-emulator escape
-//!    sequence `\x1b]52;c;BASE64\x07`.  This works through remote terminals,
-//!    SSH, tmux, etc. because the *host* terminal intercepts the sequence and
-//!    writes to the real system clipboard.
+//! 1. **In-memory shared buffer** — a process-global (`Arc<RwLock<...>>`)
+//!    store written on `set()` and read on `get()` as the Tier-1 fallback.
+//!    Because every [`Clipboard`] instance shares the same buffer, a copy
+//!    performed inside a PTY reader thread's handle is immediately readable
+//!    by the Window Manager's separate paste handle, even when running
+//!    headless (SSH / container / CI) where `arboard` cannot initialize.
+//!    Zero disk or network overhead; the memory is reclaimed by the OS when
+//!    the process exits.
 //!
 //! 2. **`arboard`** – a persistent handle for direct access (local fallback
 //!    and clipboard reads).  When running over SSH the arboard handle may not
 //!    initialise; OSC 52 alone is sufficient for copy.
 //!
-//! 3. **Temp-file store** – a best-effort backing store written on `set()`
-//!    when no system clipboard is available (headless / remote), so `get()`
-//!    can round-trip copy→paste on machines (e.g. a bare Ubuntu server over
-//!    SSH) where `arboard` cannot initialise and the host terminal may not
-//!    support OSC 52 reads.
-//!
-//! The temp-file store is **session-scoped, not handle-scoped**: dropping a
-//! [`Clipboard`] never unlinks the store.  A successfully consumed `get()`
-//! removes the file (single-use round-trip); otherwise the store is cleaned
-//! up by the OS (`$XDG_RUNTIME_DIR` is tmpfs and wiped on logout, and the
-//! fallback temp-dir entries are cleaned by the OS).
+//! 3. **OSC 52** – writes the clipboard via the terminal-emulator escape
+//!    sequence `\x1b]52;c;BASE64\x07`.  This works through remote terminals,
+//!    SSH, tmux, etc. because the *host* terminal intercepts the sequence and
+//!    writes to the real system clipboard.
 //!
 //! # Design: explicit static orchestration
 //!
-//! The three backends have fundamentally asymmetric capabilities: `arboard`
-//! and the temp-file store can read and write, while OSC 52 is strictly
-//! write-only (terminals do not reliably answer clipboard read queries).
-//! [`Clipboard`] therefore orchestrates them as a **fixed, explicit
-//! pipeline**, not a uniform backend registry:
+//! The backends have fundamentally asymmetric capabilities: `arboard` and the
+//! in-memory buffer can read and write, while OSC 52 is strictly write-only
+//! (terminals do not reliably answer clipboard read queries).  [`Clipboard`]
+//! therefore orchestrates them as a **fixed, explicit pipeline**, not a
+//! uniform backend registry:
 //!
-//! - `set()` is an ordered fan-out — temp store, then `arboard`, then
+//! - `set()` is an ordered fan-out — in-memory buffer, then `arboard`, then
 //!   **OSC 52 last** so the host terminal emulator becomes the final owner of
 //!   the system clipboard (required for reliable X11 ownership).  It is
 //!   infallible: each backend failure is logged and ignored so the remaining
 //!   back-ends still run.
-//! - `get()` is a fallback chain — `arboard`, then the temp store (with
-//!   consume-on-read) — and never consults OSC 52.
+//! - `get()` is a fallback chain — `arboard`, then the shared in-memory
+//!   buffer — and never consults OSC 52.
 //!
-//! Each step lives in a private helper (`write_temp_store`,
-//! `write_system_clipboard`, `read_temp_store`, `read_system_clipboard`,
-//! `truncate_for_osc52`).  Keeping the ordering structural — rather than
-//! driving it through a loop, iterator, or priority table — makes the
-//! execution invariants impossible to reorder by accident.
+//! Each step lives in a private helper (`write_system_clipboard`,
+//! `read_system_clipboard`, `truncate_for_osc52`).  Keeping the ordering
+//! structural — rather than driving it through a loop, iterator, or priority
+//! table — makes the execution invariants impossible to reorder by accident.
 //!
-//! Tests exercise the backends through isolated handles (`with_temp_path`,
-//! `headless_with_temp_path`) and inject the relay target into the PTY reader
-//! loop (`ParserReadLoopArgs.clipboard`), so no test ever touches the real
-//! system clipboard or the user's temp store.
+//! Tests exercise the backends through isolated handles (`with_shared_buffer`)
+//! and inject the relay target into the PTY reader loop
+//! (`ParserReadLoopArgs.clipboard`), so no test ever touches the real system
+//! clipboard or the process-global default buffer.
+//!
+//! # Layering: a subsystem, not a policy owner
+//!
+//! This module is a low-level subsystem consumed by higher layers — the
+//! Window Manager in `term-wm-core`, the session client, and the PTY reader
+//! loop in `term-wm-pty-engine`.  Consumers hold a [`Clipboard`] handle and
+//! use only the public surface ([`Clipboard::new`], [`Clipboard::set`],
+//! [`Clipboard::get`], [`ClipboardConfig`] at construction time); they never
+//! reach into the backend internals.
+//!
+//! Feature toggles that live **above** this module — e.g. the Window
+//! Manager's selection `clipboard_enabled` flag, driven by the command
+//! palette — are consumer-layer policy, **not** [`ClipboardConfig`] fields.
+//! They gate whether a consumer invokes the clipboard at all (such as whether
+//! a mouse selection may be copied); they do not configure, disable, or
+//! observe any backend behaviour here.  Toggling such a flag therefore has no
+//! effect on OSC 52 emission, the in-memory shared buffer, or `arboard`.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use base64::Engine;
 use thiserror::Error;
@@ -60,22 +74,9 @@ use crate::redirect_stdio::StderrSuppressGuard;
 
 /// Default cap on OSC 52 emission payload size (1 MB).  Payloads larger than
 /// this are truncated at a valid UTF-8 char boundary so the host terminal
-/// still receives output up to the cap.  Local file cache and arboard writes
-/// are never truncated.
+/// still receives output up to the cap.  Local in-memory buffer and arboard
+/// writes are never truncated.
 pub const DEFAULT_MAX_OSC52_BYTES: usize = 1024 * 1024;
-
-/// Environment variable pointing to the user-private runtime directory
-/// (set by systemd on modern Linux; `0700`-permissioned, tmpfs-backed).
-const ENV_XDG_RUNTIME_DIR: &str = "XDG_RUNTIME_DIR";
-
-/// Filename of the temp-file clipboard backing store used as a headless
-/// fallback for `get()`.
-const CLIPBOARD_CACHE_FILENAME: &str = "term-wm-clipboard.txt";
-
-/// Prefix for the per-user subdirectory created under the shared temp dir
-/// on Unix when `$XDG_RUNTIME_DIR` is not available.
-#[cfg(unix)]
-const APP_TEMP_DIR_PREFIX: &str = "term-wm";
 
 /// Length of the OSC 52 header `\x1b]52;` (ESC + ] + "52;").
 const OSC52_HEADER_LEN: usize = 5;
@@ -124,9 +125,10 @@ pub enum ClipboardError {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ClipboardConfig {
-    /// Resolved file path for the headless single-use temp-file store
-    /// fallback (see `default_temp_path` for the resolution rules).
-    pub cache_path: PathBuf,
+    /// Whether OSC 52 emission to the host terminal is enabled.  Default
+    /// `true`; set to `false` to suppress terminal-escape clipboard output
+    /// entirely (e.g. non-interactive environments).
+    pub osc52_enabled: bool,
     /// Maximum payload byte limit for OSC 52 emission; larger payloads are
     /// truncated at a UTF-8 char boundary.  Default 1 MB
     /// ([`DEFAULT_MAX_OSC52_BYTES`]).
@@ -136,44 +138,53 @@ pub struct ClipboardConfig {
 impl Default for ClipboardConfig {
     fn default() -> Self {
         Self {
-            cache_path: default_temp_path(),
+            osc52_enabled: true,
             osc52_limit: DEFAULT_MAX_OSC52_BYTES,
         }
     }
 }
 
-/// A persistent clipboard handle backed by `arboard` (optional), OSC 52,
-/// and a temp-file store (optional).
+/// The process-global shared in-memory buffer used as the Tier-1 clipboard
+/// fallback.
 ///
-/// It is a **static orchestrator** over those three backends: `set()` fans
-/// out to each in a fixed order and `get()` follows an explicit fallback
-/// chain, with each step delegated to a private helper.  See the module docs
-/// for the design rationale (and why this deliberately avoids a trait-based
-/// backend registry).
+/// Lazily initialised once per process so that every [`Clipboard`] instance
+/// constructed via [`Clipboard::new`] / [`Clipboard::with_config`] reads and
+/// writes the same buffer.  Sharing is what lets a copy performed in a PTY
+/// reader thread be immediately readable by the Window Manager's separate
+/// paste handle in headless sessions where `arboard` cannot initialise.
+fn default_shared_buffer() -> Arc<RwLock<Option<String>>> {
+    static BUF: OnceLock<Arc<RwLock<Option<String>>>> = OnceLock::new();
+    BUF.get_or_init(|| Arc::new(RwLock::new(None))).clone()
+}
+
+/// A persistent clipboard handle backed by `arboard` (optional), a shared
+/// in-memory buffer, and OSC 52 (optional).
+///
+/// It is a **static orchestrator** over those backends: `set()` fans out to
+/// each in a fixed order and `get()` follows an explicit fallback chain, with
+/// each step delegated to a private helper.  See the module docs for the
+/// design rationale (and why this deliberately avoids a trait-based backend
+/// registry).
 ///
 /// Holding a long-lived [`arboard::Clipboard`] instance avoids the macOS
 /// problem where a short-lived connection is torn down before the pasteboard
 /// server finishes processing the write.
 ///
 /// When running over SSH the arboard handle will be `None`; `set()` still
-/// works via OSC 52 emitted to stdout, and the temp-file store (enabled
-/// only in that headless case) lets `get()` round-trip copy→paste.
+/// works via OSC 52 emitted to stdout, and the shared in-memory buffer lets
+/// `get()` round-trip copy→paste inside the process.
 pub struct Clipboard {
     arboard: Option<arboard::Clipboard>,
-    /// Whether the temp-file backing store is active.  Enabled at
-    /// construction when `arboard` is unavailable (headless / SSH), so
-    /// clipboard text is only persisted to disk when there is no real
-    /// system clipboard to write to.  Stored separately (rather than
-    /// recomputed from `arboard`) so tests can exercise both modes without
-    /// a display.
-    temp_store_enabled: bool,
-    /// Resolved path of the temp-file backing store, determined once at
-    /// construction (see [`Clipboard::new`]).  Tests inject an isolated
-    /// path via [`Clipboard::with_temp_path`] to avoid the shared store.
-    temp_path: PathBuf,
+    /// Process-shared in-memory buffer (Tier-1 fallback).  Every instance
+    /// constructed with the default buffer writes and reads the same memory,
+    /// so headless copy→paste round-trips across handles (PTY reader thread
+    /// → Window Manager paste).
+    shared: Arc<RwLock<Option<String>>>,
+    /// Whether OSC 52 emission to the host terminal is enabled.
+    osc52_enabled: bool,
     /// Maximum size of the text emitted over OSC 52, in bytes.  Payloads
-    /// above this cap are truncated at a UTF-8 char boundary; the temp-file
-    /// store and arboard always receive the full text.
+    /// above this cap are truncated at a UTF-8 char boundary; the in-memory
+    /// buffer and arboard always receive the full text.
     osc52_limit: usize,
     /// Captured OSC 52 output — only present in test builds so that tests
     /// can verify the OSC 52 path was exercised alongside the arboard path.
@@ -192,73 +203,56 @@ impl Clipboard {
     /// succeeds.
     ///
     /// The arboard backend is initialised when a local display is available;
-    /// when running remotely (SSH, no display) it is silently absent and
-    /// only the OSC 52 fallback will be available.
+    /// when running remotely (SSH, no display) it is silently absent and the
+    /// shared in-memory buffer plus OSC 52 fallback are used.
     pub fn new() -> Self {
         Self::with_config(ClipboardConfig::default())
     }
 
-    /// Create a clipboard handle using `path` as the temp-file backing
-    /// store and the default OSC 52 cap.  Resolution of the default path is
-    /// skipped; tests use this to inject an isolated path into a throwaway
-    /// temp location.
-    pub fn with_temp_path(path: PathBuf) -> Self {
-        Self::with_config(ClipboardConfig {
-            cache_path: path,
-            ..ClipboardConfig::default()
-        })
-    }
-
-    /// Create a clipboard handle from a [`ClipboardConfig`].
+    /// Create a headless clipboard handle backed by `buffer` as its Tier-1
+    /// shared in-memory store, with the default OSC 52 config.
     ///
-    /// The temp-file backing store is active only when no system clipboard
-    /// (arboard) is available (headless / SSH), so clipboard text is never
-    /// persisted to disk during a normal local session.  The OSC 52 cap is
-    /// applied only to OSC 52 emission: payloads larger than `osc52_limit`
-    /// are truncated at a valid UTF-8 char boundary so the host terminal
-    /// still receives output up to the cap; the temp-file store and arboard
-    /// always receive the full, untruncated text.
-    pub fn with_config(config: ClipboardConfig) -> Self {
-        let arboard = arboard::Clipboard::new().ok();
-        let temp_store_enabled = arboard.is_none();
-        tracing::debug!(
-            "clipboard: backend arboard={}, temp store={}, store path={}",
-            if arboard.is_some() {
-                "available"
-            } else {
-                "unavailable"
-            },
-            if temp_store_enabled {
-                "enabled"
-            } else {
-                "disabled"
-            },
-            config.cache_path.display()
-        );
+    /// Test-only seam: forces `arboard` to `None` and lets sibling modules
+    /// (e.g. the PTY reader loop tests) exercise the shared-buffer and
+    /// OSC 52 paths deterministically on any machine, regardless of whether
+    /// a display server is present, without exposing the internal backend
+    /// fields or touching the real system clipboard.
+    pub fn with_shared_buffer(buffer: Arc<RwLock<Option<String>>>) -> Self {
         Self {
-            arboard,
-            temp_store_enabled,
-            temp_path: config.cache_path,
-            osc52_limit: config.osc52_limit,
+            arboard: None,
+            shared: buffer,
+            osc52_enabled: ClipboardConfig::default().osc52_enabled,
+            osc52_limit: ClipboardConfig::default().osc52_limit,
             #[cfg(test)]
             osc52_output: Vec::new(),
         }
     }
 
-    /// Create a clipboard handle that is forced into headless mode (no
-    /// arboard, temp-file store enabled) and uses `path` as the backing store.
+    /// Create a clipboard handle from a [`ClipboardConfig`].
     ///
-    /// Test-only seam: lets sibling modules (e.g. the PTY reader loop tests)
-    /// exercise the headless temp-store and OSC 52 paths deterministically on
-    /// any machine, regardless of whether a display server is present, without
-    /// exposing the internal backend fields.
-    #[cfg(test)]
-    pub(crate) fn headless_with_temp_path(path: PathBuf) -> Self {
+    /// The arboard backend is active only when a local display is available;
+    /// the shared in-memory buffer is always written and serves as the
+    /// `get()` fallback.  The OSC 52 cap is applied only to OSC 52 emission:
+    /// payloads larger than `osc52_limit` are truncated at a valid UTF-8 char
+    /// boundary so the host terminal still receives output up to the cap; the
+    /// in-memory buffer and arboard always receive the full, untruncated text.
+    pub fn with_config(config: ClipboardConfig) -> Self {
+        let arboard = arboard::Clipboard::new().ok();
+        tracing::debug!(
+            "clipboard: backend arboard={}, osc52 enabled={}",
+            if arboard.is_some() {
+                "available"
+            } else {
+                "unavailable"
+            },
+            config.osc52_enabled
+        );
         Self {
-            arboard: None,
-            temp_store_enabled: true,
-            temp_path: path,
-            osc52_limit: DEFAULT_MAX_OSC52_BYTES,
+            arboard,
+            shared: default_shared_buffer(),
+            osc52_enabled: config.osc52_enabled,
+            osc52_limit: config.osc52_limit,
+            #[cfg(test)]
             osc52_output: Vec::new(),
         }
     }
@@ -266,61 +260,76 @@ impl Clipboard {
     /// Read the clipboard as a `String`.
     ///
     /// Prefers `arboard` (the real system clipboard) when available; on
-    /// headless / remote machines it falls back to the temp-file backing
-    /// store written by [`Clipboard::set`], so copy→paste round-trips
+    /// headless / remote machines it falls back to the shared in-memory
+    /// buffer written by [`Clipboard::set`], so copy→paste round-trips
     /// inside term-wm.  Does **not** attempt OSC 52 reads because most
     /// terminal emulators do not support them.
     pub fn get(&mut self) -> Result<String, ClipboardError> {
         match read_system_clipboard(&mut self.arboard) {
-            Ok(Some(text)) => {
-                return Ok(text);
-            }
-            Ok(None) if !self.temp_store_enabled => {
-                tracing::debug!("clipboard: get no backends available");
-                return Err(ClipboardError::NotAvailable);
-            }
+            Ok(Some(text)) => return Ok(text),
             Ok(None) => {}
-            Err(e) if !self.temp_store_enabled => {
-                tracing::debug!("clipboard: get via arboard failed ({e}); temp store inactive");
-                return Err(e);
-            }
-            Err(_) => {
-                tracing::debug!("clipboard: get via arboard failed; falling back to temp store");
+            Err(e) => {
+                tracing::debug!(
+                    "clipboard: get via arboard failed ({e}); falling back to in-memory buffer"
+                );
             }
         }
-        // arboard absent or errored with the temp store active: fall back to
-        // the temp-file backing store.
-        read_temp_store(&self.temp_path, self.temp_store_enabled)
-            .ok_or(ClipboardError::NotAvailable)
+        // arboard absent or errored: fall back to the shared in-memory buffer.
+        // Recover from a poisoned lock (a thread panicked while holding a
+        // guard) so the Tier-1 fallback stays available for later operations.
+        let text = self
+            .shared
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match text {
+            Some(text) => {
+                tracing::debug!(
+                    "clipboard: get read via in-memory shared buffer ({} bytes)",
+                    text.len()
+                );
+                Ok(text)
+            }
+            None => {
+                tracing::debug!(
+                    "clipboard: get no backend available (arboard absent, buffer empty)"
+                );
+                Err(ClipboardError::NotAvailable)
+            }
+        }
     }
 
     /// Set the system clipboard to `text`.
     ///
     /// Best-effort fan-out to every active backend; failures are logged and
-    /// ignored so the remaining back-ends still run.  The temp-file store is
-    /// only written when arboard is unavailable (headless / SSH):
+    /// ignored so the remaining back-ends still run:
     ///
-    /// 1. **Temp file** — when there is no system clipboard (headless /
-    ///    remote), a local copy so `get()` can round-trip copy→paste.
-    ///    Written **first** so an internal paste is guaranteed even if a
-    ///    later backend fails.
+    /// 1. **In-memory buffer** — always written first, so an internal paste
+    ///    is guaranteed even if a later backend fails.
     /// 2. `arboard` — writes to the local system clipboard directly.
-    /// 3. **OSC 52** — writes to the host terminal's clipboard via the
-    ///    escape sequence, and is emitted **last** so the host terminal
-    ///    emulator becomes the final owner of the system clipboard.  This
-    ///    ensures copy works when embedded in remote/embedded terminals
+    /// 3. **OSC 52** (when enabled) — writes to the host terminal's clipboard
+    ///    via the escape sequence, and is emitted **last** so the host
+    ///    terminal emulator becomes the final owner of the system clipboard.
+    ///    This ensures copy works when embedded in remote/embedded terminals
     ///    (Zed, tmux, SSH), and on X11 it supersedes arboard's in-process
     ///    selection thread, whose clipboard ownership is known to be
     ///    unreliable (pastes can silently serve stale data).  The terminal
-    ///    emulator then answers paste requests directly.  Oversized
-    ///    payloads are truncated at a valid UTF-8 char boundary to the OSC 52
-    ///    emission cap (default [`DEFAULT_MAX_OSC52_BYTES`], settable via
+    ///    emulator then answers paste requests directly.  Oversized payloads
+    ///    are truncated at a valid UTF-8 char boundary to the OSC 52 emission
+    ///    cap (default [`DEFAULT_MAX_OSC52_BYTES`], settable via
     ///    [`Clipboard::with_config`]), so the host still receives output up
-    ///    to the cap; the temp-file store and arboard always receive the full
-    ///    untruncated text.
+    ///    to the cap; the in-memory buffer and arboard always receive the
+    ///    full untruncated text.
     pub fn set(&mut self, text: &str) {
-        write_temp_store(&self.temp_path, self.temp_store_enabled, text);
+        if let Ok(mut guard) = self.shared.write() {
+            *guard = Some(text.to_owned());
+        }
         write_system_clipboard(&mut self.arboard, text);
+
+        if !self.osc52_enabled {
+            tracing::debug!("clipboard: set OSC 52 emission disabled; skipping");
+            return;
+        }
 
         // Emit OSC 52 for the host terminal LAST.  When the host terminal
         // emulator supports OSC 52 (VTE, Alacritty, WezTerm, …) it responds
@@ -345,19 +354,6 @@ impl Clipboard {
     }
 }
 
-/// Best-effort write to the headless temp-file backing store.
-///
-/// Only active when `enabled` (no system clipboard available, e.g. over SSH),
-/// so clipboard text is never persisted to disk during a normal local session.
-fn write_temp_store(path: &Path, enabled: bool, text: &str) {
-    if enabled && let Err(e) = write_clipboard_temp(path, text) {
-        tracing::debug!(
-            "clipboard: set temp store write failed at {} ({e})",
-            path.display()
-        );
-    }
-}
-
 /// Best-effort write to the local system clipboard via `arboard`.
 ///
 /// On X11 this claims the CLIPBOARD selection, but arboard hosts the data in
@@ -366,7 +362,7 @@ fn write_temp_store(path: &Path, enabled: bool, text: &str) {
 /// clipboard — suppressed by [`StderrSuppressGuard`].
 fn write_system_clipboard(clipboard: &mut Option<arboard::Clipboard>, text: &str) {
     let Some(cb) = clipboard.as_mut() else {
-        tracing::debug!("clipboard: set arboard unavailable; temp store + OSC 52 only");
+        tracing::debug!("clipboard: set arboard unavailable; in-memory buffer + OSC 52 only");
         return;
     };
     let _guard = StderrSuppressGuard::new();
@@ -380,7 +376,7 @@ fn write_system_clipboard(clipboard: &mut Option<arboard::Clipboard>, text: &str
 ///
 /// `Ok(None)` when there is no system clipboard backend (headless / SSH); an
 /// `Err` propagates an arboard read failure so the caller can decide whether
-/// to fall back to the temp store.
+/// to fall back to the shared in-memory buffer.
 fn read_system_clipboard(
     clipboard: &mut Option<arboard::Clipboard>,
 ) -> Result<Option<String>, ClipboardError> {
@@ -399,212 +395,10 @@ fn read_system_clipboard(
     }
 }
 
-/// Read the headless temp-file backing store, consuming it on success.
-///
-/// This is a single-use copy→paste round-trip: the file is removed so
-/// sensitive clipboard text does not persist on disk.  Best-effort.
-fn read_temp_store(path: &Path, enabled: bool) -> Option<String> {
-    if !enabled {
-        return None;
-    }
-    match read_clipboard_temp(path) {
-        Ok(text) => {
-            tracing::debug!(
-                "clipboard: get read via temp store {} ({} bytes)",
-                path.display(),
-                text.len()
-            );
-            if let Err(e) = std::fs::remove_file(path) {
-                tracing::debug!(
-                    "clipboard: get temp store cleanup failed at {} ({e})",
-                    path.display()
-                );
-            }
-            Some(text)
-        }
-        Err(_) => {
-            tracing::debug!(
-                "clipboard: get temp store unavailable at {}",
-                path.display()
-            );
-            None
-        }
-    }
-}
-
 /// Truncate `text` to `limit` bytes at a valid UTF-8 char boundary so OSC 52
 /// emission stays within the cap without corrupting multibyte characters.
 fn truncate_for_osc52(text: &str, limit: usize) -> &str {
     &text[..text.floor_char_boundary(limit)]
-}
-
-/// Resolve the default path of the temp-file clipboard store.
-///
-/// Clipboard contents can be sensitive (passwords, tokens), so the store
-/// must never live in a world-readable location.  Resolution order:
-///
-/// 1. `$XDG_RUNTIME_DIR/term-wm-clipboard.txt` — a user-private (`0700`),
-///    RAM-backed (`tmpfs`) directory created by systemd on modern Linux.
-/// 2. `<temp_dir>/term-wm-<uid>/term-wm-clipboard.txt` on Unix — a
-///    user-owned, `0700` subdirectory under the shared temp dir so other
-///    users cannot read the clipboard.
-/// 3. `<temp_dir>/term-wm-clipboard.txt` elsewhere — the platform temp
-///    dir is already user-private on Windows and macOS.
-fn default_temp_path() -> PathBuf {
-    if let Some(runtime_dir) = std::env::var_os(ENV_XDG_RUNTIME_DIR) {
-        let path = PathBuf::from(runtime_dir).join(CLIPBOARD_CACHE_FILENAME);
-        tracing::debug!(
-            "clipboard: resolved store path via XDG_RUNTIME_DIR -> {}",
-            path.display()
-        );
-        return path;
-    }
-    let base = std::env::temp_dir();
-    #[cfg(unix)]
-    let base = base.join(format!("{}-{}", APP_TEMP_DIR_PREFIX, unsafe {
-        libc::getuid()
-    }));
-    let path = base.join(CLIPBOARD_CACHE_FILENAME);
-    tracing::debug!(
-        "clipboard: resolved store path via temp_dir{} -> {}",
-        if cfg!(unix) { " (per-user subdir)" } else { "" },
-        path.display()
-    );
-    path
-}
-
-/// Create the parent directory of the clipboard store with owner-only
-/// permissions (`0700`) on Unix, preventing other users from entering it.
-///
-/// If the directory already exists it is NOT blindly reused: a pre-existing
-/// directory under the predictable `/tmp/term-wm-<uid>` name could have been
-/// created permissively by another user, who could then plant files to steal
-/// or poison clipboard contents.  The existing directory is accepted only
-/// when it is a directory owned by the current user and not writable by
-/// group or others.
-fn ensure_clipboard_store_dir(path: &Path) -> std::io::Result<()> {
-    let Some(parent) = path.parent() else {
-        return Ok(());
-    };
-    if parent.as_os_str().is_empty() {
-        return Ok(());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        match builder.create(parent) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let meta = std::fs::metadata(parent)?;
-                if !meta.is_dir() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "clipboard store: parent path is not a directory",
-                    ));
-                }
-                if meta.uid() != unsafe { libc::geteuid() } {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "clipboard store: parent directory not owned by current user",
-                    ));
-                }
-                if meta.mode() & 0o022 != 0 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "clipboard store: parent directory is group/other-writable",
-                    ));
-                }
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(parent)
-}
-
-/// Write `text` to the temp-file backing store at `path`.
-///
-/// The file is created with owner-only permissions (`0600`) on Unix, and
-/// the permissions are pinned on the opened fd itself (`fchmod`), which also
-/// closes the open-then-chmod path-re-resolution TOCTOU window.  Before any
-/// content is written the opened fd is verified (race-free, via `fstat`) to
-/// be a regular file owned by the current user with a link count of one —
-/// this rejects a symlink (`O_NOFOLLOW`) as well as a hard link planted at
-/// the store path that would otherwise leak clipboard contents into a file
-/// the attacker owns, or overwrite a file we own elsewhere.
-///
-/// Best-effort: failures are swallowed by callers — this is a fallback,
-/// not a primary clipboard mechanism.
-fn write_clipboard_temp(path: &Path, text: &str) -> std::io::Result<()> {
-    ensure_clipboard_store_dir(path)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-        // Reject a symlink at the store path so an attacker cannot redirect
-        // our write onto a file we do not own (e.g. via a pre-planted
-        // symlink in a shared temp dir before our 0700 store dir exists).
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut f = options.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        use std::os::unix::io::AsRawFd;
-
-        let meta = f.metadata()?;
-        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.nlink() != 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "clipboard store: unexpected file ownership, type, or link count",
-            ));
-        }
-        if unsafe { libc::fchmod(f.as_raw_fd(), 0o600) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    f.set_len(0)?;
-    f.write_all(text.as_bytes())?;
-    f.flush()?;
-    Ok(())
-}
-
-/// Read the text previously stored at `path` by the temp-file backing store.
-///
-/// On Unix the file is opened with `O_NOFOLLOW` (rejecting a symlink planted
-/// at the store path) and the opened fd is verified to be a regular file
-/// owned by the current user with owner-only permissions before its contents
-/// are trusted.  A foreign-owned or permissive file could be attacker
-/// content that would be pasted into the terminal (clipboard poisoning).
-fn read_clipboard_temp(path: &Path) -> std::io::Result<String> {
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true);
-        options.custom_flags(libc::O_NOFOLLOW);
-        let mut f = options.open(path)?;
-        let meta = f.metadata()?;
-        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "clipboard store: refusing to read non-owner-only file",
-            ));
-        }
-        let mut buf = String::new();
-        f.read_to_string(&mut buf)?;
-        Ok(buf)
-    }
-    #[cfg(not(unix))]
-    std::fs::read_to_string(path)
 }
 
 /// Build the raw bytes of an OSC 52 clipboard sequence.
@@ -838,53 +632,85 @@ impl Default for Osc52Extractor {
 mod tests {
     use super::*;
 
-    /// Path to the clipboard store inside an isolated, auto-cleaned
-    /// [`tempfile::TempDir`], so tests never touch the shared default store
-    /// or leak files in the OS temp directory.
-    ///
-    /// A nested owner-only (`0700`) subdirectory is used as the store parent
-    /// to mirror production (where the parent is created `0700`), because
-    /// `tempfile::TempDir` roots are group/other-writable by default and
-    /// would be rejected by [`ensure_clipboard_store_dir`].
-    fn store_path(dir: &tempfile::TempDir) -> PathBuf {
-        let sub = dir.path().join("store");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            let mut builder = std::fs::DirBuilder::new();
-            builder.mode(0o700);
-            builder.create(&sub).unwrap();
-        }
-        #[cfg(not(unix))]
-        std::fs::create_dir_all(&sub).unwrap();
-        sub.join(CLIPBOARD_CACHE_FILENAME)
+    /// An isolated shared buffer for a single test, so the process-global
+    /// default buffer is never touched and tests do not leak state to each
+    /// other.
+    fn isolated_buffer() -> Arc<RwLock<Option<String>>> {
+        Arc::new(RwLock::new(None))
+    }
+
+    /// A clipboard handle forced into headless mode (no arboard) sharing
+    /// `buffer`, so tests exercise the in-memory + OSC 52 paths
+    /// deterministically on any machine regardless of display availability.
+    fn headless_with_buffer(buffer: Arc<RwLock<Option<String>>>) -> Clipboard {
+        Clipboard::with_shared_buffer(buffer)
     }
 
     #[test]
-    fn temp_store_roundtrip_via_set_get_when_arboard_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = store_path(&dir);
-        let mut cb = Clipboard::with_temp_path(path.clone());
-        // Simulate a headless SSH session where arboard cannot initialise:
-        // the temp-file store is the only round-trip mechanism.
-        cb.arboard = None;
-        cb.temp_store_enabled = true;
+    fn in_memory_roundtrip_via_set_get_when_arboard_absent() {
+        let buffer = isolated_buffer();
+        let mut cb = headless_with_buffer(Arc::clone(&buffer));
 
         cb.set("clipboard text");
-        assert!(path.exists(), "set() must persist to the temp store");
+        assert_eq!(
+            *buffer.read().unwrap(),
+            Some("clipboard text".to_owned()),
+            "set() must write the shared in-memory buffer"
+        );
         assert_eq!(cb.get().unwrap(), "clipboard text");
-        assert!(
-            !path.exists(),
-            "get() must consume the temp store so secrets do not persist on disk"
+        // Persist until the next set(): repeated get() returns the same value.
+        assert_eq!(cb.get().unwrap(), "clipboard text");
+    }
+
+    #[test]
+    fn shared_buffer_shared_across_instances() {
+        // Two handles sharing one buffer round-trip like the old shared temp
+        // file: a copy in one handle is readable by another in headless mode.
+        let buffer = isolated_buffer();
+        let mut writer = headless_with_buffer(Arc::clone(&buffer));
+        let mut reader = headless_with_buffer(Arc::clone(&buffer));
+
+        writer.set("shared text");
+        assert_eq!(
+            reader.get().unwrap(),
+            "shared text",
+            "a set() on one handle must be readable by another handle"
         );
     }
 
     #[test]
-    fn temp_store_read_helper_roundtrips() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = store_path(&dir);
-        write_clipboard_temp(&path, "helper text").unwrap();
-        assert_eq!(read_clipboard_temp(&path).unwrap(), "helper text");
+    fn in_memory_unicode_roundtrip() {
+        let mut cb = headless_with_buffer(isolated_buffer());
+        cb.set("héllo 日本語 ✅");
+        assert_eq!(cb.get().unwrap(), "héllo 日本語 ✅");
+    }
+
+    #[test]
+    fn get_missing_returns_not_available() {
+        let mut cb = headless_with_buffer(isolated_buffer());
+        assert!(matches!(cb.get(), Err(ClipboardError::NotAvailable)));
+    }
+
+    #[test]
+    fn get_recovers_from_poisoned_lock() {
+        // Simulate a thread panicking while holding the write lock; get()
+        // must still recover via into_inner rather than propagate poison.
+        let buffer = isolated_buffer();
+        let mut cb = headless_with_buffer(Arc::clone(&buffer));
+        cb.set("prior value");
+
+        let poisoner = Arc::clone(&buffer);
+        let t = std::thread::spawn(move || {
+            let _guard = poisoner.write().unwrap();
+            panic!("intentional panic while holding clipboard lock");
+        });
+        let _ = t.join();
+
+        assert_eq!(
+            cb.get().unwrap(),
+            "prior value",
+            "get() must recover from a poisoned lock via into_inner"
+        );
     }
 
     #[test]
@@ -911,181 +737,41 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_new_uses_default_path_and_default_limit() {
+    fn clipboard_default_config() {
+        let config = ClipboardConfig::default();
+        assert!(config.osc52_enabled);
+        assert_eq!(config.osc52_limit, DEFAULT_MAX_OSC52_BYTES);
+
         let cb = Clipboard::new();
-        assert_eq!(cb.temp_path, default_temp_path());
+        assert!(cb.osc52_enabled);
         assert_eq!(cb.osc52_limit, DEFAULT_MAX_OSC52_BYTES);
     }
 
     #[test]
-    fn temp_store_read_missing_returns_not_available() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cb = Clipboard::with_temp_path(store_path(&dir));
+    fn set_always_writes_memory_buffer_even_when_osc52_disabled() {
+        let buffer = isolated_buffer();
+        let mut cb = Clipboard::with_config(ClipboardConfig {
+            osc52_enabled: false,
+            ..ClipboardConfig::default()
+        });
         cb.arboard = None;
-        cb.temp_store_enabled = true;
-        assert!(matches!(cb.get(), Err(ClipboardError::NotAvailable)));
-    }
+        cb.shared = Arc::clone(&buffer);
 
-    #[test]
-    fn temp_store_unicode_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cb = Clipboard::with_temp_path(store_path(&dir));
-        cb.arboard = None;
-        cb.temp_store_enabled = true;
-
-        cb.set("héllo 日本語 ✅");
-        assert_eq!(cb.get().unwrap(), "héllo 日本語 ✅");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn temp_store_dir_and_file_are_owner_only() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        // Nested path forces `ensure_clipboard_store_dir` to create the
-        // intermediate directory, which must be owner-only (0700).
-        let store_dir = dir.path().join("store");
-        let path = store_dir.join(CLIPBOARD_CACHE_FILENAME);
-        write_clipboard_temp(&path, "secret").unwrap();
-
-        let dir_mode = std::fs::metadata(&store_dir).unwrap().permissions().mode() & 0o777;
-        let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(dir_mode, 0o700, "store dir must be owner-only");
-        assert_eq!(file_mode, 0o600, "store file must be owner-only");
-    }
-
-    #[test]
-    fn temp_store_not_written_when_clipboard_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = store_path(&dir);
-        let mut cb = Clipboard::with_temp_path(path.clone());
-        // Simulate a local session with a real system clipboard: the
-        // temp-file store is disabled, so `set()` must not persist text
-        // to disk, and `get()` must not read from it.
-        cb.temp_store_enabled = false;
-        cb.arboard = None;
-
-        cb.set("sensitive text");
-        assert!(
-            !path.exists(),
-            "temp store must not be written when a system clipboard exists"
+        cb.set("gated text");
+        assert_eq!(
+            *buffer.read().unwrap(),
+            Some("gated text".to_owned()),
+            "in-memory buffer must be written regardless of OSC 52 gating"
         );
         assert!(
-            matches!(cb.get(), Err(ClipboardError::NotAvailable)),
-            "get() must not fall back to the temp store when it is disabled"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn temp_store_write_rejects_symlink() {
-        use std::os::unix::fs::{DirBuilderExt, symlink};
-
-        let dir = tempfile::tempdir().unwrap();
-        let store_dir = dir.path().join("store");
-        // Owner-only dir so the rejection comes from O_NOFOLLOW, not from
-        // the pre-existing-dir permission check.
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(&store_dir).unwrap();
-
-        let target = dir.path().join("target.txt");
-        std::fs::write(&target, "precious").unwrap();
-        // Simulate an attacker pre-planting a symlink at the store path.
-        let link = store_dir.join(CLIPBOARD_CACHE_FILENAME);
-        symlink(&target, &link).unwrap();
-
-        // The write must refuse to follow the symlink (O_NOFOLLOW -> ELOOP).
-        assert!(write_clipboard_temp(&link, "evil").is_err());
-        assert_eq!(
-            std::fs::read_to_string(&target).unwrap(),
-            "precious",
-            "symlink target must not be truncated"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn temp_store_read_rejects_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempfile::tempdir().unwrap();
-        let store_dir = dir.path().join("store");
-        std::fs::create_dir(&store_dir).unwrap();
-        let target = dir.path().join("target.txt");
-        std::fs::write(&target, "precious").unwrap();
-        let link = store_dir.join(CLIPBOARD_CACHE_FILENAME);
-        symlink(&target, &link).unwrap();
-
-        // The read must refuse to follow the symlink so attacker content
-        // cannot be pasted as clipboard text.
-        assert!(read_clipboard_temp(&link).is_err());
-        assert_eq!(
-            std::fs::read_to_string(&target).unwrap(),
-            "precious",
-            "symlink target must be left untouched"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn temp_store_rejects_permissive_preexisting_dir() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let store_dir = dir.path().join("store");
-        std::fs::create_dir(&store_dir).unwrap();
-        // Simulate a directory pre-created by another user (or left
-        // permissively) that we would otherwise blindly reuse.
-        std::fs::set_permissions(&store_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let path = store_dir.join(CLIPBOARD_CACHE_FILENAME);
-
-        assert!(
-            write_clipboard_temp(&path, "secret").is_err(),
-            "permissive pre-existing store dir must be rejected"
-        );
-        assert!(!path.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn temp_store_write_rejects_hardlink_target() {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-
-        let dir = tempfile::tempdir().unwrap();
-        let store_dir = dir.path().join("store");
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(&store_dir).unwrap();
-
-        let attacker_file = dir.path().join("attacker-owned.txt");
-        std::fs::write(&attacker_file, "precious").unwrap();
-        // Simulate an attacker hard-linking their own file into the store
-        // path (O_NOFOLLOW does not stop hard links).
-        let store_path = store_dir.join(CLIPBOARD_CACHE_FILENAME);
-        std::fs::hard_link(&attacker_file, &store_path).unwrap();
-        assert_eq!(
-            std::fs::metadata(&store_path).unwrap().nlink(),
-            2,
-            "hard link must be set up for the test"
-        );
-
-        assert!(
-            write_clipboard_temp(&store_path, "secret").is_err(),
-            "a hard-linked store file must be rejected before any write"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&attacker_file).unwrap(),
-            "precious",
-            "hard-link target must not be truncated or overwritten"
+            cb.osc52_output.is_empty(),
+            "OSC 52 must not be emitted when osc52_enabled is false"
         );
     }
 
     #[test]
     fn clipboard_set_emits_osc52() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cb = Clipboard::with_temp_path(store_path(&dir));
+        let mut cb = headless_with_buffer(isolated_buffer());
         cb.set("hello from test");
 
         assert!(
@@ -1229,15 +915,13 @@ mod tests {
 
     #[test]
     fn osc52_emission_truncated_over_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        // Force a small OSC 52 cap via with_config.
-        let path = store_path(&dir);
+        let buffer = isolated_buffer();
         let mut cb = Clipboard::with_config(ClipboardConfig {
-            cache_path: path.clone(),
+            osc52_enabled: true,
             osc52_limit: 8,
         });
         cb.arboard = None;
-        cb.temp_store_enabled = true;
+        cb.shared = Arc::clone(&buffer);
 
         let oversized = "this text is longer than the 8-byte cap";
         cb.set(oversized);
@@ -1254,23 +938,21 @@ mod tests {
             "truncated emission must be a prefix of the original text"
         );
 
-        // The temp store must retain the full, untruncated text.
+        // The in-memory buffer must retain the full, untruncated text.
         assert_eq!(
-            read_clipboard_temp(&path).unwrap(),
-            oversized,
-            "temp store must keep the full text"
+            *buffer.read().unwrap(),
+            Some(oversized.to_owned()),
+            "in-memory buffer must keep the full text"
         );
     }
 
     #[test]
     fn osc52_truncation_respects_utf8_boundary() {
-        let dir = tempfile::tempdir().unwrap();
         let mut cb = Clipboard::with_config(ClipboardConfig {
-            cache_path: store_path(&dir),
+            osc52_enabled: true,
             osc52_limit: 5,
         });
         cb.arboard = None;
-        cb.temp_store_enabled = true;
 
         // "héllo" — 'é' is 2 bytes.  A byte-5 cut would land inside 'é';
         // floor_char_boundary must land at index 4 (after 'h' + 'é').

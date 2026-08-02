@@ -21,5 +21,3 @@ tracing = { workspace = true }
 vt100 = { workspace = true }
 vte = { workspace = true }
 
-[dev-dependencies]
-tempfile = { workspace = true }
