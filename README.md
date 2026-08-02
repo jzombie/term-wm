@@ -53,17 +53,31 @@ New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
 
 ### Keybindings Quick Reference
 
-| Action | Key |
+| Action | Key
 |---|---|
 | Open Command Palette (Super Key) | `Ctrl+A` |
-| Send `Ctrl+A` to the focused app | `Ctrl+A` while the palette is open |
-| Cycle focus between windows | `Tab` / `Shift+Tab` (palette open) |
+| Send `Ctrl+A` to the focused app | `Ctrl+A` (When Command Palette is open)
+| Cycle focus between windows | `Tab` / `Shift+Tab` (When Command Palette is open)
+
+## Direct Mode Keybindings
+
+`term-wm` automatically enters **Direct Mode** (unfiltered, zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
+
+This mode is application-specific and different windows running different applications can be in different modes at once.
+
+In Direct Mode, the following keybindings **are not-effective**, and are contingent upon the app running inside the window to handle them.
+
+## Non-Direct Mode Keybindings
+
+| Action | Key
+|---|---|
 | Scrollback navigation | `PageUp` / `PageDown` / `Home` / `End` |
 | Scroll one line | `Shift+Up` / `Shift+Down` |
 | Select text (mouse) | Click and drag; release copies |
-| Paste | Right-click |
+| Copy | Select text | Direct Mode apps are app-specific
+| Paste | Right-click | Direct Mode apps are app-specific
 
-`term-wm` automatically enters **Direct Mode** (zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
+> **Note:** Copy and paste behavior depends on the host OS and terminal emulator. Because the system and terminal clipboards may diverge, copy/paste can occasionally appear out of sync; the OS-native hotkeys (e.g. `Cmd+C`/`Cmd+V` on macOS, `Ctrl+Shift+C`/`Ctrl+Shift+V` in many terminals) remain available as a fallback.
 
 ## System Requirements & Compatibility
 
