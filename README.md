@@ -59,7 +59,7 @@ New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
 | Send `Ctrl+A` to the focused app | `Ctrl+A` (When Command Palette is open)
 | Cycle focus between windows | `Tab` / `Shift+Tab` (When Command Palette is open)
 
-## Direct Mode Keybindings
+#### Direct Mode Keybindings
 
 `term-wm` automatically enters **Direct Mode** (unfiltered, zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
 
@@ -67,7 +67,7 @@ This mode is application-specific and different windows running different applic
 
 In Direct Mode, the following keybindings **are not-effective**, and are contingent upon the app running inside the window to handle them.
 
-## Non-Direct Mode Keybindings
+#### Non-Direct Mode Keybindings
 
 | Action | Keybinding / Input |
 | --- | --- |
