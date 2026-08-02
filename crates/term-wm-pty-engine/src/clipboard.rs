@@ -84,11 +84,9 @@ fn default_temp_path() -> PathBuf {
     }
     let base = std::env::temp_dir();
     #[cfg(unix)]
-    let base = base.join(format!(
-        "{}-{}",
-        APP_TEMP_DIR_PREFIX,
-        unsafe { libc::getuid() }
-    ));
+    let base = base.join(format!("{}-{}", APP_TEMP_DIR_PREFIX, unsafe {
+        libc::getuid()
+    }));
     let path = base.join(CLIPBOARD_CACHE_FILENAME);
     tracing::debug!(
         "clipboard: resolved store path via temp_dir{} -> {}",
@@ -330,8 +328,16 @@ impl Clipboard {
         let temp_store_enabled = arboard.is_none();
         tracing::debug!(
             "clipboard: backend arboard={}, temp store={}, store path={}",
-            if arboard.is_some() { "available" } else { "unavailable" },
-            if temp_store_enabled { "enabled" } else { "disabled" },
+            if arboard.is_some() {
+                "available"
+            } else {
+                "unavailable"
+            },
+            if temp_store_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
             cache_path.display()
         );
         Self {
@@ -359,9 +365,7 @@ impl Clipboard {
                     return Ok(text);
                 }
                 Err(e) if !self.temp_store_enabled => {
-                    tracing::debug!(
-                        "clipboard: get via arboard failed ({e}); temp store inactive"
-                    );
+                    tracing::debug!("clipboard: get via arboard failed ({e}); temp store inactive");
                     return Err(e.into());
                 }
                 Err(e) => {
@@ -454,9 +458,7 @@ impl Clipboard {
                 Err(e) => tracing::debug!("clipboard: set via arboard failed ({e})"),
             }
         } else {
-            tracing::debug!(
-                "clipboard: set arboard unavailable; temp store + OSC 52 only"
-            );
+            tracing::debug!("clipboard: set arboard unavailable; temp store + OSC 52 only");
         }
 
         // Emit OSC 52 for the host terminal LAST.  When the host terminal
