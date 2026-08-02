@@ -500,19 +500,17 @@ impl Default for Osc52Extractor {
 mod tests {
     use super::*;
 
-    /// Unique temp-file path per test (avoids parallel-test races on the
-    /// shared OS temp directory).
-    fn unique_temp_path(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "term-wm-test-{tag}-{}.txt",
-            std::process::id()
-        ))
+    /// Path to the clipboard store inside an isolated, auto-cleaned
+    /// [`tempfile::TempDir`], so tests never touch the shared default store
+    /// or leak files in the OS temp directory.
+    fn store_path(dir: &tempfile::TempDir) -> PathBuf {
+        dir.path().join(CLIPBOARD_CACHE_FILENAME)
     }
 
     #[test]
     fn temp_store_roundtrip_via_set_get_when_arboard_absent() {
-        let path = unique_temp_path("roundtrip");
-        let mut cb = Clipboard::with_temp_path(path);
+        let dir = tempfile::tempdir().unwrap();
+        let mut cb = Clipboard::with_temp_path(store_path(&dir));
         // Simulate a headless SSH session where arboard cannot initialise.
         cb.arboard = None;
 
@@ -522,22 +520,24 @@ mod tests {
 
     #[test]
     fn temp_store_read_helper_roundtrips() {
-        let path = unique_temp_path("helper");
+        let dir = tempfile::tempdir().unwrap();
+        let path = store_path(&dir);
         write_clipboard_temp(&path, "helper text").unwrap();
         assert_eq!(read_clipboard_temp(&path).unwrap(), "helper text");
     }
 
     #[test]
     fn temp_store_read_missing_returns_not_available() {
-        let mut cb = Clipboard::with_temp_path(unique_temp_path("missing"));
+        let dir = tempfile::tempdir().unwrap();
+        let mut cb = Clipboard::with_temp_path(store_path(&dir));
         cb.arboard = None;
         assert!(matches!(cb.get(), Err(ClipboardError::NotAvailable)));
     }
 
     #[test]
     fn temp_store_unicode_roundtrip() {
-        let path = unique_temp_path("unicode");
-        let mut cb = Clipboard::with_temp_path(path);
+        let dir = tempfile::tempdir().unwrap();
+        let mut cb = Clipboard::with_temp_path(store_path(&dir));
         cb.arboard = None;
 
         cb.set("héllo 日本語 ✅").unwrap();
@@ -549,14 +549,14 @@ mod tests {
     fn temp_store_dir_and_file_are_owner_only() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!(
-            "term-wm-test-perms-{}",
-            std::process::id()
-        ));
-        let path = dir.join(CLIPBOARD_CACHE_FILENAME);
+        let dir = tempfile::tempdir().unwrap();
+        // Nested path forces `ensure_clipboard_store_dir` to create the
+        // intermediate directory, which must be owner-only (0700).
+        let store_dir = dir.path().join("store");
+        let path = store_dir.join(CLIPBOARD_CACHE_FILENAME);
         write_clipboard_temp(&path, "secret").unwrap();
 
-        let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        let dir_mode = std::fs::metadata(&store_dir).unwrap().permissions().mode() & 0o777;
         let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700, "store dir must be owner-only");
         assert_eq!(file_mode, 0o600, "store file must be owner-only");
