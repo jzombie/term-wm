@@ -23,9 +23,9 @@ const GLYPHS: [&str; 10] = [".", ",", ":", "-", ";", "+", "*", "x", "#", "@"];
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "render-bench",
+    name = env!("CARGO_PKG_NAME"),
     version = env!("CARGO_PKG_VERSION"),
-    about = "Render-heavy benchmark for checking terminal throughput"
+    about = env!("CARGO_PKG_DESCRIPTION")
 )]
 struct BenchCli {
     /// How long to run the benchmark.
@@ -37,7 +37,7 @@ struct BenchCli {
     )]
     duration_seconds: f64,
 
-    /// Target frames per second. Used to pace rendering so comparisons are repeatable.
+    /// Target frames per second to pace rendering so comparisons are repeatable.
     #[arg(short = 'f', long = "fps", value_name = "FPS", default_value_t = 60.0)]
     target_fps: f64,
 }

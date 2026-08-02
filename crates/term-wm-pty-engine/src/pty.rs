@@ -598,6 +598,11 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
     let mut vte_parser = vte::Parser::new();
     let tracker_for_adapter = std::sync::Arc::clone(&tracker);
     let mut tracker_adapter = PtyPerformAdapter::new(tracker_for_adapter);
+    // One clipboard handle for the whole reader lifetime: re-initialising
+    // arboard per OSC 52 sequence would repeat the display-server handshake
+    // on every copy event.  Each extracted sequence is relayed synchronously
+    // (no debounce) so the final payload of a burst is never dropped.
+    let mut clipboard = Clipboard::new();
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
         match reader.read(&mut buf) {
@@ -667,9 +672,10 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     *guard = Some(title);
                 }
                 // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
+                // Relay each extracted sequence synchronously via the hoisted
+                // handle — no debounce, so the tail payload is never dropped.
                 if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
-                    let mut cb = Clipboard::new();
-                    let _ = cb.set(&text);
+                    let _ = clipboard.set(&text);
                     if let Some(ref capture) = osc52_text {
                         *capture.lock().unwrap() = Some(text);
                     }

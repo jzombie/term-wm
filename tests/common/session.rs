@@ -19,14 +19,10 @@ pub fn test_channel(name: &str) -> ChannelName {
 pub async fn spawn_server_for_channel(
     channel: &ChannelName,
     cmd: Vec<String>,
-    cols: u16,
-    rows: u16,
 ) -> Arc<RpcIpcClient> {
     let config = SessionServerConfig {
         channel: channel.clone(),
         cmd,
-        cols,
-        rows,
     };
     tokio::spawn(async move { run_server(config).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -87,11 +83,6 @@ pub async fn wait_for_output(
     accumulated
 }
 
-pub async fn spawn_session(
-    channel: &ChannelName,
-    cmd: Vec<String>,
-    cols: u16,
-    rows: u16,
-) -> Arc<RpcIpcClient> {
-    spawn_server_for_channel(channel, cmd, cols, rows).await
+pub async fn spawn_session(channel: &ChannelName, cmd: Vec<String>) -> Arc<RpcIpcClient> {
+    spawn_server_for_channel(channel, cmd).await
 }

@@ -2,7 +2,13 @@
 name = "term-wm"
 description = "A cross-platform terminal multiplexer, window manager, Ratatui component library, and runtime."
 keywords = ["window-manager", "multiplexer", "terminal", "tui", "cross-platform"]
-categories = ["command-line-utilities", "emulators", "gui", "concurrency", "network-programming"]
+categories = [
+    "command-line-utilities",
+    "emulators",
+    "gui",
+    "concurrency",
+    "network-programming",
+]
 authors.workspace = true
 version.workspace = true
 edition.workspace = true

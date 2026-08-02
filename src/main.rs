@@ -30,10 +30,13 @@ const PTY_SCROLLBACK_LEN: usize = 2000;
     long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
 )]
 struct Cli {
+    /// Number of windows to open.
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
+    /// Command(s) to run.
     #[arg(value_name = "CMD", num_args = 0..)]
     cmds: Vec<String>,
+    /// Run embedded as a library component.
     #[arg(long)]
     embedded: bool,
 }

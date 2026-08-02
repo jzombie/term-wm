@@ -3,7 +3,7 @@
 **Package:** `%PACKAGE%` ([https://crates.io/crates/%PACKAGE%](https://crates.io/crates/%PACKAGE%))  
 **Version:** `%VERSION%` (%PLATFORM%)
 
-Submit bug reports: %REPOSITORY%/issues/new
+Submit bug reports to %REPOSITORY%/issues/new
 
 Welcome to `%PACKAGE%`! This page is a quick reference for navigating the UI.
 

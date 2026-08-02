@@ -37,8 +37,6 @@ const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::fro
 pub struct SessionServerConfig {
     pub channel: ChannelName,
     pub cmd: Vec<String>,
-    pub cols: u16,
-    pub rows: u16,
 }
 
 #[derive(Clone)]
@@ -174,8 +172,8 @@ pub async fn run_server(
         let session = Session::spawn(
             SESSION_ID,
             cmd,
-            config.cols,
-            config.rows,
+            FALLBACK_COLS,
+            FALLBACK_ROWS,
             Some(&config.channel),
         )?;
         st.set_session(session);
