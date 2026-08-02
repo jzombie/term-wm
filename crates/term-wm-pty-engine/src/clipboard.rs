@@ -260,11 +260,26 @@ impl Clipboard {
         // arboard absent or errored: fall back to the shared in-memory buffer.
         // Recover from a poisoned lock (a thread panicked while holding a
         // guard) so the Tier-1 fallback stays available for later operations.
-        self.shared
+        let text = self
+            .shared
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or(ClipboardError::NotAvailable)
+            .clone();
+        match text {
+            Some(text) => {
+                tracing::debug!(
+                    "clipboard: get read via in-memory shared buffer ({} bytes)",
+                    text.len()
+                );
+                Ok(text)
+            }
+            None => {
+                tracing::debug!(
+                    "clipboard: get no backend available (arboard absent, buffer empty)"
+                );
+                Err(ClipboardError::NotAvailable)
+            }
+        }
     }
 
     /// Set the system clipboard to `text`.
