@@ -426,9 +426,10 @@ impl Clipboard {
     ///    selection thread, whose clipboard ownership is known to be
     ///    unreliable (pastes can silently serve stale data).  The terminal
     ///    emulator then answers paste requests directly.  Oversized
-    ///    payloads are truncated to [`Clipboard::osc52_limit`] bytes at a
-    ///    valid UTF-8 char boundary, so the host still receives output up to
-    ///    the cap; the temp-file store and arboard always receive the full
+    ///    payloads are truncated at a valid UTF-8 char boundary to the OSC 52
+    ///    emission cap (default [`DEFAULT_MAX_OSC52_BYTES`], settable via
+    ///    [`Clipboard::with_options`]), so the host still receives output up
+    ///    to the cap; the temp-file store and arboard always receive the full
     ///    untruncated text.
     ///
     /// Errors from any path are silently ignored — at least one of
