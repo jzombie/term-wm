@@ -19,7 +19,8 @@ const DEFAULT_CHANNEL: &str = "default/main";
 #[command(
     name = env!("CARGO_PKG_NAME"),
     version = env!("CARGO_PKG_VERSION"),
-    about = env!("CARGO_PKG_DESCRIPTION")
+    about = env!("CARGO_PKG_DESCRIPTION"),
+    long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
 )]
 struct Cli {
     #[command(subcommand)]
