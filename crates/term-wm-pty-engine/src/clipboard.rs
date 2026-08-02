@@ -126,6 +126,10 @@ fn write_clipboard_temp(path: &Path, text: &str) -> std::io::Result<()> {
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
+        // Reject a symlink at the store path so an attacker cannot redirect
+        // our truncate/write onto a file we do not own (e.g. via a pre-planted
+        // symlink in a shared temp dir before our 0700 store dir exists).
+        options.custom_flags(libc::O_NOFOLLOW);
     }
     let mut f = options.open(path)?;
     f.write_all(text.as_bytes())?;
@@ -237,19 +241,19 @@ impl Clipboard {
     /// terminal emulators do not support them.
     pub fn get(&mut self) -> Result<String, ClipboardError> {
         if let Some(cb) = self.arboard.as_mut() {
-            return match cb.get_text() {
+            match cb.get_text() {
                 Ok(text) => {
                     tracing::debug!("clipboard: get read via arboard ({} bytes)", text.len());
-                    Ok(text)
+                    return Ok(text);
                 }
                 Err(e) => {
                     tracing::debug!(
                         "clipboard: get via arboard failed ({e}); falling back to temp store"
                     );
-                    Err(ClipboardError::from(e))
                 }
-            };
+            }
         }
+        // arboard absent or errored: fall back to the temp-file backing store.
         match read_clipboard_temp(&self.temp_path) {
             Ok(text) => {
                 tracing::debug!(
@@ -618,6 +622,30 @@ mod tests {
         let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700, "store dir must be owner-only");
         assert_eq!(file_mode, 0o600, "store file must be owner-only");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_store_write_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("store");
+        std::fs::create_dir(&store_dir).unwrap();
+
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "precious").unwrap();
+        // Simulate an attacker pre-planting a symlink at the store path.
+        let link = store_dir.join(CLIPBOARD_CACHE_FILENAME);
+        symlink(&target, &link).unwrap();
+
+        // The write must refuse to follow the symlink (O_NOFOLLOW -> ELOOP).
+        assert!(write_clipboard_temp(&link, "evil").is_err());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "precious",
+            "symlink target must not be truncated"
+        );
     }
 
     #[test]
