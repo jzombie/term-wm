@@ -165,4 +165,6 @@ async fn daemon_survives_parent_death() {
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
     ShutdownGateway::call(&*client, ()).await.unwrap();
+    // Give the daemon time to run its teardown and exit.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 }
