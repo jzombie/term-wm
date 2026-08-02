@@ -62,7 +62,12 @@ const APP_TEMP_DIR_PREFIX: &str = "term-wm";
 ///    dir is already user-private on Windows and macOS.
 fn default_temp_path() -> PathBuf {
     if let Some(runtime_dir) = std::env::var_os(ENV_XDG_RUNTIME_DIR) {
-        return PathBuf::from(runtime_dir).join(CLIPBOARD_CACHE_FILENAME);
+        let path = PathBuf::from(runtime_dir).join(CLIPBOARD_CACHE_FILENAME);
+        tracing::debug!(
+            "clipboard: resolved store path via XDG_RUNTIME_DIR -> {}",
+            path.display()
+        );
+        return path;
     }
     let base = std::env::temp_dir();
     #[cfg(unix)]
@@ -71,7 +76,13 @@ fn default_temp_path() -> PathBuf {
         APP_TEMP_DIR_PREFIX,
         unsafe { libc::getuid() }
     ));
-    base.join(CLIPBOARD_CACHE_FILENAME)
+    let path = base.join(CLIPBOARD_CACHE_FILENAME);
+    tracing::debug!(
+        "clipboard: resolved store path via temp_dir{} -> {}",
+        if cfg!(unix) { " (per-user subdir)" } else { "" },
+        path.display()
+    );
+    path
 }
 
 /// Create the parent directory of the clipboard store with owner-only
@@ -203,8 +214,14 @@ impl Clipboard {
     /// store.  Resolution of the default path is skipped; tests use this
     /// to inject an isolated path into a throwaway temp location.
     pub fn with_temp_path(path: PathBuf) -> Self {
+        let arboard = arboard::Clipboard::new().ok();
+        tracing::debug!(
+            "clipboard: backend arboard={}, temp store={}",
+            if arboard.is_some() { "available" } else { "unavailable" },
+            path.display()
+        );
         Self {
-            arboard: arboard::Clipboard::new().ok(),
+            arboard,
             temp_path: path,
             #[cfg(test)]
             osc52_output: Vec::new(),
@@ -220,9 +237,36 @@ impl Clipboard {
     /// terminal emulators do not support them.
     pub fn get(&mut self) -> Result<String, ClipboardError> {
         if let Some(cb) = self.arboard.as_mut() {
-            return cb.get_text().map_err(ClipboardError::from);
+            return match cb.get_text() {
+                Ok(text) => {
+                    tracing::debug!("clipboard: get read via arboard ({} bytes)", text.len());
+                    Ok(text)
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "clipboard: get via arboard failed ({e}); falling back to temp store"
+                    );
+                    Err(ClipboardError::from(e))
+                }
+            };
         }
-        read_clipboard_temp(&self.temp_path).map_err(|_| ClipboardError::NotAvailable)
+        match read_clipboard_temp(&self.temp_path) {
+            Ok(text) => {
+                tracing::debug!(
+                    "clipboard: get read via temp store {} ({} bytes)",
+                    self.temp_path.display(),
+                    text.len()
+                );
+                Ok(text)
+            }
+            Err(_) => {
+                tracing::debug!(
+                    "clipboard: get temp store unavailable at {}",
+                    self.temp_path.display()
+                );
+                Err(ClipboardError::NotAvailable)
+            }
+        }
     }
 
     /// Set the system clipboard to `text`.
@@ -245,7 +289,9 @@ impl Clipboard {
         // mechanism that reaches the real clipboard when term-wm runs
         // inside Zed's remote terminal, tmux, or over SSH.
         #[cfg(not(test))]
-        let _ = set_via_osc52_with_writer(text, &mut std::io::stdout().lock());
+        if let Err(e) = set_via_osc52_with_writer(text, &mut std::io::stdout().lock()) {
+            tracing::debug!("clipboard: set OSC 52 to stdout failed ({e})");
+        }
 
         // In tests, capture to osc52_output instead of stdout.
         #[cfg(test)]
@@ -257,14 +303,26 @@ impl Clipboard {
 
         // Always write the temp-file backing store so `get()` can
         // round-trip copy→paste on headless machines.  Best-effort.
-        let _ = write_clipboard_temp(&self.temp_path, text);
+        if let Err(e) = write_clipboard_temp(&self.temp_path, text) {
+            tracing::debug!(
+                "clipboard: set temp store write failed at {} ({e})",
+                self.temp_path.display()
+            );
+        }
 
         // Also write via arboard for the local case.
         // macOS AppKit/NSPasteboard writes debug spam to stderr when
         // setting the clipboard — suppress it to prevent terminal junk.
         if let Some(cb) = &mut self.arboard {
             let _guard = StderrSuppressGuard::new();
-            let _ = cb.set_text(text.to_owned());
+            match cb.set_text(text.to_owned()) {
+                Ok(()) => tracing::debug!("clipboard: set wrote via arboard"),
+                Err(e) => tracing::debug!("clipboard: set via arboard failed ({e})"),
+            }
+        } else {
+            tracing::debug!(
+                "clipboard: set arboard unavailable; temp store + OSC 52 only"
+            );
         }
 
         Ok(())
