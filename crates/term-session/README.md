@@ -9,25 +9,29 @@ A layout-agnostic, headless terminal session host and multiplexer.
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
 
 ```sh
-cargo run --release --bin term-session -- term-wm                        # attach to default/main, auto-spawning a server
-cargo run --release --bin term-session -- --channel work -- vim          # attach to (or spawn) the "work" channel
-cargo run --release --bin term-session -- --server --channel work -- vim # start a dedicated server daemon
+cargo run --release --bin term-session -- attach                          # attach to default/main, auto-spawning the gateway
+cargo run --release --bin term-session -- attach --channel work -- vim    # attach to (or spawn) the "work" channel
+cargo run --release --bin term-session -- list                            # list channels, sessions, and connected sockets
+cargo run --release --bin term-session -- kill work                       # kill the "work" channel's session + sockets
+cargo run --release --bin term-session -- stop                            # stop the gateway daemon
 ```
 
 Multiple terminals can attach to the same channel to share one session.
 
-In client mode `term-session` first probes the channel for a live server and, if none is running, spawns a detached one automatically (`connect_or_spawn_server`). The program to run is forwarded to the server at spawn time. The PTY starts at a default size and the server resizes it on demand to the smallest geometry across attached clients. The channel can also be set via the `TERM_WM_CHANNEL` environment variable.
+## Architecture
 
-## Architecture & Capabilities
+`term-session` runs a **single gateway daemon** that hosts every channel in one process. In client mode `term-session` first probes for a running gateway and, if none is found, spawns a detached one automatically (`connect_or_spawn_server`). Each connection then `Attach`es to a channel and `Spawn`s (or joins) its session.
 
-* **Concurrent Display Heads:** Supports multiple independent clients connecting to and rendering a single running session simultaneously.
-* **Muxio IPC Integration:** Utilizes the Muxio IPC framework and Bitcode serialization over OS-native transports (Linux abstract sockets, macOS `/tmp`, Windows named pipes) to route PTY state between the background server and attached clients.
+* **One process, many channels:** a single daemon supervises all PTY sessions; no per-channel server process.
+* **Server-assigned identity:** a client's `conn_id` is assigned by the gateway at connect time; channel binding is server-side and authoritative — a client can only reach the channel it attached to.
+* **Admin CLI:** `list` dumps every channel's session status (PTY cols×rows, exited state) and each connected socket (`conn_id`, hostname, connect time, physical terminal size). `kill` terminates a channel's process tree and detaches its sockets (or `--socket CONN_ID` detaches one socket). `stop` performs an orderly daemon shutdown.
+* **Muxio IPC:** PTY state and RPCs travel over the Muxio IPC framework with Bitcode serialization over OS-native transports (Linux abstract sockets, macOS `/tmp`, Windows named pipes). The gateway socket name is deterministic (`term-wm/<user>/gateway`) and can be overridden at runtime via `TERM_WM_GATEWAY`.
 * **Shared Mechanics:** Reuses a large part of `term-wm`'s internals — the PTY engine (`term-wm-pty-engine`: spawning, scrollback tracking, `vt100` parsing), the input event types (`term-wm-events`), and the crossterm input adapter (`term-wm-crossterm-adapter`). `term-session` does **not** produce the window manager: there is no layout engine, no tiling, and no window chrome — only the persistence and multiplexing layer.
 
 ## Platform Notes
 
-* **macOS & Linux:** The auto-spawned server detaches into its own session via `setsid()`, so it survives terminal closure and client disconnects. (Other Unix-like systems have not been tested.)
-* **Windows:** `term-session` works on Windows, but it does **not** currently auto-daemonize. The server is spawned with `CREATE_NO_WINDOW` (which suppresses the console window) rather than a full process-session detachment, so the server process does not fully detach from the launching console's lifetime the way it does on macOS and Linux.
+* **macOS & Linux:** The gateway detaches into its own session via `setsid()`, so it survives terminal closure and client disconnects. Killing a channel terminates the session's entire process group (SIGTERM → SIGKILL escalation), so background jobs are not orphaned.
+* **Windows:** `term-session` auto-daemonizes on Windows too. The gateway is spawned with `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` (giving it no console, so the parent's `CTRL_CLOSE_EVENT` never reaches it) and disinherits standard handles. PTY children are contained in a Win32 Job Object so the whole process tree is terminated on kill.
 
 ## Integration with term-wm
 
