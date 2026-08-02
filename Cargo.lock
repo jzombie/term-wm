@@ -3010,7 +3010,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3020,7 +3020,7 @@ dependencies = [
 
 [[package]]
 name = "term-resize-indicator"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3028,7 +3028,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "clap",
  "libc",
@@ -3041,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3071,7 +3071,7 @@ version = "0.0.0"
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3080,7 +3080,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3099,7 +3099,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3136,7 +3136,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3176,7 +3176,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3185,28 +3185,27 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "term-wm-layout-engine",
 ]
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.0",
  "ctrlc",
  "libc",
  "portable-pty",
- "tempfile",
  "term-wm-events",
  "thiserror 2.0.19",
  "tracing",
@@ -3216,11 +3215,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3236,7 +3235,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -3261,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.9.2-alpha"
+version = "0.9.3-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
