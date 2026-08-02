@@ -110,7 +110,4 @@ pub fn init_default() {
     {
         let _ = redirect_fd_to_tracing(2i32, true);
     }
-
-    // This is safe.  It should show up in the debug console.
-    eprintln!("stderr redirected");
 }
