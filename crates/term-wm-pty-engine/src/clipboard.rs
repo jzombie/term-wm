@@ -74,6 +74,7 @@ const CLIPBOARD_CACHE_FILENAME: &str = "term-wm-clipboard.txt";
 
 /// Prefix for the per-user subdirectory created under the shared temp dir
 /// on Unix when `$XDG_RUNTIME_DIR` is not available.
+#[cfg(unix)]
 const APP_TEMP_DIR_PREFIX: &str = "term-wm";
 
 /// Length of the OSC 52 header `\x1b]52;` (ESC + ] + "52;").
