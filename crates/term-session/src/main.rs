@@ -139,7 +139,13 @@ fn main() -> io::Result<()> {
                 io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
             })?;
             let socket_name = connect_or_spawn_server(None)?;
-            run_session(&socket_name, &channel.to_string(), &cli.cmd, cli.cols, cli.rows)
+            run_session(
+                &socket_name,
+                &channel.to_string(),
+                &cli.cmd,
+                cli.cols,
+                cli.rows,
+            )
         }
     }
 }
@@ -184,7 +190,8 @@ fn run_daemon_mode(cli: &Cli) -> io::Result<()> {
             })?;
     }
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
     rt.block_on(run_gateway(gateway.clone()))
         .map_err(|e| io::Error::other(format!("gateway error: {e}")))?;
     Ok(())
@@ -282,7 +289,8 @@ where
     Fut: std::future::Future<Output = T>,
 {
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
-    let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
     rt.block_on(async {
         let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
             .await
@@ -316,7 +324,7 @@ fn list_channels() -> io::Result<()> {
         let session = ch
             .session
             .as_ref()
-            .map(|s| format!("{}x{}", s.cols, s.rows))
+            .map(|s| format!("session size: {}x{}", s.cols, s.rows))
             .unwrap_or_else(|| "none".to_string());
         let nclients = ch.clients.len();
         println!();
@@ -332,12 +340,11 @@ fn list_channels() -> io::Result<()> {
             }
         );
         for c in &ch.clients {
+            println!("    - pid: {}", c.pid);
+            println!("      host: {}", c.hostname);
+            println!("      size: {}x{}", c.cols, c.rows);
             println!(
-                "    - pid {}  {}  {}x{}  connected {}",
-                c.pid,
-                c.hostname,
-                c.cols,
-                c.rows,
+                "      connected: {}",
                 format_unix_relative(c.connected_at_unix)
             );
         }
@@ -399,10 +406,8 @@ fn kill_channel(channel: &str, socket: Option<usize>, self_: bool) -> io::Result
         return Ok(());
     }
 
-    with_gateway(|client| async move {
-        KillChannel::call(&*client, channel.to_string()).await
-    })?
-    .map_err(|e| io::Error::other(format!("kill channel: {e}")))?;
+    with_gateway(|client| async move { KillChannel::call(&*client, channel.to_string()).await })?
+        .map_err(|e| io::Error::other(format!("kill channel: {e}")))?;
     println!("Killed channel {channel}");
     Ok(())
 }
