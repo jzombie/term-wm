@@ -105,7 +105,9 @@ pub async fn spawn_session(channel: &ChannelName) -> (Arc<RpcIpcClient>, usize) 
 }
 
 /// List channels via the admin method (no attach required).
-pub async fn list_channels(client: &Arc<RpcIpcClient>) -> Vec<term_session_muxio_service_definitions::ChannelInfo> {
+pub async fn list_channels(
+    client: &Arc<RpcIpcClient>,
+) -> term_session_muxio_service_definitions::ListChannelsResponse {
     ListChannels::call(&**client, ()).await.expect("list channels")
 }
 

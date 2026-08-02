@@ -217,13 +217,17 @@ async fn session_list_channels() {
         .await
         .unwrap();
 
-    let channels = list_channels(&client).await;
+    let resp = list_channels(&client).await;
+    let channels = &resp.channels;
     assert!(channels.iter().any(|c| c.name == "test/list_channels"));
     let ch = channels
         .iter()
         .find(|c| c.name == "test/list_channels")
         .unwrap();
     assert!(ch.session.is_some(), "session should be present");
+    // Process visibility: the response identifies the daemon PID + socket.
+    assert!(resp.gateway_pid > 0, "gateway pid reported");
+    assert!(!resp.socket.is_empty(), "socket name reported");
 }
 
 #[tokio::test]
@@ -241,7 +245,7 @@ async fn session_close_session() {
     let start = std::time::Instant::now();
     loop {
         let channels = list_channels(&client).await;
-        let ch = channels.iter().find(|c| c.name == "test/close_session");
+        let ch = channels.channels.iter().find(|c| c.name == "test/close_session");
         let gone = ch.map(|c| c.session.is_none()).unwrap_or(true);
         if gone {
             break;
@@ -469,7 +473,8 @@ async fn list_channels_reports_clients_and_geometry() {
         .unwrap();
     Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
 
-    let channels = list_channels(&c1).await;
+    let resp = list_channels(&c1).await;
+    let channels = &resp.channels;
     let ch = channels.iter().find(|c| c.name == "test/list_geom").unwrap();
     assert!(ch.session.is_some(), "session present");
     assert!(ch.clients.len() == 2, "two clients attached");
@@ -487,6 +492,9 @@ async fn list_channels_reports_clients_and_geometry() {
     }
     // Channel reports its creation time.
     assert!(ch.created_at_unix > 0, "channel create time recorded");
+    // Process visibility: the response identifies the daemon PID + socket.
+    assert!(resp.gateway_pid > 0, "gateway pid reported");
+    assert!(!resp.socket.is_empty(), "socket name reported");
 }
 
 #[tokio::test]
@@ -521,7 +529,7 @@ async fn kill_channel_kills_only_that_channel() {
     // Channel A's session is gone (the channel may be reaped entirely once
     // its session exits and no clients remain — either way no live session).
     let channels = list_channels(&a).await;
-    let ch_a = channels.iter().find(|c| c.name == "test/kill_a");
+    let ch_a = channels.channels.iter().find(|c| c.name == "test/kill_a");
     if let Some(ch) = ch_a {
         // If the channel survived reaping, its session must be gone.
         assert!(ch.session.is_none(), "killed channel has no session");
@@ -548,7 +556,7 @@ async fn kill_channel_respawns_with_stored_cmd() {
     let (id, _, _) = Spawn::call(&*c2, (None, TEST_COLS, TEST_ROWS)).await.unwrap();
     assert_eq!(id, 1);
     let channels = list_channels(&c2).await;
-    let ch = channels.iter().find(|c| c.name == "test/kill_respawn").unwrap();
+    let ch = channels.channels.iter().find(|c| c.name == "test/kill_respawn").unwrap();
     assert!(ch.session.is_some(), "session respawned");
 }
 

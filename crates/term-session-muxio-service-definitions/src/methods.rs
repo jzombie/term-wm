@@ -297,8 +297,20 @@ pub struct ChannelInfo {
     pub clients: Vec<ClientInfo>,
 }
 
+/// Response for `ListChannels`: the gateway's PID + bound socket name plus the
+/// full channel listing. The PID lets the CLI identify the daemon process
+/// unambiguously in process managers.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct ListChannelsResponse {
+    pub gateway_pid: u64,
+    pub socket: String,
+    pub channels: Vec<ChannelInfo>,
+}
+
 #[derive(Encode, Decode)]
-struct ListChannelsResponse {
+struct ListChannelsResponseWire {
+    pub gateway_pid: u64,
+    pub socket: String,
     pub channels: Vec<ChannelInfo>,
 }
 
@@ -308,7 +320,7 @@ impl RpcMethodPrebuffered for ListChannels {
     const METHOD_ID: u64 = rpc_method_id!("session.list_channels");
 
     type Input = ();
-    type Output = Vec<ChannelInfo>;
+    type Output = ListChannelsResponse;
 
     fn encode_request(_input: Self::Input) -> Result<Vec<u8>, io::Error> {
         Ok(Vec::new())
@@ -319,13 +331,21 @@ impl RpcMethodPrebuffered for ListChannels {
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&ListChannelsResponse { channels: output }))
+        Ok(bitcode::encode(&ListChannelsResponseWire {
+            gateway_pid: output.gateway_pid,
+            socket: output.socket,
+            channels: output.channels,
+        }))
     }
 
     fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
-        let r = bitcode::decode::<ListChannelsResponse>(bytes)
+        let r = bitcode::decode::<ListChannelsResponseWire>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok(r.channels)
+        Ok(ListChannelsResponse {
+            gateway_pid: r.gateway_pid,
+            socket: r.socket,
+            channels: r.channels,
+        })
     }
 }
 

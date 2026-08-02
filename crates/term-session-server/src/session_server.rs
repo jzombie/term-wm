@@ -12,9 +12,9 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, OnPtyResized, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty,
-    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn,
-    WriteInput,
+    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED,
+    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway,
+    Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -825,9 +825,11 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
 
     // ── ListChannels ─────────────────────────────────────────────────
     let st = Arc::clone(&state);
+    let list_socket = socket_name.clone();
     endpoint
         .register_prebuffered(ListChannels::METHOD_ID, move |_payload, _ctx| {
             let state = Arc::clone(&st);
+            let socket = list_socket.clone();
             async move {
                 let channels = {
                     let chans = state.channels.read().await;
@@ -844,7 +846,12 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                     let guard = ch.lock().await;
                     out.push(guard.to_info(&name));
                 }
-                ListChannels::encode_response(out).map_err(boxed_io)
+                ListChannels::encode_response(ListChannelsResponse {
+                    gateway_pid: std::process::id() as u64,
+                    socket,
+                    channels: out,
+                })
+                .map_err(boxed_io)
             }
         })
         .await

@@ -151,6 +151,11 @@ fn main() -> io::Result<()> {
 fn run_daemon_mode(cli: &Cli) -> io::Result<()> {
     tracing_subscriber::fmt::init();
 
+    // Make the daemon recognizable in process managers: every `term-session`
+    // process is the same binary, so rename this one so `ps`/`top`/Task
+    // Manager show `term-session-daemon` instead of generic `term-session`.
+    set_daemon_process_name();
+
     // Self-detach: a `--daemon` that was not already started as a session
     // leader (e.g. spawned directly by a test or wrapper, not via
     // `auto_spawn::connect_or_spawn_server`) detaches itself from the
@@ -222,6 +227,55 @@ fn write_selfcheck_marker(marker: &std::path::Path) {
     let _ = std::fs::write(marker, proof);
 }
 
+/// Rename the running process so process managers can distinguish the gateway
+/// daemon from interactive `term-session` clients. Best-effort and cosmetic:
+/// a failure is ignored and never affects functionality.
+///
+/// Platform behavior (and limitations):
+/// - **Linux:** `PR_SET_NAME` sets the process comm (capped at 15 bytes →
+///   `term-session-d`), so `ps -comm`, `top`, and `htop` show the renamed
+///   value. This is the most complete rename on any platform.
+/// - **macOS:** `pthread_setname_np` sets the **thread** name, not the process
+///   comm — `ps -o comm` and Activity Monitor's process list still show
+///   `term-session`. The renamed value is only visible in Activity Monitor's
+///   per-thread view (and `sample`). This is an OS limitation: macOS has no
+///   portable user-space API to rename the process comm. Daemon disambiguation
+///   on macOS therefore relies primarily on the `--daemon` argv flag and the
+///   `Gateway Daemon PID` header printed by `term-session list`.
+/// - **Windows:** `SetThreadDescription` sets the thread description, which
+///   Process Explorer / Process Hacker show in the **Description** column.
+fn set_daemon_process_name() {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CString;
+        if let Ok(name) = CString::new("term-session-d") {
+            unsafe {
+                libc::prctl(libc::PR_SET_NAME, name.as_ptr() as usize, 0, 0, 0);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::CString;
+        if let Ok(name) = CString::new("term-session-daemon") {
+            unsafe {
+                libc::pthread_setname_np(name.as_ptr());
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadDescription};
+        let wide: Vec<u16> = "term-session-daemon"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            SetThreadDescription(GetCurrentThread(), wide.as_ptr());
+        }
+    }
+}
+
 /// Connect to the gateway daemon and run `op` with a live client. The tokio
 /// runtime that hosts the muxio connection is kept alive for the whole `op`,
 /// so RPCs complete (dropping it early would tear down the connection and
@@ -249,10 +303,11 @@ where
 }
 
 fn list_channels(json: bool) -> io::Result<()> {
-    let channels = with_gateway(|client| async move { ListChannels::call(&*client, ()).await })?
+    let resp = with_gateway(|client| async move { ListChannels::call(&*client, ()).await })?
         .map_err(|e| io::Error::other(format!("list: {e}")))?;
     if json {
-        for ch in &channels {
+        let mut json_channels: Vec<String> = Vec::new();
+        for ch in &resp.channels {
             let session = ch
                 .session
                 .as_ref()
@@ -268,23 +323,39 @@ fn list_channels(json: bool) -> io::Result<()> {
                     )
                 })
                 .collect();
-            println!(
+            json_channels.push(format!(
                 "{{\"name\":\"{}\",\"created_at\":{},\"session\":\"{}\",\"clients\":[{}]}}",
                 ch.name,
                 ch.created_at_unix,
                 session,
                 clients.join(",")
-            );
+            ));
         }
+        println!(
+            "{{\"gateway_pid\":{},\"socket\":\"{}\",\"channels\":[{}]}}",
+            resp.gateway_pid,
+            resp.socket,
+            json_channels.join(",")
+        );
     } else {
+        // Header: which PID on this system is the gateway daemon.
+        println!(
+            "Gateway Daemon PID: {} | Socket: {}",
+            resp.gateway_pid, resp.socket
+        );
+        if resp.channels.is_empty() {
+            println!("\nNo channels.");
+            return Ok(());
+        }
         // Vertical list: one block per channel, one line per client.
-        for ch in &channels {
+        for ch in &resp.channels {
             let session = ch
                 .session
                 .as_ref()
                 .map(|s| format!("{}x{}", s.cols, s.rows))
                 .unwrap_or_else(|| "none".to_string());
             let nclients = ch.clients.len();
+            println!();
             println!("channel: {}", ch.name);
             println!("  created: {}", format_unix_relative(ch.created_at_unix));
             println!("  session: {}", session);
