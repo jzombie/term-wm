@@ -73,9 +73,8 @@ In Direct Mode, the following keybindings **are not-effective**, and are conting
 |---|---|
 | Scrollback navigation | `PageUp` / `PageDown` / `Home` / `End` |
 | Scroll one line | `Shift+Up` / `Shift+Down` |
-| Select text (mouse) | Click and drag; release copies |
-| Copy | Select text | Direct Mode apps are app-specific
-| Paste | Right-click | Direct Mode apps are app-specific
+| Copy; Select text | [mouse] Click and drag mouse; release copies |
+| Paste | Right-click | [mouse] Direct Mode apps are app-specific
 
 > **Note:** Copy and paste behavior depends on the host OS and terminal emulator. Because the system and terminal clipboards may diverge, copy/paste can occasionally appear out of sync; the OS-native hotkeys (e.g. `Cmd+C`/`Cmd+V` on macOS, `Ctrl+Shift+C`/`Ctrl+Shift+V` in many terminals) remain available as a fallback.
 
