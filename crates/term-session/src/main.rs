@@ -149,15 +149,42 @@ fn main() -> io::Result<()> {
 
 fn run_daemon_mode(cli: &Cli) -> io::Result<()> {
     tracing_subscriber::fmt::init();
+
+    // Self-detach: a `--daemon` that was not already started as a session
+    // leader (e.g. spawned directly by a test or wrapper, not via
+    // `auto_spawn::connect_or_spawn_server`) detaches itself from the
+    // launching terminal so Ctrl+C / SIGHUP never reach it. `setsid()` fails
+    // with EPERM if the process is already a process-group leader, which is
+    // exactly the already-detached case — so ignore that error.
+    #[cfg(unix)]
+    unsafe {
+        libc::setsid();
+    }
+
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
+
+    // Test-only: as soon as the gateway socket is reachable, write the
+    // platform's detachment proof to the marker, then exit the probe thread.
+    if let Some(ref marker) = cli.daemon_selfcheck {
+        let gw = gateway.clone();
+        let marker = marker.clone();
+        std::thread::Builder::new()
+            .name("daemon-selfcheck".into())
+            .spawn(move || {
+                for _ in 0..200 {
+                    if term_session_muxio_service_definitions::probe_ipc_endpoint(&gw) {
+                        write_selfcheck_marker(&marker);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                let _ = std::fs::write(&marker, "bound-timeout");
+            })?;
+    }
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
     rt.block_on(run_gateway(gateway.clone()))
         .map_err(|e| io::Error::other(format!("gateway error: {e}")))?;
-
-    if let Some(ref marker) = cli.daemon_selfcheck {
-        write_selfcheck_marker(marker);
-    }
     Ok(())
 }
 

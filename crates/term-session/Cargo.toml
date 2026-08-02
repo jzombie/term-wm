@@ -27,3 +27,7 @@ tracing-subscriber = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
+
+[dev-dependencies]
+muxio-tokio-rpc-ipc-client = { workspace = true }
+tokio = { workspace = true }
