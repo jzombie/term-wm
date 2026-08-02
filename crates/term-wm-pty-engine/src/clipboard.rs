@@ -1,6 +1,6 @@
 //! Cross-platform clipboard helper utilities.
 //!
-//! This module provides two clipboard back-ends:
+//! This module provides three clipboard back-ends:
 //!
 //! 1. **OSC 52** – writes the clipboard via the terminal-emulator escape
 //!    sequence `\x1b]52;c;BASE64\x07`.  This works through remote terminals,
@@ -10,8 +10,14 @@
 //! 2. **`arboard`** – a persistent handle for direct access (local fallback
 //!    and clipboard reads).  When running over SSH the arboard handle may not
 //!    initialise; OSC 52 alone is sufficient for copy.
+//!
+//! 3. **Temp-file store** – a best-effort backing store written on every
+//!    `set()` so `get()` can round-trip copy→paste on headless / remote
+//!    machines (e.g. a bare Ubuntu server over SSH) where `arboard` cannot
+//!    initialise and the host terminal may not support OSC 52 reads.
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use thiserror::Error;
@@ -28,6 +34,36 @@ pub enum ClipboardError {
 
     #[error("clipboard backend not available (running remotely?)")]
     NotAvailable,
+}
+
+/// Filename (in the OS temp directory) of the temp-file clipboard backing
+/// store used as a headless fallback for `get()`.
+const CLIPBOARD_TEMP_FILENAME: &str = "term-wm-clipboard.txt";
+
+/// Absolute path of the default temp-file clipboard store.
+fn default_temp_path() -> PathBuf {
+    std::env::temp_dir().join(CLIPBOARD_TEMP_FILENAME)
+}
+
+/// Write `text` to the temp-file backing store at `path`.
+///
+/// Best-effort: failures are swallowed by callers — this is a fallback,
+/// not a primary clipboard mechanism.
+fn write_clipboard_temp(path: &Path, text: &str) -> std::io::Result<()> {
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(text.as_bytes())?;
+    f.flush()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// Read the text previously stored at `path` by the temp-file backing store.
+fn read_clipboard_temp(path: &Path) -> std::io::Result<String> {
+    std::fs::read_to_string(path)
 }
 
 /// Build the raw bytes of an OSC 52 clipboard sequence.
@@ -58,17 +94,22 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
     Ok(())
 }
 
-/// A persistent clipboard handle backed by `arboard` (optional) and OSC 52.
+/// A persistent clipboard handle backed by `arboard` (optional), OSC 52,
+/// and a temp-file store (optional).
 ///
 /// Holding a long-lived [`arboard::Clipboard`] instance avoids the macOS
 /// problem where a short-lived connection is torn down before the pasteboard
 /// server finishes processing the write.
 ///
 /// When running over SSH the arboard handle will be `None`; `set()` still
-/// works via OSC 52 emitted to stdout, but `get()` returns
-/// `ClipboardError::NotAvailable`.
+/// works via OSC 52 emitted to stdout, and `get()` falls back to the
+/// temp-file store so copy→paste round-trips on headless machines.
 pub struct Clipboard {
     arboard: Option<arboard::Clipboard>,
+    /// Path of the temp-file backing store.  When `None`, the default
+    /// OS temp-dir path is used.  Tests set a unique path to avoid
+    /// cross-test interference.
+    temp_path: Option<PathBuf>,
     /// Captured OSC 52 output — only present in test builds so that tests
     /// can verify the OSC 52 path was exercised alongside the arboard path.
     #[cfg(test)]
@@ -90,37 +131,49 @@ impl Clipboard {
     pub fn new() -> Self {
         Self {
             arboard: arboard::Clipboard::new().ok(),
+            temp_path: None,
             #[cfg(test)]
             osc52_output: Vec::new(),
         }
     }
 
+    /// Resolve the effective temp-file backing-store path.
+    fn temp_path(&self) -> PathBuf {
+        self.temp_path
+            .clone()
+            .unwrap_or_else(default_temp_path)
+    }
+
     /// Read the clipboard as a `String`.
     ///
-    /// Only works in local environments where `arboard` can reach the
-    /// system clipboard.  Over SSH this returns `ClipboardError::NotAvailable`.
-    /// Does **not** attempt OSC 52 reads because most terminal emulators
-    /// do not support them.
+    /// Prefers `arboard` (the real system clipboard) when available; on
+    /// headless / remote machines it falls back to the temp-file backing
+    /// store written by [`Clipboard::set`], so copy→paste round-trips
+    /// inside term-wm.  Does **not** attempt OSC 52 reads because most
+    /// terminal emulators do not support them.
     pub fn get(&mut self) -> Result<String, ClipboardError> {
-        self.arboard
-            .as_mut()
-            .ok_or(ClipboardError::NotAvailable)?
-            .get_text()
-            .map_err(ClipboardError::from)
+        if let Some(cb) = self.arboard.as_mut() {
+            return cb.get_text().map_err(ClipboardError::from);
+        }
+        let path = self.temp_path();
+        read_clipboard_temp(&path).map_err(|_| ClipboardError::NotAvailable)
     }
 
     /// Set the system clipboard to `text`.
     ///
-    /// Runs **both** back-ends:
+    /// Runs **all** back-ends:
     ///
     /// 1. `arboard` — writes to the local system clipboard directly.
     /// 2. **OSC 52** — writes to the host terminal's clipboard via the
     ///    escape sequence.  This ensures copy works when embedded in
     ///    remote/embedded terminals (Zed, tmux, SSH) where the host
     ///    terminal intercepts the sequence.
+    /// 3. **Temp file** — a local copy so `get()` can round-trip copy→paste
+    ///    on headless machines where neither arboard nor an OSC 52 read
+    ///    is available.
     ///
-    /// Errors from either path are silently ignored — at least one of
-    /// the two is expected to fail depending on the environment.
+    /// Errors from any path are silently ignored — at least one of
+    /// the back-ends is expected to fail depending on the environment.
     pub fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
         // Always write OSC 52 for the host terminal — this is the only
         // mechanism that reaches the real clipboard when term-wm runs
@@ -135,6 +188,10 @@ impl Clipboard {
             let _ = set_via_osc52_with_writer(text, &mut buf);
             self.osc52_output = buf;
         }
+
+        // Always write the temp-file backing store so `get()` can
+        // round-trip copy→paste on headless machines.  Best-effort.
+        let _ = write_clipboard_temp(&self.temp_path(), text);
 
         // Also write via arboard for the local case.
         // macOS AppKit/NSPasteboard writes debug spam to stderr when
@@ -376,6 +433,53 @@ impl Default for Osc52Extractor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Unique temp-file path per test (avoids parallel-test races on the
+    /// shared OS temp directory).
+    fn unique_temp_path(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "term-wm-test-{tag}-{}.txt",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn temp_store_roundtrip_via_set_get_when_arboard_absent() {
+        let path = unique_temp_path("roundtrip");
+        let mut cb = Clipboard::new();
+        cb.temp_path = Some(path.clone());
+        // Simulate a headless SSH session where arboard cannot initialise.
+        cb.arboard = None;
+
+        cb.set("clipboard text").unwrap();
+        assert_eq!(cb.get().unwrap(), "clipboard text");
+    }
+
+    #[test]
+    fn temp_store_read_helper_roundtrips() {
+        let path = unique_temp_path("helper");
+        write_clipboard_temp(&path, "helper text").unwrap();
+        assert_eq!(read_clipboard_temp(&path).unwrap(), "helper text");
+    }
+
+    #[test]
+    fn temp_store_read_missing_returns_not_available() {
+        let mut cb = Clipboard::new();
+        cb.arboard = None;
+        cb.temp_path = Some(unique_temp_path("missing"));
+        assert!(matches!(cb.get(), Err(ClipboardError::NotAvailable)));
+    }
+
+    #[test]
+    fn temp_store_unicode_roundtrip() {
+        let path = unique_temp_path("unicode");
+        let mut cb = Clipboard::new();
+        cb.temp_path = Some(path.clone());
+        cb.arboard = None;
+
+        cb.set("héllo 日本語 ✅").unwrap();
+        assert_eq!(cb.get().unwrap(), "héllo 日本語 ✅");
+    }
 
     #[test]
     fn clipboard_set_emits_osc52() {
