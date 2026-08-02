@@ -338,8 +338,15 @@ fn stop_gateway() -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate `TERM_WM_CHANNEL`, which is process-global.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn cli_channel_takes_precedence_over_env() {
+        let _guard = env_lock();
         unsafe {
             std::env::set_var(CHANNEL_ENV_VAR, "other/chan");
         }
@@ -351,6 +358,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_env_channel() {
+        let _guard = env_lock();
         unsafe {
             std::env::set_var(CHANNEL_ENV_VAR, "work/dev");
         }
@@ -362,6 +370,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_default_channel() {
+        let _guard = env_lock();
         unsafe {
             std::env::remove_var(CHANNEL_ENV_VAR);
         }
