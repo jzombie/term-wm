@@ -88,6 +88,13 @@ fn default_temp_path() -> PathBuf {
 
 /// Create the parent directory of the clipboard store with owner-only
 /// permissions (`0700`) on Unix, preventing other users from entering it.
+///
+/// If the directory already exists it is NOT blindly reused: a pre-existing
+/// directory under the predictable `/tmp/term-wm-<uid>` name could have been
+/// created permissively by another user, who could then plant files to steal
+/// or poison clipboard contents.  The existing directory is accepted only
+/// when it is a directory owned by the current user and not writable by
+/// group or others.
 fn ensure_clipboard_store_dir(path: &Path) -> std::io::Result<()> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -97,12 +104,34 @@ fn ensure_clipboard_store_dir(path: &Path) -> std::io::Result<()> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
         let mut builder = std::fs::DirBuilder::new();
         builder.mode(0o700);
         match builder.create(parent) {
             Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let meta = std::fs::metadata(parent)?;
+                if !meta.is_dir() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "clipboard store: parent path is not a directory",
+                    ));
+                }
+                if meta.uid() != unsafe { libc::geteuid() } {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "clipboard store: parent directory not owned by current user",
+                    ));
+                }
+                if meta.mode() & 0o022 != 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "clipboard store: parent directory is group/other-writable",
+                    ));
+                }
+                Ok(())
+            }
             Err(e) => Err(e),
         }
     }
@@ -113,38 +142,81 @@ fn ensure_clipboard_store_dir(path: &Path) -> std::io::Result<()> {
 /// Write `text` to the temp-file backing store at `path`.
 ///
 /// The file is created with owner-only permissions (`0600`) on Unix, and
-/// the permissions are re-applied after writing to guard against a
-/// pre-existing file created with looser permissions (e.g. by an older
-/// version or a permissive umask).
+/// the permissions are pinned on the opened fd itself (`fchmod`), which also
+/// closes the open-then-chmod path-re-resolution TOCTOU window.  Before any
+/// content is written the opened fd is verified (race-free, via `fstat`) to
+/// be a regular file owned by the current user with a link count of one —
+/// this rejects a symlink (`O_NOFOLLOW`) as well as a hard link planted at
+/// the store path that would otherwise leak clipboard contents into a file
+/// the attacker owns, or overwrite a file we own elsewhere.
 ///
 /// Best-effort: failures are swallowed by callers — this is a fallback,
 /// not a primary clipboard mechanism.
 fn write_clipboard_temp(path: &Path, text: &str) -> std::io::Result<()> {
     ensure_clipboard_store_dir(path)?;
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
         // Reject a symlink at the store path so an attacker cannot redirect
-        // our truncate/write onto a file we do not own (e.g. via a pre-planted
+        // our write onto a file we do not own (e.g. via a pre-planted
         // symlink in a shared temp dir before our 0700 store dir exists).
         options.custom_flags(libc::O_NOFOLLOW);
     }
     let mut f = options.open(path)?;
-    f.write_all(text.as_bytes())?;
-    f.flush()?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::io::AsRawFd;
+
+        let meta = f.metadata()?;
+        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.nlink() != 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "clipboard store: unexpected file ownership, type, or link count",
+            ));
+        }
+        if unsafe { libc::fchmod(f.as_raw_fd(), 0o600) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
     }
+    f.set_len(0)?;
+    f.write_all(text.as_bytes())?;
+    f.flush()?;
     Ok(())
 }
 
 /// Read the text previously stored at `path` by the temp-file backing store.
+///
+/// On Unix the file is opened with `O_NOFOLLOW` (rejecting a symlink planted
+/// at the store path) and the opened fd is verified to be a regular file
+/// owned by the current user with owner-only permissions before its contents
+/// are trusted.  A foreign-owned or permissive file could be attacker
+/// content that would be pasted into the terminal (clipboard poisoning).
 fn read_clipboard_temp(path: &Path) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        options.custom_flags(libc::O_NOFOLLOW);
+        let mut f = options.open(path)?;
+        let meta = f.metadata()?;
+        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "clipboard store: refusing to read non-owner-only file",
+            ));
+        }
+        let mut buf = String::new();
+        f.read_to_string(&mut buf)?;
+        Ok(buf)
+    }
+    #[cfg(not(unix))]
     std::fs::read_to_string(path)
 }
 
@@ -282,6 +354,15 @@ impl Clipboard {
                     self.temp_path.display(),
                     text.len()
                 );
+                // Consume the store: this is a single-use copy→paste round-trip,
+                // so remove the file so sensitive clipboard text does not persist
+                // on disk.  Best-effort.
+                if let Err(e) = std::fs::remove_file(&self.temp_path) {
+                    tracing::debug!(
+                        "clipboard: get temp store cleanup failed at {} ({e})",
+                        self.temp_path.display()
+                    );
+                }
                 Ok(text)
             }
             Err(_) => {
@@ -597,21 +678,42 @@ mod tests {
     /// Path to the clipboard store inside an isolated, auto-cleaned
     /// [`tempfile::TempDir`], so tests never touch the shared default store
     /// or leak files in the OS temp directory.
+    ///
+    /// A nested owner-only (`0700`) subdirectory is used as the store parent
+    /// to mirror production (where the parent is created `0700`), because
+    /// `tempfile::TempDir` roots are group/other-writable by default and
+    /// would be rejected by [`ensure_clipboard_store_dir`].
     fn store_path(dir: &tempfile::TempDir) -> PathBuf {
-        dir.path().join(CLIPBOARD_CACHE_FILENAME)
+        let sub = dir.path().join("store");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder.create(&sub).unwrap();
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&sub).unwrap();
+        sub.join(CLIPBOARD_CACHE_FILENAME)
     }
 
     #[test]
     fn temp_store_roundtrip_via_set_get_when_arboard_absent() {
         let dir = tempfile::tempdir().unwrap();
-        let mut cb = Clipboard::with_temp_path(store_path(&dir));
+        let path = store_path(&dir);
+        let mut cb = Clipboard::with_temp_path(path.clone());
         // Simulate a headless SSH session where arboard cannot initialise:
         // the temp-file store is the only round-trip mechanism.
         cb.arboard = None;
         cb.temp_store_enabled = true;
 
         cb.set("clipboard text").unwrap();
+        assert!(path.exists(), "set() must persist to the temp store");
         assert_eq!(cb.get().unwrap(), "clipboard text");
+        assert!(
+            !path.exists(),
+            "get() must consume the temp store so secrets do not persist on disk"
+        );
     }
 
     #[test]
@@ -685,11 +787,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn temp_store_write_rejects_symlink() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{DirBuilderExt, symlink};
 
         let dir = tempfile::tempdir().unwrap();
         let store_dir = dir.path().join("store");
-        std::fs::create_dir(&store_dir).unwrap();
+        // Owner-only dir so the rejection comes from O_NOFOLLOW, not from
+        // the pre-existing-dir permission check.
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&store_dir).unwrap();
 
         let target = dir.path().join("target.txt");
         std::fs::write(&target, "precious").unwrap();
@@ -703,6 +809,83 @@ mod tests {
             std::fs::read_to_string(&target).unwrap(),
             "precious",
             "symlink target must not be truncated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_store_read_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("store");
+        std::fs::create_dir(&store_dir).unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "precious").unwrap();
+        let link = store_dir.join(CLIPBOARD_CACHE_FILENAME);
+        symlink(&target, &link).unwrap();
+
+        // The read must refuse to follow the symlink so attacker content
+        // cannot be pasted as clipboard text.
+        assert!(read_clipboard_temp(&link).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "precious",
+            "symlink target must be left untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_store_rejects_permissive_preexisting_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("store");
+        std::fs::create_dir(&store_dir).unwrap();
+        // Simulate a directory pre-created by another user (or left
+        // permissively) that we would otherwise blindly reuse.
+        std::fs::set_permissions(&store_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let path = store_dir.join(CLIPBOARD_CACHE_FILENAME);
+
+        assert!(
+            write_clipboard_temp(&path, "secret").is_err(),
+            "permissive pre-existing store dir must be rejected"
+        );
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_store_write_rejects_hardlink_target() {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("store");
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&store_dir).unwrap();
+
+        let attacker_file = dir.path().join("attacker-owned.txt");
+        std::fs::write(&attacker_file, "precious").unwrap();
+        // Simulate an attacker hard-linking their own file into the store
+        // path (O_NOFOLLOW does not stop hard links).
+        let store_path = store_dir.join(CLIPBOARD_CACHE_FILENAME);
+        std::fs::hard_link(&attacker_file, &store_path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&store_path).unwrap().nlink(),
+            2,
+            "hard link must be set up for the test"
+        );
+
+        assert!(
+            write_clipboard_temp(&store_path, "secret").is_err(),
+            "a hard-linked store file must be rejected before any write"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&attacker_file).unwrap(),
+            "precious",
+            "hard-link target must not be truncated or overwritten"
         );
     }
 
