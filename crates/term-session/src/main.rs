@@ -278,7 +278,7 @@ fn list_channels(json: bool) -> io::Result<()> {
     } else {
         // One summary row per channel plus a detailed row per client.
         println!(
-            "{:<24} {:<12} {:<10} {:<10} {:<14} {}",
+            "{:<24} {:<12} {:<10} {:<10} {:<14} {:<24}",
             "CHANNEL", "CREATED", "SESSION", "CLIENT", "HOST", "SIZE @ CONNECTED"
         );
         for ch in &channels {
@@ -290,16 +290,17 @@ fn list_channels(json: bool) -> io::Result<()> {
                 .unwrap_or_else(|| "-".to_string());
             if ch.clients.is_empty() {
                 println!(
-                    "{:<24} {:<12} {:<10} {:<10} {:<14} {}",
+                    "{:<24} {:<12} {:<10} {:<10} {:<14} {:<24}",
                     ch.name, created, session, "-", "-", "-"
                 );
                 continue;
             }
             for (i, c) in ch.clients.iter().enumerate() {
+                // Blank the channel/created columns on continuation rows.
                 let (name, cr) = if i == 0 {
-                    (ch.name.as_str(), created.as_str())
+                    (ch.name.to_string(), created.clone())
                 } else {
-                    ("", "")
+                    (String::new(), String::new())
                 };
                 println!(
                     "{:<24} {:<12} {:<10} {:<10} {:<14} ({}x{} @ {})",
