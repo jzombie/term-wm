@@ -325,7 +325,8 @@ pub struct WindowManager<
     /// and propagated to components via `set_selection_enabled`.  This is
     /// **not** a
     /// [`ClipboardConfig`](crate::clipboard::ClipboardConfig) flag — it only
-    /// gates whether the WM calls [`Clipboard::set`], and has no effect on
+    /// gates whether the WM calls
+    /// [`crate::clipboard::Clipboard::set`], and has no effect on
     /// the clipboard subsystem's backends.
     clipboard_enabled: bool,
     clipboard_dirty: bool,
