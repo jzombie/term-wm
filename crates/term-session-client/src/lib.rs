@@ -139,6 +139,12 @@ const BRACKETED_PASTE_OVERHEAD: usize = 12;
 /// Rough per-cell ANSI byte multiplier for initial render-buffer capacity.
 const RENDER_BUF_CELL_MULTIPLIER: usize = 3;
 
+/// Minimum terminal grid size: the vt100 parser computes `rows - 1` at
+/// construction, so a 0-size grid would overflow. Headless ptys (e.g. under
+/// `script` with `/dev/null`) can report 0x0; clamp to these.
+const MIN_TERM_COLS: u16 = 2;
+const MIN_TERM_ROWS: u16 = 2;
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -291,10 +297,16 @@ pub fn run_session(
     let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(CLIPBOARD_CHANNEL_CAPACITY);
 
     // Terminal geometry: caller-provided seed, or fall back to the local size.
-    let (term_cols, term_rows) = if cols > 0 && rows > 0 {
-        (cols, rows)
-    } else {
-        crossterm::terminal::size()?
+    // The vt100 parser requires a non-zero grid (it computes `rows - 1` at
+    // construction), so clamp a degenerate 0x0 from a headless pty to a
+    // sane minimum rather than panicking.
+    let (term_cols, term_rows) = {
+        let (c, r) = if cols > 0 && rows > 0 {
+            (cols, rows)
+        } else {
+            crossterm::terminal::size()?
+        };
+        (c.max(MIN_TERM_COLS), r.max(MIN_TERM_ROWS))
     };
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().into_owned())

@@ -260,33 +260,86 @@ fn list_channels(json: bool) -> io::Result<()> {
             let clients: Vec<String> = ch
                 .clients
                 .iter()
-                .map(|c| format!("{}@{}", c.conn_id, c.hostname))
+                .map(|c| {
+                    format!(
+                        "{{\"conn_id\":{},\"hostname\":\"{}\",\"connected_at\":{},\"cols\":{},\"rows\":{}}}",
+                        c.conn_id, c.hostname, c.connected_at_unix, c.cols, c.rows
+                    )
+                })
                 .collect();
             println!(
-                "{{\"name\":\"{}\",\"session\":\"{}\",\"clients\":[{}]}}",
+                "{{\"name\":\"{}\",\"created_at\":{},\"session\":\"{}\",\"clients\":[{}]}}",
                 ch.name,
+                ch.created_at_unix,
                 session,
                 clients.join(",")
             );
         }
     } else {
-        println!("{:<28} {:<12} CLIENTS", "CHANNEL", "SESSION");
+        // One summary row per channel plus a detailed row per client.
+        println!(
+            "{:<24} {:<12} {:<10} {:<10} {:<14} {}",
+            "CHANNEL", "CREATED", "SESSION", "CLIENT", "HOST", "SIZE @ CONNECTED"
+        );
         for ch in &channels {
+            let created = format_unix_relative(ch.created_at_unix);
             let session = ch
                 .session
                 .as_ref()
                 .map(|s| format!("{}x{}", s.cols, s.rows))
                 .unwrap_or_else(|| "-".to_string());
-            let clients = ch
-                .clients
-                .iter()
-                .map(|c| format!("{}", c.conn_id))
-                .collect::<Vec<_>>()
-                .join(",");
-            println!("{:<28} {:<12} {}", ch.name, session, clients);
+            if ch.clients.is_empty() {
+                println!(
+                    "{:<24} {:<12} {:<10} {:<10} {:<14} {}",
+                    ch.name, created, session, "-", "-", "-"
+                );
+                continue;
+            }
+            for (i, c) in ch.clients.iter().enumerate() {
+                let (name, cr) = if i == 0 {
+                    (ch.name.as_str(), created.as_str())
+                } else {
+                    ("", "")
+                };
+                println!(
+                    "{:<24} {:<12} {:<10} {:<10} {:<14} ({}x{} @ {})",
+                    name,
+                    cr,
+                    session,
+                    c.conn_id,
+                    c.hostname,
+                    c.cols,
+                    c.rows,
+                    format_unix_relative(c.connected_at_unix)
+                );
+            }
         }
     }
     Ok(())
+}
+
+/// Format a unix timestamp as a relative human string ("2s ago", "5m ago", …),
+/// falling back to an absolute HH:MM:SS for very old timestamps.
+fn format_unix_relative(ts: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if ts == 0 {
+        return "-".to_string();
+    }
+    let diff = now.saturating_sub(ts);
+    if diff < 60 {
+        format!("{diff}s")
+    } else if diff < 3600 {
+        format!("{}m", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h", diff / 3600)
+    } else {
+        let secs = ts % 86400;
+        let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+        format!("{h:02}:{m:02}:{s:02}")
+    }
 }
 
 fn kill_channel(channel: &str, socket: Option<usize>, self_: bool) -> io::Result<()> {

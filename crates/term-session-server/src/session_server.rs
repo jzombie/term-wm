@@ -78,6 +78,8 @@ struct ConnEntry {
 #[derive(Clone)]
 struct ClientEntry {
     caller: Option<RpcIpcConnectionContextHandle>,
+    hostname: String,
+    connected_at_unix: u64,
     cols: u16,
     rows: u16,
 }
@@ -94,6 +96,8 @@ struct ChannelState {
     clients: HashMap<usize, ClientEntry>,
     subscribers: Vec<SubscriberEntry>,
     notify: Arc<Notify>,
+    /// Unix seconds when the channel was first created on the gateway.
+    created_at_unix: u64,
     /// Command template used to respawn the session after it exits.
     cmd: Vec<String>,
     input_tx: mpsc::Sender<Vec<u8>>,
@@ -142,6 +146,7 @@ impl ChannelState {
             clients: HashMap::new(),
             subscribers: Vec::new(),
             notify,
+            created_at_unix: now_unix(),
             cmd,
             input_tx,
             kill_pending: false,
@@ -259,14 +264,15 @@ impl ChannelState {
             .iter()
             .map(|(conn_id, c)| ClientInfo {
                 conn_id: *conn_id,
-                hostname: String::new(),
-                connected_at_unix: 0,
+                hostname: c.hostname.clone(),
+                connected_at_unix: c.connected_at_unix,
                 cols: c.cols,
                 rows: c.rows,
             })
             .collect();
         ChannelInfo {
             name: name.to_string(),
+            created_at_unix: self.created_at_unix,
             session,
             clients,
         }
@@ -557,18 +563,26 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
                 let ch = get_or_create_channel(&state, &channel).await;
-                // Fetch the connection's caller handle before locking the
-                // channel (never hold two locks at once).
-                let caller = {
+                // Fetch the connection's caller handle, hostname, and connect
+                // time before locking the channel (never hold two locks).
+                let conn_meta = {
                     let conns = state.conns.read().await;
-                    conns.get(&ctx.conn_id).map(|c| c.handle.clone())
+                    conns.get(&ctx.conn_id).map(|c| {
+                        (
+                            c.handle.clone(),
+                            c.hostname.clone(),
+                            c.connected_at_unix,
+                        )
+                    })
                 };
                 let mut guard = ch.lock().await;
                 let entry = guard
                     .clients
                     .entry(ctx.conn_id)
                     .or_insert_with(|| ClientEntry {
-                        caller,
+                        caller: conn_meta.as_ref().map(|(h, _, _)| h.clone()),
+                        hostname: conn_meta.as_ref().map(|(_, n, _)| n.clone()).unwrap_or_default(),
+                        connected_at_unix: conn_meta.as_ref().map(|(_, _, t)| *t).unwrap_or(0),
                         cols,
                         rows,
                     });

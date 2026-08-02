@@ -476,6 +476,17 @@ async fn list_channels_reports_clients_and_geometry() {
     // Geometry reflects the smallest client (80x24).
     assert_eq!(ch.session.as_ref().unwrap().cols, 80);
     assert_eq!(ch.session.as_ref().unwrap().rows, 24);
+    // Each client carries its server-assigned conn_id, hostname, connect time,
+    // and physical terminal size.
+    for cl in &ch.clients {
+        assert!(cl.conn_id > 0, "conn_id is server-assigned");
+        assert!(!cl.hostname.is_empty(), "hostname recorded");
+        assert!(cl.connected_at_unix > 0, "connect time recorded");
+        // The client's declared physical size is at least the Spawn/Attach seed.
+        assert!(cl.cols >= 80 && cl.rows >= 24, "physical size recorded");
+    }
+    // Channel reports its creation time.
+    assert!(ch.created_at_unix > 0, "channel create time recorded");
 }
 
 #[tokio::test]

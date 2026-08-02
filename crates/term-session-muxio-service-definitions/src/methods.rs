@@ -292,6 +292,7 @@ pub struct ClientInfo {
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct ChannelInfo {
     pub name: String,
+    pub created_at_unix: u64,
     pub session: Option<SessionInfo>,
     pub clients: Vec<ClientInfo>,
 }
