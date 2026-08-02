@@ -463,14 +463,18 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     }
 }
 
-/// Spawn a detached escalation task for a kill-requested session.
+/// Spawn a detached escalation task for a kill-requested session, returning
+/// its `JoinHandle` so the caller (e.g. shutdown teardown) can await it.
 ///
 /// Policy owned by the daemon supervisor (never the pty engine): after an
 /// async `SIGKILL_GRACE` sleep, re-check the session state; if it already
 /// exited during the grace window (reaped by the output-polling task), abort
 /// instantly — no blind `SIGKILL` to a possibly-recycled pgid. Only escalate
 /// if the session is still alive and the kill is still pending.
-async fn spawn_kill_escalation(state: &SharedState, name: &ChannelName) {
+async fn spawn_kill_escalation(
+    state: &SharedState,
+    name: &ChannelName,
+) -> tokio::task::JoinHandle<()> {
     let state = Arc::clone(state);
     let name = name.clone();
     tokio::spawn(async move {
@@ -497,7 +501,7 @@ async fn spawn_kill_escalation(state: &SharedState, name: &ChannelName) {
             #[cfg(not(unix))]
             let _ = session.pty.kill_child();
         }
-    });
+    })
 }
 
 /// Run the gateway daemon. Hosts every channel in one process; returns after
@@ -944,20 +948,27 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                     let chans = state.channels.read().await;
                     chans.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
                 };
-                // Off-lock: signal each session's process group (non-blocking)
-                // and finalize subscribers.
+                // Off-lock: signal each session's process group (non-blocking),
+                // finalize subscribers, and collect the escalation handles so
+                // the exit signal fires only after every child tree is reaped.
+                let mut escalations = Vec::new();
                 for (name, ch) in channels {
                     let mut guard = ch.lock().await;
                     tracing::info!(channel = %name, "Shutdown: signaling session tree");
                     guard.request_session_kill(SIGTERM);
                     guard.finalize_subscribers();
                     drop(guard);
-                    spawn_kill_escalation(&state, &name).await;
+                    escalations.push(spawn_kill_escalation(&state, &name).await);
                 }
-                // Deferred exit signal: sleep a grace so the transport flushes
-                // the `()` response frame, then fire the oneshot that ends
-                // run_gateway. Never fire it synchronously from the handler.
+                // Deferred exit signal: await the SIGKILL escalation tasks so
+                // all child process trees are definitively terminated, then
+                // sleep a grace so the transport flushes the `()` response
+                // frame, then fire the oneshot that ends run_gateway. Never
+                // fire it synchronously from the handler.
                 tokio::spawn(async move {
+                    for handle in escalations {
+                        let _ = handle.await;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(SHUTDOWN_FLUSH_GRACE_MS)).await;
                     let mut tx_guard = shutdown_tx.lock().await;
                     if let Some(tx) = tx_guard.take() {
