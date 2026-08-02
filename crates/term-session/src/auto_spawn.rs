@@ -3,7 +3,9 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use term_session_muxio_service_definitions::{ChannelName, gateway_channel_name, probe_ipc_endpoint};
+use term_session_muxio_service_definitions::{
+    ChannelName, gateway_channel_name, probe_ipc_endpoint,
+};
 
 /// Resolve the gateway channel name to probe/spawn.
 /// Uses the runtime `TERM_WM_GATEWAY` override if present, else the static
@@ -75,9 +77,9 @@ pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<Stri
         return Ok(socket_name);
     }
 
-    let bin = bin.map(|b| b.to_path_buf()).unwrap_or_else(|| {
-        std::env::current_exe().expect("current exe path")
-    });
+    let bin = bin
+        .map(|b| b.to_path_buf())
+        .unwrap_or_else(|| std::env::current_exe().expect("current exe path"));
     let mut child = spawn_detached_server(&bin)?;
     let start = Instant::now();
     let timeout = Duration::from_secs(3);

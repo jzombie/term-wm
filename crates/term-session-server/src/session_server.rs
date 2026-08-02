@@ -12,9 +12,9 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED,
-    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway,
-    Spawn, WriteInput,
+    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_SHUTTING_DOWN,
+    RPC_ERROR_UNATTACHED, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    SessionInfo, ShutdownGateway, Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -305,7 +305,10 @@ async fn resolve_channel(
 /// Create (or fetch, re-verifying under the write lock) a channel.
 /// Safe double-checked locking: a racing Attach that saw a reaped Arc is
 /// redirected to the canonical instance instead of overwriting it.
-async fn get_or_create_channel(state: &SharedState, name: &ChannelName) -> Arc<Mutex<ChannelState>> {
+async fn get_or_create_channel(
+    state: &SharedState,
+    name: &ChannelName,
+) -> Arc<Mutex<ChannelState>> {
     {
         let channels = state.channels.read().await;
         if let Some(existing) = channels.get(name) {
@@ -441,11 +444,10 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     let channel = {
         let mut conns = state.conns.write().await;
         let entry = conns.remove(&conn_id);
-        entry
-            .and_then(|e| match e.state {
-                ConnState::Attached(name) => Some(name),
-                ConnState::Unattached => None,
-            })
+        entry.and_then(|e| match e.state {
+            ConnState::Attached(name) => Some(name),
+            ConnState::Unattached => None,
+        })
     };
     let Some(channel) = channel else {
         return;
@@ -515,7 +517,9 @@ async fn spawn_kill_escalation(
 
 /// Run the gateway daemon. Hosts every channel in one process; returns after
 /// a `ShutdownGateway` (or transport error).
-pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run_gateway(
+    gateway: ChannelName,
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
     let socket_name = gateway.to_string();
     let state: SharedState = Arc::new(ServerState {
         conns: RwLock::new(HashMap::new()),
@@ -587,7 +591,10 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                     .entry(ctx.conn_id)
                     .or_insert_with(|| ClientEntry {
                         caller: conn_meta.as_ref().map(|(h, _, _, _)| h.clone()),
-                        hostname: conn_meta.as_ref().map(|(_, n, _, _)| n.clone()).unwrap_or_default(),
+                        hostname: conn_meta
+                            .as_ref()
+                            .map(|(_, n, _, _)| n.clone())
+                            .unwrap_or_default(),
                         connected_at_unix: conn_meta.as_ref().map(|(_, _, t, _)| *t).unwrap_or(0),
                         pid: conn_meta.as_ref().map(|(_, _, _, p)| *p).unwrap_or(0),
                         cols,
@@ -665,7 +672,9 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                 let Some(channel) = channel else {
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
-                let ch = resolve_channel(state.as_ref(), &channel).await.ok_or_else(|| rpc_err("channel not found"))?;
+                let ch = resolve_channel(state.as_ref(), &channel)
+                    .await
+                    .ok_or_else(|| rpc_err("channel not found"))?;
                 let mut guard = ch.lock().await;
                 if let Some(client) = guard.clients.get_mut(&ctx.conn_id) {
                     client.cols = cols;
@@ -703,7 +712,9 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                 let Some(channel) = channel else {
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
-                let ch = resolve_channel(state.as_ref(), &channel).await.ok_or_else(|| rpc_err("channel not found"))?;
+                let ch = resolve_channel(state.as_ref(), &channel)
+                    .await
+                    .ok_or_else(|| rpc_err("channel not found"))?;
                 let mut guard = ch.lock().await;
                 guard.request_session_kill(SIGTERM);
                 guard.finalize_subscribers();
@@ -730,7 +741,9 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                 let Some(channel) = channel else {
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
-                let ch = resolve_channel(state.as_ref(), &channel).await.ok_or_else(|| rpc_err("channel not found"))?;
+                let ch = resolve_channel(state.as_ref(), &channel)
+                    .await
+                    .ok_or_else(|| rpc_err("channel not found"))?;
                 let writer = {
                     let guard = ch.lock().await;
                     guard
@@ -840,10 +853,8 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
             async move {
                 let channels = {
                     let chans = state.channels.read().await;
-                    let mut v: Vec<(ChannelName, Arc<Mutex<ChannelState>>)> = chans
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    let mut v: Vec<(ChannelName, Arc<Mutex<ChannelState>>)> =
+                        chans.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     drop(chans);
                     v.sort_by_key(|a| a.0.to_string());
                     v
@@ -996,7 +1007,8 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                     for handle in escalations {
                         let _ = handle.await;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(SHUTDOWN_FLUSH_GRACE_MS)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(SHUTDOWN_FLUSH_GRACE_MS))
+                        .await;
                     let mut tx_guard = shutdown_tx.lock().await;
                     if let Some(tx) = tx_guard.take() {
                         let _ = tx.send(());

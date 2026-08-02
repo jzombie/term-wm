@@ -5,9 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
-use term_session_muxio_service_definitions::{
-    Attach, ChannelName, ListChannels, ShutdownGateway,
-};
+use term_session_muxio_service_definitions::{Attach, ChannelName, ListChannels, ShutdownGateway};
 use term_session_server::run_gateway;
 
 pub const TEST_COLS: u16 = 80;
@@ -63,7 +61,11 @@ pub async fn connect_client_with_retry(socket_path: &str) -> Arc<RpcIpcClient> {
 pub async fn attach_client(client: &RpcIpcClient, channel: &ChannelName) -> usize {
     Attach::call(
         client,
-        (channel.to_string(), "test-host".to_string(), std::process::id() as u64),
+        (
+            channel.to_string(),
+            "test-host".to_string(),
+            std::process::id() as u64,
+        ),
     )
     .await
     .expect("attach")
@@ -111,10 +113,14 @@ pub async fn spawn_session(channel: &ChannelName) -> (Arc<RpcIpcClient>, usize) 
 pub async fn list_channels(
     client: &Arc<RpcIpcClient>,
 ) -> term_session_muxio_service_definitions::ListChannelsResponse {
-    ListChannels::call(&**client, ()).await.expect("list channels")
+    ListChannels::call(&**client, ())
+        .await
+        .expect("list channels")
 }
 
 /// Stop the gateway daemon.
 pub async fn shutdown_gateway(client: &Arc<RpcIpcClient>) {
-    ShutdownGateway::call(&**client, ()).await.expect("shutdown");
+    ShutdownGateway::call(&**client, ())
+        .await
+        .expect("shutdown");
 }

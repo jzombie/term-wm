@@ -322,10 +322,15 @@ pub fn run_session(
         .await
         .map_err(|e| abi_fault(&e))?;
         // 2) Spawn: join/respawn the session (cmd travels via Spawn).
-        let cmd = if cmd.is_empty() { None } else { Some(cmd.to_vec()) };
-        let (_session_id, actual_cols, actual_rows) = Spawn::call(&*client, (cmd, term_cols, term_rows))
-            .await
-            .map_err(|e| abi_fault(&e))?;
+        let cmd = if cmd.is_empty() {
+            None
+        } else {
+            Some(cmd.to_vec())
+        };
+        let (_session_id, actual_cols, actual_rows) =
+            Spawn::call(&*client, (cmd, term_cols, term_rows))
+                .await
+                .map_err(|e| abi_fault(&e))?;
         let _ = conn_id;
         Ok::<(u16, u16), io::Error>((actual_cols, actual_rows))
     })?;

@@ -12,9 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-use term_session_muxio_service_definitions::{
-    Attach, ShutdownGateway, Spawn,
-};
+use term_session_muxio_service_definitions::{Attach, ShutdownGateway, Spawn};
 
 /// The compiled `term-session` binary under test.
 fn bin() -> PathBuf {
@@ -43,19 +41,23 @@ fn unique_gateway(tag: &str) -> String {
 /// marker. Returns `(child, marker_path)`.
 fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
     let marker = if selfcheck {
-        let path = std::env::temp_dir().join(format!("term-session-selfcheck-{}.txt", gateway.replace('/', "-")));
+        let path = std::env::temp_dir().join(format!(
+            "term-session-selfcheck-{}.txt",
+            gateway.replace('/', "-")
+        ));
         let _ = std::fs::remove_file(&path);
         Some(path)
     } else {
         None
     };
     let mut cmd = Command::new(bin());
-    cmd.env("TERM_WM_GATEWAY", gateway)
-        .arg("--daemon");
+    cmd.env("TERM_WM_GATEWAY", gateway).arg("--daemon");
     if let Some(ref m) = marker {
         cmd.arg("--daemon-selfcheck").arg(m);
     }
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let child = cmd.spawn().expect("spawn daemon");
     (child, marker)
 }
@@ -112,12 +114,27 @@ async fn daemon_survives_all_clients_disconnecting() {
 
     let client = wait_connectable(&gateway).await;
     let channel = "test/daemon_survive";
-    Attach::call(&*client, (channel.to_string(), "t".to_string(), std::process::id() as u64))
-        .await
-        .unwrap();
+    Attach::call(
+        &*client,
+        (
+            channel.to_string(),
+            "t".to_string(),
+            std::process::id() as u64,
+        ),
+    )
+    .await
+    .unwrap();
     Spawn::call(
         &*client,
-        (Some(vec![mock_bin().to_string_lossy().to_string(), "sleep".into(), "60000".into()]), 80u16, 24u16),
+        (
+            Some(vec![
+                mock_bin().to_string_lossy().to_string(),
+                "sleep".into(),
+                "60000".into(),
+            ]),
+            80u16,
+            24u16,
+        ),
     )
     .await
     .unwrap();
@@ -126,9 +143,16 @@ async fn daemon_survives_all_clients_disconnecting() {
     // After ALL clients disconnect, the daemon must still be reachable and a
     // fresh attach/spawn must succeed (session respawns / persists).
     let client2 = wait_connectable(&gateway).await;
-    Attach::call(&*client2, (channel.to_string(), "t".to_string(), std::process::id() as u64))
-        .await
-        .unwrap();
+    Attach::call(
+        &*client2,
+        (
+            channel.to_string(),
+            "t".to_string(),
+            std::process::id() as u64,
+        ),
+    )
+    .await
+    .unwrap();
     Spawn::call(&*client2, (None, 80u16, 24u16)).await.unwrap();
 
     ShutdownGateway::call(&*client2, ()).await.unwrap();
@@ -158,9 +182,16 @@ async fn daemon_survives_parent_death() {
 
     // The daemon it spawned must still be reachable and the session alive.
     let client = wait_connectable(&gateway).await;
-    Attach::call(&*client, (channel.to_string(), "t".to_string(), std::process::id() as u64))
-        .await
-        .unwrap();
+    Attach::call(
+        &*client,
+        (
+            channel.to_string(),
+            "t".to_string(),
+            std::process::id() as u64,
+        ),
+    )
+    .await
+    .unwrap();
     let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
