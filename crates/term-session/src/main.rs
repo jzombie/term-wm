@@ -221,11 +221,19 @@ fn write_selfcheck_marker(marker: &std::path::Path) {
     let _ = std::fs::write(marker, proof);
 }
 
-fn gateway_connect() -> io::Result<Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>> {
+/// Connect to the gateway daemon and run `op` with a live client. The tokio
+/// runtime that hosts the muxio connection is kept alive for the whole `op`,
+/// so RPCs complete (dropping it early would tear down the connection and
+/// hang the call). `op` receives an owned `Arc` and runs on that runtime.
+fn with_gateway<F, Fut, T>(op: F) -> io::Result<T>
+where
+    F: FnOnce(Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
     let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
     rt.block_on(async {
-        muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
+        let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
             .await
             .map_err(|e| {
                 io::Error::new(
@@ -234,16 +242,14 @@ fn gateway_connect() -> io::Result<Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>
                         "No gateway daemon is running on '{gateway}'. Start one with `term-session attach` or `term-session --daemon` first.\n  cause: {e}"
                     ),
                 )
-            })
+            })?;
+        Ok(op(client).await)
     })
 }
 
 fn list_channels(json: bool) -> io::Result<()> {
-    let client = gateway_connect()?;
-    let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
-    let channels = rt.block_on(ListChannels::call(&*client, ())).map_err(|e| {
-        io::Error::other(format!("list: {e}"))
-    })?;
+    let channels = with_gateway(|client| async move { ListChannels::call(&*client, ()).await })?
+        .map_err(|e| io::Error::other(format!("list: {e}")))?;
     if json {
         for ch in &channels {
             let session = ch
@@ -284,26 +290,28 @@ fn list_channels(json: bool) -> io::Result<()> {
 }
 
 fn kill_channel(channel: &str, socket: Option<usize>, self_: bool) -> io::Result<()> {
-    let client = gateway_connect()?;
-    let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
-
     if let Some(conn_id) = socket {
-        rt.block_on(KillClient::call(&*client, (channel.to_string(), conn_id)))
-            .map_err(|e| io::Error::other(format!("kill client: {e}")))?;
+        with_gateway(|client| async move {
+            KillClient::call(&*client, (channel.to_string(), conn_id)).await
+        })?
+        .map_err(|e| io::Error::other(format!("kill client: {e}")))?;
         println!("Detached socket {conn_id} from channel {channel}");
         return Ok(());
     }
 
     if self_ {
         // Attach to get our own conn id, then detach just ourselves.
-        let hostname = hostname::get()
-            .map(|h| h.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "unknown".to_string());
-        rt.block_on(term_session_muxio_service_definitions::Attach::call(
-            &*client,
-            (channel.to_string(), hostname),
-        ))
-        .map_err(|e| io::Error::other(format!("attach: {e}")))?;
+        with_gateway(|client| async move {
+            let hostname = hostname::get()
+                .map(|h| h.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "unknown".to_string());
+            term_session_muxio_service_definitions::Attach::call(
+                &*client,
+                (channel.to_string(), hostname),
+            )
+            .await
+            .map_err(|e| io::Error::other(format!("attach: {e}")))
+        })??;
         // The gateway does not expose a "current conn id" RPC beyond Attach's
         // return value; we reconnect and kill ourselves via the server-side
         // KillClient flow is unsafe here, so fall back to full channel kill.
@@ -311,16 +319,16 @@ fn kill_channel(channel: &str, socket: Option<usize>, self_: bool) -> io::Result
         return Ok(());
     }
 
-    rt.block_on(KillChannel::call(&*client, channel.to_string()))
-        .map_err(|e| io::Error::other(format!("kill channel: {e}")))?;
+    with_gateway(|client| async move {
+        KillChannel::call(&*client, channel.to_string()).await
+    })?
+    .map_err(|e| io::Error::other(format!("kill channel: {e}")))?;
     println!("Killed channel {channel}");
     Ok(())
 }
 
 fn stop_gateway() -> io::Result<()> {
-    let client = gateway_connect()?;
-    let rt = tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
-    rt.block_on(ShutdownGateway::call(&*client, ()))
+    with_gateway(|client| async move { ShutdownGateway::call(&*client, ()).await })?
         .map_err(|e| io::Error::other(format!("shutdown: {e}")))?;
     println!("Gateway shutdown initiated");
     Ok(())
