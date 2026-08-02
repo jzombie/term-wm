@@ -12,7 +12,6 @@ use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
-use term_wm::wm_config::WmConfig;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_core::events::Event;
@@ -30,12 +29,12 @@ const PTY_SCROLLBACK_LEN: usize = 2000;
     long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
 )]
 struct Cli {
+    /// Number of windows to open.
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
+    /// Command(s) to run.
     #[arg(value_name = "CMD", num_args = 0..)]
     cmds: Vec<String>,
-    #[arg(long)]
-    embedded: bool,
 }
 
 fn main() -> io::Result<()> {
@@ -58,7 +57,7 @@ fn main() -> io::Result<()> {
 
     let mut event_source = UnifiedEventSource::new()?;
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
-    let mut app = App::new_with(cli.cmds, total, cli.embedded, pty_wakeup_tx)?;
+    let mut app = App::new_with(cli.cmds, total, pty_wakeup_tx)?;
 
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
@@ -79,7 +78,6 @@ impl App {
     fn new_with(
         commands: Vec<String>,
         num_windows: usize,
-        embedded: bool,
         pty_wakeup_tx: Sender<UnifiedEvent>,
     ) -> io::Result<Self> {
         let app_ctx = Arc::new(
@@ -94,31 +92,23 @@ impl App {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
 
-        let wm = if embedded {
-            AppBuilder::<LayerComponent>::bare()
-                .config(WmConfig::minimal())
-                .app_ctx(Arc::clone(&app_ctx))
-                .build()
-                .expect("embedded build")
-        } else {
-            AppBuilder::<LayerComponent>::bare()
-                .app_ctx(Arc::clone(&app_ctx))
-                .top_panel(LayerComponent::TopPanel(
-                    term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
-                ))
-                .bottom_panel(LayerComponent::BottomPanel(
-                    term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                        &app_name,
-                        &app_version,
-                        hostname,
-                    ),
-                ))
-                .fab(LayerComponent::Fab(
-                    term_wm_sys_ui_components::WmFabComponent::new(),
-                ))
-                .build()
-                .expect("standalone build")
-        };
+        let wm = AppBuilder::<LayerComponent>::bare()
+            .app_ctx(Arc::clone(&app_ctx))
+            .top_panel(LayerComponent::TopPanel(
+                term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
+            ))
+            .bottom_panel(LayerComponent::BottomPanel(
+                term_wm_sys_ui_components::WmBottomPanelComponent::new(
+                    &app_name,
+                    &app_version,
+                    hostname,
+                ),
+            ))
+            .fab(LayerComponent::Fab(
+                term_wm_sys_ui_components::WmFabComponent::new(),
+            ))
+            .build()
+            .expect("standalone build");
 
         let inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
         let mut app = Self {

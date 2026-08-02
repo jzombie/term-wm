@@ -16,7 +16,7 @@ cargo run --release --bin term-session -- --server --channel work -- vim # start
 
 Multiple terminals can attach to the same channel to share one session.
 
-In client mode `term-session` first probes the channel for a live server and, if none is running, spawns a detached one automatically (`connect_or_spawn_server`). The program to run and the PTY size are forwarded to the server at spawn time. The channel can also be set via the `TERM_WM_CHANNEL` environment variable.
+In client mode `term-session` first probes the channel for a live server and, if none is running, spawns a detached one automatically (`connect_or_spawn_server`). The program to run is forwarded to the server at spawn time. The PTY starts at a default size and the server resizes it on demand to the smallest geometry across attached clients. The channel can also be set via the `TERM_WM_CHANNEL` environment variable.
 
 ## Architecture & Capabilities
 

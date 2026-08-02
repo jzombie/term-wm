@@ -9,8 +9,6 @@ use term_session_muxio_service_definitions::{ChannelName, probe_ipc_endpoint};
 #[derive(Clone, Debug)]
 pub struct ServerSpawnConfig<'a> {
     pub channel: &'a ChannelName,
-    pub cols: u16,
-    pub rows: u16,
     pub cmd: &'a [String],
 }
 
@@ -20,8 +18,6 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
     cmd.arg("--server")
         .arg("--channel")
         .arg(cfg.channel.to_string());
-    cmd.arg("--cols").arg(cfg.cols.to_string());
-    cmd.arg("--rows").arg(cfg.rows.to_string());
     if !cfg.cmd.is_empty() {
         cmd.arg("--").args(cfg.cmd);
     }

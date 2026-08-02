@@ -10,9 +10,9 @@ const CHANNEL_ENV_VAR: &str = "TERM_WM_CHANNEL";
 const DEFAULT_CHANNEL: &str = "default/main";
 
 #[derive(Parser, Debug)]
-#[command(name = "term-session", about = "term-wm session manager")]
+#[command(name = env!("CARGO_PKG_NAME"), about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Cli {
-    /// Channel name (namespace/name). Falls back to TERM_WM_CHANNEL env, then "default/main".
+    /// Channel name (namespace/name); falls back to TERM_WM_CHANNEL env, then "default/main".
     #[arg(short, long)]
     channel: Option<String>,
 
@@ -20,16 +20,7 @@ struct Cli {
     #[arg(long)]
     server: bool,
 
-    /// Columns (width) of each terminal
-    #[arg(long = "cols", default_value = "80")]
-    cols: u16,
-
-    /// Rows (height) of each terminal
-    #[arg(long = "rows", default_value = "24")]
-    rows: u16,
-
-    /// Command to run (and its arguments).
-    /// If omitted, launches the default shell.
+    /// Command to run (and its arguments); if omitted, launches the default shell.
     #[arg(num_args = 0..)]
     cmd: Vec<String>,
 }
@@ -40,8 +31,6 @@ fn run_server_mode(channel: &ChannelName, cli: &Cli) -> io::Result<()> {
     let config = SessionServerConfig {
         channel: channel.clone(),
         cmd: cli.cmd.clone(),
-        cols: cli.cols,
-        rows: cli.rows,
     };
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
@@ -72,8 +61,6 @@ fn main() -> io::Result<()> {
 
     let spawn_cfg = ServerSpawnConfig {
         channel: &channel,
-        cols: cli.cols,
-        rows: cli.rows,
         cmd: &cli.cmd,
     };
     let socket_name = connect_or_spawn_server(&channel, &spawn_cfg)?;
