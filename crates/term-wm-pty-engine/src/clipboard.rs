@@ -36,9 +36,17 @@ pub enum ClipboardError {
     NotAvailable,
 }
 
+/// Environment variable pointing to the user-private runtime directory
+/// (set by systemd on modern Linux; `0700`-permissioned, tmpfs-backed).
+const ENV_XDG_RUNTIME_DIR: &str = "XDG_RUNTIME_DIR";
+
 /// Filename of the temp-file clipboard backing store used as a headless
 /// fallback for `get()`.
-const CLIPBOARD_TEMP_FILENAME: &str = "term-wm-clipboard.txt";
+const CLIPBOARD_CACHE_FILENAME: &str = "term-wm-clipboard.txt";
+
+/// Prefix for the per-user subdirectory created under the shared temp dir
+/// on Unix when `$XDG_RUNTIME_DIR` is not available.
+const APP_TEMP_DIR_PREFIX: &str = "term-wm";
 
 /// Resolve the default path of the temp-file clipboard store.
 ///
@@ -53,13 +61,17 @@ const CLIPBOARD_TEMP_FILENAME: &str = "term-wm-clipboard.txt";
 /// 3. `<temp_dir>/term-wm-clipboard.txt` elsewhere — the platform temp
 ///    dir is already user-private on Windows and macOS.
 fn default_temp_path() -> PathBuf {
-    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir).join(CLIPBOARD_TEMP_FILENAME);
+    if let Some(runtime_dir) = std::env::var_os(ENV_XDG_RUNTIME_DIR) {
+        return PathBuf::from(runtime_dir).join(CLIPBOARD_CACHE_FILENAME);
     }
     let base = std::env::temp_dir();
     #[cfg(unix)]
-    let base = base.join(format!("term-wm-{}", unsafe { libc::getuid() }));
-    base.join(CLIPBOARD_TEMP_FILENAME)
+    let base = base.join(format!(
+        "{}-{}",
+        APP_TEMP_DIR_PREFIX,
+        unsafe { libc::getuid() }
+    ));
+    base.join(CLIPBOARD_CACHE_FILENAME)
 }
 
 /// Create the parent directory of the clipboard store with owner-only
@@ -160,10 +172,10 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
 /// temp-file store so copy→paste round-trips on headless machines.
 pub struct Clipboard {
     arboard: Option<arboard::Clipboard>,
-    /// Path of the temp-file backing store.  When `None`, the default
-    /// secure path is used (see [`default_temp_path`]).  Tests set a
-    /// unique path to avoid cross-test interference.
-    temp_path: Option<PathBuf>,
+    /// Resolved path of the temp-file backing store, determined once at
+    /// construction (see [`Clipboard::new`]).  Tests inject an isolated
+    /// path via [`Clipboard::with_temp_path`] to avoid the shared store.
+    temp_path: PathBuf,
     /// Captured OSC 52 output — only present in test builds so that tests
     /// can verify the OSC 52 path was exercised alongside the arboard path.
     #[cfg(test)]
@@ -181,21 +193,22 @@ impl Clipboard {
     ///
     /// The arboard backend is initialised when a local display is available;
     /// when running remotely (SSH, no display) it is silently absent and
-    /// only the OSC 52 fallback will be available.
+    /// only the OSC 52 fallback will be available.  The temp-file backing
+    /// store path is resolved once here from the environment.
     pub fn new() -> Self {
+        Self::with_temp_path(default_temp_path())
+    }
+
+    /// Create a clipboard handle using `path` as the temp-file backing
+    /// store.  Resolution of the default path is skipped; tests use this
+    /// to inject an isolated path into a throwaway temp location.
+    pub fn with_temp_path(path: PathBuf) -> Self {
         Self {
             arboard: arboard::Clipboard::new().ok(),
-            temp_path: None,
+            temp_path: path,
             #[cfg(test)]
             osc52_output: Vec::new(),
         }
-    }
-
-    /// Resolve the effective temp-file backing-store path.
-    fn temp_path(&self) -> PathBuf {
-        self.temp_path
-            .clone()
-            .unwrap_or_else(default_temp_path)
     }
 
     /// Read the clipboard as a `String`.
@@ -209,8 +222,7 @@ impl Clipboard {
         if let Some(cb) = self.arboard.as_mut() {
             return cb.get_text().map_err(ClipboardError::from);
         }
-        let path = self.temp_path();
-        read_clipboard_temp(&path).map_err(|_| ClipboardError::NotAvailable)
+        read_clipboard_temp(&self.temp_path).map_err(|_| ClipboardError::NotAvailable)
     }
 
     /// Set the system clipboard to `text`.
@@ -245,7 +257,7 @@ impl Clipboard {
 
         // Always write the temp-file backing store so `get()` can
         // round-trip copy→paste on headless machines.  Best-effort.
-        let _ = write_clipboard_temp(&self.temp_path(), text);
+        let _ = write_clipboard_temp(&self.temp_path, text);
 
         // Also write via arboard for the local case.
         // macOS AppKit/NSPasteboard writes debug spam to stderr when
@@ -500,8 +512,7 @@ mod tests {
     #[test]
     fn temp_store_roundtrip_via_set_get_when_arboard_absent() {
         let path = unique_temp_path("roundtrip");
-        let mut cb = Clipboard::new();
-        cb.temp_path = Some(path.clone());
+        let mut cb = Clipboard::with_temp_path(path);
         // Simulate a headless SSH session where arboard cannot initialise.
         cb.arboard = None;
 
@@ -518,17 +529,15 @@ mod tests {
 
     #[test]
     fn temp_store_read_missing_returns_not_available() {
-        let mut cb = Clipboard::new();
+        let mut cb = Clipboard::with_temp_path(unique_temp_path("missing"));
         cb.arboard = None;
-        cb.temp_path = Some(unique_temp_path("missing"));
         assert!(matches!(cb.get(), Err(ClipboardError::NotAvailable)));
     }
 
     #[test]
     fn temp_store_unicode_roundtrip() {
         let path = unique_temp_path("unicode");
-        let mut cb = Clipboard::new();
-        cb.temp_path = Some(path.clone());
+        let mut cb = Clipboard::with_temp_path(path);
         cb.arboard = None;
 
         cb.set("héllo 日本語 ✅").unwrap();
@@ -544,7 +553,7 @@ mod tests {
             "term-wm-test-perms-{}",
             std::process::id()
         ));
-        let path = dir.join(CLIPBOARD_TEMP_FILENAME);
+        let path = dir.join(CLIPBOARD_CACHE_FILENAME);
         write_clipboard_temp(&path, "secret").unwrap();
 
         let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
