@@ -2741,6 +2741,40 @@ fn make_keys<L: WmComponent, O: Overlay<TermWmAction>>(
 }
 
 #[cfg(test)]
+struct TestOverlay {
+    bounds: Option<LayoutRect>,
+}
+
+#[cfg(test)]
+impl Component<TermWmAction> for TestOverlay {
+    fn render(
+        &mut self,
+        _backend: &mut dyn term_wm_render::RenderBackend,
+        _area: LayoutRect,
+        _ctx: &crate::component_context::ComponentContext,
+        _registry: &mut crate::hitbox_registry::HitboxRegistry,
+    ) {
+    }
+    fn update(
+        &mut self,
+        _action: TermWmAction,
+        _ctx: &crate::component_context::ComponentContext,
+        _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+    ) {
+    }
+}
+
+#[cfg(test)]
+impl Overlay<TermWmAction> for TestOverlay {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn render_area(&self) -> Option<LayoutRect> {
+        self.bounds.filter(|b| b.width > 0 && b.height > 0)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::components::NoopOverlay;
@@ -6632,38 +6666,6 @@ mod tests {
     }
 
     #[test]
-    fn command_palette_empty_map_returns_no_action() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        assert!(!wm.command_menu_visible());
-        let event = crate::events::Event::Key(crate::events::KeyEvent {
-            code: crate::events::KeyCode::Esc,
-            modifiers: crate::events::KeyModifiers::NONE,
-            kind: crate::events::KeyKind::Press,
-        });
-        assert!(wm.handle_command_palette_event(&event).is_none());
-    }
-
-    #[test]
-    fn command_menu_visible_derived_from_overlay_map() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        assert!(!wm.command_menu_visible());
-        wm.close_command_menu();
-        assert!(!wm.command_menu_visible());
-    }
-
-    #[test]
     fn tile_window_key_respects_quadrant() {
         use crate::layout::{Direction, LayoutNode, TilingLayout};
         use crate::window::{FloatRect, FloatRectSpec};
@@ -6781,114 +6783,6 @@ mod tests {
         // ActionRecorder returns None by default
         let result = wm.take_alternate_screen_transition(keys[0]);
         assert_eq!(result, None);
-    }
-
-    // ── TestOverlay for command_palette_bounds tests ──────────────────────
-
-    struct TestOverlay {
-        bounds: Option<LayoutRect>,
-    }
-
-    impl Component<TermWmAction> for TestOverlay {
-        fn render(
-            &mut self,
-            _backend: &mut dyn term_wm_render::RenderBackend,
-            _area: LayoutRect,
-            _ctx: &crate::component_context::ComponentContext,
-            _registry: &mut crate::hitbox_registry::HitboxRegistry,
-        ) {
-        }
-        fn update(
-            &mut self,
-            _action: TermWmAction,
-            _ctx: &crate::component_context::ComponentContext,
-            _actions: &mut VecDeque<(WindowKey, TermWmAction)>,
-        ) {
-        }
-    }
-
-    impl Overlay<TermWmAction> for TestOverlay {
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-            self
-        }
-        fn render_area(&self) -> Option<LayoutRect> {
-            self.bounds.filter(|b| b.width > 0 && b.height > 0)
-        }
-    }
-
-    // ── command_palette_bounds tests ──────────────────────────────────────
-
-    #[test]
-    fn command_palette_bounds_returns_none_when_no_key() {
-        let wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        assert_eq!(wm.command_palette_bounds(), None);
-    }
-
-    #[test]
-    fn command_palette_bounds_delegates_to_overlay_render_area() {
-        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let expected = LayoutRect {
-            x: 10,
-            y: 5,
-            width: 40,
-            height: 10,
-        };
-        let overlay = TestOverlay {
-            bounds: Some(expected),
-        };
-        wm.open_command_palette_overlay(overlay);
-        assert_eq!(wm.command_palette_bounds(), Some(expected));
-    }
-
-    #[test]
-    fn command_palette_bounds_returns_none_for_zero_size() {
-        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        let overlay = TestOverlay {
-            bounds: Some(LayoutRect::default()),
-        };
-        wm.open_command_palette_overlay(overlay);
-        // zero-size is filtered by render_area() → None
-        assert_eq!(wm.command_palette_bounds(), None);
-    }
-
-    #[test]
-    fn command_palette_bounds_returns_none_for_missing_overlay() {
-        let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        // Insert a different overlay but don't set command_palette_key
-        let other = TestOverlay {
-            bounds: Some(LayoutRect {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 10,
-            }),
-        };
-        wm.overlays.insert(other);
-        assert_eq!(wm.command_palette_bounds(), None);
     }
 
     // ── handle_outside_click tests ───────────────────────────────────────
@@ -7140,18 +7034,6 @@ mod tests {
             std::collections::HashMap::new(),
         );
         assert_eq!(wm.help_key(), None);
-    }
-
-    #[test]
-    fn command_palette_key_returns_none_initially() {
-        let wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        assert_eq!(wm.command_palette_key(), None);
     }
 
     // ── help_overlay_bounds tests ──────────────────────────────────────────

@@ -289,3 +289,243 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         items
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_context::AppContext;
+    use crate::components::NoopWmComponent;
+    use crate::window::test_component::TestComponent;
+    use crate::window::window_manager::TestOverlay;
+    use crate::wm_config::WmConfig;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_wm<O: Overlay<TermWmAction>>() -> WindowManager<TestComponent, NoopWmComponent, O> {
+        WindowManager::with_config(
+            WmConfig::standalone(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            HashMap::new(),
+        )
+    }
+
+    fn key_esc() -> Event {
+        Event::Key(crate::events::KeyEvent {
+            code: crate::events::KeyCode::Esc,
+            modifiers: crate::events::KeyModifiers::NONE,
+            kind: crate::events::KeyKind::Press,
+        })
+    }
+
+    /// Records `set_tab_outline` calls for tab-outline propagation assertions.
+    struct TabTrackingOverlay {
+        tab_outline: Option<Option<Instant>>,
+    }
+
+    impl Component<TermWmAction> for TabTrackingOverlay {
+        fn render(
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
+            _ctx: &crate::component_context::ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn update(
+            &mut self,
+            _action: TermWmAction,
+            _ctx: &crate::component_context::ComponentContext,
+            _actions: &mut std::collections::VecDeque<(crate::window::WindowKey, TermWmAction)>,
+        ) {
+        }
+    }
+
+    impl Overlay<TermWmAction> for TabTrackingOverlay {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn set_tab_outline(&mut self, expires_at: Option<Instant>) {
+            self.tab_outline = Some(expires_at);
+        }
+    }
+
+    /// Emits an action from `handle_events` to exercise the dismiss path.
+    struct MenuActionOverlay;
+
+    impl Component<TermWmAction> for MenuActionOverlay {
+        fn render(
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
+            _ctx: &crate::component_context::ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn update(
+            &mut self,
+            _action: TermWmAction,
+            _ctx: &crate::component_context::ComponentContext,
+            _actions: &mut std::collections::VecDeque<(crate::window::WindowKey, TermWmAction)>,
+        ) {
+        }
+        fn handle_events(
+            &mut self,
+            _event: &Event,
+            _ctx: &crate::component_context::ComponentContext,
+        ) -> EventResult<TermWmAction> {
+            EventResult::Action(TermWmAction::ExitUi)
+        }
+    }
+
+    impl Overlay<TermWmAction> for MenuActionOverlay {
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn command_palette_empty_map_returns_no_action() {
+        let mut wm: WindowManager<TestComponent> = make_wm();
+        assert!(!wm.command_menu_visible());
+        assert!(wm.handle_command_palette_event(&key_esc()).is_none());
+    }
+
+    #[test]
+    fn command_menu_visible_derived_from_overlay_map() {
+        let mut wm: WindowManager<TestComponent> = make_wm();
+        assert!(!wm.command_menu_visible());
+        wm.close_command_menu();
+        assert!(!wm.command_menu_visible());
+    }
+
+    #[test]
+    fn command_palette_key_returns_none_initially() {
+        let wm: WindowManager<TestComponent> = make_wm();
+        assert_eq!(wm.command_palette_key(), None);
+    }
+
+    #[test]
+    fn command_palette_bounds_returns_none_when_no_key() {
+        let wm = make_wm::<TestOverlay>();
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    #[test]
+    fn command_palette_bounds_delegates_to_overlay_render_area() {
+        let mut wm = make_wm::<TestOverlay>();
+        let expected = LayoutRect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 10,
+        };
+        wm.open_command_palette_overlay(TestOverlay {
+            bounds: Some(expected),
+        });
+        assert_eq!(wm.command_palette_bounds(), Some(expected));
+    }
+
+    #[test]
+    fn command_palette_bounds_returns_none_for_zero_size() {
+        let mut wm = make_wm::<TestOverlay>();
+        wm.open_command_palette_overlay(TestOverlay {
+            bounds: Some(LayoutRect::default()),
+        });
+        // zero-size is filtered by render_area() → None
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    #[test]
+    fn command_palette_bounds_returns_none_for_missing_overlay() {
+        let mut wm = make_wm::<TestOverlay>();
+        // Insert a different overlay but don't set command_palette_key
+        wm.overlays.insert(TestOverlay {
+            bounds: Some(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            }),
+        });
+        assert_eq!(wm.command_palette_bounds(), None);
+    }
+
+    #[test]
+    fn open_overlay_sets_command_palette_input_mode() {
+        let mut wm = make_wm::<TestOverlay>();
+        wm.open_command_palette_overlay(TestOverlay { bounds: None });
+        assert_eq!(wm.input_mode(), WmInputMode::CommandPalette);
+        assert!(wm.command_palette_visible());
+    }
+
+    #[test]
+    fn close_resets_input_mode_and_visibility() {
+        let mut wm = make_wm::<TestOverlay>();
+        wm.open_command_palette_overlay(TestOverlay { bounds: None });
+        assert!(wm.command_palette_visible());
+        wm.close_command_palette();
+        assert_eq!(wm.input_mode(), WmInputMode::Passthrough);
+        assert!(!wm.command_palette_visible());
+    }
+
+    #[test]
+    fn set_tab_outline_sets_expiry_and_propagates() {
+        let mut wm = make_wm::<TabTrackingOverlay>();
+        let overlay = TabTrackingOverlay { tab_outline: None };
+        wm.open_command_palette_overlay(overlay);
+        wm.set_tab_outline_mode(Duration::from_millis(100));
+        assert!(wm.tab_outline_until.is_some());
+        let recorded = wm
+            .overlays
+            .get_mut(wm.command_palette_key().expect("palette key"))
+            .expect("palette overlay")
+            .as_any_mut()
+            .downcast_mut::<TabTrackingOverlay>()
+            .expect("TabTrackingOverlay")
+            .tab_outline
+            .expect("set_tab_outline called");
+        assert!(recorded.is_some(), "expiry should be propagated to overlay");
+    }
+
+    #[test]
+    fn clear_tab_outline_resets_state() {
+        let mut wm = make_wm::<TabTrackingOverlay>();
+        let overlay = TabTrackingOverlay { tab_outline: None };
+        wm.open_command_palette_overlay(overlay);
+        wm.set_tab_outline_mode(Duration::from_millis(100));
+        assert!(wm.tab_outline_until.is_some());
+        wm.clear_tab_outline();
+        assert!(wm.tab_outline_until.is_none());
+        let recorded = wm
+            .overlays
+            .get_mut(wm.command_palette_key().expect("palette key"))
+            .expect("palette overlay")
+            .as_any_mut()
+            .downcast_mut::<TabTrackingOverlay>()
+            .expect("TabTrackingOverlay")
+            .tab_outline
+            .expect("set_tab_outline called");
+        assert!(recorded.is_none(), "clear should propagate None to overlay");
+    }
+
+    #[test]
+    fn handle_event_action_dismisses_and_returns() {
+        let mut wm = make_wm::<MenuActionOverlay>();
+        wm.open_command_palette_overlay(MenuActionOverlay);
+        let result = wm.handle_command_palette_event(&key_esc());
+        assert_eq!(result, Some(TermWmAction::ExitUi));
+        assert_eq!(wm.input_mode(), WmInputMode::Passthrough);
+        assert!(!wm.command_palette_visible());
+    }
+
+    #[test]
+    fn handle_event_ignored_keeps_palette() {
+        let mut wm = make_wm::<TestOverlay>();
+        wm.open_command_palette_overlay(TestOverlay { bounds: None });
+        assert!(wm.handle_command_palette_event(&key_esc()).is_none());
+        assert_eq!(wm.input_mode(), WmInputMode::CommandPalette);
+        assert!(wm.command_palette_visible());
+    }
+}
