@@ -313,10 +313,14 @@ pub fn run_session(
         .unwrap_or_else(|_| "unknown".to_string());
 
     let (actual_cols, actual_rows) = rt.block_on(async {
-        // 1) Attach: bind this connection to the channel (server-assigned conn_id).
-        let conn_id = Attach::call(&*client, (channel.to_string(), hostname))
-            .await
-            .map_err(|e| abi_fault(&e))?;
+        // 1) Attach: bind this connection to the channel (server-assigned
+        // conn_id); report our OS PID so `list` can show which client is which.
+        let conn_id = Attach::call(
+            &*client,
+            (channel.to_string(), hostname, std::process::id() as u64),
+        )
+        .await
+        .map_err(|e| abi_fault(&e))?;
         // 2) Spawn: join/respawn the session (cmd travels via Spawn).
         let cmd = if cmd.is_empty() { None } else { Some(cmd.to_vec()) };
         let (_session_id, actual_cols, actual_rows) = Spawn::call(&*client, (cmd, term_cols, term_rows))

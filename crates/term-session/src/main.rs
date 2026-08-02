@@ -72,11 +72,7 @@ enum Command {
     },
     /// List channels and their sessions/clients.
     #[command(name = "ls", alias = "list")]
-    List {
-        /// Emit JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
+    List,
     /// Kill a channel's session and detach all its sockets.
     Kill {
         /// Channel name to kill.
@@ -129,7 +125,7 @@ fn main() -> io::Result<()> {
             let socket_name = connect_or_spawn_server(None)?;
             run_session(&socket_name, &channel.to_string(), &cmd, cols, rows)
         }
-        Some(Command::List { json }) => list_channels(json),
+        Some(Command::List) => list_channels(),
         Some(Command::Kill {
             channel,
             socket,
@@ -302,81 +298,48 @@ where
     })
 }
 
-fn list_channels(json: bool) -> io::Result<()> {
+fn list_channels() -> io::Result<()> {
     let resp = with_gateway(|client| async move { ListChannels::call(&*client, ()).await })?
         .map_err(|e| io::Error::other(format!("list: {e}")))?;
-    if json {
-        let mut json_channels: Vec<String> = Vec::new();
-        for ch in &resp.channels {
-            let session = ch
-                .session
-                .as_ref()
-                .map(|s| format!("{}x{} exited={:?}", s.cols, s.rows, s.exited))
-                .unwrap_or_else(|| "no-session".to_string());
-            let clients: Vec<String> = ch
-                .clients
-                .iter()
-                .map(|c| {
-                    format!(
-                        "{{\"conn_id\":{},\"hostname\":\"{}\",\"connected_at\":{},\"cols\":{},\"rows\":{}}}",
-                        c.conn_id, c.hostname, c.connected_at_unix, c.cols, c.rows
-                    )
-                })
-                .collect();
-            json_channels.push(format!(
-                "{{\"name\":\"{}\",\"created_at\":{},\"session\":\"{}\",\"clients\":[{}]}}",
-                ch.name,
-                ch.created_at_unix,
-                session,
-                clients.join(",")
-            ));
-        }
+    // Header: which PID on this system is the gateway daemon.
+    println!(
+        "Gateway Daemon PID: {} | Socket: {}",
+        resp.gateway_pid, resp.socket
+    );
+    if resp.channels.is_empty() {
+        println!("\nNo channels.");
+        return Ok(());
+    }
+    // Vertical list: one block per channel, one line per client. Kept short so
+    // it wraps cleanly instead of being a wide table.
+    for ch in &resp.channels {
+        let session = ch
+            .session
+            .as_ref()
+            .map(|s| format!("{}x{}", s.cols, s.rows))
+            .unwrap_or_else(|| "none".to_string());
+        let nclients = ch.clients.len();
+        println!();
+        println!("channel: {}", ch.name);
+        println!("  created: {}", format_unix_relative(ch.created_at_unix));
+        println!("  session: {}", session);
         println!(
-            "{{\"gateway_pid\":{},\"socket\":\"{}\",\"channels\":[{}]}}",
-            resp.gateway_pid,
-            resp.socket,
-            json_channels.join(",")
-        );
-    } else {
-        // Header: which PID on this system is the gateway daemon.
-        println!(
-            "Gateway Daemon PID: {} | Socket: {}",
-            resp.gateway_pid, resp.socket
-        );
-        if resp.channels.is_empty() {
-            println!("\nNo channels.");
-            return Ok(());
-        }
-        // Vertical list: one block per channel, one line per client.
-        for ch in &resp.channels {
-            let session = ch
-                .session
-                .as_ref()
-                .map(|s| format!("{}x{}", s.cols, s.rows))
-                .unwrap_or_else(|| "none".to_string());
-            let nclients = ch.clients.len();
-            println!();
-            println!("channel: {}", ch.name);
-            println!("  created: {}", format_unix_relative(ch.created_at_unix));
-            println!("  session: {}", session);
-            println!(
-                "  clients: {}",
-                if nclients == 0 {
-                    "none".to_string()
-                } else {
-                    format!("{nclients} connected")
-                }
-            );
-            for c in &ch.clients {
-                println!(
-                    "    - conn {}  {}  {}x{}  connected {}",
-                    c.conn_id,
-                    c.hostname,
-                    c.cols,
-                    c.rows,
-                    format_unix_relative(c.connected_at_unix)
-                );
+            "  clients: {}",
+            if nclients == 0 {
+                "none".to_string()
+            } else {
+                format!("{nclients} connected")
             }
+        );
+        for c in &ch.clients {
+            println!(
+                "    - pid {}  {}  {}x{}  connected {}",
+                c.pid,
+                c.hostname,
+                c.cols,
+                c.rows,
+                format_unix_relative(c.connected_at_unix)
+            );
         }
     }
     Ok(())
@@ -424,7 +387,7 @@ fn kill_channel(channel: &str, socket: Option<usize>, self_: bool) -> io::Result
                 .unwrap_or_else(|_| "unknown".to_string());
             term_session_muxio_service_definitions::Attach::call(
                 &*client,
-                (channel.to_string(), hostname),
+                (channel.to_string(), hostname, std::process::id() as u64),
             )
             .await
             .map_err(|e| io::Error::other(format!("attach: {e}")))

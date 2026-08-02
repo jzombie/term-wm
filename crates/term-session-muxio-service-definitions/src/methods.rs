@@ -17,6 +17,8 @@ pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
 struct AttachRequest {
     pub channel: String,
     pub hostname: String,
+    /// The client process's OS PID, so `list` can show which PID is attached.
+    pub pid: u64,
 }
 
 #[derive(Encode, Decode)]
@@ -29,20 +31,22 @@ pub struct Attach;
 impl RpcMethodPrebuffered for Attach {
     const METHOD_ID: u64 = rpc_method_id!("session.attach");
 
-    type Input = (String, String);
+    // TODO: Use type aliases to simplify this
+    type Input = (String, String, u64);
     type Output = usize;
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
         Ok(bitcode::encode(&AttachRequest {
             channel: input.0,
             hostname: input.1,
+            pid: input.2,
         }))
     }
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
         let r = bitcode::decode::<AttachRequest>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok((r.channel, r.hostname))
+        Ok((r.channel, r.hostname, r.pid))
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
@@ -282,6 +286,8 @@ pub struct SessionInfo {
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct ClientInfo {
     pub conn_id: usize,
+    /// The client process's OS PID (reported at Attach).
+    pub pid: u64,
     pub hostname: String,
     pub connected_at_unix: u64,
     pub cols: u16,

@@ -73,6 +73,8 @@ struct ConnEntry {
     state: ConnState,
     hostname: String,
     connected_at_unix: u64,
+    /// Client process OS PID (reported at Attach).
+    pid: u64,
 }
 
 #[derive(Clone)]
@@ -80,6 +82,7 @@ struct ClientEntry {
     caller: Option<RpcIpcConnectionContextHandle>,
     hostname: String,
     connected_at_unix: u64,
+    pid: u64,
     cols: u16,
     rows: u16,
 }
@@ -264,6 +267,7 @@ impl ChannelState {
             .iter()
             .map(|(conn_id, c)| ClientInfo {
                 conn_id: *conn_id,
+                pid: c.pid,
                 hostname: c.hostname.clone(),
                 connected_at_unix: c.connected_at_unix,
                 cols: c.cols,
@@ -532,7 +536,7 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                 if state.is_shutting_down.load(Ordering::SeqCst) {
                     return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-                let (channel_str, hostname) = Attach::decode_request(&payload)?;
+                let (channel_str, hostname, pid) = Attach::decode_request(&payload)?;
                 let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
                 let _channel = get_or_create_channel(&state, &name).await;
                 let conn_id = ctx.conn_id;
@@ -541,6 +545,7 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                     entry.state = ConnState::Attached(name);
                     entry.hostname = hostname;
                     entry.connected_at_unix = now_unix();
+                    entry.pid = pid;
                 }
                 Attach::encode_response(conn_id).map_err(boxed_io)
             }
@@ -572,6 +577,7 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                             c.handle.clone(),
                             c.hostname.clone(),
                             c.connected_at_unix,
+                            c.pid,
                         )
                     })
                 };
@@ -580,9 +586,10 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                     .clients
                     .entry(ctx.conn_id)
                     .or_insert_with(|| ClientEntry {
-                        caller: conn_meta.as_ref().map(|(h, _, _)| h.clone()),
-                        hostname: conn_meta.as_ref().map(|(_, n, _)| n.clone()).unwrap_or_default(),
-                        connected_at_unix: conn_meta.as_ref().map(|(_, _, t)| *t).unwrap_or(0),
+                        caller: conn_meta.as_ref().map(|(h, _, _, _)| h.clone()),
+                        hostname: conn_meta.as_ref().map(|(_, n, _, _)| n.clone()).unwrap_or_default(),
+                        connected_at_unix: conn_meta.as_ref().map(|(_, _, t, _)| *t).unwrap_or(0),
+                        pid: conn_meta.as_ref().map(|(_, _, _, p)| *p).unwrap_or(0),
                         cols,
                         rows,
                     });
@@ -1016,6 +1023,7 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                             state: ConnState::Unattached,
                             hostname: String::new(),
                             connected_at_unix: now_unix(),
+                            pid: 0,
                         },
                     );
                 }

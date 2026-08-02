@@ -61,9 +61,12 @@ pub async fn connect_client_with_retry(socket_path: &str) -> Arc<RpcIpcClient> {
 
 /// Attach a client to a channel, returning its server-assigned conn id.
 pub async fn attach_client(client: &RpcIpcClient, channel: &ChannelName) -> usize {
-    Attach::call(client, (channel.to_string(), "test-host".to_string()))
-        .await
-        .expect("attach")
+    Attach::call(
+        client,
+        (channel.to_string(), "test-host".to_string(), std::process::id() as u64),
+    )
+    .await
+    .expect("attach")
 }
 
 pub async fn wait_for_output(

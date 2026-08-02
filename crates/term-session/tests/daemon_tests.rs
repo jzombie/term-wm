@@ -112,7 +112,7 @@ async fn daemon_survives_all_clients_disconnecting() {
 
     let client = wait_connectable(&gateway).await;
     let channel = "test/daemon_survive";
-    Attach::call(&*client, (channel.to_string(), "t".to_string()))
+    Attach::call(&*client, (channel.to_string(), "t".to_string(), std::process::id() as u64))
         .await
         .unwrap();
     Spawn::call(
@@ -126,7 +126,7 @@ async fn daemon_survives_all_clients_disconnecting() {
     // After ALL clients disconnect, the daemon must still be reachable and a
     // fresh attach/spawn must succeed (session respawns / persists).
     let client2 = wait_connectable(&gateway).await;
-    Attach::call(&*client2, (channel.to_string(), "t".to_string()))
+    Attach::call(&*client2, (channel.to_string(), "t".to_string(), std::process::id() as u64))
         .await
         .unwrap();
     Spawn::call(&*client2, (None, 80u16, 24u16)).await.unwrap();
@@ -158,7 +158,7 @@ async fn daemon_survives_parent_death() {
 
     // The daemon it spawned must still be reachable and the session alive.
     let client = wait_connectable(&gateway).await;
-    Attach::call(&*client, (channel.to_string(), "t".to_string()))
+    Attach::call(&*client, (channel.to_string(), "t".to_string(), std::process::id() as u64))
         .await
         .unwrap();
     let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
