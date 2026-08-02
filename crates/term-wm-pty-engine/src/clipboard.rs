@@ -300,30 +300,35 @@ impl Clipboard {
     /// is unavailable (headless / SSH):
     ///
     /// 1. `arboard` — writes to the local system clipboard directly.
-    /// 2. **OSC 52** — writes to the host terminal's clipboard via the
-    ///    escape sequence.  This ensures copy works when embedded in
-    ///    remote/embedded terminals (Zed, tmux, SSH) where the host
-    ///    terminal intercepts the sequence.
-    /// 3. **Temp file** — when there is no system clipboard (headless /
+    /// 2. **Temp file** — when there is no system clipboard (headless /
     ///    remote), a local copy so `get()` can round-trip copy→paste.
+    /// 3. **OSC 52** — writes to the host terminal's clipboard via the
+    ///    escape sequence, and is emitted **last** so the host terminal
+    ///    emulator becomes the final owner of the system clipboard.  This
+    ///    ensures copy works when embedded in remote/embedded terminals
+    ///    (Zed, tmux, SSH), and on X11 it supersedes arboard's in-process
+    ///    selection thread, whose clipboard ownership is known to be
+    ///    unreliable (pastes can silently serve stale data).  The terminal
+    ///    emulator then answers paste requests directly.
     ///
     /// Errors from any path are silently ignored — at least one of
     /// the back-ends is expected to fail depending on the environment.
     pub fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
-        // Always write OSC 52 for the host terminal — this is the only
-        // mechanism that reaches the real clipboard when term-wm runs
-        // inside Zed's remote terminal, tmux, or over SSH.
-        #[cfg(not(test))]
-        if let Err(e) = set_via_osc52_with_writer(text, &mut std::io::stdout().lock()) {
-            tracing::debug!("clipboard: set OSC 52 to stdout failed ({e})");
-        }
-
-        // In tests, capture to osc52_output instead of stdout.
-        #[cfg(test)]
-        {
-            let mut buf = Vec::new();
-            let _ = set_via_osc52_with_writer(text, &mut buf);
-            self.osc52_output = buf;
+        // Write via arboard for the local case first.  On X11 this claims
+        // the CLIPBOARD selection, but arboard hosts the data in its own
+        // background thread, which can silently drop or serve stale data.
+        // macOS AppKit/NSPasteboard writes debug spam to stderr when
+        // setting the clipboard — suppress it to prevent terminal junk.
+        if let Some(cb) = &mut self.arboard {
+            let _guard = StderrSuppressGuard::new();
+            match cb.set_text(text.to_owned()) {
+                Ok(()) => tracing::debug!("clipboard: set wrote via arboard"),
+                Err(e) => tracing::debug!("clipboard: set via arboard failed ({e})"),
+            }
+        } else {
+            tracing::debug!(
+                "clipboard: set arboard unavailable; temp store + OSC 52 only"
+            );
         }
 
         // Persist to the temp-file backing store only when there is no real
@@ -338,19 +343,22 @@ impl Clipboard {
             );
         }
 
-        // Also write via arboard for the local case.
-        // macOS AppKit/NSPasteboard writes debug spam to stderr when
-        // setting the clipboard — suppress it to prevent terminal junk.
-        if let Some(cb) = &mut self.arboard {
-            let _guard = StderrSuppressGuard::new();
-            match cb.set_text(text.to_owned()) {
-                Ok(()) => tracing::debug!("clipboard: set wrote via arboard"),
-                Err(e) => tracing::debug!("clipboard: set via arboard failed ({e})"),
-            }
-        } else {
-            tracing::debug!(
-                "clipboard: set arboard unavailable; temp store + OSC 52 only"
-            );
+        // Emit OSC 52 for the host terminal LAST.  When the host terminal
+        // emulator supports OSC 52 (VTE, Alacritty, WezTerm, …) it responds
+        // by taking over the system clipboard, making it the final owner —
+        // which on X11 is far more reliable than arboard's in-process
+        // selection thread for answering paste requests.
+        #[cfg(not(test))]
+        if let Err(e) = set_via_osc52_with_writer(text, &mut std::io::stdout().lock()) {
+            tracing::debug!("clipboard: set OSC 52 to stdout failed ({e})");
+        }
+
+        // In tests, capture to osc52_output instead of stdout.
+        #[cfg(test)]
+        {
+            let mut buf = Vec::new();
+            let _ = set_via_osc52_with_writer(text, &mut buf);
+            self.osc52_output = buf;
         }
 
         Ok(())
