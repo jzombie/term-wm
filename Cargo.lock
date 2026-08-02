@@ -3206,7 +3206,6 @@ dependencies = [
  "ctrlc",
  "libc",
  "portable-pty",
- "tempfile",
  "term-wm-events",
  "thiserror 2.0.19",
  "tracing",

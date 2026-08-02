@@ -574,7 +574,7 @@ struct ParserReadLoopArgs {
     /// Clipboard to relay extracted OSC 52 sequences through. `None` in
     /// production (the loop constructs a default handle); tests inject an
     /// isolated, headless [`Clipboard`] so the relay can be exercised without
-    /// touching the real system clipboard or temp store.
+    /// touching the real system clipboard or process-global default buffer.
     clipboard: Option<Clipboard>,
     /// Application state tracker — shared via Arc with Pty.
     tracker: std::sync::Arc<crate::PtyStateTracker>,
@@ -905,7 +905,7 @@ mod tests {
     use std::io::Cursor;
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, RwLock};
 
     /// Returns a platform-appropriate dummy executable for PTY plumbing tests.
     /// On Unix, `cat` blocks on stdin and echoes output. On Windows, `cmd.exe`
@@ -1083,26 +1083,12 @@ mod tests {
 
     #[test]
     fn parser_read_loop_relays_osc52_to_isolated_clipboard_and_hook() {
-        let dir = tempfile::tempdir().unwrap();
-        // Nested owner-only subdir mirrors production: the tempdir root is
-        // group/other-writable and would be rejected by
-        // ensure_clipboard_store_dir.
-        let store_dir = dir.path().join("store");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            let mut builder = std::fs::DirBuilder::new();
-            builder.mode(0o700);
-            builder.create(&store_dir).unwrap();
-        }
-        #[cfg(not(unix))]
-        std::fs::create_dir_all(&store_dir).unwrap();
-        let path = store_dir.join("clipboard.txt");
-
-        // Inject a headless clipboard so the relay is deterministic and the
-        // real system clipboard / temp store are never touched.
+        // Inject a headless clipboard backed by an isolated shared in-memory
+        // buffer so the relay is deterministic and the real system clipboard
+        // / process-global default buffer are never touched.
+        let shared = Arc::new(RwLock::new(None));
         let mut args = make_parser_test_args();
-        args.clipboard = Some(Clipboard::headless_with_temp_path(path.clone()));
+        args.clipboard = Some(Clipboard::with_shared_buffer(Arc::clone(&shared)));
         let captured = Arc::new(Mutex::new(None));
         args.osc52_text = Some(Arc::clone(&captured));
         args.reader = Box::new(Cursor::new(crate::clipboard::format_osc52_bytes(
@@ -1117,13 +1103,12 @@ mod tests {
             Some("clip via pty"),
             "osc52_text hook must capture the relayed payload"
         );
-        // A fresh headless handle over the same isolated path must read the
-        // relayed text back, proving set() ran without touching the real store.
-        let mut reader = Clipboard::headless_with_temp_path(path);
+        // The shared buffer must hold the relayed text, proving set() ran
+        // without touching the real system clipboard.
         assert_eq!(
-            reader.get().unwrap(),
-            "clip via pty",
-            "relayed set() must have written the isolated temp store"
+            *shared.read().unwrap(),
+            Some("clip via pty".to_string()),
+            "relayed set() must have written the shared in-memory buffer"
         );
     }
 
