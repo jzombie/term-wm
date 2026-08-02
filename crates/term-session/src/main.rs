@@ -276,37 +276,28 @@ fn list_channels(json: bool) -> io::Result<()> {
             );
         }
     } else {
-        // One summary row per channel plus a detailed row per client.
-        println!(
-            "{:<24} {:<12} {:<10} {:<10} {:<14} {:<24}",
-            "CHANNEL", "CREATED", "SESSION", "CLIENT", "HOST", "SIZE @ CONNECTED"
-        );
+        // Vertical list: one block per channel, one line per client.
         for ch in &channels {
-            let created = format_unix_relative(ch.created_at_unix);
             let session = ch
                 .session
                 .as_ref()
                 .map(|s| format!("{}x{}", s.cols, s.rows))
-                .unwrap_or_else(|| "-".to_string());
-            if ch.clients.is_empty() {
-                println!(
-                    "{:<24} {:<12} {:<10} {:<10} {:<14} {:<24}",
-                    ch.name, created, session, "-", "-", "-"
-                );
-                continue;
-            }
-            for (i, c) in ch.clients.iter().enumerate() {
-                // Blank the channel/created columns on continuation rows.
-                let (name, cr) = if i == 0 {
-                    (ch.name.to_string(), created.clone())
+                .unwrap_or_else(|| "none".to_string());
+            let nclients = ch.clients.len();
+            println!("channel: {}", ch.name);
+            println!("  created: {}", format_unix_relative(ch.created_at_unix));
+            println!("  session: {}", session);
+            println!(
+                "  clients: {}",
+                if nclients == 0 {
+                    "none".to_string()
                 } else {
-                    (String::new(), String::new())
-                };
+                    format!("{nclients} connected")
+                }
+            );
+            for c in &ch.clients {
                 println!(
-                    "{:<24} {:<12} {:<10} {:<10} {:<14} ({}x{} @ {})",
-                    name,
-                    cr,
-                    session,
+                    "    - conn {}  {}  {}x{}  connected {}",
                     c.conn_id,
                     c.hostname,
                     c.cols,
