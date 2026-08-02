@@ -47,7 +47,6 @@ cargo run --release -- -n 3 -- ls -la    # 3 windows; the first runs `ls -la`
 Options (`term-wm -h`):
 
 - `-n, --count <N>` — number of windows to open (default 2; min 1)
-- `--embedded` — bare/embedded mode: no system chrome, panels, or floating windows
 - `-h, --help`, `-V, --version`
 
 New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
