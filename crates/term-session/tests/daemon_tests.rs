@@ -165,10 +165,11 @@ async fn daemon_survives_parent_death() {
     let channel = "test/daemon_parent_death";
     let mock = mock_bin().to_string_lossy().to_string();
 
-    // Spawn an `attach` subprocess that auto-spawns the daemon, then kill it.
+    // Spawn an `attach` subprocess that auto-spawns the daemon, running a
+    // LONG-LIVED session so its process survives the parent dying.
     let mut attach = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .args(["attach", "--channel", channel, "--", &mock, "echo"])
+        .args(["attach", "--channel", channel, "--", &mock, "sleep", "60000"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -180,7 +181,9 @@ async fn daemon_survives_parent_death() {
     let _ = attach.kill();
     let _ = attach.wait();
 
-    // The daemon it spawned must still be reachable and the session alive.
+    // The daemon it spawned must still be reachable and the session alive
+    // (the `sleep` process is still running, so the daemon must not have
+    // exited — sessions are torn down only when their process ends).
     let client = wait_connectable(&gateway).await;
     Attach::call(
         &*client,
