@@ -36,21 +36,75 @@ pub enum ClipboardError {
     NotAvailable,
 }
 
-/// Filename (in the OS temp directory) of the temp-file clipboard backing
-/// store used as a headless fallback for `get()`.
+/// Filename of the temp-file clipboard backing store used as a headless
+/// fallback for `get()`.
 const CLIPBOARD_TEMP_FILENAME: &str = "term-wm-clipboard.txt";
 
-/// Absolute path of the default temp-file clipboard store.
+/// Resolve the default path of the temp-file clipboard store.
+///
+/// Clipboard contents can be sensitive (passwords, tokens), so the store
+/// must never live in a world-readable location.  Resolution order:
+///
+/// 1. `$XDG_RUNTIME_DIR/term-wm-clipboard.txt` — a user-private (`0700`),
+///    RAM-backed (`tmpfs`) directory created by systemd on modern Linux.
+/// 2. `<temp_dir>/term-wm-<uid>/term-wm-clipboard.txt` on Unix — a
+///    user-owned, `0700` subdirectory under the shared temp dir so other
+///    users cannot read the clipboard.
+/// 3. `<temp_dir>/term-wm-clipboard.txt` elsewhere — the platform temp
+///    dir is already user-private on Windows and macOS.
 fn default_temp_path() -> PathBuf {
-    std::env::temp_dir().join(CLIPBOARD_TEMP_FILENAME)
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir).join(CLIPBOARD_TEMP_FILENAME);
+    }
+    let base = std::env::temp_dir();
+    #[cfg(unix)]
+    let base = base.join(format!("term-wm-{}", unsafe { libc::getuid() }));
+    base.join(CLIPBOARD_TEMP_FILENAME)
+}
+
+/// Create the parent directory of the clipboard store with owner-only
+/// permissions (`0700`) on Unix, preventing other users from entering it.
+fn ensure_clipboard_store_dir(path: &Path) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        match builder.create(parent) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(parent)
 }
 
 /// Write `text` to the temp-file backing store at `path`.
 ///
+/// The file is created with owner-only permissions (`0600`) on Unix, and
+/// the permissions are re-applied after writing to guard against a
+/// pre-existing file created with looser permissions (e.g. by an older
+/// version or a permissive umask).
+///
 /// Best-effort: failures are swallowed by callers — this is a fallback,
 /// not a primary clipboard mechanism.
 fn write_clipboard_temp(path: &Path, text: &str) -> std::io::Result<()> {
-    let mut f = std::fs::File::create(path)?;
+    ensure_clipboard_store_dir(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(path)?;
     f.write_all(text.as_bytes())?;
     f.flush()?;
     #[cfg(unix)]
@@ -107,8 +161,8 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
 pub struct Clipboard {
     arboard: Option<arboard::Clipboard>,
     /// Path of the temp-file backing store.  When `None`, the default
-    /// OS temp-dir path is used.  Tests set a unique path to avoid
-    /// cross-test interference.
+    /// secure path is used (see [`default_temp_path`]).  Tests set a
+    /// unique path to avoid cross-test interference.
     temp_path: Option<PathBuf>,
     /// Captured OSC 52 output — only present in test builds so that tests
     /// can verify the OSC 52 path was exercised alongside the arboard path.
@@ -479,6 +533,24 @@ mod tests {
 
         cb.set("héllo 日本語 ✅").unwrap();
         assert_eq!(cb.get().unwrap(), "héllo 日本語 ✅");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_store_dir_and_file_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "term-wm-test-perms-{}",
+            std::process::id()
+        ));
+        let path = dir.join(CLIPBOARD_TEMP_FILENAME);
+        write_clipboard_temp(&path, "secret").unwrap();
+
+        let dir_mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "store dir must be owner-only");
+        assert_eq!(file_mode, 0o600, "store file must be owner-only");
     }
 
     #[test]
