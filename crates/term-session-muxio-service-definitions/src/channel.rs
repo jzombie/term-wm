@@ -2,7 +2,11 @@ use std::fmt;
 
 use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
 
-#[derive(Debug, Clone)]
+/// Environment variable that overrides the gateway channel name at runtime.
+/// Injected by the test harness for suite isolation, or set by an operator.
+pub const GATEWAY_CHANNEL_ENV_VAR: &str = "TERM_WM_GATEWAY";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ChannelName {
     pub namespace: String,
     pub name: String,
@@ -64,6 +68,57 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
     Stream::connect(name).is_ok()
 }
 
+/// Resolve the logical gateway channel name.
+///
+/// Deterministic and static by default: `TERM_WM_GATEWAY` env override wins
+/// at runtime, otherwise the gateway resolves to `term-wm/<user>/gateway`
+/// where `<user>` is the current OS user. No build-time entropy is involved;
+/// the compiled artifact is reproducible and an upgraded binary probes the
+/// same endpoint as a running daemon. Test isolation is the test harness's
+/// job — it injects a unique `TERM_WM_GATEWAY` per suite into the client and
+/// daemon subprocesses.
+pub fn gateway_channel_name() -> ChannelName {
+    if let Ok(name) = std::env::var(GATEWAY_CHANNEL_ENV_VAR) {
+        return ChannelName::parse(&name).unwrap_or_else(|_| ChannelName {
+            namespace: "term-wm".to_string(),
+            name: "gateway".to_string(),
+        });
+    }
+    let user = current_os_user();
+    ChannelName {
+        namespace: "term-wm".to_string(),
+        name: format!("{user}/gateway"),
+    }
+}
+
+/// Current OS username for the user-scoped default gateway name.
+/// From `$USER` (Unix) / `USERNAME` (Windows), falling back to "user".
+fn current_os_user() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("USERNAME").unwrap_or_else(|_| "user".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("USER").unwrap_or_else(|_| {
+            // Fall back to the numeric uid via getpwuid when $USER is unset.
+            let uid = unsafe { libc::getuid() };
+            unsafe {
+                let pw = libc::getpwuid(uid);
+                if pw.is_null() {
+                    return "user".to_string();
+                }
+                let name = (*pw).pw_name;
+                if name.is_null() {
+                    return "user".to_string();
+                }
+                let cstr = std::ffi::CStr::from_ptr(name);
+                cstr.to_string_lossy().into_owned()
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +152,29 @@ mod tests {
     fn probe_is_false_when_nothing_is_bound() {
         let channel = ChannelName::parse("probe/not_listening").unwrap();
         assert!(!probe_ipc_endpoint(&channel));
+    }
+
+    #[test]
+    fn gateway_override_env_wins() {
+        // TERM_WM_GATEWAY must be honoured when present (runtime injection).
+        unsafe {
+            std::env::set_var(GATEWAY_CHANNEL_ENV_VAR, "test/iso-gateway");
+        }
+        let gw = gateway_channel_name();
+        assert_eq!(gw.to_string(), "test/iso-gateway");
+        unsafe {
+            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+        }
+    }
+
+    #[test]
+    fn gateway_default_is_deterministic_and_user_scoped() {
+        // No override -> must be term-wm/<user>/gateway, stable across calls
+        // and never a bare shared literal.
+        let a = gateway_channel_name();
+        let b = gateway_channel_name();
+        assert_eq!(a, b);
+        assert_eq!(a.namespace, "term-wm");
+        assert!(a.name.ends_with("/gateway"), "got {}", a.name);
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
@@ -7,11 +8,13 @@ use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
 use muxio_rpc_service_endpoint::{RpcServiceEndpointInterface, StreamResponder};
 use muxio_tokio_rpc_ipc_server::{RpcIpcConnectionContextHandle, RpcIpcServer, RpcIpcServerEvent};
 use portable_pty::PtySize;
-use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
-    ChannelName, CloseSession, ListSessions, OnPtyResized, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, WriteInput,
+    Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
+    ListChannels, OnPtyResized, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn,
+    WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -21,22 +24,57 @@ use crate::session::Session;
 const FALLBACK_COLS: u16 = 80;
 /// Default terminal rows when no client constrains the PTY size.
 const FALLBACK_ROWS: u16 = 24;
-/// Hardcoded singleton session ID (this server manages one PTY at a time).
+/// Session id per channel (each channel hosts a single PTY at a time).
 const SESSION_ID: u64 = 1;
 /// Bounded input channel capacity — memory safety against extreme input bursts.
 const INPUT_CHANNEL_CAPACITY: usize = 128;
 
 /// Grace period to let the transport flush end-of-stream frames after the
-/// session exits, before the server process terminates.
+/// session exits, before the gateway process terminates.
 const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// How often the output polling task wakes to re-check the session's exit
 /// status, as a fallback for a missed or raced PTY EOF notification.
 const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-pub struct SessionServerConfig {
-    pub channel: ChannelName,
-    pub cmd: Vec<String>,
+/// Grace between SIGTERM and SIGKILL when terminating a session's process tree.
+const SIGKILL_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// SIGTERM for cooperative process-group termination. On non-Unix platforms
+/// the value is unused (kill paths fall back to `kill_child`); it is kept a
+/// named `const` so the call sites read identically.
+#[cfg(unix)]
+const SIGTERM: i32 = libc::SIGTERM;
+#[cfg(not(unix))]
+const SIGTERM: i32 = 15;
+/// SIGKILL for straggler escalation after the grace window.
+#[cfg(unix)]
+const SIGKILL: i32 = libc::SIGKILL;
+#[cfg(not(unix))]
+const SIGKILL: i32 = 9;
+
+/// Grace before the gateway exits after the last ShutdownGateway response is
+/// flushed: the RPC handler returns immediately and a detached task sleeps
+/// this long so the muxio transport drains the `()` frame before the socket
+/// is torn down.
+const SHUTDOWN_FLUSH_GRACE_MS: u64 = 50;
+
+/// The administrative gateway channel name (reserved).
+
+/// A connection's bind state. Identity is server-assigned (`conn_id`); a
+/// connection must `Attach` before it may spawn/resize/write.
+#[derive(Clone)]
+enum ConnState {
+    Unattached,
+    Attached(ChannelName),
+}
+
+#[derive(Clone)]
+struct ConnEntry {
+    handle: RpcIpcConnectionContextHandle,
+    state: ConnState,
+    hostname: String,
+    connected_at_unix: u64,
 }
 
 #[derive(Clone)]
@@ -51,25 +89,69 @@ struct SubscriberEntry {
     respond: StreamResponder,
 }
 
-struct ServerState {
+/// Per-channel state. One gateway process hosts many channels; each channel
+/// owns its own session, connected clients, subscribers, and input channel.
+struct ChannelState {
     session: Option<Session>,
     clients: HashMap<usize, ClientEntry>,
     subscribers: Vec<SubscriberEntry>,
     notify: Arc<Notify>,
+    /// Command template used to respawn the session after it exits.
+    cmd: Vec<String>,
+    input_tx: mpsc::Sender<Vec<u8>>,
+    /// True between a SIGTERM request and the process group's actual exit (or
+    /// the SIGKILL escalation). Cleared when the session is observed exited.
+    kill_pending: bool,
+    /// Tombstone set by GC just before removal; any Attach that read a stale
+    /// Arc re-checks this under the write lock (safe double-checked locking).
+    is_reaped: bool,
 }
 
-impl ServerState {
-    fn new(notify: Arc<Notify>) -> Self {
+/// Gateway coordination. Two tiers:
+/// - `conns` is a read-mostly routing table (RwLock).
+/// - `channels` maps channel names to independently-mutexed channel states.
+/// The gateway never holds more than one lock at a time (resolve-and-drop).
+struct ServerState {
+    conns: RwLock<HashMap<usize, ConnEntry>>,
+    channels: RwLock<HashMap<ChannelName, Arc<Mutex<ChannelState>>>>,
+    is_shutting_down: AtomicBool,
+}
+
+type SharedState = Arc<ServerState>;
+
+fn rpc_err(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
+    Box::new(std::io::Error::new(std::io::ErrorKind::Other, message.to_string()))
+}
+
+/// Lift an `io::Error` into the boxed handler error type.
+fn boxed_io(e: std::io::Error) -> Box<dyn std::error::Error + Send + Sync> {
+    Box::new(e)
+}
+
+/// Unix seconds for a connection's `connected_at_unix` wire field.
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+impl ChannelState {
+    fn new(cmd: Vec<String>, input_tx: mpsc::Sender<Vec<u8>>, notify: Arc<Notify>) -> Self {
         Self {
             session: None,
             clients: HashMap::new(),
             subscribers: Vec::new(),
             notify,
+            cmd,
+            input_tx,
+            kill_pending: false,
+            is_reaped: false,
         }
     }
 
-    /// Replace the current session and attach the Notify callback
-    /// so the background polling task is woken on PTY output.
+    /// Replace the current session and attach the Notify callback so the
+    /// background polling task wakes on PTY output.
     fn set_session(&mut self, mut session: Session) {
         let n = self.notify.clone();
         session.set_status_callback(Some(Box::new(move |status| {
@@ -78,16 +160,30 @@ impl ServerState {
             }
         })));
         self.session = Some(session);
-        // Prime notify to process initial startup output generated
-        // before the callback was registered.
+        // Prime notify to process initial startup output generated before the
+        // callback was registered.
         self.notify.notify_one();
     }
 
-    /// Terminate and clear the active session, flushing remaining PTY buffers
-    /// and stream completion markers to all active subscribers.
-    fn clear_session(&mut self) {
-        if let Some(mut session) = self.session.take() {
+    /// Signal the session's process group (non-blocking) and arm the kill
+    /// escalation flag. The caller is responsible for spawning the detached
+    /// escalation task (see `spawn_kill_escalation`). Mechanism only — no
+    /// sleeps, no waits, no `SIGKILL` here.
+    fn request_session_kill(&mut self, signal: i32) {
+        if let Some(session) = self.session.as_mut() {
+            #[cfg(unix)]
+            let _ = session.pty.signal_process_group(signal);
+            #[cfg(not(unix))]
             let _ = session.pty.kill_child();
+        }
+        self.kill_pending = true;
+        self.notify.notify_one();
+    }
+
+    /// Flush remaining PTY buffers and stream completion markers to all active
+    /// subscribers, then drop them. Used by kill paths and on session exit.
+    fn finalize_subscribers(&mut self) {
+        if let Some(session) = self.session.as_mut() {
             let raw = session.read_output();
             if !raw.is_empty() {
                 for sub in &self.subscribers {
@@ -99,7 +195,6 @@ impl ServerState {
             sub.respond.respond(Vec::new(), true);
         }
         self.subscribers.clear();
-        self.notify.notify_one();
     }
 
     /// Constrain the PTY to the smallest geometry across all connected clients.
@@ -136,9 +231,9 @@ impl ServerState {
         session.rows = min_rows;
     }
 
-    /// Broadcast geometry to all clients via detached async tasks.
-    /// Call AFTER releasing the ServerState lock.
-    fn notify_clients(clients: &[ClientEntry], cols: u16, rows: u16) {
+    /// Broadcast geometry to all connected clients via detached async tasks.
+    /// Call AFTER releasing the channel lock.
+    fn notify_clients(&self, clients: &[ClientEntry], cols: u16, rows: u16) {
         for client in clients {
             let Some(caller) = client.caller.clone() else {
                 continue;
@@ -150,57 +245,327 @@ impl ServerState {
             });
         }
     }
+
+    fn to_info(&self, name: &ChannelName) -> ChannelInfo {
+        let session = self.session.as_ref().map(|s| SessionInfo {
+            id: s.id,
+            cols: s.cols,
+            rows: s.rows,
+            exited: s.exited,
+            exit_code: s.exit_code,
+            title: s.title.clone().unwrap_or_default(),
+        });
+        let clients = self
+            .clients
+            .iter()
+            .map(|(conn_id, c)| ClientInfo {
+                conn_id: *conn_id,
+                hostname: String::new(),
+                connected_at_unix: 0,
+                cols: c.cols,
+                rows: c.rows,
+            })
+            .collect();
+        ChannelInfo {
+            name: name.to_string(),
+            session,
+            clients,
+        }
+    }
 }
 
-type SharedState = Arc<Mutex<ServerState>>;
+/// Resolve the channel a connection is bound to, or `None` if unattached.
+async fn bound_channel(state: &ServerState, conn_id: usize) -> Option<ChannelName> {
+    let conns = state.conns.read().await;
+    match conns.get(&conn_id)?.state {
+        ConnState::Attached(ref name) => Some(name.clone()),
+        ConnState::Unattached => None,
+    }
+}
 
-/// Run the session server. Returns the PTY child's exit code on success.
-pub async fn run_server(
-    config: SessionServerConfig,
-) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
-    let socket_name = config.channel.to_string();
-    let notify = Arc::new(Notify::new());
-    let state: SharedState = Arc::new(Mutex::new(ServerState::new(notify.clone())));
+/// Fetch an `Arc<ChannelState>` for the channel, resolving then dropping the
+/// routing guard (never holding `conns` while locking the channel).
+async fn resolve_channel(
+    state: &ServerState,
+    name: &ChannelName,
+) -> Option<Arc<Mutex<ChannelState>>> {
+    let channels = state.channels.read().await;
+    channels.get(name).cloned()
+}
 
+/// Create (or fetch, re-verifying under the write lock) a channel.
+/// Safe double-checked locking: a racing Attach that saw a reaped Arc is
+/// redirected to the canonical instance instead of overwriting it.
+async fn get_or_create_channel(state: &SharedState, name: &ChannelName) -> Arc<Mutex<ChannelState>> {
     {
-        let mut st = state.lock().await;
-        let cmd = if config.cmd.is_empty() {
-            None
-        } else {
-            Some(config.cmd.clone())
-        };
-        let session = Session::spawn(
-            SESSION_ID,
-            cmd,
-            FALLBACK_COLS,
-            FALLBACK_ROWS,
-            Some(&config.channel),
-        )?;
-        st.set_session(session);
+        let channels = state.channels.read().await;
+        if let Some(existing) = channels.get(name) {
+            let arc = existing.clone();
+            drop(channels);
+            let is_reaped = arc.lock().await.is_reaped;
+            if !is_reaped {
+                return arc;
+            }
+        }
     }
 
-    let channel_id = config.channel.clone();
+    let mut channels = state.channels.write().await;
+    // Re-check under the write lock: a racing thread may have inserted a
+    // non-reaped channel between our read and write acquisition. A reaped
+    // (or absent) entry falls through and is replaced with a fresh channel.
+    if let Some(existing) = channels.get(name) {
+        let arc = existing.clone();
+        let is_reaped = arc.lock().await.is_reaped;
+        if !is_reaped {
+            return arc;
+        }
+    }
+    let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(INPUT_CHANNEL_CAPACITY);
+    let notify = Arc::new(Notify::new());
+    let channel = Arc::new(Mutex::new(ChannelState::new(Vec::new(), input_tx, notify)));
+    let ch = Arc::clone(&channel);
+    tokio::spawn(async move {
+        let mut input_rx = input_rx;
+        while let Some(data) = input_rx.recv().await {
+            let writer = {
+                let guard = ch.lock().await;
+                guard.session.as_ref().map(|s| s.pty.writer_handle())
+            };
+            if let Some(writer) = writer {
+                let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
+            }
+        }
+        // Note: the input task runs for the daemon lifetime; the channel's
+        // `input_rx` is only dropped when the channel's senders all vanish.
+    });
+
+    // Output polling task: drains PTY output and broadcasts to subscribers;
+    // on session exit finalizes subscribers, clears the session, and reaps
+    // the channel if no clients remain.
+    {
+        let st = Arc::clone(&state);
+        let ch = Arc::clone(&channel);
+        let notify = {
+            let locked = ch.lock().await;
+            locked.notify.clone()
+        };
+        let name_for_task = name.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = notify.notified() => {}
+                    _ = tokio::time::sleep(SESSION_EXIT_POLL_INTERVAL) => {}
+                }
+                let mut guard = ch.lock().await;
+                if guard.is_reaped {
+                    break;
+                }
+                if guard.subscribers.is_empty() {
+                    if let Some(session) = guard.session.as_mut() {
+                        session.sync_screen();
+                        if session.check_exited() {
+                            tracing::info!(channel = %name_for_task, "Session exited");
+                            guard.session = None;
+                            guard.kill_pending = false;
+                        }
+                    }
+                } else {
+                    let (raw, exited, code) = {
+                        let Some(session) = guard.session.as_mut() else {
+                            // No live session: finalize any lingering subscribers.
+                            for sub in &guard.subscribers {
+                                sub.respond.respond(Vec::new(), true);
+                            }
+                            guard.subscribers.clear();
+                            guard.notify.notify_one();
+                            continue;
+                        };
+                        let raw = session.read_output();
+                        let exited = session.check_exited();
+                        let code = session.exit_code;
+                        (raw, exited, code)
+                    };
+                    if !raw.is_empty() {
+                        for sub in &guard.subscribers {
+                            sub.respond.respond(raw.clone(), false);
+                        }
+                    }
+                    if exited {
+                        tracing::info!(channel = %name_for_task, "Session exited with code {:?}", code);
+                        for sub in &guard.subscribers {
+                            sub.respond.respond(Vec::new(), true);
+                        }
+                        guard.subscribers.clear();
+                        guard.session = None;
+                        guard.kill_pending = false;
+                        guard.notify.notify_one();
+                    }
+                }
+                let should_reap = guard.session.is_none() && guard.clients.is_empty();
+                drop(guard);
+
+                if should_reap {
+                    // GC: drop the channel guard before requesting `channels.write`
+                    // (strict ordering, no AB-BA), then re-verify under the write lock.
+                    let mut channels = st.channels.write().await;
+                    if let Some(arc) = channels.get(&name_for_task) {
+                        let mut locked = arc.lock().await;
+                        if locked.session.is_none() && locked.clients.is_empty() {
+                            locked.is_reaped = true;
+                            drop(locked);
+                            channels.remove(&name_for_task);
+                            tracing::info!(channel = %name_for_task, "Reaped idle channel");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    channels.insert(name.clone(), Arc::clone(&channel));
+    channel
+}
+
+/// Remove a connection from the routing table and prune it from its bound
+/// channel's client/subscriber maps (authoritative teardown on disconnect).
+async fn evict_conn(state: &ServerState, conn_id: usize) {
+    let channel = {
+        let mut conns = state.conns.write().await;
+        let entry = conns.remove(&conn_id);
+        entry
+            .and_then(|e| match e.state {
+                ConnState::Attached(name) => Some(name),
+                ConnState::Unattached => None,
+            })
+    };
+    let Some(channel) = channel else {
+        return;
+    };
+    let Some(ch) = resolve_channel(state, &channel).await else {
+        return;
+    };
+    let mut guard = ch.lock().await;
+    guard.clients.remove(&conn_id);
+    guard.subscribers.retain(|s| s.conn_id != conn_id);
+    guard.recalculate_pty_size();
+    let (ncols, nrows) = guard
+        .session
+        .as_ref()
+        .map(|s| (s.cols, s.rows))
+        .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
+    let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
+    drop(guard);
+    // Best-effort geometry broadcast; the channel may be reaped concurrently,
+    // in which case clients already see end-of-stream.
+    if let Some(ch) = resolve_channel(state, &channel).await {
+        let guard = ch.lock().await;
+        guard.notify_clients(&targets, ncols, nrows);
+    }
+}
+
+/// Spawn a detached escalation task for a kill-requested session.
+///
+/// Policy owned by the daemon supervisor (never the pty engine): after an
+/// async `SIGKILL_GRACE` sleep, re-check the session state; if it already
+/// exited during the grace window (reaped by the output-polling task), abort
+/// instantly — no blind `SIGKILL` to a possibly-recycled pgid. Only escalate
+/// if the session is still alive and the kill is still pending.
+async fn spawn_kill_escalation(state: &SharedState, name: &ChannelName) {
+    let state = Arc::clone(state);
+    let name = name.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(SIGKILL_GRACE).await;
+        let Some(ch) = resolve_channel(&state, &name).await else {
+            return;
+        };
+        let mut guard = ch.lock().await;
+        if !guard.kill_pending {
+            return;
+        }
+        // Abort if the session exited during the grace (or is already gone).
+        let alive = guard
+            .session
+            .as_ref()
+            .is_some_and(|s| !s.exited && s.pty.reader_is_alive());
+        guard.kill_pending = false;
+        if !alive {
+            return;
+        }
+        if let Some(session) = guard.session.as_mut() {
+            #[cfg(unix)]
+            let _ = session.pty.signal_process_group(SIGKILL);
+            #[cfg(not(unix))]
+            let _ = session.pty.kill_child();
+        }
+    });
+}
+
+/// Run the gateway daemon. Hosts every channel in one process; returns after
+/// a `ShutdownGateway` (or transport error).
+pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let socket_name = gateway.to_string();
+    let state: SharedState = Arc::new(ServerState {
+        conns: RwLock::new(HashMap::new()),
+        channels: RwLock::new(HashMap::new()),
+        is_shutting_down: AtomicBool::new(false),
+    });
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let server = RpcIpcServer::new(Some(event_tx));
     let endpoint = server.endpoint();
 
-    // Register Spawn
+    // ── Attach ────────────────────────────────────────────────────────
     let st = Arc::clone(&state);
-    let ch = channel_id.clone();
+    endpoint
+        .register_prebuffered(Attach::METHOD_ID, move |payload, ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let (channel_str, hostname) = Attach::decode_request(&payload)?;
+                let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
+                let _channel = get_or_create_channel(&state, &name).await;
+                let conn_id = ctx.conn_id;
+                let mut conns = state.conns.write().await;
+                if let Some(entry) = conns.get_mut(&conn_id) {
+                    entry.state = ConnState::Attached(name);
+                    entry.hostname = hostname;
+                    entry.connected_at_unix = now_unix();
+                }
+                Attach::encode_response(conn_id).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register Attach: {e:?}"))?;
+
+    // ── Spawn ────────────────────────────────────────────────────────
+    let st = Arc::clone(&state);
     endpoint
         .register_prebuffered(Spawn::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
-            let ch = ch.clone();
             async move {
-                let mut guard = state.lock().await;
-                let (cmd, cols, rows) = Spawn::decode_request(&payload)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let (cmd, cols, rows) = Spawn::decode_request(&payload)?;
+                let channel = bound_channel(state.as_ref(), ctx.conn_id).await;
+                let Some(channel) = channel else {
+                    return Err(rpc_err(RPC_ERROR_UNATTACHED));
+                };
+                let ch = get_or_create_channel(&state, &channel).await;
+                // Fetch the connection's caller handle before locking the
+                // channel (never hold two locks at once).
+                let caller = {
+                    let conns = state.conns.read().await;
+                    conns.get(&ctx.conn_id).map(|c| c.handle.clone())
+                };
+                let mut guard = ch.lock().await;
                 let entry = guard
                     .clients
                     .entry(ctx.conn_id)
                     .or_insert_with(|| ClientEntry {
-                        caller: None,
+                        caller,
                         cols,
                         rows,
                     });
@@ -220,14 +585,28 @@ pub async fn run_server(
                     let cols = guard.session.as_ref().map(|s| s.cols).unwrap_or(cols);
                     let rows = guard.session.as_ref().map(|s| s.rows).unwrap_or(rows);
                     drop(guard);
-                    ServerState::notify_clients(&targets, ncols, nrows);
-                    return Spawn::encode_response((id, cols, rows))
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                    if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
+                        let g = ch.lock().await;
+                        g.notify_clients(&targets, ncols, nrows);
+                    }
+                    return Spawn::encode_response((id, cols, rows)).map_err(boxed_io);
                 }
+
+                // Respawn: new non-empty cmd overwrites the stored template;
+                // empty/None falls back to the existing template.
+                let effective_cmd = if let Some(c) = cmd
+                    && !c.is_empty()
+                {
+                    guard.cmd = c.clone();
+                    Some(c)
+                } else if !guard.cmd.is_empty() {
+                    Some(guard.cmd.clone())
+                } else {
+                    None
+                };
                 let id = SESSION_ID;
-                let session = Session::spawn(id, cmd, cols, rows, Some(&ch))?;
+                let session = Session::spawn(id, effective_cmd, cols, rows, Some(&channel))?;
                 guard.set_session(session);
-                // Enforce global geometric constraints on the newly instantiated PTY
                 guard.recalculate_pty_size();
                 let (ncols, nrows) = guard
                     .session
@@ -238,23 +617,32 @@ pub async fn run_server(
                 let session = guard.session.as_ref().unwrap();
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
                 drop(guard);
-                ServerState::notify_clients(&targets, ncols, nrows);
-                Spawn::encode_response((sid, scol, srow))
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
+                    let g = ch.lock().await;
+                    g.notify_clients(&targets, ncols, nrows);
+                }
+                Spawn::encode_response((sid, scol, srow)).map_err(boxed_io)
             }
         })
         .await
         .map_err(|e| format!("register Spawn: {e:?}"))?;
 
-    // Register ResizePty
+    // ── ResizePty ────────────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
         .register_prebuffered(ResizePty::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
             async move {
-                let (_id, cols, rows) = ResizePty::decode_request(&payload)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let mut guard = state.lock().await;
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let (_id, cols, rows) = ResizePty::decode_request(&payload)?;
+                let channel = bound_channel(state.as_ref(), ctx.conn_id).await;
+                let Some(channel) = channel else {
+                    return Err(rpc_err(RPC_ERROR_UNATTACHED));
+                };
+                let ch = resolve_channel(state.as_ref(), &channel).await.ok_or_else(|| rpc_err("channel not found"))?;
+                let mut guard = ch.lock().await;
                 if let Some(client) = guard.clients.get_mut(&ctx.conn_id) {
                     client.cols = cols;
                     client.rows = rows;
@@ -267,59 +655,60 @@ pub async fn run_server(
                     .unwrap_or((cols, rows));
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 drop(guard);
-                ServerState::notify_clients(&targets, ncols, nrows);
-                ResizePty::encode_response((ncols, nrows))
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
+                    let g = ch.lock().await;
+                    g.notify_clients(&targets, ncols, nrows);
+                }
+                ResizePty::encode_response((ncols, nrows)).map_err(boxed_io)
             }
         })
         .await
         .map_err(|e| format!("register ResizePty: {e:?}"))?;
 
-    // Register CloseSession
+    // ── CloseSession ─────────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(CloseSession::METHOD_ID, move |payload, _ctx| {
+        .register_prebuffered(CloseSession::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
             async move {
-                let _id = CloseSession::decode_request(&payload)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                let mut guard = state.lock().await;
-                guard.clear_session();
-                CloseSession::encode_response(())
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let _id = CloseSession::decode_request(&payload)?;
+                let channel = bound_channel(state.as_ref(), ctx.conn_id).await;
+                let Some(channel) = channel else {
+                    return Err(rpc_err(RPC_ERROR_UNATTACHED));
+                };
+                let ch = resolve_channel(state.as_ref(), &channel).await.ok_or_else(|| rpc_err("channel not found"))?;
+                let mut guard = ch.lock().await;
+                guard.request_session_kill(SIGTERM);
+                guard.finalize_subscribers();
+                drop(guard);
+                // Spawn the exited-checked SIGKILL escalation for stragglers.
+                spawn_kill_escalation(&state, &channel).await;
+                CloseSession::encode_response(()).map_err(boxed_io)
             }
         })
         .await
         .map_err(|e| format!("register CloseSession: {e:?}"))?;
 
-    // Register ListSessions
+    // ── WriteInput ───────────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(ListSessions::METHOD_ID, move |_payload, _ctx| {
+        .register_prebuffered(WriteInput::METHOD_ID, move |payload, ctx| {
             let state = Arc::clone(&st);
             async move {
-                let guard = state.lock().await;
-                let sessions = match &guard.session {
-                    Some(s) => vec![(s.id, String::new(), s.exited)],
-                    None => vec![],
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let (id, data) = WriteInput::decode_request(&payload)?;
+                let channel = bound_channel(state.as_ref(), ctx.conn_id).await;
+                let Some(channel) = channel else {
+                    return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
-                ListSessions::encode_response(sessions)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-            }
-        })
-        .await
-        .map_err(|e| format!("register ListSessions: {e:?}"))?;
-
-    // Register WriteInput
-    let st = Arc::clone(&state);
-    endpoint
-        .register_prebuffered(WriteInput::METHOD_ID, move |payload, _ctx| {
-            let state = Arc::clone(&st);
-            async move {
-                let (id, data) = WriteInput::decode_request(&payload)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                let ch = resolve_channel(state.as_ref(), &channel).await.ok_or_else(|| rpc_err("channel not found"))?;
                 let writer = {
-                    let guard = state.lock().await;
+                    let guard = ch.lock().await;
                     guard
                         .session
                         .as_ref()
@@ -332,76 +721,71 @@ pub async fn run_server(
                 if let Some(writer) = writer {
                     let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
                 }
-                WriteInput::encode_response(())
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                WriteInput::encode_response(()).map_err(boxed_io)
             }
         })
         .await
         .map_err(|e| format!("register WriteInput: {e:?}"))?;
 
-    // Register StreamInput (streaming handler for PTY input)
-    // The channel persists across client disconnects so reconnecting
-    // clients can still send input — we drop it only when the server
-    // shuts down.
-    // Bounded to 128 items + try_send provides memory safety when the
-    // PTY write task falls behind under extreme input bursts.  Dropped
-    // chunks may fragment the PTY byte stream (multi-byte sequences);
-    // client-side coalescing (in term-session-client) prevents most
-    // over-production, but the bound is the last line of defense.
-    let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(INPUT_CHANNEL_CAPACITY);
+    // ── StreamInput ──────────────────────────────────────────────────
+    let st = Arc::clone(&state);
     endpoint
-        .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, _ctx| {
-            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event
-                && let Err(e) = input_tx.try_send(bytes)
-            {
-                tracing::warn!(error = %e, "server input buffer full; dropping input chunk");
+        .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, ctx| {
+            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
+                let state = Arc::clone(&st);
+                let conn_id = ctx.conn_id;
+                tokio::spawn(async move {
+                    let channel = bound_channel(state.as_ref(), conn_id).await;
+                    let Some(channel) = channel else {
+                        return;
+                    };
+                    let ch = resolve_channel(state.as_ref(), &channel).await;
+                    let Some(ch) = ch else {
+                        return;
+                    };
+                    let tx = {
+                        let guard = ch.lock().await;
+                        guard.input_tx.clone()
+                    };
+                    if let Err(e) = tx.try_send(bytes) {
+                        tracing::warn!(error = %e, "gateway input buffer full; dropping input chunk");
+                    }
+                });
             }
             // Intentionally ignore End/Error — the channel stays alive.
         })
         .await
         .map_err(|e| format!("register stream handler STREAM_INPUT: {e:?}"))?;
 
-    // Background task: write received input bytes to the PTY session
-    let input_st = Arc::clone(&state);
-    tokio::spawn(async move {
-        while let Some(data) = input_rx.recv().await {
-            let writer = {
-                let guard = input_st.lock().await;
-                guard.session.as_ref().map(|s| s.pty.writer_handle())
-            };
-            // PTY writes are blocking I/O (kernel input buffer); offload to
-            // the blocking pool so a full buffer never stalls an async worker
-            // or holds the state lock. Awaiting per chunk preserves order.
-            if let Some(writer) = writer {
-                let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
-            }
-        }
-    });
-
-    // Register SubscribeOutput
+    // ── SubscribeOutput ──────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
         .register_stream_handler(SUBSCRIBE_OUTPUT_METHOD_ID, move |event, respond, ctx| {
             let is_new = matches!(&event, RpcStreamEvent::Header { .. });
             if is_new {
                 let st = Arc::clone(&st);
+                let conn_id = ctx.conn_id;
                 tokio::spawn(async move {
-                    let mut guard = st.lock().await;
-
+                    let channel = bound_channel(&st, conn_id).await;
+                    let Some(channel) = channel else {
+                        return;
+                    };
+                    let ch = resolve_channel(&st, &channel).await;
+                    let Some(ch) = ch else {
+                        return;
+                    };
+                    let mut guard = ch.lock().await;
                     // Drain accumulated PTY output and capture the raw bytes
-                    // so they can be sent to the new subscriber (not just the snapshot).
+                    // so they can be sent to the new subscriber.
                     let early = guard.session.as_mut().and_then(|s| {
                         let data = s.read_output();
                         if data.is_empty() { None } else { Some(data) }
                     });
                     let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
                     guard.subscribers.push(SubscriberEntry {
-                        conn_id: ctx.conn_id,
+                        conn_id,
                         respond: respond.clone(),
                     });
-
-                    // Wake the polling loop — the session may have pending
-                    // output or exit state that needs processing.
                     guard.notify.notify_one();
                     let is_dead = guard.session.is_none();
                     drop(guard);
@@ -422,29 +806,109 @@ pub async fn run_server(
         .await
         .map_err(|e| format!("register SubscribeOutput: {e:?}"))?;
 
-    // Connection event handler
+    // ── ListChannels ─────────────────────────────────────────────────
     let st = Arc::clone(&state);
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            match event {
-                RpcIpcServerEvent::ClientConnected(handle) => {
-                    tracing::info!("Client {} connected", handle.0.conn_id);
-                    let mut guard = st.lock().await;
-                    let handle_clone = handle.clone();
-                    guard.clients.insert(
-                        handle.0.conn_id,
-                        ClientEntry {
-                            caller: Some(handle_clone),
-                            cols: u16::MAX,
-                            rows: u16::MAX,
-                        },
-                    );
+    endpoint
+        .register_prebuffered(ListChannels::METHOD_ID, move |_payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let channels = {
+                    let chans = state.channels.read().await;
+                    let mut v: Vec<(ChannelName, Arc<Mutex<ChannelState>>)> = chans
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    drop(chans);
+                    v.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+                    v
+                };
+                let mut out = Vec::with_capacity(channels.len());
+                for (name, ch) in channels {
+                    let guard = ch.lock().await;
+                    out.push(guard.to_info(&name));
                 }
-                RpcIpcServerEvent::ClientDisconnected(conn_id) => {
-                    tracing::info!("Client {conn_id} disconnected");
-                    let mut guard = st.lock().await;
+                ListChannels::encode_response(out).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ListChannels: {e:?}"))?;
+
+    // ── KillChannel ──────────────────────────────────────────────────
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(KillChannel::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let channel_str = KillChannel::decode_request(&payload)?;
+                let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
+                // 1) Snapshot the target connections under `conns.write`, then release.
+                let target_conns: Vec<usize> = {
+                    let conns = state.conns.read().await;
+                    conns
+                        .iter()
+                        .filter(|(_, entry)| matches!(entry.state, ConnState::Attached(ref n) if n == &name))
+                        .map(|(conn_id, _)| *conn_id)
+                        .collect()
+                };
+                // 2) Lock the channel: signal the session tree and evict every socket.
+                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let mut guard = ch.lock().await;
+                    guard.request_session_kill(SIGTERM);
+                    guard.finalize_subscribers();
+                    for conn_id in &target_conns {
+                        guard.clients.remove(conn_id);
+                        guard.subscribers.retain(|s| s.conn_id != *conn_id);
+                    }
+                    drop(guard);
+                    spawn_kill_escalation(&state, &name).await;
+                }
+                // 3) Evict the ConnEntry records from the routing table.
+                let mut conns = state.conns.write().await;
+                for conn_id in &target_conns {
+                    conns.remove(conn_id);
+                }
+                KillChannel::encode_response(()).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register KillChannel: {e:?}"))?;
+
+    // ── KillClient ───────────────────────────────────────────────────
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(KillClient::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let (channel_str, conn_id) = KillClient::decode_request(&payload)?;
+                let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
+                // Evict the conn first (conns → channel ordering).
+                {
+                    let mut conns = state.conns.write().await;
+                    conns.remove(&conn_id);
+                }
+                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let mut guard = ch.lock().await;
+                    // End the evicted subscriber's stream before dropping it.
+                    let mut evicted: Vec<StreamResponder> = Vec::new();
+                    let mut keep = Vec::with_capacity(guard.subscribers.len());
+                    for sub in guard.subscribers.drain(..) {
+                        if sub.conn_id == conn_id {
+                            evicted.push(sub.respond);
+                        } else {
+                            keep.push(sub);
+                        }
+                    }
+                    guard.subscribers = keep;
+                    for respond in evicted {
+                        respond.respond(Vec::new(), true);
+                    }
                     guard.clients.remove(&conn_id);
-                    guard.subscribers.retain(|s| s.conn_id != conn_id);
                     guard.recalculate_pty_size();
                     let (ncols, nrows) = guard
                         .session
@@ -453,97 +917,99 @@ pub async fn run_server(
                         .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     drop(guard);
-                    ServerState::notify_clients(&targets, ncols, nrows);
+                    if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                        let g = ch.lock().await;
+                        g.notify_clients(&targets, ncols, nrows);
+                    }
                 }
+                KillClient::encode_response(()).map_err(boxed_io)
             }
-        }
-    });
+        })
+        .await
+        .map_err(|e| format!("register KillClient: {e:?}"))?;
 
-    // Output polling via Notify — blocks until PTY produces output.
-    // When the session exits, the exit code is sent back through this
-    // channel so run_server can return it.
-    //
-    // A periodic timer also wakes the loop so a session exit is detected even
-    // when the reader thread's EOF/Exited notification is missed or raced.
-    let (exit_tx, mut exit_rx) = oneshot::channel::<i32>();
+    // ── ShutdownGateway ──────────────────────────────────────────────
+    let st = Arc::clone(&state);
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    let shutdown_tx = Arc::new(Mutex::new(Some(shutdown_tx)));
+    endpoint
+        .register_prebuffered(ShutdownGateway::METHOD_ID, move |_payload, _ctx| {
+            let state = Arc::clone(&st);
+            let shutdown_tx = Arc::clone(&shutdown_tx);
+            async move {
+                // Atomic seal: reject all further RPCs before teardown starts.
+                state.is_shutting_down.store(true, Ordering::SeqCst);
+                // Snapshot the channels, then release the map lock.
+                let channels: Vec<(ChannelName, Arc<Mutex<ChannelState>>)> = {
+                    let chans = state.channels.read().await;
+                    chans.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+                };
+                // Off-lock: signal each session's process group (non-blocking)
+                // and finalize subscribers.
+                for (name, ch) in channels {
+                    let mut guard = ch.lock().await;
+                    tracing::info!(channel = %name, "Shutdown: signaling session tree");
+                    guard.request_session_kill(SIGTERM);
+                    guard.finalize_subscribers();
+                    drop(guard);
+                    spawn_kill_escalation(&state, &name).await;
+                }
+                // Deferred exit signal: sleep a grace so the transport flushes
+                // the `()` response frame, then fire the oneshot that ends
+                // run_gateway. Never fire it synchronously from the handler.
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(SHUTDOWN_FLUSH_GRACE_MS)).await;
+                    let mut tx_guard = shutdown_tx.lock().await;
+                    if let Some(tx) = tx_guard.take() {
+                        let _ = tx.send(());
+                    }
+                });
+                ShutdownGateway::encode_response(()).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ShutdownGateway: {e:?}"))?;
+
+    // ── Connection event loop ────────────────────────────────────────
     let st = Arc::clone(&state);
     tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = notify.notified() => {}
-                _ = tokio::time::sleep(SESSION_EXIT_POLL_INTERVAL) => {}
-            }
-            let mut guard = st.lock().await;
-            if guard.subscribers.is_empty() {
-                let mut exited = false;
-                if let Some(session) = guard.session.as_mut() {
-                    session.sync_screen();
-                    exited = session.check_exited();
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                RpcIpcServerEvent::ClientConnected(handle) => {
+                    tracing::info!("Client {} connected", handle.0.conn_id);
+                    let mut conns = st.conns.write().await;
+                    conns.insert(
+                        handle.0.conn_id,
+                        ConnEntry {
+                            handle: handle.clone(),
+                            state: ConnState::Unattached,
+                            hostname: String::new(),
+                            connected_at_unix: now_unix(),
+                        },
+                    );
                 }
-                if exited {
-                    tracing::info!("Session exited, tearing down");
-                    guard.session = None;
+                RpcIpcServerEvent::ClientDisconnected(conn_id) => {
+                    tracing::info!("Client {conn_id} disconnected");
+                    evict_conn(st.as_ref(), conn_id).await;
                 }
-                continue;
-            }
-            let (raw, exited, code) = {
-                let Some(session) = guard.session.as_mut() else {
-                    let _ = exit_tx.send(0);
-                    break;
-                };
-                let raw = session.read_output();
-                let exited = session.check_exited();
-                let code = session.exit_code;
-                (raw, exited, code)
-            };
-            if raw.is_empty() && !guard.subscribers.is_empty() {
-                tracing::debug!(
-                    "PTY output empty with {} subscribers",
-                    guard.subscribers.len()
-                );
-            }
-
-            // Push raw PTY output to all subscribers
-            if !raw.is_empty() {
-                for sub in &guard.subscribers {
-                    sub.respond.respond(raw.clone(), false);
-                }
-            }
-
-            // On exit: finalize all streams and clean up
-            if exited {
-                for sub in &guard.subscribers {
-                    sub.respond.respond(Vec::new(), true);
-                }
-                guard.subscribers.clear();
-                let _ = exit_tx.send(code.unwrap_or(0));
-                tracing::info!("Session exited with code {:?}", code);
-                break;
             }
         }
     });
 
-    tracing::info!("Session server listening on channel {}", config.channel);
+    tracing::info!("Gateway listening on channel {gateway}");
 
-    // Wait for either the server to finish or the session to exit.
+    // Wait for either the server to finish or a shutdown signal.
     let exit_code = tokio::select! {
         result = async {
-            server
-                .serve(&socket_name)
-                .await
-                .map_err(|e| format!("serve: {e:?}"))
+            server.serve(&socket_name).await.map_err(|e| format!("serve: {e:?}"))
         } => {
             result?;
             0
         }
-        code = &mut exit_rx => {
-            // The polling task just queued the end-of-stream frames to each
-            // subscriber. The transport flushes them asynchronously, so give
-            // it a short grace period before the process exits — otherwise the
-            // frames are dropped with the runtime and the client never learns
-            // the session ended (it hangs waiting for output).
+        _ = &mut shutdown_rx => {
+            // Give the transport time to flush final subscriber frames.
             tokio::time::sleep(SESSION_EXIT_FLUSH_GRACE).await;
-            code.unwrap_or(0)
+            0
         }
     };
 

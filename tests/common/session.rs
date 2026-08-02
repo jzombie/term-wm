@@ -4,9 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use muxio_tokio_rpc_ipc_client::RpcIpcClient;
-use term_session_muxio_service_definitions::ChannelName;
-use term_session_server::{SessionServerConfig, run_server};
+use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
+use term_session_muxio_service_definitions::{
+    Attach, ChannelName, ListChannels, ShutdownGateway,
+};
+use term_session_server::run_gateway;
 
 pub const TEST_COLS: u16 = 80;
 pub const TEST_ROWS: u16 = 24;
@@ -16,17 +18,20 @@ pub fn test_channel(name: &str) -> ChannelName {
     ChannelName::parse(name).expect("test channel")
 }
 
-pub async fn spawn_server_for_channel(
-    channel: &ChannelName,
-    cmd: Vec<String>,
-) -> Arc<RpcIpcClient> {
-    let config = SessionServerConfig {
-        channel: channel.clone(),
-        cmd,
-    };
-    tokio::spawn(async move { run_server(config).await });
+/// Spawn one shared gateway daemon for the current test, using a unique
+/// gateway name so parallel tests never collide. Returns the gateway socket
+/// name string that clients connect to.
+pub async fn spawn_gateway() -> String {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let gateway = ChannelName::parse(&format!("term-wm/testgw-{id}")).expect("unique gateway");
+    tokio::spawn({
+        let gateway = gateway.clone();
+        async move { run_gateway(gateway).await }
+    });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    connect_client_with_retry(&channel.to_string()).await
+    connect_client_with_retry(&gateway.to_string()).await;
+    gateway.to_string()
 }
 
 pub fn get_bench_bin() -> PathBuf {
@@ -52,6 +57,13 @@ pub async fn connect_client_with_retry(socket_path: &str) -> Arc<RpcIpcClient> {
             Err(e) => panic!("Failed to connect to server after {timeout:?}: {e}"),
         }
     }
+}
+
+/// Attach a client to a channel, returning its server-assigned conn id.
+pub async fn attach_client(client: &RpcIpcClient, channel: &ChannelName) -> usize {
+    Attach::call(client, (channel.to_string(), "test-host".to_string()))
+        .await
+        .expect("attach")
 }
 
 pub async fn wait_for_output(
@@ -83,6 +95,21 @@ pub async fn wait_for_output(
     accumulated
 }
 
-pub async fn spawn_session(channel: &ChannelName, cmd: Vec<String>) -> Arc<RpcIpcClient> {
-    spawn_server_for_channel(channel, cmd).await
+/// Convenience: spawn the gateway, connect, and attach to a channel,
+/// returning `(client, conn_id)`.
+pub async fn spawn_session(channel: &ChannelName) -> (Arc<RpcIpcClient>, usize) {
+    let gateway = spawn_gateway().await;
+    let client = connect_client_with_retry(&gateway).await;
+    let conn_id = attach_client(&client, channel).await;
+    (client, conn_id)
+}
+
+/// List channels via the admin method (no attach required).
+pub async fn list_channels(client: &Arc<RpcIpcClient>) -> Vec<term_session_muxio_service_definitions::ChannelInfo> {
+    ListChannels::call(&**client, ()).await.expect("list channels")
+}
+
+/// Stop the gateway daemon.
+pub async fn shutdown_gateway(client: &Arc<RpcIpcClient>) {
+    ShutdownGateway::call(&**client, ()).await.expect("shutdown");
 }

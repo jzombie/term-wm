@@ -16,9 +16,14 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+hostname = { workspace = true }
 libc = { workspace = true }
+muxio-tokio-rpc-ipc-client = { workspace = true }
 term-session-client = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

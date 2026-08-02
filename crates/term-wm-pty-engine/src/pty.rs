@@ -454,6 +454,47 @@ impl Pty {
         Ok(())
     }
 
+    /// Process group leader (pgid) of the PTY child's session, when known.
+    ///
+    /// On Unix the child is started via `setsid()` (portable-pty), so its pgid
+    /// equals its pid; a negative-pgid `kill(2)` then signals the whole
+    /// process tree. Returns `None` where the platform does not expose it
+    /// (e.g. Windows ConPTY).
+    #[cfg(unix)]
+    pub fn process_group_id(&self) -> Option<i32> {
+        self.master.process_group_leader()
+    }
+
+    /// Send a signal to the child's entire process group, not just the leader.
+    ///
+    /// Strictly non-blocking: translates to a single `kill(-pgid, signal)` and
+    /// returns immediately. This is mechanism only — the caller (the daemon
+    /// supervisor) owns any escalation policy (grace timers, SIGTERM→SIGKILL
+    /// sequencing, exited-state arbitration). No temporal waits live here.
+    ///
+    /// Returns an error when no process group is known on this platform; the
+    /// supervisor falls back to `kill_child()` (single process).
+    #[cfg(unix)]
+    pub fn signal_process_group(&self, signal: i32) -> PtyResult<()> {
+        let Some(pgid) = self.master.process_group_leader() else {
+            return Err(wrap_err(
+                "signal_process_group",
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "PTY child has no process group",
+                ),
+            ));
+        };
+        let ret = unsafe { libc::kill(-pgid, signal) };
+        if ret == -1 {
+            return Err(wrap_err(
+                "signal_process_group",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn size(&self) -> PtySize {
         self.size
     }

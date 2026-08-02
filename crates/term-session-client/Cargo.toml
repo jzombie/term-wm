@@ -16,6 +16,7 @@ windows-sys = { workspace = true }
 [dependencies]
 crossbeam-channel = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste"] }
+hostname = { workspace = true }
 libc = { workspace = true }
 muxio-core = { workspace = true }
 muxio-rpc-service = { workspace = true }

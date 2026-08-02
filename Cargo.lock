@@ -3031,12 +3031,15 @@ name = "term-session"
 version = "0.9.3-alpha"
 dependencies = [
  "clap",
+ "hostname",
  "libc",
+ "muxio-tokio-rpc-ipc-client",
  "term-session-client",
  "term-session-muxio-service-definitions",
  "term-session-server",
  "tokio",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3045,6 +3048,7 @@ version = "0.9.3-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
+ "hostname",
  "insta",
  "libc",
  "muxio-core",
@@ -3075,6 +3079,7 @@ version = "0.9.3-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
+ "libc",
  "muxio-rpc-service",
 ]
 

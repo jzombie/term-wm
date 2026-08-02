@@ -3,6 +3,59 @@ use std::io;
 use bitcode::{Decode, Encode};
 use muxio_rpc_service::{prebuffered::RpcMethodPrebuffered, rpc_method_id};
 
+// ── Error message constants ─────────────────────────────────────────
+// muxio's wire error only has Fail/System/NotFound codes, so structured
+// gateway errors are signalled with well-known message strings that both
+// the client and server match on.
+pub const RPC_ERROR_UNATTACHED: &str =
+    "gateway: connection is not attached to a channel; call Attach first";
+pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
+
+// ── Attach ──────────────────────────────────────────────────────────
+
+#[derive(Encode, Decode)]
+struct AttachRequest {
+    pub channel: String,
+    pub hostname: String,
+}
+
+#[derive(Encode, Decode)]
+struct AttachResponse {
+    pub conn_id: usize,
+}
+
+pub struct Attach;
+
+impl RpcMethodPrebuffered for Attach {
+    const METHOD_ID: u64 = rpc_method_id!("session.attach");
+
+    type Input = (String, String);
+    type Output = usize;
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&AttachRequest {
+            channel: input.0,
+            hostname: input.1,
+        }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<AttachRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok((r.channel, r.hostname))
+    }
+
+    fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&AttachResponse { conn_id: output }))
+    }
+
+    fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        let r = bitcode::decode::<AttachResponse>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(r.conn_id)
+    }
+}
+
 // ── Spawn ────────────────────────────────────────────────────────────
 
 #[derive(Encode, Decode)]
@@ -212,20 +265,49 @@ pub const STREAM_INPUT_METHOD_ID: u64 = rpc_method_id!("session.stream_input");
 // ── SubscribeOutput (streaming handler for PTY output pushes) ──────
 pub const SUBSCRIBE_OUTPUT_METHOD_ID: u64 = rpc_method_id!("session.subscribe_output");
 
-// ── ListSessions ─────────────────────────────────────────────────────
+// ── ListChannels ─────────────────────────────────────────────────────
 
-#[derive(Encode, Decode)]
-struct ListResponse {
-    pub sessions: Vec<(u64, String, bool)>,
+/// Public wire info for one session on a channel.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SessionInfo {
+    pub id: u64,
+    pub cols: u16,
+    pub rows: u16,
+    pub exited: bool,
+    pub exit_code: Option<i32>,
+    pub title: String,
 }
 
-pub struct ListSessions;
+/// Public wire info for one attached client socket on a channel.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct ClientInfo {
+    pub conn_id: usize,
+    pub hostname: String,
+    pub connected_at_unix: u64,
+    pub cols: u16,
+    pub rows: u16,
+}
 
-impl RpcMethodPrebuffered for ListSessions {
-    const METHOD_ID: u64 = rpc_method_id!("session.list");
+/// Public wire info for one channel on the gateway.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct ChannelInfo {
+    pub name: String,
+    pub session: Option<SessionInfo>,
+    pub clients: Vec<ClientInfo>,
+}
+
+#[derive(Encode, Decode)]
+struct ListChannelsResponse {
+    pub channels: Vec<ChannelInfo>,
+}
+
+pub struct ListChannels;
+
+impl RpcMethodPrebuffered for ListChannels {
+    const METHOD_ID: u64 = rpc_method_id!("session.list_channels");
 
     type Input = ();
-    type Output = Vec<(u64, String, bool)>;
+    type Output = Vec<ChannelInfo>;
 
     fn encode_request(_input: Self::Input) -> Result<Vec<u8>, io::Error> {
         Ok(Vec::new())
@@ -236,13 +318,112 @@ impl RpcMethodPrebuffered for ListSessions {
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&ListResponse { sessions: output }))
+        Ok(bitcode::encode(&ListChannelsResponse { channels: output }))
     }
 
     fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
-        let r = bitcode::decode::<ListResponse>(bytes)
+        let r = bitcode::decode::<ListChannelsResponse>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok(r.sessions)
+        Ok(r.channels)
+    }
+}
+
+// ── KillChannel ──────────────────────────────────────────────────────
+
+#[derive(Encode, Decode)]
+struct KillChannelRequest {
+    pub channel: String,
+}
+
+pub struct KillChannel;
+
+impl RpcMethodPrebuffered for KillChannel {
+    const METHOD_ID: u64 = rpc_method_id!("session.kill_channel");
+
+    type Input = String;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&KillChannelRequest { channel: input }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<KillChannelRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(r.channel)
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── KillClient ───────────────────────────────────────────────────────
+
+#[derive(Encode, Decode)]
+struct KillClientRequest {
+    pub channel: String,
+    pub conn_id: usize,
+}
+
+pub struct KillClient;
+
+impl RpcMethodPrebuffered for KillClient {
+    const METHOD_ID: u64 = rpc_method_id!("session.kill_client");
+
+    type Input = (String, usize);
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&KillClientRequest {
+            channel: input.0,
+            conn_id: input.1,
+        }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<KillClientRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok((r.channel, r.conn_id))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── ShutdownGateway ──────────────────────────────────────────────────
+
+pub struct ShutdownGateway;
+
+impl RpcMethodPrebuffered for ShutdownGateway {
+    const METHOD_ID: u64 = rpc_method_id!("session.shutdown_gateway");
+
+    type Input = ();
+    type Output = ();
+
+    fn encode_request(_input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_request(_bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        Ok(())
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
     }
 }
 

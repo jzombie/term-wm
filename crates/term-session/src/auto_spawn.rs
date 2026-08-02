@@ -3,24 +3,18 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use term_session_muxio_service_definitions::{ChannelName, probe_ipc_endpoint};
+use term_session_muxio_service_definitions::{ChannelName, gateway_channel_name, probe_ipc_endpoint};
 
-/// Parameters forwarded to the auto-spawned server process.
-#[derive(Clone, Debug)]
-pub struct ServerSpawnConfig<'a> {
-    pub channel: &'a ChannelName,
-    pub cmd: &'a [String],
+/// Resolve the gateway channel name to probe/spawn.
+/// Uses the runtime `TERM_WM_GATEWAY` override if present, else the static
+/// user-scoped default (`term-wm/<user>/gateway`).
+pub fn resolve_gateway() -> ChannelName {
+    gateway_channel_name()
 }
 
-fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
-    let bin = std::env::current_exe()?;
+fn spawn_detached_server(bin: &std::path::Path) -> io::Result<Child> {
     let mut cmd = Command::new(bin);
-    cmd.arg("--server")
-        .arg("--channel")
-        .arg(cfg.channel.to_string());
-    if !cfg.cmd.is_empty() {
-        cmd.arg("--").args(cfg.cmd);
-    }
+    cmd.arg("--daemon");
     // All stdio is detached: a daemon must not rely on the parent reading its
     // pipes. In particular, a piped stderr that is never drained lets the OS
     // pipe buffer fill, blocking the server's stderr writes and deadlocking
@@ -49,45 +43,59 @@ fn spawn_detached_server(cfg: &ServerSpawnConfig<'_>) -> io::Result<Child> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
+        // Detached process: no console, so the parent console's CTRL_CLOSE_EVENT
+        // never reaches the daemon. CREATE_NO_WINDOW is ignored when
+        // DETACHED_PROCESS is set, so it is not passed. The daemon also
+        // disinherits standard handles (Stdio::null above), so wrappers/CI/SSH
+        // runners never wait on inherited pipes.
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        cmd.inherit_handles(false);
     }
     cmd.spawn()
 }
 
-/// Wait for a session server to become reachable on the channel, spawning one
-/// via `current_exe() --server` if none is running.
-///
-/// Returns the channel name string, which the caller passes to the muxio IPC
-/// client. The client and server both route it through `GenericNamespaced`, so
-/// no filesystem path is involved.
-pub fn connect_or_spawn_server(
-    channel: &ChannelName,
-    cfg: &ServerSpawnConfig<'_>,
-) -> io::Result<String> {
-    let socket_name = channel.to_string();
+/// Windows creation flags (named per AGENTS.md magic-strings rule).
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+/// Detach the child from the parent's console entirely.
+#[cfg(windows)]
+const DETACHED_PROCESS: u32 = 0x00000008;
 
-    if probe_ipc_endpoint(channel) {
+/// Wait for the gateway to become reachable, spawning a detached daemon if
+/// none is running.
+///
+/// Returns the gateway channel name string, which the caller passes to the
+/// muxio IPC client. `bin` defaults to the current executable so tests can
+/// point it at `CARGO_BIN_EXE_term-session`.
+pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<String> {
+    let gateway = resolve_gateway();
+    let socket_name = gateway.to_string();
+
+    if probe_ipc_endpoint(&gateway) {
         return Ok(socket_name);
     }
 
-    let mut child = spawn_detached_server(cfg)?;
+    let bin = bin.map(|b| b.to_path_buf()).unwrap_or_else(|| {
+        std::env::current_exe().expect("current exe path")
+    });
+    let mut child = spawn_detached_server(&bin)?;
     let start = Instant::now();
     let timeout = Duration::from_secs(3);
     let poll_interval = Duration::from_millis(50);
 
     while start.elapsed() < timeout {
-        if probe_ipc_endpoint(channel) {
+        if probe_ipc_endpoint(&gateway) {
             return Ok(socket_name);
         }
         if let Ok(Some(status)) = child.try_wait() {
-            // The spawned server died before the socket came up. Another racer
+            // The spawned daemon died before the socket came up. Another racer
             // may have won the bind; re-probe before surfacing the failure.
-            if probe_ipc_endpoint(channel) {
+            if probe_ipc_endpoint(&gateway) {
                 return Ok(socket_name);
             }
             return Err(io::Error::new(
                 io::ErrorKind::ConnectionRefused,
-                format!("Session server exited during startup with status: {status}"),
+                format!("Gateway exited during startup with status: {status}"),
             ));
         }
         thread::sleep(poll_interval);
@@ -95,6 +103,6 @@ pub fn connect_or_spawn_server(
 
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
-        format!("Timed out waiting for server on channel '{channel}'"),
+        format!("Timed out waiting for gateway on channel '{gateway}'"),
     ))
 }
