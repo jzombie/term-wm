@@ -350,6 +350,24 @@ impl Clipboard {
         }
     }
 
+    /// Create a clipboard handle that is forced into headless mode (no
+    /// arboard, temp-file store enabled) and uses `path` as the backing store.
+    ///
+    /// Test-only seam: lets sibling modules (e.g. the PTY reader loop tests)
+    /// exercise the headless temp-store and OSC 52 paths deterministically on
+    /// any machine, regardless of whether a display server is present, without
+    /// exposing the internal backend fields.
+    #[cfg(test)]
+    pub(crate) fn headless_with_temp_path(path: PathBuf) -> Self {
+        Self {
+            arboard: None,
+            temp_store_enabled: true,
+            temp_path: path,
+            osc52_limit: DEFAULT_MAX_OSC52_BYTES,
+            osc52_output: Vec::new(),
+        }
+    }
+
     /// Read the clipboard as a `String`.
     ///
     /// Prefers `arboard` (the real system clipboard) when available; on
@@ -801,6 +819,36 @@ mod tests {
         let path = store_path(&dir);
         write_clipboard_temp(&path, "helper text").unwrap();
         assert_eq!(read_clipboard_temp(&path).unwrap(), "helper text");
+    }
+
+    #[test]
+    fn clipboard_error_display_messages() {
+        assert_eq!(
+            ClipboardError::NotAvailable.to_string(),
+            "clipboard backend not available (running remotely?)"
+        );
+        let io = ClipboardError::Io(std::io::Error::other("boom"));
+        assert_eq!(io.to_string(), "I/O error writing OSC 52 sequence: boom");
+        let backend = ClipboardError::Backend(arboard::Error::ContentNotAvailable);
+        assert_eq!(
+            backend.to_string(),
+            "clipboard backend error: The clipboard contents were not available in the requested format or the clipboard is empty."
+        );
+    }
+
+    #[test]
+    fn clipboard_error_from_conversions() {
+        let io: ClipboardError = std::io::Error::other("x").into();
+        assert!(matches!(io, ClipboardError::Io(_)));
+        let arboard_err: ClipboardError = arboard::Error::ContentNotAvailable.into();
+        assert!(matches!(arboard_err, ClipboardError::Backend(_)));
+    }
+
+    #[test]
+    fn clipboard_new_uses_default_path_and_default_limit() {
+        let cb = Clipboard::new();
+        assert_eq!(cb.temp_path, default_temp_path());
+        assert_eq!(cb.osc52_limit, DEFAULT_MAX_OSC52_BYTES);
     }
 
     #[test]
@@ -1276,5 +1324,33 @@ mod tests {
         // Next push with no terminator should hit the safety valve.
         assert!(ex.push(b"", &[]).is_none());
         assert!(!ex.is_active());
+    }
+
+    #[test]
+    fn extractor_new_starts_inactive() {
+        let ex = Osc52Extractor::new();
+        assert!(!ex.is_active());
+    }
+
+    #[test]
+    fn extractor_push_empty_data_no_activation() {
+        let mut ex = Osc52Extractor::new();
+        assert!(ex.push(b"", &[]).is_none());
+        assert!(!ex.is_active());
+    }
+
+    #[test]
+    fn extractor_clear_resets_in_progress() {
+        let seq = format_osc52_bytes("hello");
+        let mid = seq.len() / 2;
+        let mut ex = Osc52Extractor::new();
+        // Header (and partial payload) is buffered without a terminator yet.
+        assert!(ex.push(&seq[..mid], &[]).is_none());
+        assert!(ex.is_active());
+        ex.clear();
+        assert!(!ex.is_active());
+        // A full sequence fed after clear still extracts.
+        let result = ex.push(&seq, &[]);
+        assert_eq!(result.as_deref(), Some("hello"));
     }
 }
