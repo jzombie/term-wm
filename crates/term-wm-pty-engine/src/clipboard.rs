@@ -22,6 +22,33 @@
 //! removes the file (single-use round-trip); otherwise the store is cleaned
 //! up by the OS (`$XDG_RUNTIME_DIR` is tmpfs and wiped on logout, and the
 //! fallback temp-dir entries are cleaned by the OS).
+//!
+//! # Design: explicit static orchestration
+//!
+//! The three backends have fundamentally asymmetric capabilities: `arboard`
+//! and the temp-file store can read and write, while OSC 52 is strictly
+//! write-only (terminals do not reliably answer clipboard read queries).
+//! [`Clipboard`] therefore orchestrates them as a **fixed, explicit
+//! pipeline**, not a uniform backend registry:
+//!
+//! - `set()` is an ordered fan-out — temp store, then `arboard`, then
+//!   **OSC 52 last** so the host terminal emulator becomes the final owner of
+//!   the system clipboard (required for reliable X11 ownership).  It is
+//!   infallible: each backend failure is logged and ignored so the remaining
+//!   back-ends still run.
+//! - `get()` is a fallback chain — `arboard`, then the temp store (with
+//!   consume-on-read) — and never consults OSC 52.
+//!
+//! Each step lives in a private helper (`write_temp_store`,
+//! `write_system_clipboard`, `read_temp_store`, `read_system_clipboard`,
+//! `truncate_for_osc52`).  Keeping the ordering structural — rather than
+//! driving it through a loop, iterator, or priority table — makes the
+//! execution invariants impossible to reorder by accident.
+//!
+//! Tests exercise the backends through isolated handles (`with_temp_path`,
+//! `headless_with_temp_path`) and inject the relay target into the PTY reader
+//! loop (`ParserReadLoopArgs.clipboard`), so no test ever touches the real
+//! system clipboard or the user's temp store.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -260,6 +287,12 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
 
 /// A persistent clipboard handle backed by `arboard` (optional), OSC 52,
 /// and a temp-file store (optional).
+///
+/// It is a **static orchestrator** over those three backends: `set()` fans
+/// out to each in a fixed order and `get()` follows an explicit fallback
+/// chain, with each step delegated to a private helper.  See the module docs
+/// for the design rationale (and why this deliberately avoids a trait-based
+/// backend registry).
 ///
 /// Holding a long-lived [`arboard::Clipboard`] instance avoids the macOS
 /// problem where a short-lived connection is torn down before the pasteboard
