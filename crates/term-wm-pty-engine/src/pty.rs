@@ -188,6 +188,7 @@ impl Pty {
                 status_cb: reader_status_cb,
                 scrollback_len,
                 osc52_text: None,
+                clipboard: None,
                 exited_emitted: reader_exited_emitted,
                 tracker: reader_tracker,
             })
@@ -570,6 +571,11 @@ struct ParserReadLoopArgs {
     /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
+    /// Clipboard to relay extracted OSC 52 sequences through. `None` in
+    /// production (the loop constructs a default handle); tests inject an
+    /// isolated, headless [`Clipboard`] so the relay can be exercised without
+    /// touching the real system clipboard or temp store.
+    clipboard: Option<Clipboard>,
     /// Application state tracker — shared via Arc with Pty.
     tracker: std::sync::Arc<crate::PtyStateTracker>,
 }
@@ -588,6 +594,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         status_cb,
         scrollback_len: _scrollback_len,
         osc52_text,
+        clipboard,
         exited_emitted,
         tracker,
     } = args;
@@ -602,7 +609,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
     // arboard per OSC 52 sequence would repeat the display-server handshake
     // on every copy event.  Each extracted sequence is relayed synchronously
     // (no debounce) so the final payload of a burst is never dropped.
-    let mut clipboard = Clipboard::new();
+    let mut clipboard = clipboard.unwrap_or_else(Clipboard::new);
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
     loop {
         match reader.read(&mut buf) {
@@ -675,7 +682,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // Relay each extracted sequence synchronously via the hoisted
                 // handle — no debounce, so the tail payload is never dropped.
                 if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
-                    let _ = clipboard.set(&text);
+                    clipboard.set(&text);
                     if let Some(ref capture) = osc52_text {
                         *capture.lock().unwrap() = Some(text);
                     }
@@ -988,6 +995,7 @@ mod tests {
             scrollback_len: 0,
             exited_emitted: Arc::new(AtomicBool::new(false)),
             osc52_text: None,
+            clipboard: None,
             tracker: std::sync::Arc::new(crate::PtyStateTracker::new(24)),
         }
     }
@@ -1070,6 +1078,52 @@ mod tests {
         assert!(
             dsr_requested.load(Ordering::Relaxed),
             "DSR in combined data must be detected"
+        );
+    }
+
+    #[test]
+    fn parser_read_loop_relays_osc52_to_isolated_clipboard_and_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nested owner-only subdir mirrors production: the tempdir root is
+        // group/other-writable and would be rejected by
+        // ensure_clipboard_store_dir.
+        let store_dir = dir.path().join("store");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder.create(&store_dir).unwrap();
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let path = store_dir.join("clipboard.txt");
+
+        // Inject a headless clipboard so the relay is deterministic and the
+        // real system clipboard / temp store are never touched.
+        let mut args = make_parser_test_args();
+        args.clipboard = Some(Clipboard::headless_with_temp_path(path.clone()));
+        let captured = Arc::new(Mutex::new(None));
+        args.osc52_text = Some(Arc::clone(&captured));
+        args.reader = Box::new(Cursor::new(crate::clipboard::format_osc52_bytes(
+            "clip via pty",
+        )));
+
+        parser_read_loop(args);
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(
+            captured.as_deref(),
+            Some("clip via pty"),
+            "osc52_text hook must capture the relayed payload"
+        );
+        // A fresh headless handle over the same isolated path must read the
+        // relayed text back, proving set() ran without touching the real store.
+        let mut reader = Clipboard::headless_with_temp_path(path);
+        assert_eq!(
+            reader.get().unwrap(),
+            "clip via pty",
+            "relayed set() must have written the isolated temp store"
         );
     }
 
