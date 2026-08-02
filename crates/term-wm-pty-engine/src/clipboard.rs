@@ -11,10 +11,11 @@
 //!    and clipboard reads).  When running over SSH the arboard handle may not
 //!    initialise; OSC 52 alone is sufficient for copy.
 //!
-//! 3. **Temp-file store** – a best-effort backing store written on every
-//!    `set()` so `get()` can round-trip copy→paste on headless / remote
-//!    machines (e.g. a bare Ubuntu server over SSH) where `arboard` cannot
-//!    initialise and the host terminal may not support OSC 52 reads.
+//! 3. **Temp-file store** – a best-effort backing store written on `set()`
+//!    when no system clipboard is available (headless / remote), so `get()`
+//!    can round-trip copy→paste on machines (e.g. a bare Ubuntu server over
+//!    SSH) where `arboard` cannot initialise and the host terminal may not
+//!    support OSC 52 reads.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -183,10 +184,17 @@ pub fn set_via_osc52_with_writer(text: &str, writer: &mut dyn Write) -> Result<(
 /// server finishes processing the write.
 ///
 /// When running over SSH the arboard handle will be `None`; `set()` still
-/// works via OSC 52 emitted to stdout, and `get()` falls back to the
-/// temp-file store so copy→paste round-trips on headless machines.
+/// works via OSC 52 emitted to stdout, and the temp-file store (enabled
+/// only in that headless case) lets `get()` round-trip copy→paste.
 pub struct Clipboard {
     arboard: Option<arboard::Clipboard>,
+    /// Whether the temp-file backing store is active.  Enabled at
+    /// construction when `arboard` is unavailable (headless / SSH), so
+    /// clipboard text is only persisted to disk when there is no real
+    /// system clipboard to write to.  Stored separately (rather than
+    /// recomputed from `arboard`) so tests can exercise both modes without
+    /// a display.
+    temp_store_enabled: bool,
     /// Resolved path of the temp-file backing store, determined once at
     /// construction (see [`Clipboard::new`]).  Tests inject an isolated
     /// path via [`Clipboard::with_temp_path`] to avoid the shared store.
@@ -219,13 +227,16 @@ impl Clipboard {
     /// to inject an isolated path into a throwaway temp location.
     pub fn with_temp_path(path: PathBuf) -> Self {
         let arboard = arboard::Clipboard::new().ok();
+        let temp_store_enabled = arboard.is_none();
         tracing::debug!(
-            "clipboard: backend arboard={}, temp store={}",
+            "clipboard: backend arboard={}, temp store={}, store path={}",
             if arboard.is_some() { "available" } else { "unavailable" },
+            if temp_store_enabled { "enabled" } else { "disabled" },
             path.display()
         );
         Self {
             arboard,
+            temp_store_enabled,
             temp_path: path,
             #[cfg(test)]
             osc52_output: Vec::new(),
@@ -246,14 +257,24 @@ impl Clipboard {
                     tracing::debug!("clipboard: get read via arboard ({} bytes)", text.len());
                     return Ok(text);
                 }
+                Err(e) if !self.temp_store_enabled => {
+                    tracing::debug!(
+                        "clipboard: get via arboard failed ({e}); temp store inactive"
+                    );
+                    return Err(e.into());
+                }
                 Err(e) => {
                     tracing::debug!(
                         "clipboard: get via arboard failed ({e}); falling back to temp store"
                     );
                 }
             }
+        } else if !self.temp_store_enabled {
+            tracing::debug!("clipboard: get no backends available");
+            return Err(ClipboardError::NotAvailable);
         }
-        // arboard absent or errored: fall back to the temp-file backing store.
+        // arboard absent or errored with the temp store active: fall back to
+        // the temp-file backing store.
         match read_clipboard_temp(&self.temp_path) {
             Ok(text) => {
                 tracing::debug!(
@@ -275,16 +296,16 @@ impl Clipboard {
 
     /// Set the system clipboard to `text`.
     ///
-    /// Runs **all** back-ends:
+    /// Runs all back-ends; the temp-file store is only written when arboard
+    /// is unavailable (headless / SSH):
     ///
     /// 1. `arboard` — writes to the local system clipboard directly.
     /// 2. **OSC 52** — writes to the host terminal's clipboard via the
     ///    escape sequence.  This ensures copy works when embedded in
     ///    remote/embedded terminals (Zed, tmux, SSH) where the host
     ///    terminal intercepts the sequence.
-    /// 3. **Temp file** — a local copy so `get()` can round-trip copy→paste
-    ///    on headless machines where neither arboard nor an OSC 52 read
-    ///    is available.
+    /// 3. **Temp file** — when there is no system clipboard (headless /
+    ///    remote), a local copy so `get()` can round-trip copy→paste.
     ///
     /// Errors from any path are silently ignored — at least one of
     /// the back-ends is expected to fail depending on the environment.
@@ -305,9 +326,12 @@ impl Clipboard {
             self.osc52_output = buf;
         }
 
-        // Always write the temp-file backing store so `get()` can
-        // round-trip copy→paste on headless machines.  Best-effort.
-        if let Err(e) = write_clipboard_temp(&self.temp_path, text) {
+        // Persist to the temp-file backing store only when there is no real
+        // system clipboard to write to (headless / SSH).  This keeps
+        // clipboard text off disk in normal local sessions.  Best-effort.
+        if self.temp_store_enabled
+            && let Err(e) = write_clipboard_temp(&self.temp_path, text)
+        {
             tracing::debug!(
                 "clipboard: set temp store write failed at {} ({e})",
                 self.temp_path.display()
@@ -573,8 +597,10 @@ mod tests {
     fn temp_store_roundtrip_via_set_get_when_arboard_absent() {
         let dir = tempfile::tempdir().unwrap();
         let mut cb = Clipboard::with_temp_path(store_path(&dir));
-        // Simulate a headless SSH session where arboard cannot initialise.
+        // Simulate a headless SSH session where arboard cannot initialise:
+        // the temp-file store is the only round-trip mechanism.
         cb.arboard = None;
+        cb.temp_store_enabled = true;
 
         cb.set("clipboard text").unwrap();
         assert_eq!(cb.get().unwrap(), "clipboard text");
@@ -593,6 +619,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut cb = Clipboard::with_temp_path(store_path(&dir));
         cb.arboard = None;
+        cb.temp_store_enabled = true;
         assert!(matches!(cb.get(), Err(ClipboardError::NotAvailable)));
     }
 
@@ -601,6 +628,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut cb = Clipboard::with_temp_path(store_path(&dir));
         cb.arboard = None;
+        cb.temp_store_enabled = true;
 
         cb.set("héllo 日本語 ✅").unwrap();
         assert_eq!(cb.get().unwrap(), "héllo 日本語 ✅");
@@ -622,6 +650,28 @@ mod tests {
         let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700, "store dir must be owner-only");
         assert_eq!(file_mode, 0o600, "store file must be owner-only");
+    }
+
+    #[test]
+    fn temp_store_not_written_when_clipboard_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store_path(&dir);
+        let mut cb = Clipboard::with_temp_path(path.clone());
+        // Simulate a local session with a real system clipboard: the
+        // temp-file store is disabled, so `set()` must not persist text
+        // to disk, and `get()` must not read from it.
+        cb.temp_store_enabled = false;
+        cb.arboard = None;
+
+        cb.set("sensitive text").unwrap();
+        assert!(
+            !path.exists(),
+            "temp store must not be written when a system clipboard exists"
+        );
+        assert!(
+            matches!(cb.get(), Err(ClipboardError::NotAvailable)),
+            "get() must not fall back to the temp store when it is disabled"
+        );
     }
 
     #[cfg(unix)]
