@@ -59,8 +59,6 @@ const SIGKILL: i32 = 9;
 /// is torn down.
 const SHUTDOWN_FLUSH_GRACE_MS: u64 = 50;
 
-/// The administrative gateway channel name (reserved).
-
 /// A connection's bind state. Identity is server-assigned (`conn_id`); a
 /// connection must `Attach` before it may spawn/resize/write.
 #[derive(Clone)]
@@ -110,6 +108,7 @@ struct ChannelState {
 /// Gateway coordination. Two tiers:
 /// - `conns` is a read-mostly routing table (RwLock).
 /// - `channels` maps channel names to independently-mutexed channel states.
+///
 /// The gateway never holds more than one lock at a time (resolve-and-drop).
 struct ServerState {
     conns: RwLock<HashMap<usize, ConnEntry>>,
@@ -120,7 +119,7 @@ struct ServerState {
 type SharedState = Arc<ServerState>;
 
 fn rpc_err(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
-    Box::new(std::io::Error::new(std::io::ErrorKind::Other, message.to_string()))
+    Box::new(std::io::Error::other(message.to_string()))
 }
 
 /// Lift an `io::Error` into the boxed handler error type.
@@ -343,7 +342,7 @@ async fn get_or_create_channel(state: &SharedState, name: &ChannelName) -> Arc<M
     // on session exit finalizes subscribers, clears the session, and reaps
     // the channel if no clients remain.
     {
-        let st = Arc::clone(&state);
+        let st = Arc::clone(state);
         let ch = Arc::clone(&channel);
         let notify = {
             let locked = ch.lock().await;
@@ -823,7 +822,7 @@ pub async fn run_gateway(gateway: ChannelName) -> Result<i32, Box<dyn std::error
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     drop(chans);
-                    v.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+                    v.sort_by_key(|a| a.0.to_string());
                     v
                 };
                 let mut out = Vec::with_capacity(channels.len());

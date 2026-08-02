@@ -511,9 +511,9 @@ async fn kill_channel_kills_only_that_channel() {
     // its session exits and no clients remain — either way no live session).
     let channels = list_channels(&a).await;
     let ch_a = channels.iter().find(|c| c.name == "test/kill_a");
-    match ch_a {
-        Some(ch) => assert!(ch.session.is_none(), "killed channel has no session"),
-        None => {} // fully reaped by GC
+    if let Some(ch) = ch_a {
+        // If the channel survived reaping, its session must be gone.
+        assert!(ch.session.is_none(), "killed channel has no session");
     }
 }
 

@@ -123,6 +123,13 @@ fn current_os_user() -> String {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate the `TERM_WM_GATEWAY` env var, which is
+    /// process-global and unsafe to read/write concurrently.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn channel_name_parses_name_and_namespace() {
         let single = ChannelName::parse("main").unwrap();
@@ -156,6 +163,7 @@ mod tests {
 
     #[test]
     fn gateway_override_env_wins() {
+        let _guard = env_lock();
         // TERM_WM_GATEWAY must be honoured when present (runtime injection).
         unsafe {
             std::env::set_var(GATEWAY_CHANNEL_ENV_VAR, "test/iso-gateway");
@@ -169,8 +177,12 @@ mod tests {
 
     #[test]
     fn gateway_default_is_deterministic_and_user_scoped() {
+        let _guard = env_lock();
         // No override -> must be term-wm/<user>/gateway, stable across calls
         // and never a bare shared literal.
+        unsafe {
+            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+        }
         let a = gateway_channel_name();
         let b = gateway_channel_name();
         assert_eq!(a, b);

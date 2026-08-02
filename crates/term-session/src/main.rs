@@ -270,7 +270,7 @@ fn list_channels(json: bool) -> io::Result<()> {
             );
         }
     } else {
-        println!("{:<28} {:<12} {}", "CHANNEL", "SESSION", "CLIENTS");
+        println!("{:<28} {:<12} CLIENTS", "CHANNEL", "SESSION");
         for ch in &channels {
             let session = ch
                 .session
