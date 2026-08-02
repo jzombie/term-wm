@@ -46,6 +46,23 @@
 //! and inject the relay target into the PTY reader loop
 //! (`ParserReadLoopArgs.clipboard`), so no test ever touches the real system
 //! clipboard or the process-global default buffer.
+//!
+//! # Layering: a subsystem, not a policy owner
+//!
+//! This module is a low-level subsystem consumed by higher layers — the
+//! Window Manager in `term-wm-core`, the session client, and the PTY reader
+//! loop in `term-wm-pty-engine`.  Consumers hold a [`Clipboard`] handle and
+//! use only the public surface ([`Clipboard::new`], [`Clipboard::set`],
+//! [`Clipboard::get`], [`ClipboardConfig`] at construction time); they never
+//! reach into the backend internals.
+//!
+//! Feature toggles that live **above** this module — e.g. the Window
+//! Manager's selection `clipboard_enabled` flag, driven by the command
+//! palette — are consumer-layer policy, **not** [`ClipboardConfig`] fields.
+//! They gate whether a consumer invokes the clipboard at all (such as whether
+//! a mouse selection may be copied); they do not configure, disable, or
+//! observe any backend behaviour here.  Toggling such a flag therefore has no
+//! effect on OSC 52 emission, the in-memory shared buffer, or `arboard`.
 
 use std::io::Write;
 use std::sync::{Arc, OnceLock, RwLock};
