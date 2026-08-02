@@ -358,60 +358,34 @@ impl Clipboard {
     /// inside term-wm.  Does **not** attempt OSC 52 reads because most
     /// terminal emulators do not support them.
     pub fn get(&mut self) -> Result<String, ClipboardError> {
-        if let Some(cb) = self.arboard.as_mut() {
-            match cb.get_text() {
-                Ok(text) => {
-                    tracing::debug!("clipboard: get read via arboard ({} bytes)", text.len());
-                    return Ok(text);
-                }
-                Err(e) if !self.temp_store_enabled => {
-                    tracing::debug!("clipboard: get via arboard failed ({e}); temp store inactive");
-                    return Err(e.into());
-                }
-                Err(e) => {
-                    tracing::debug!(
-                        "clipboard: get via arboard failed ({e}); falling back to temp store"
-                    );
-                }
+        match read_system_clipboard(&mut self.arboard) {
+            Ok(Some(text)) => {
+                return Ok(text);
             }
-        } else if !self.temp_store_enabled {
-            tracing::debug!("clipboard: get no backends available");
-            return Err(ClipboardError::NotAvailable);
+            Ok(None) if !self.temp_store_enabled => {
+                tracing::debug!("clipboard: get no backends available");
+                return Err(ClipboardError::NotAvailable);
+            }
+            Ok(None) => {}
+            Err(e) if !self.temp_store_enabled => {
+                tracing::debug!("clipboard: get via arboard failed ({e}); temp store inactive");
+                return Err(e);
+            }
+            Err(_) => {
+                tracing::debug!("clipboard: get via arboard failed; falling back to temp store");
+            }
         }
         // arboard absent or errored with the temp store active: fall back to
         // the temp-file backing store.
-        match read_clipboard_temp(&self.temp_path) {
-            Ok(text) => {
-                tracing::debug!(
-                    "clipboard: get read via temp store {} ({} bytes)",
-                    self.temp_path.display(),
-                    text.len()
-                );
-                // Consume the store: this is a single-use copy→paste round-trip,
-                // so remove the file so sensitive clipboard text does not persist
-                // on disk.  Best-effort.
-                if let Err(e) = std::fs::remove_file(&self.temp_path) {
-                    tracing::debug!(
-                        "clipboard: get temp store cleanup failed at {} ({e})",
-                        self.temp_path.display()
-                    );
-                }
-                Ok(text)
-            }
-            Err(_) => {
-                tracing::debug!(
-                    "clipboard: get temp store unavailable at {}",
-                    self.temp_path.display()
-                );
-                Err(ClipboardError::NotAvailable)
-            }
-        }
+        read_temp_store(&self.temp_path, self.temp_store_enabled)
+            .ok_or(ClipboardError::NotAvailable)
     }
 
     /// Set the system clipboard to `text`.
     ///
-    /// Runs all back-ends; the temp-file store is only written when arboard
-    /// is unavailable (headless / SSH):
+    /// Best-effort fan-out to every active backend; failures are logged and
+    /// ignored so the remaining back-ends still run.  The temp-file store is
+    /// only written when arboard is unavailable (headless / SSH):
     ///
     /// 1. **Temp file** — when there is no system clipboard (headless /
     ///    remote), a local copy so `get()` can round-trip copy→paste.
@@ -431,36 +405,9 @@ impl Clipboard {
     ///    [`Clipboard::with_options`]), so the host still receives output up
     ///    to the cap; the temp-file store and arboard always receive the full
     ///    untruncated text.
-    ///
-    /// Errors from any path are silently ignored — at least one of
-    /// the back-ends is expected to fail depending on the environment.
-    pub fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
-        // Persist to the temp-file backing store only when there is no real
-        // system clipboard to write to (headless / SSH).  This keeps
-        // clipboard text off disk in normal local sessions.  Best-effort.
-        if self.temp_store_enabled
-            && let Err(e) = write_clipboard_temp(&self.temp_path, text)
-        {
-            tracing::debug!(
-                "clipboard: set temp store write failed at {} ({e})",
-                self.temp_path.display()
-            );
-        }
-
-        // Write via arboard for the local case.  On X11 this claims the
-        // CLIPBOARD selection, but arboard hosts the data in its own
-        // background thread, which can silently drop or serve stale data.
-        // macOS AppKit/NSPasteboard writes debug spam to stderr when
-        // setting the clipboard — suppress it to prevent terminal junk.
-        if let Some(cb) = &mut self.arboard {
-            let _guard = StderrSuppressGuard::new();
-            match cb.set_text(text.to_owned()) {
-                Ok(()) => tracing::debug!("clipboard: set wrote via arboard"),
-                Err(e) => tracing::debug!("clipboard: set via arboard failed ({e})"),
-            }
-        } else {
-            tracing::debug!("clipboard: set arboard unavailable; temp store + OSC 52 only");
-        }
+    pub fn set(&mut self, text: &str) {
+        write_temp_store(&self.temp_path, self.temp_store_enabled, text);
+        write_system_clipboard(&mut self.arboard, text);
 
         // Emit OSC 52 for the host terminal LAST.  When the host terminal
         // emulator supports OSC 52 (VTE, Alacritty, WezTerm, …) it responds
@@ -469,7 +416,7 @@ impl Clipboard {
         // selection thread for answering paste requests.  Truncate at a
         // valid UTF-8 char boundary so oversized payloads still reach the
         // host up to the cap without corrupting multibyte characters.
-        let osc52_text = &text[..text.floor_char_boundary(self.osc52_limit)];
+        let osc52_text = truncate_for_osc52(text, self.osc52_limit);
         #[cfg(not(test))]
         if let Err(e) = set_via_osc52_with_writer(osc52_text, &mut std::io::stdout().lock()) {
             tracing::debug!("clipboard: set OSC 52 to stdout failed ({e})");
@@ -482,9 +429,100 @@ impl Clipboard {
             let _ = set_via_osc52_with_writer(osc52_text, &mut buf);
             self.osc52_output = buf;
         }
-
-        Ok(())
     }
+}
+
+/// Best-effort write to the headless temp-file backing store.
+///
+/// Only active when `enabled` (no system clipboard available, e.g. over SSH),
+/// so clipboard text is never persisted to disk during a normal local session.
+fn write_temp_store(path: &Path, enabled: bool, text: &str) {
+    if enabled && let Err(e) = write_clipboard_temp(path, text) {
+        tracing::debug!(
+            "clipboard: set temp store write failed at {} ({e})",
+            path.display()
+        );
+    }
+}
+
+/// Best-effort write to the local system clipboard via `arboard`.
+///
+/// On X11 this claims the CLIPBOARD selection, but arboard hosts the data in
+/// its own background thread, which can silently drop or serve stale data.
+/// macOS AppKit/NSPasteboard writes debug spam to stderr when setting the
+/// clipboard — suppressed by [`StderrSuppressGuard`].
+fn write_system_clipboard(clipboard: &mut Option<arboard::Clipboard>, text: &str) {
+    let Some(cb) = clipboard.as_mut() else {
+        tracing::debug!("clipboard: set arboard unavailable; temp store + OSC 52 only");
+        return;
+    };
+    let _guard = StderrSuppressGuard::new();
+    match cb.set_text(text.to_owned()) {
+        Ok(()) => tracing::debug!("clipboard: set wrote via arboard"),
+        Err(e) => tracing::debug!("clipboard: set via arboard failed ({e})"),
+    }
+}
+
+/// Best-effort read from the local system clipboard via `arboard`.
+///
+/// `Ok(None)` when there is no system clipboard backend (headless / SSH); an
+/// `Err` propagates an arboard read failure so the caller can decide whether
+/// to fall back to the temp store.
+fn read_system_clipboard(
+    clipboard: &mut Option<arboard::Clipboard>,
+) -> Result<Option<String>, ClipboardError> {
+    let Some(cb) = clipboard.as_mut() else {
+        return Ok(None);
+    };
+    match cb.get_text() {
+        Ok(text) => {
+            tracing::debug!("clipboard: get read via arboard ({} bytes)", text.len());
+            Ok(Some(text))
+        }
+        Err(e) => {
+            tracing::debug!("clipboard: get via arboard failed ({e})");
+            Err(e.into())
+        }
+    }
+}
+
+/// Read the headless temp-file backing store, consuming it on success.
+///
+/// This is a single-use copy→paste round-trip: the file is removed so
+/// sensitive clipboard text does not persist on disk.  Best-effort.
+fn read_temp_store(path: &Path, enabled: bool) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    match read_clipboard_temp(path) {
+        Ok(text) => {
+            tracing::debug!(
+                "clipboard: get read via temp store {} ({} bytes)",
+                path.display(),
+                text.len()
+            );
+            if let Err(e) = std::fs::remove_file(path) {
+                tracing::debug!(
+                    "clipboard: get temp store cleanup failed at {} ({e})",
+                    path.display()
+                );
+            }
+            Some(text)
+        }
+        Err(_) => {
+            tracing::debug!(
+                "clipboard: get temp store unavailable at {}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Truncate `text` to `limit` bytes at a valid UTF-8 char boundary so OSC 52
+/// emission stays within the cap without corrupting multibyte characters.
+fn truncate_for_osc52(text: &str, limit: usize) -> &str {
+    &text[..text.floor_char_boundary(limit)]
 }
 
 /// Length of the OSC 52 header `\x1b]52;` (ESC + ] + "52;").
@@ -748,7 +786,7 @@ mod tests {
         cb.arboard = None;
         cb.temp_store_enabled = true;
 
-        cb.set("clipboard text").unwrap();
+        cb.set("clipboard text");
         assert!(path.exists(), "set() must persist to the temp store");
         assert_eq!(cb.get().unwrap(), "clipboard text");
         assert!(
@@ -781,7 +819,7 @@ mod tests {
         cb.arboard = None;
         cb.temp_store_enabled = true;
 
-        cb.set("héllo 日本語 ✅").unwrap();
+        cb.set("héllo 日本語 ✅");
         assert_eq!(cb.get().unwrap(), "héllo 日本語 ✅");
     }
 
@@ -814,7 +852,7 @@ mod tests {
         cb.temp_store_enabled = false;
         cb.arboard = None;
 
-        cb.set("sensitive text").unwrap();
+        cb.set("sensitive text");
         assert!(
             !path.exists(),
             "temp store must not be written when a system clipboard exists"
@@ -934,7 +972,7 @@ mod tests {
     fn clipboard_set_emits_osc52() {
         let dir = tempfile::tempdir().unwrap();
         let mut cb = Clipboard::with_temp_path(store_path(&dir));
-        cb.set("hello from test").unwrap();
+        cb.set("hello from test");
 
         assert!(
             !cb.osc52_output.is_empty(),
@@ -1085,7 +1123,7 @@ mod tests {
         cb.temp_store_enabled = true;
 
         let oversized = "this text is longer than the 8-byte cap";
-        cb.set(oversized).unwrap();
+        cb.set(oversized);
 
         // OSC 52 output must be truncated to <= limit bytes at a char boundary.
         let decoded = extract_osc52_text(&cb.osc52_output).unwrap();
@@ -1117,7 +1155,7 @@ mod tests {
         // "héllo" — 'é' is 2 bytes.  A byte-5 cut would land inside 'é';
         // floor_char_boundary must land at index 4 (after 'h' + 'é').
         let text = "héllo";
-        cb.set(text).unwrap();
+        cb.set(text);
 
         let decoded = extract_osc52_text(&cb.osc52_output).unwrap();
         assert_eq!(decoded, "héll", "must truncate at a valid UTF-8 boundary");

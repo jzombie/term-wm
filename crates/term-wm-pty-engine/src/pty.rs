@@ -675,7 +675,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // Relay each extracted sequence synchronously via the hoisted
                 // handle — no debounce, so the tail payload is never dropped.
                 if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
-                    let _ = clipboard.set(&text);
+                    clipboard.set(&text);
                     if let Some(ref capture) = osc52_text {
                         *capture.lock().unwrap() = Some(text);
                     }

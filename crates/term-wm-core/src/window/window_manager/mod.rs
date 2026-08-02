@@ -2191,9 +2191,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let Some(text) = self.selection_text.clone() else {
             return;
         };
-        if let Some(cb) = &mut self.clipboard
-            && cb.set(&text).is_ok()
-        {
+        if let Some(cb) = &mut self.clipboard {
+            cb.set(&text);
             self.push_notification(
                 "Selection copied to clipboard",
                 std::time::Duration::from_secs(2),

@@ -488,7 +488,7 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
 
         // Drain clipboard
         while let Ok(text) = clip_rx.try_recv() {
-            let _ = clipboard.set(&text);
+            clipboard.set(&text);
         }
 
         // Handle SIGINT
