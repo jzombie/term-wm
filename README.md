@@ -10,6 +10,10 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](#)
 
 <div align="center">
+  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.1-alpha-linux.png?raw=true" alt="term-wm v0.9.1-alpha on Linux" /><br />
+  <em>pictured: term-wm v0.9.1-alpha on Linux</em>
+</div>
+<div align="center">
   <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.0-alpha-mac.png?raw=true" alt="term-wm v0.9.0-alpha on macOS" /><br />
   <em>pictured: term-wm v0.9.0-alpha on macOS</em>
 </div>
