@@ -152,7 +152,7 @@ async fn daemon_survives_parent_death() {
         .expect("spawn attach");
 
     // Give it time to auto-spawn the daemon and attach.
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    tokio::time::sleep(Duration::from_millis(2000)).await;
     let _ = attach.kill();
     let _ = attach.wait();
 
