@@ -4,6 +4,8 @@ A layout-agnostic, headless terminal session host and multiplexer.
 
 `term-session` provides the persistence layer for terminal applications. It operates similarly to `tmux` or `GNU screen`, ensuring that running processes survive client disconnects. Unlike traditional window managers, `term-session` enforces **no layout paradigm**. It is a pure session daemon.
 
+Its clients render in **alternate-screen mode** (a full-screen TUI): the attached terminal switches into the alternate buffer for the duration of the session and restores the caller's screen on exit. See [Scrolling](#scrolling) for what this means for scrollback.
+
 ## Usage
 
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
@@ -39,4 +41,6 @@ To deploy a persistent, tiling terminal workspace, run `term-wm` as a child proc
 
 ## Scrolling
 
-`term-session` does **not** currently implement scrollback for its remote clients — `term-session attach` renders only the current viewport of the shared PTY. This has not been addressed yet because `term-session` is designed to work alongside [term-wm](https://crates.io/crates/term-wm), which provides its own scrollback handling for its windows. If you run `term-wm` inside a `term-session` session (the recommended integration above), scrolling is handled by the window manager rather than the session layer. Standalone `term-session` clients that need in-terminal scrollback are not yet supported.
+The standalone `term-session attach` client runs the terminal in **alternate-screen mode** (`smcup`), the standard full-screen TUI convention. On most terminal emulators the alternate screen carries **no native scrollback**, so the host terminal's built-in scroll wheel/scrollbar does not capture the session's output. This is deliberate: a full-screen TUI owns its viewport and must not be conflated with the terminal's main-screen history, so `term-session` does **not** implement scrollback for its remote clients — `term-session attach` renders only the current viewport of the shared PTY.
+
+Scrollback is the host integration's responsibility. `term-session` is designed to work alongside [term-wm](https://crates.io/crates/term-wm), which provides its own scrollback handling for its windows. If you run `term-wm` inside a `term-session` session (the recommended integration above), scrolling is handled by the window manager rather than the session layer. Standalone `term-session` clients that need in-terminal scrollback are not supported.
