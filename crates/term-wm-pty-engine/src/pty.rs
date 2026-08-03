@@ -1008,6 +1008,45 @@ mod tests {
         }
     }
 
+    /// Locate the `term-session-mock` binary (a workspace member built into
+    /// `target/debug`) so the Job Object test can spawn a child that itself
+    /// forks a grandchild. No Cargo dependency: the mock is discovered by
+    /// walking up from the test binary's directory, exactly like the
+    /// integration tests do. Returns `None` when the mock has not been built.
+    #[cfg(windows)]
+    fn get_mock_bin() -> Option<std::path::PathBuf> {
+        let mut path = std::env::current_exe().expect("test exe path");
+        path.pop();
+        if path.ends_with("deps") {
+            path.pop();
+        }
+        let candidate = path.join(format!("term-session-mock{}", std::env::consts::EXE_SUFFIX));
+        if candidate.exists() {
+            Some(candidate)
+        } else {
+            None
+        }
+    }
+
+    /// Whether a process with the given OS PID is still running.
+    #[cfg(windows)]
+    fn process_is_alive(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            let _ = CloseHandle(handle);
+            ok != 0 && code == STILL_ACTIVE as u32
+        }
+    }
+
     // ── bytes_to_debug_text ──────────────────────────────────────────
 
     #[test]
@@ -1249,8 +1288,22 @@ mod tests {
     fn spawn_assigns_job_object_containing_child() {
         // The Windows child must be contained in a Job Object so kill paths
         // terminate the whole tree (grandchildren included), not just the
-        // session leader. `cmd.exe` keeps the ConPTY alive like a real shell.
-        let cmd = CommandBuilder::new(get_test_executable());
+        // session leader. We spawn the mock in `spawn_child` mode: it forks a
+        // grandchild (another mock instance in `sleep` mode) and prints
+        // `GRANDCHILD_PID:<n>` to stdout. We read that PID, confirm the
+        // grandchild is alive, kill the child via `kill_child` (which calls
+        // `TerminateJobObject`), and confirm the grandchild died too — the
+        // whole-tree guarantee.
+        //
+        // Skipped when the mock binary hasn't been built (e.g. a standalone
+        // `cargo test -p term-wm-pty-engine` without a prior workspace build).
+        let Some(mock) = get_mock_bin() else {
+            eprintln!("skipping spawn_assigns_job_object_containing_child: mock binary not built");
+            return;
+        };
+        let mut cmd = CommandBuilder::new(mock);
+        cmd.arg("spawn_child");
+        cmd.arg("60000");
         let size = PtySize {
             rows: 24,
             cols: 80,
@@ -1264,12 +1317,58 @@ mod tests {
             "spawned child must be contained in a Job Object on Windows"
         );
 
+        // Poll `screen()` — which answers the child's startup DSR
+        // cursor-position request — while accumulating output until the
+        // `GRANDCHILD_PID:` marker appears.
+        let mut accumulated = Vec::new();
+        let start = std::time::Instant::now();
+        let grandchild = loop {
+            pty.screen();
+            accumulated.extend_from_slice(&pty.drain_pending());
+            if let Some(idx) = accumulated
+                .windows(b"GRANDCHILD_PID:".len())
+                .position(|w| w == b"GRANDCHILD_PID:")
+            {
+                let rest = &accumulated[idx + b"GRANDCHILD_PID:".len()..];
+                let pid_str: String = rest
+                    .iter()
+                    .take_while(|b| b.is_ascii_digit())
+                    .map(|b| *b as char)
+                    .collect();
+                break pid_str
+                    .parse()
+                    .unwrap_or_else(|_| panic!("invalid grandchild PID in {rest:?}"));
+            }
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "mock spawn_child should print a grandchild PID; got {accumulated:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+
+        // The grandchild must be alive before the kill.
+        assert!(
+            process_is_alive(grandchild),
+            "grandchild {grandchild} should be alive before kill_child"
+        );
+
         // kill_child must consume the job (its Drop then fires
         // KILL_ON_JOB_CLOSE for any stragglers) and reap the child.
         pty.kill_child().expect("kill_child");
         assert!(pty.job.is_none(), "job must be taken on kill_child");
         assert!(pty.child.is_none(), "child must be reaped on kill_child");
         assert!(pty.exited, "pty must be marked exited after kill_child");
+
+        // The grandchild must die with the tree — the whole point of the
+        // Job Object containment. Poll briefly since termination is async.
+        let start = std::time::Instant::now();
+        while process_is_alive(grandchild) {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "grandchild {grandchild} should be dead after kill_child"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]
