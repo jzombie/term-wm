@@ -10,6 +10,8 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
 use crate::pty_state_tracker::PtyPerformAdapter;
+#[cfg(windows)]
+use crate::job_object::JobObject;
 
 /// Size of the PTY master read buffer (single `read()` call).
 /// 64KB keeps the reader parked most of the time under heavy output
@@ -94,6 +96,12 @@ pub struct Pty {
     pty_size: PtySize,
     scrollback_len: usize,
     child: Option<Box<dyn Child + Send + Sync>>,
+    /// Win32 Job Object containing the child's process tree (Windows only).
+    /// Dropping it with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates any
+    /// processes still in the job, so an un-killed `Pty` never orphans
+    /// descendants. The Windows analogue of the Unix process group.
+    #[cfg(windows)]
+    job: Option<JobObject>,
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
     /// Guards against double-fire of the Exited callback from both
@@ -139,6 +147,25 @@ impl Pty {
             .slave
             .spawn_command(command)
             .map_err(|err| wrap_err("spawn_command", err))?;
+        #[cfg(windows)]
+        let job = {
+            // Contain the child's entire process tree in a Job Object so kill
+            // paths tear down grandchildren too (the Windows analogue of
+            // `kill(-pgid, sig)`). Assignment happens immediately after spawn:
+            // Win32 allows nested jobs, so membership in any parent job does
+            // not block this. There is a bounded race — the child may start
+            // before assignment — but once assigned, every descendant is
+            // contained and dies with the job (or on job-handle close).
+            let job = JobObject::new().ok();
+            if let (Some(job), Some(proc)) = (&job, child.as_raw_handle())
+                && let Err(err) = unsafe { job.assign(proc) }
+            {
+                tracing::warn!(
+                    "AssignProcessToJobObject failed: {err}; falling back to single-process kill"
+                );
+            }
+            job
+        };
         let reader = pair
             .master
             .try_clone_reader()
@@ -212,6 +239,8 @@ impl Pty {
             pty_size: size,
             scrollback_len,
             child: Some(child),
+            #[cfg(windows)]
+            job,
             exited: false,
             exit_status: None,
             reader: Some(reader_handle),
@@ -445,7 +474,16 @@ impl Pty {
     }
 
     /// Kill the child process if present.
+    ///
+    /// On Windows the whole contained tree is terminated via the Job Object
+    /// (grandchildren included), falling back to single-process termination
+    /// when containment was not established. The job handle is taken so its
+    /// `Drop` (KILL_ON_JOB_CLOSE) is the last line of defense for stragglers.
     pub fn kill_child(&mut self) -> PtyResult<()> {
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            let _ = job.terminate(1);
+        }
         if let Some(mut child) = self.child.take() {
             child.kill().map_err(|err| wrap_err("kill", err))?;
             self.exited = true;
@@ -1204,6 +1242,34 @@ mod tests {
             woke.load(Ordering::Relaxed),
             "status callback must fire on Wakeup when PTY outputs data"
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn spawn_assigns_job_object_containing_child() {
+        // The Windows child must be contained in a Job Object so kill paths
+        // terminate the whole tree (grandchildren included), not just the
+        // session leader. `cmd.exe` keeps the ConPTY alive like a real shell.
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        assert!(
+            pty.job.is_some(),
+            "spawned child must be contained in a Job Object on Windows"
+        );
+
+        // kill_child must consume the job (its Drop then fires
+        // KILL_ON_JOB_CLOSE for any stragglers) and reap the child.
+        pty.kill_child().expect("kill_child");
+        assert!(pty.job.is_none(), "job must be taken on kill_child");
+        assert!(pty.child.is_none(), "child must be reaped on kill_child");
+        assert!(pty.exited, "pty must be marked exited after kill_child");
     }
 
     #[test]

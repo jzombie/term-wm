@@ -3216,6 +3216,7 @@ dependencies = [
  "tracing",
  "vt100",
  "vte",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

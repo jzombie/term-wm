@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.5-alpha] - TBD
+
+## Errata / Corrections for v0.9.4-alpha
+
+- **Windows process-tree containment (correction):** the v0.9.4-alpha changelog entry "Gateway process supervision" stated that kill paths terminate the whole process tree on Windows via "Win32 Job Object containment". That was inaccurate for the shipped binary: at release time the Windows kill path (`Pty::kill_child`) delegated to portable-pty's `WinChild`, which performs a bare `TerminateProcess` on the **single session leader** — grandchildren were not contained and could be orphaned. Only the Unix process-group path (SIGTERM → exited-checked SIGKILL escalation) actually matched the description.
+  - **Resolution:** the Job Object containment described in that entry is now genuinely implemented. The PTY engine creates a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job, assigns the spawned child immediately, and `Pty::kill_child` calls `TerminateJobObject` (whole tree, grandchildren included), with the job handle's `Drop` as the final kill-on-close safety net. Graceful fallback to single-process termination remains if assignment fails. Covered by a Windows-gated test (`spawn_assigns_job_object_containing_child`).
+
 ## [0.9.4-alpha] - 2026-08-03
 
 ### Added

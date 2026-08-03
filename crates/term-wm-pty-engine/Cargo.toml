@@ -21,3 +21,6 @@ tracing = { workspace = true }
 vt100 = { workspace = true }
 vte = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
