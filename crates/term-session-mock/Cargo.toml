@@ -1,6 +1,6 @@
 [package]
 name = "term-session-mock"
-description = "term-wm internal test tooling: A mock PTY binary and shared test helpers for cross-platform terminal stream and ConPTY byte-sequence simulation."
+description = "term-wm internal test tooling: a mock PTY binary and shared test helpers for cross-platform terminal stream simulation, including Windows ConPTY byte-sequence handling."
 keywords = ["terminal", "conpty", "windows", "testing", "simulation"]
 categories = ["emulators", "development-tools", "simulation"]
 authors.workspace = true
