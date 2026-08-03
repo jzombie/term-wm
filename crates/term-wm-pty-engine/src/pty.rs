@@ -591,6 +591,17 @@ impl Drop for Pty {
         if let Some(reader) = &self.reader {
             reader.thread().unpark();
         }
+        // Terminate the child process if it is still owned. The `Reaper`
+        // path extracts the child via `into_parts()` first (leaving this
+        // `None`), so this only fires when a Pty is dropped without an
+        // explicit teardown — e.g. a gateway/session object is dropped
+        // without `ShutdownGateway` (integration tests) or a terminal
+        // window is closed without routing through the reaper. Without
+        // this, the child (and any PTY reader thread) is orphaned and
+        // keeps running.
+        if self.child.is_some() {
+            let _ = self.kill_child();
+        }
     }
 }
 
