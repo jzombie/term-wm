@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
 use term_session_muxio_service_definitions::{
-    Attach, ChannelName, ListChannels, ShutdownGateway, Spawn, probe_ipc_endpoint,
+    Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, probe_ipc_endpoint,
 };
 
 /// The compiled `term-session` binary under test.
@@ -58,6 +58,28 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
         .stderr(Stdio::null());
     let child = cmd.spawn().expect("spawn daemon");
     (child, marker)
+}
+
+/// Attach a client to a channel and return its server-assigned conn id,
+/// using the mock identity fields the other helpers expect.
+async fn attach_to(
+    client: &muxio_tokio_rpc_ipc_client::RpcIpcClient,
+    channel: &str,
+    hostname: &str,
+) -> usize {
+    Attach::call(
+        client,
+        AttachRequest {
+            channel: channel.to_string(),
+            hostname: hostname.to_string(),
+            pid: std::process::id() as u64,
+            user: "test-user".to_string(),
+            version: "test-version".to_string(),
+            ssh_ip: None,
+        },
+    )
+    .await
+    .expect("attach")
 }
 
 /// Poll until a client can connect to the gateway, or panic after a timeout.
@@ -112,16 +134,7 @@ async fn daemon_survives_all_clients_disconnecting() {
 
     let client = wait_connectable(&gateway).await;
     let channel = "test/daemon_survive";
-    Attach::call(
-        &*client,
-        (
-            channel.to_string(),
-            "t".to_string(),
-            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&client, channel, "t").await;
     Spawn::call(
         &*client,
         (
@@ -141,16 +154,7 @@ async fn daemon_survives_all_clients_disconnecting() {
     // After ALL clients disconnect, the daemon must still be reachable and a
     // fresh attach/spawn must succeed (session respawns / persists).
     let client2 = wait_connectable(&gateway).await;
-    Attach::call(
-        &*client2,
-        (
-            channel.to_string(),
-            "t".to_string(),
-            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&client2, channel, "t").await;
     Spawn::call(&*client2, (None, 80u16, 24u16)).await.unwrap();
 
     ShutdownGateway::call(&*client2, true).await.unwrap();
@@ -190,16 +194,7 @@ async fn daemon_survives_parent_death() {
     // (the `sleep` process is still running, so the daemon must not have
     // exited — sessions are torn down only when their process ends).
     let client = wait_connectable(&gateway).await;
-    Attach::call(
-        &*client,
-        (
-            channel.to_string(),
-            "t".to_string(),
-            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&client, channel, "t").await;
     let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
@@ -415,26 +410,8 @@ async fn cli_kill_client_detaches_one_client() {
     // Two attached clients on the same channel.
     let c1 = wait_connectable(&gateway).await;
     let c2 = wait_connectable(&gateway).await;
-    Attach::call(
-        &*c1,
-        (
-            channel.to_string(),
-            "one".to_string(),
-            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
-        ),
-    )
-    .await
-    .unwrap();
-    Attach::call(
-        &*c2,
-        (
-            channel.to_string(),
-            "two".to_string(),
-            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&c1, channel, "one").await;
+    attach_to(&c2, channel, "two").await;
     Spawn::call(
         &*c1,
         (
@@ -601,16 +578,7 @@ async fn cli_stop_requires_force_when_live_sessions() {
     let (mut child, _marker) = spawn_daemon(&gateway, false);
 
     let client = wait_connectable(&gateway).await;
-    Attach::call(
-        &*client,
-        (
-            channel.to_string(),
-            "cli".to_string(),
-            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&client, channel, "cli").await;
     Spawn::call(
         &*client,
         (

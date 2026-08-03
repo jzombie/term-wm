@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
-use term_session_muxio_service_definitions::{Attach, ChannelName, ListChannels, ShutdownGateway};
+use term_session_muxio_service_definitions::{
+    Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway,
+};
 use term_session_server::run_gateway;
 
 pub const TEST_COLS: u16 = 80;
@@ -106,14 +108,14 @@ pub async fn connect_client_with_retry(socket_path: &str) -> Arc<RpcIpcClient> {
 pub async fn attach_client(client: &RpcIpcClient, channel: &ChannelName) -> usize {
     Attach::call(
         client,
-        (
-            channel.to_string(),
-            "test-host".to_string(),
-            std::process::id() as u64,
-            "test-user".to_string(),
-            "test-version".to_string(),
-            None,
-        ),
+        AttachRequest {
+            channel: channel.to_string(),
+            hostname: "test-host".to_string(),
+            pid: std::process::id() as u64,
+            user: "test-user".to_string(),
+            version: "test-version".to_string(),
+            ssh_ip: None,
+        },
     )
     .await
     .expect("attach")

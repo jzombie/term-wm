@@ -20,8 +20,8 @@ use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
-    Attach, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    Spawn,
+    Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
@@ -357,14 +357,14 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         // conn_id); report our OS PID so `list` can show which client is which.
         let conn_id = Attach::call(
             &*client,
-            (
-                channel.to_string(),
+            AttachRequest {
+                channel: channel.to_string(),
                 hostname,
-                std::process::id() as u64,
-                client_user(),
-                client_version(),
-                client_ssh_ip(),
-            ),
+                pid: std::process::id() as u64,
+                user: client_user(),
+                version: client_version(),
+                ssh_ip: client_ssh_ip(),
+            },
         )
         .await
         .map_err(|e| abi_fault(&e))?;

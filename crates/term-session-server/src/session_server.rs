@@ -584,9 +584,8 @@ pub async fn run_gateway(
                 if state.is_shutting_down.load(Ordering::SeqCst) {
                     return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-                let (channel_str, hostname, pid, user, version, ssh_ip) =
-                    Attach::decode_request(&payload)?;
-                let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
+                let req = Attach::decode_request(&payload)?;
+                let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
                 let _channel = get_or_create_channel(&state, &name).await;
                 let conn_id = ctx.conn_id;
                 let mut conns = state.conns.write().await;
@@ -604,12 +603,12 @@ pub async fn run_gateway(
                     ssh_ip: None,
                 });
                 entry.state = ConnState::Attached(name);
-                entry.hostname = hostname;
+                entry.hostname = req.hostname;
                 entry.connected_at_unix = now_unix();
-                entry.pid = pid;
-                entry.user = user;
-                entry.version = version;
-                entry.ssh_ip = ssh_ip;
+                entry.pid = req.pid;
+                entry.user = req.user;
+                entry.version = req.version;
+                entry.ssh_ip = req.ssh_ip;
                 Attach::encode_response(conn_id).map_err(boxed_io)
             }
         })
@@ -631,43 +630,33 @@ pub async fn run_gateway(
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
                 let ch = get_or_create_channel(&state, &channel).await;
-                // Fetch the connection's caller handle, hostname, and connect
-                // time before locking the channel (never hold two locks).
+                // Fetch the connection's entry (caller handle, hostname,
+                // identity) before locking the channel (never hold two locks).
                 let conn_meta = {
                     let conns = state.conns.read().await;
-                    conns.get(&ctx.conn_id).map(|c| {
-                        (
-                            c.handle.clone(),
-                            c.hostname.clone(),
-                            c.connected_at_unix,
-                            c.pid,
-                            c.user.clone(),
-                            c.version.clone(),
-                            c.ssh_ip.clone(),
-                        )
-                    })
+                    conns.get(&ctx.conn_id).cloned()
                 };
                 let mut guard = ch.lock().await;
                 let entry = guard
                     .clients
                     .entry(ctx.conn_id)
                     .or_insert_with(|| ClientEntry {
-                        caller: conn_meta.as_ref().map(|(h, _, _, _, _, _, _)| h.clone()),
+                        caller: conn_meta.as_ref().map(|c| c.handle.clone()),
                         hostname: conn_meta
                             .as_ref()
-                            .map(|(_, n, _, _, _, _, _)| n.clone())
+                            .map(|c| c.hostname.clone())
                             .unwrap_or_default(),
-                        connected_at_unix: conn_meta.as_ref().map(|(_, _, t, _, _, _, _)| *t).unwrap_or(0),
-                        pid: conn_meta.as_ref().map(|(_, _, _, p, _, _, _)| *p).unwrap_or(0),
-                        user: conn_meta
+                        connected_at_unix: conn_meta
                             .as_ref()
-                            .map(|(_, _, _, _, u, _, _)| u.clone())
-                            .unwrap_or_default(),
+                            .map(|c| c.connected_at_unix)
+                            .unwrap_or(0),
+                        pid: conn_meta.as_ref().map(|c| c.pid).unwrap_or(0),
+                        user: conn_meta.as_ref().map(|c| c.user.clone()).unwrap_or_default(),
                         version: conn_meta
                             .as_ref()
-                            .map(|(_, _, _, _, _, v, _)| v.clone())
+                            .map(|c| c.version.clone())
                             .unwrap_or_default(),
-                        ssh_ip: conn_meta.as_ref().and_then(|(_, _, _, _, _, _, s)| s.clone()),
+                        ssh_ip: conn_meta.as_ref().and_then(|c| c.ssh_ip.clone()),
                         cols,
                         rows,
                     });

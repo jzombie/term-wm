@@ -4,7 +4,7 @@ use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use term_session_muxio_service_definitions::{
-    Attach, CloseSession, KillChannel, KillClient, ResizePty, STREAM_INPUT_METHOD_ID,
+    Attach, AttachRequest, CloseSession, KillChannel, KillClient, ResizePty, STREAM_INPUT_METHOD_ID,
     SUBSCRIBE_OUTPUT_METHOD_ID, ShutdownGateway, Spawn,
 };
 
@@ -1202,14 +1202,14 @@ async fn list_channels_reports_client_identity() {
     let client = connect_client_with_retry(guard.socket()).await;
     Attach::call(
         &*client,
-        (
-            channel.to_string(),
-            "host-a".to_string(),
-            1234u64,
-            "alice".to_string(),
-            "9.9.9".to_string(),
-            Some("192.168.1.50".to_string()),
-        ),
+        AttachRequest {
+            channel: channel.to_string(),
+            hostname: "host-a".to_string(),
+            pid: 1234,
+            user: "alice".to_string(),
+            version: "9.9.9".to_string(),
+            ssh_ip: Some("192.168.1.50".to_string()),
+        },
     )
     .await
     .unwrap();
