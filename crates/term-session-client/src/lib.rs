@@ -221,14 +221,9 @@ fn is_coalescable_mouse(
 ///
 /// `socket_path` is the gateway channel name (the muxio socket identity);
 /// `channel` is the logical channel to attach to; `cmd` is the command to run
-/// (empty = the gateway's default shell); `cols`/`rows` seed the PTY geometry.
-pub fn run_session(
-    socket_path: &str,
-    channel: &str,
-    cmd: &[String],
-    cols: u16,
-    rows: u16,
-) -> io::Result<()> {
+/// (empty = the gateway's default shell). PTY geometry is read from the real
+/// terminal.
+pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Result<()> {
     // Windows console hosts default to "QuickEdit" mode: clicking the window
     // enters text-selection mode, during which the kernel suspends the
     // process's console I/O until the selection is cleared (Esc). A stray
@@ -296,16 +291,11 @@ pub fn run_session(
     let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(PTY_OUTPUT_CHANNEL_CAPACITY);
     let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(CLIPBOARD_CHANNEL_CAPACITY);
 
-    // Terminal geometry: caller-provided seed, or fall back to the local size.
-    // The vt100 parser requires a non-zero grid (it computes `rows - 1` at
-    // construction), so clamp a degenerate 0x0 from a headless pty to a
-    // sane minimum rather than panicking.
+    // Terminal geometry comes from the real terminal (no cols/rows are threaded
+    // through the API). The vt100 parser computes `rows - 1` at construction, so
+    // clamp a degenerate 0x0 report up to a non-zero grid rather than panicking.
     let (term_cols, term_rows) = {
-        let (c, r) = if cols > 0 && rows > 0 {
-            (cols, rows)
-        } else {
-            crossterm::terminal::size()?
-        };
+        let (c, r) = crossterm::terminal::size()?;
         (c.max(MIN_TERM_COLS), r.max(MIN_TERM_ROWS))
     };
     let hostname = hostname::get()
