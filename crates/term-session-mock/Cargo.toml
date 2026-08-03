@@ -7,3 +7,9 @@ version = "0.0.0"
 edition = "2024"
 # Never publish this; only used for testing
 publish = false
+
+[dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

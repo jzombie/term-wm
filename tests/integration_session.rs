@@ -8,7 +8,7 @@ use term_session_muxio_service_definitions::{
 };
 
 mod common;
-use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin};
+use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin, mock_pid_alive};
 use common::session::{
     TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin, list_channels,
     spawn_gateway, spawn_session, test_channel, wait_for_output,
@@ -592,6 +592,79 @@ async fn list_channels_reports_clients_and_geometry() {
     // Process visibility: the response identifies the daemon PID + socket.
     assert!(resp.gateway_pid > 0, "gateway pid reported");
     assert!(!resp.socket.is_empty(), "socket name reported");
+    guard.shutdown().await;
+}
+
+/// KillChannel must terminate the *entire* process tree — grandchildren
+/// included, not just the PTY session leader. The mock's `spawn_child` mode
+/// forks a grandchild and reports its PID on stdout; this test reads that
+/// PID, confirms the grandchild is alive, kills the channel, then confirms
+/// the grandchild died.
+///
+/// On Windows this exercises the Win32 Job Object containment
+/// (`TerminateJobObject` on a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job); on
+/// Unix it exercises the process-group SIGTERM→SIGKILL escalation.
+#[tokio::test]
+#[serial]
+async fn kill_channel_terminates_process_tree() {
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/kill_tree")).await;
+    Spawn::call(
+        &*client,
+        (
+            Some(vec![mock.clone(), "spawn_child".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
+    // Read the grandchild PID marker from the mock's stdout.
+    const MARKER: &[u8] = b"GRANDCHILD_PID:";
+    let output = wait_for_output(&mut reader, MARKER, Duration::from_secs(5)).await;
+    let idx = output
+        .windows(MARKER.len())
+        .position(|w| w == MARKER)
+        .unwrap_or_else(|| panic!("grandchild PID marker not found; got {output:?}"));
+    let rest = &output[idx + MARKER.len()..];
+    let pid_str: String = rest
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .map(|b| *b as char)
+        .collect();
+    let grandchild_pid: u32 = pid_str
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid grandchild PID in {rest:?}"));
+
+    // The grandchild must be alive before the kill.
+    assert!(
+        mock_pid_alive(&mock, grandchild_pid),
+        "grandchild {grandchild_pid} should be alive before KillChannel"
+    );
+
+    KillChannel::call(&*client, "test/kill_tree".to_string())
+        .await
+        .unwrap();
+
+    // The grandchild must die with its parent — this is the whole-tree
+    // containment guarantee. Poll briefly since termination is asynchronous.
+    let start = std::time::Instant::now();
+    loop {
+        if !mock_pid_alive(&mock, grandchild_pid) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "grandchild {grandchild_pid} should be dead after KillChannel"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     guard.shutdown().await;
 }
 

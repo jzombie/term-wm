@@ -12,6 +12,18 @@ pub fn get_mock_bin() -> String {
     path.to_string_lossy().to_string()
 }
 
+/// Probe whether a process with the given OS PID is alive by asking the mock
+/// binary's `check_pid` subcommand. Cross-platform (uses `OpenProcess` on
+/// Windows, `kill(pid, 0)` elsewhere), so tests can assert tree-kill behavior
+/// without platform-specific APIs in the harness.
+pub fn mock_pid_alive(mock_bin: &str, pid: u32) -> bool {
+    std::process::Command::new(mock_bin)
+        .args(["check_pid", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Scan for a complete SGR 1006 mouse sequence: `\x1b[<...M` or `\x1b[<...m`.
 /// Returns the complete token slice if found, accounting for ConPTY noise
 /// injected between the start and end delimiters.
