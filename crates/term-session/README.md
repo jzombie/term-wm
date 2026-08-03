@@ -36,3 +36,7 @@ Multiple terminals can attach to the same channel to share one session.
 ## Integration with term-wm
 
 To deploy a persistent, tiling terminal workspace, run `term-wm` as a child process inside `term-session`. This architecture guarantees that the window manager and its layout state survive terminal emulator restarts or SSH disconnects.
+
+## Scrolling
+
+`term-session` does **not** currently implement scrollback for its remote clients — `term-session attach` renders only the current viewport of the shared PTY. This has not been addressed yet because `term-session` is designed to work alongside `term-wm`, which provides its own scrollback handling for its windows. If you run `term-wm` inside a `term-session` session (the recommended integration above), scrolling is handled by the window manager rather than the session layer. Standalone `term-session` clients that need in-terminal scrollback are not yet supported.
