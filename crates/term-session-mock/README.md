@@ -1,6 +1,6 @@
 # term-session-mock
 
-Internal test tooling for [term-wm](https://crates.io/crates/term-wm). Not intended for direct use.
+Internal test tooling for the [term-wm](https://crates.io/crates/term-wm) workspace. Not intended for direct use.
 
 ## What this is
 
@@ -31,4 +31,10 @@ Every subcommand performs **real** OS behavior — real process spawning, real e
 
 ## Finding the binary
 
-Integration tests locate the compiled binary through [`get_mock_bin`](src/lib.rs), which resolves `CARGO_BIN_EXE_term-session-mock` (set by Cargo for tests of crates that depend on this one) and falls back to the workspace `target/` build location. It **panics** (never skips) if the binary cannot be found, so a missing build fails loudly instead of silently dropping coverage.
+Test suites locate the compiled binary through [`get_mock_bin`](src/lib.rs), which:
+
+1. honors `CARGO_BIN_EXE_term-session-mock` when Cargo provides it (this crate's own integration tests);
+2. otherwise finds the workspace build in `target/debug` or the hashed `target/debug/deps` location;
+3. if neither exists, **runs `cargo build` for this crate on demand** and re-resolves.
+
+The helper never returns a missing path, so tests can never silently skip. If the binary still cannot be located after an on-demand build, it panics — a broken build fails loudly instead of quietly dropping coverage.
