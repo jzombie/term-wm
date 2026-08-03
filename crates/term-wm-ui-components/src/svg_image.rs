@@ -132,7 +132,7 @@ fn decode_pnm(bytes: &[u8]) -> Option<Pnm> {
         let count = (width * height * 3) as usize;
         let raw = bytes.get(idx..idx + count)?.to_vec();
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-        for chunk in raw.chunks_exact(3) {
+        for chunk in raw.as_chunks::<3>().0 {
             let r = scale_max(chunk[0], maxval);
             let g = scale_max(chunk[1], maxval);
             let b = scale_max(chunk[2], maxval);
