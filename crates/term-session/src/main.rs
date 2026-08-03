@@ -22,10 +22,6 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon: bool,
 
-    /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
-    #[arg(long)]
-    gateway: Option<String>,
-
     /// Test-only: write a marker file with the platform's detachment proof
     /// once the daemon has bound, then exit.
     #[arg(long, hide = true)]
@@ -40,6 +36,10 @@ struct Cli {
     /// Implicitly attaches when given without a subcommand.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmd: Vec<String>,
+
+    /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
+    #[arg(long)]
+    gateway: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
