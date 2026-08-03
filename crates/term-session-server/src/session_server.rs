@@ -174,6 +174,7 @@ impl ChannelState {
     /// escalation task (see `spawn_kill_escalation`). Mechanism only — no
     /// sleeps, no waits, no `SIGKILL` here.
     fn request_session_kill(&mut self, signal: i32) {
+        let _ = &signal;
         if let Some(session) = self.session.as_mut() {
             #[cfg(unix)]
             let _ = session.pty.signal_process_group(signal);
