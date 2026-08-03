@@ -160,7 +160,7 @@ impl AsciiImageComponent {
         let mut luma = Vec::with_capacity(capacity);
         let mut sum: u32 = 0;
         let mut count: u32 = 0;
-        for chunk in rgba.chunks_exact(4) {
+        for chunk in rgba.as_chunks::<4>().0 {
             let alpha_u8 = chunk[3];
             alpha.push(alpha_u8);
             let alpha = alpha_u8 as u16;

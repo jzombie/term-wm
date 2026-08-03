@@ -463,7 +463,18 @@ fn is_base64_char(b: u8) -> bool {
 /// - Windows ConPTY prefix `←]52;` (ESC rendered as left-arrow)
 /// - Terminator: BEL (`\x07`), ST (`\x1b\\`), or implicit termination at
 ///   the first byte that is not a valid base64 character.
+///
+/// When `allow_end_of_buffer` is set, reaching the end of `data` with a
+/// valid base64 payload also terminates the sequence.  This is used only
+/// at a true end-of-stream (EOF), where Windows ConPTY has consumed the
+/// BEL/ST terminator and the payload is the last bytes of the stream.
+/// Streaming callers must leave it off: a chunk boundary landing on
+/// base64 padding `=` is not a terminator.
 pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
+    scan_osc52(data, false)
+}
+
+fn scan_osc52(data: &[u8], allow_end_of_buffer: bool) -> Option<String> {
     let mut i = 0;
     while i < data.len() {
         let header_end = match find_osc52_header(&data[i..]) {
@@ -505,6 +516,14 @@ pub fn extract_osc52_text(data: &[u8]) -> Option<String> {
             }
             seen_base64 = true;
             j += 1;
+        }
+        // End-of-stream only: treat a trailing `=`-padded base64 payload as
+        // a complete sequence. Windows ConPTY consumes the BEL terminator,
+        // leaving the payload (which ends in base64 padding) as the final
+        // bytes of the stream. A chunk boundary landing on unpadded base64
+        // keeps buffering instead of truncating.
+        if end.is_none() && allow_end_of_buffer && seen_base64 && data.last() == Some(&b'=') {
+            end = Some(data.len());
         }
         if let Some(end_pos) = end {
             let b64 = &data[payload_start..end_pos];
@@ -602,6 +621,20 @@ impl Osc52Extractor {
     /// Discard any in-progress buffered data.
     pub fn clear(&mut self) {
         self.buf.clear();
+    }
+
+    /// Finalize the stream (EOF). Treats a trailing `=`-padded base64
+    /// payload in the buffer as a complete OSC 52 sequence, handling the
+    /// Windows ConPTY case where the BEL/ST terminator is consumed and
+    /// the payload is the last bytes of the stream. Returns the decoded
+    /// text if one was buffered, then clears the buffer either way.
+    pub fn finish(&mut self) -> Option<String> {
+        if self.buf.is_empty() {
+            return None;
+        }
+        let result = scan_osc52(&self.buf, true);
+        self.buf.clear();
+        result
     }
 
     /// Check the accumulated buffer for a complete OSC 52 sequence and

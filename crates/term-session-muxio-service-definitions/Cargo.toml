@@ -13,4 +13,5 @@ publish.workspace = true
 [dependencies]
 bitcode = { workspace = true }
 interprocess = { workspace = true }
+libc = { workspace = true }
 muxio-rpc-service = { workspace = true }
