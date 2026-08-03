@@ -929,12 +929,26 @@ pub async fn run_gateway(
                 }
                 let (channel_str, conn_id) = KillClient::decode_request(&payload)?;
                 let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
+                // Reject if the conn does not exist or is not attached to the
+                // named channel — kill-client must target a real client.
+                let bound_channel = {
+                    let conns = state.conns.read().await;
+                    conns.get(&conn_id).and_then(|c| match &c.state {
+                        ConnState::Attached(n) if n == &name => Some(n.clone()),
+                        _ => None,
+                    })
+                };
+                let Some(bound) = bound_channel else {
+                    return Err(rpc_err(&format!(
+                        "client {conn_id} is not attached to channel '{name}'"
+                    )));
+                };
                 // Evict the conn first (conns → channel ordering).
                 {
                     let mut conns = state.conns.write().await;
                     conns.remove(&conn_id);
                 }
-                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                if let Some(ch) = resolve_channel(state.as_ref(), &bound).await {
                     let mut guard = ch.lock().await;
                     // End the evicted subscriber's stream before dropping it.
                     let mut evicted: Vec<StreamResponder> = Vec::new();
@@ -956,7 +970,7 @@ pub async fn run_gateway(
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     drop(guard);
                     if let (Some((ncols, nrows)), Some(ch)) =
-                        (session_size, resolve_channel(state.as_ref(), &name).await)
+                        (session_size, resolve_channel(state.as_ref(), &bound).await)
                     {
                         let g = ch.lock().await;
                         g.notify_clients(&targets, ncols, nrows);

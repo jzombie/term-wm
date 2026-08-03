@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-use term_session_muxio_service_definitions::{Attach, ShutdownGateway, Spawn};
+use term_session_muxio_service_definitions::{Attach, ListChannels, ShutdownGateway, Spawn};
 
 /// The compiled `term-session` binary under test.
 fn bin() -> PathBuf {
@@ -402,4 +402,76 @@ fn close_write_end(write: libc::c_int) {
     unsafe {
         let _ = libc::close(write);
     }
+}
+
+#[tokio::test]
+async fn cli_kill_client_detaches_one_client() {
+    let gateway = unique_gateway("kill_client");
+    let channel = "test/kill_client";
+    let (mut child, _marker) = spawn_daemon(&gateway, false);
+
+    // Two attached clients on the same channel.
+    let c1 = wait_connectable(&gateway).await;
+    let c2 = wait_connectable(&gateway).await;
+    Attach::call(
+        &*c1,
+        (channel.to_string(), "one".to_string(), std::process::id() as u64),
+    )
+    .await
+    .unwrap();
+    Attach::call(
+        &*c2,
+        (channel.to_string(), "two".to_string(), std::process::id() as u64),
+    )
+    .await
+    .unwrap();
+    Spawn::call(
+        &*c1,
+        (
+            Some(vec![
+                mock_bin().to_string_lossy().to_string(),
+                "sleep".into(),
+                "60000".into(),
+            ]),
+            80u16,
+            24u16,
+        ),
+    )
+    .await
+    .unwrap();
+    Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
+
+    // Read the conn ids from `list` (as an operator would).
+    let resp = ListChannels::call(&*c1, ()).await.unwrap();
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == channel)
+        .expect("channel listed");
+    assert_eq!(ch.clients.len(), 2, "two clients attached");
+    let target = ch.clients[0].conn_id;
+
+    // Kill one client through the real CLI subcommand.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["kill-client", channel, &target.to_string()])
+        .output()
+        .expect("run kill-client");
+    assert!(
+        out.status.success(),
+        "kill-client failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // One client remains.
+    let resp = ListChannels::call(&*c1, ()).await.unwrap();
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == channel)
+        .expect("channel listed");
+    assert_eq!(ch.clients.len(), 1, "one client should remain after kill-client");
+
+    ShutdownGateway::call(&*c1, ()).await.unwrap();
+    let _ = child.wait();
 }

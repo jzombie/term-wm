@@ -53,16 +53,21 @@ enum Command {
     /// List channels and their sessions/clients.
     #[command(name = "ls", alias = "list")]
     List,
-    /// Kill a channel's session and/or an attached client.
+    /// Kill a channel's session and detach all its sockets (default).
     Kill {
         /// Channel name to kill.
         channel: String,
-        /// Kill the channel's session and detach all its sockets (default).
-        #[arg(long, conflicts_with = "kill_client")]
+        /// Explicitly name the operation (already the default).
+        #[arg(long)]
         kill_session: bool,
-        /// Detach a single client by its conn id (from `term-session list`).
-        #[arg(long, value_name = "CLIENT_ID")]
-        kill_client: Option<usize>,
+    },
+    /// Detach a single client by its conn id (from `term-session list`).
+    #[command(name = "kill-client")]
+    KillClient {
+        /// Channel name.
+        channel: String,
+        /// The client's conn id.
+        client_id: usize,
     },
     /// Stop the gateway daemon.
     #[command(name = "stop")]
@@ -89,9 +94,13 @@ fn main() -> io::Result<()> {
         Some(Command::List) => list(),
         Some(Command::Kill {
             channel,
-            kill_session,
-            kill_client,
-        }) => kill(&channel, kill_session, kill_client),
+            kill_session: _,
+        }) => kill(&channel),
+        Some(Command::KillClient { channel, client_id }) => {
+            term_session::kill_client(&channel, client_id)?;
+            println!("Detached client {client_id} from channel {channel}");
+            Ok(())
+        }
         Some(Command::Stop) => stop(),
         None => attach(cli.channel, &cli.cmd),
     }
@@ -151,17 +160,7 @@ fn list() -> io::Result<()> {
     Ok(())
 }
 
-fn kill(channel: &str, kill_session: bool, kill_client: Option<usize>) -> io::Result<()> {
-    if let Some(conn_id) = kill_client {
-        term_session::kill_client(channel, conn_id)?;
-        println!("Detached client {conn_id} from channel {channel}");
-        return Ok(());
-    }
-
-    // Bare `kill <channel>` defaults to `--kill-session`.
-    if !kill_session {
-        println!("Killing channel {channel} (session + all sockets)");
-    }
+fn kill(channel: &str) -> io::Result<()> {
     term_session::kill_channel(channel)?;
     println!("Killed channel {channel}");
     Ok(())
