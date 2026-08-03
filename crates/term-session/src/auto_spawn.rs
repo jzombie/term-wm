@@ -247,7 +247,7 @@ fn windows_spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChil
             command_line.as_mut_ptr(),
             std::ptr::null(),
             std::ptr::null(),
-            0, // bInheritHandles = FALSE
+            1, // TEMP: bInheritHandles = TRUE (negative test)
             DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
             std::ptr::null(),
             std::ptr::null(),
