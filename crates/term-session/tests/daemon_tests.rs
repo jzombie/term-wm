@@ -6,6 +6,7 @@
 //!
 //! Each test uses a unique `TERM_WM_GATEWAY` so parallel runs never collide.
 
+use std::io;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -201,4 +202,204 @@ async fn daemon_survives_parent_death() {
     ShutdownGateway::call(&*client, ()).await.unwrap();
     // Give the daemon time to run its teardown and exit.
     tokio::time::sleep(Duration::from_millis(1000)).await;
+}
+
+/// The daemon must never inherit the parent's open handles. Regression guard
+/// for the Windows `bInheritHandles = FALSE` auto-spawn: `std::process::Command`
+/// always passes `TRUE`, so a future switch back to it would leak every
+/// inheritable handle (pipe ends, sockets) into the daemon.
+///
+/// The test creates an inheritable pipe, auto-spawns the daemon through the
+/// real `connect_or_spawn_server` path, closes the parent's write end, and
+/// asserts the read end reaches EOF. If the daemon inherited the write handle
+/// it stays open forever and the assertion times out.
+#[tokio::test]
+async fn daemon_does_not_inherit_parent_handles() {
+    use term_session::auto_spawn::connect_or_spawn_server;
+
+    let gateway = unique_gateway("no_inherit");
+    // `connect_or_spawn_server` resolves the gateway from `TERM_WM_GATEWAY` in
+    // this process's environment; point it at the unique per-test channel.
+    // `set_var` is `unsafe` under edition 2024.
+    unsafe {
+        std::env::set_var("TERM_WM_GATEWAY", &gateway);
+    }
+
+    #[cfg(windows)]
+    let (read_end, write_end) = create_inheritable_pipe();
+    #[cfg(unix)]
+    let (read_end, write_end) = create_cloexec_pipe();
+    #[cfg(not(any(unix, windows)))]
+    panic!("handle-inheritance test not supported on this platform");
+
+    // Auto-spawn the detached daemon via the real auto-spawn path.
+    connect_or_spawn_server(Some(&bin())).expect("auto-spawn daemon");
+
+    // Close the parent's write end. A correctly detached daemon holds no copy,
+    // so the read end reaches EOF; a daemon that inherited the handle keeps the
+    // pipe open indefinitely.
+    close_write_end(write_end);
+
+    assert_eof_on_read_end(read_end, Duration::from_secs(5))
+        .expect("daemon inherited the parent's pipe write end");
+
+    close_read_end(read_end);
+
+    // Clean up the daemon.
+    let client = wait_connectable(&gateway).await;
+    ShutdownGateway::call(&*client, ()).await.unwrap();
+}
+
+/// Create an inheritable named pipe whose read end we keep. Both ends are
+/// marked inheritable via `SECURITY_ATTRIBUTES`, so if the daemon is spawned
+/// with `bInheritHandles = TRUE` (the regression under test) it keeps the
+/// write end and the pipe never breaks.
+#[cfg(windows)]
+fn create_inheritable_pipe() -> (
+    windows_sys::Win32::Foundation::HANDLE,
+    windows_sys::Win32::Foundation::HANDLE,
+) {
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::System::Pipes::CreatePipe;
+
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: 1,
+    };
+    let mut read = std::ptr::null_mut();
+    let mut write = std::ptr::null_mut();
+    let ok = unsafe { CreatePipe(&mut read, &mut write, &sa, 0) };
+    assert_ne!(ok, 0, "CreatePipe failed: {}", io::Error::last_os_error());
+    (read, write)
+}
+
+/// Create a pipe with both ends CLOEXEC. The std `Command` spawn path never
+/// clears CLOEXEC, so a correctly detached daemon never holds the write end.
+#[cfg(unix)]
+fn create_cloexec_pipe() -> (libc::c_int, libc::c_int) {
+    use std::os::unix::io::RawFd;
+
+    let mut fds = [0 as RawFd; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe() failed");
+    for &fd in &fds {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0, "F_GETFD failed");
+        let rc = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+        assert_eq!(rc, 0, "F_SETFD failed");
+    }
+    (fds[0], fds[1])
+}
+
+/// Assert the read end reaches EOF (write end fully closed) within `timeout`.
+#[cfg(windows)]
+fn assert_eof_on_read_end(
+    read: windows_sys::Win32::Foundation::HANDLE,
+    timeout: Duration,
+) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+    let start = Instant::now();
+    loop {
+        let mut total_avail: u32 = 0;
+        let ok = unsafe {
+            PeekNamedPipe(
+                read,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut total_avail,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) {
+                // Every write-end handle is gone: the daemon inherited none.
+                return Ok(());
+            }
+            return Err(err);
+        }
+        if start.elapsed() >= timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "read end never reached EOF (daemon inherited the write handle)",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Assert the read end reaches EOF (write end fully closed) within `timeout`.
+#[cfg(unix)]
+fn assert_eof_on_read_end(fd: libc::c_int, timeout: Duration) -> io::Result<()> {
+    let start = Instant::now();
+    loop {
+        let mut poll_fds = [libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP,
+            revents: 0,
+        }];
+        let n = unsafe { libc::poll(poll_fds.as_mut_ptr(), 1, 50) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if n > 0 {
+            // Drain any buffered bytes; EOF is a zero-length read.
+            let mut buf = [0u8; 64];
+            loop {
+                let r = unsafe {
+                    libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+                };
+                if r < 0 {
+                    if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(io::Error::last_os_error());
+                }
+                if r == 0 {
+                    return Ok(());
+                }
+                if (r as usize) < buf.len() {
+                    break;
+                }
+            }
+        }
+        if start.elapsed() >= timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "read end never reached EOF (child inherited the write fd)",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(windows)]
+fn close_read_end(read: windows_sys::Win32::Foundation::HANDLE) {
+    unsafe {
+        let _ = windows_sys::Win32::Foundation::CloseHandle(read);
+    }
+}
+
+#[cfg(windows)]
+fn close_write_end(write: windows_sys::Win32::Foundation::HANDLE) {
+    unsafe {
+        let _ = windows_sys::Win32::Foundation::CloseHandle(write);
+    }
+}
+
+#[cfg(unix)]
+fn close_read_end(read: libc::c_int) {
+    unsafe {
+        let _ = libc::close(read);
+    }
+}
+
+#[cfg(unix)]
+fn close_write_end(write: libc::c_int) {
+    unsafe {
+        let _ = libc::close(write);
+    }
 }
