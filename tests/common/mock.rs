@@ -5,7 +5,9 @@ pub const EXPECTED_OSC52_PAYLOAD: &[u8] = b"c;dGVzdA==";
 /// Locate the `term-session-mock` binary. Delegates to the shared helper in
 /// the mock crate's library so every test suite resolves it the same way.
 pub fn get_mock_bin() -> String {
-    term_session_mock::get_mock_bin().to_string_lossy().to_string()
+    term_session_mock::get_mock_bin()
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Probe whether a process with the given OS PID is alive by asking the mock

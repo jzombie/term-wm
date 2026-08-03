@@ -2,7 +2,9 @@ use std::process::Command;
 use std::time::Duration;
 
 fn mock_bin() -> String {
-    term_session_mock::get_mock_bin().to_string_lossy().to_string()
+    term_session_mock::get_mock_bin()
+        .to_string_lossy()
+        .to_string()
 }
 
 fn find_osc52_payload(stream: &[u8]) -> Option<&[u8]> {
