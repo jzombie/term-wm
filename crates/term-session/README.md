@@ -4,6 +4,8 @@ A layout-agnostic, headless terminal session host and multiplexer.
 
 `term-session` provides the persistence layer for terminal applications. It operates similarly to `tmux` or `GNU screen`, ensuring that running processes survive client disconnects. Unlike traditional window managers, `term-session` enforces **no layout paradigm**. It is a pure session daemon.
 
+Its clients render in **alternate-screen mode** (a full-screen TUI): the attached terminal switches into the alternate buffer for the duration of the session and restores the caller's screen on exit. See [Scrolling](#scrolling) for what this means for scrollback.
+
 ## Usage
 
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
@@ -24,7 +26,7 @@ Multiple terminals can attach to the same channel to share one session.
 
 * **One process, many channels:** a single daemon supervises all PTY sessions; no per-channel server process.
 * **Server-assigned identity:** a client's `conn_id` is assigned by the gateway at connect time; channel binding is server-side and authoritative — a client can only reach the channel it attached to.
-* **Admin CLI:** `list` dumps every channel's session status (PTY cols×rows, exited state) and each connected socket (`conn_id`, hostname, connect time, physical terminal size). `kill` terminates a channel's process tree and detaches its sockets (or `--socket CONN_ID` detaches one socket). `stop` performs an orderly daemon shutdown.
+* **Admin CLI:** `list` dumps every channel's session status (PTY cols×rows, exited state) and each connected socket (`conn_id`, hostname, connect time, physical terminal size). `kill` terminates a channel's session/process tree; `kill-client <channel> <CLIENT_ID>` detaches a single socket by its `conn_id` (from `list`). `stop` performs an orderly daemon shutdown.
 * **Muxio IPC:** PTY state and RPCs travel over the Muxio IPC framework with Bitcode serialization over OS-native transports (Linux abstract sockets, macOS `/tmp`, Windows named pipes). The gateway socket name is deterministic (`term-wm/<user>/gateway`) and can be overridden at runtime via `TERM_WM_GATEWAY`.
 * **Shared Mechanics:** Reuses a large part of `term-wm`'s internals — the PTY engine (`term-wm-pty-engine`: spawning, scrollback tracking, `vt100` parsing), the input event types (`term-wm-events`), and the crossterm input adapter (`term-wm-crossterm-adapter`). `term-session` does **not** produce the window manager: there is no layout engine, no tiling, and no window chrome — only the persistence and multiplexing layer.
 
@@ -36,3 +38,9 @@ Multiple terminals can attach to the same channel to share one session.
 ## Integration with term-wm
 
 To deploy a persistent, tiling terminal workspace, run `term-wm` as a child process inside `term-session`. This architecture guarantees that the window manager and its layout state survive terminal emulator restarts or SSH disconnects.
+
+## Scrolling
+
+The standalone `term-session attach` client runs the terminal in **alternate-screen mode** (`smcup`), the standard full-screen TUI convention. On most terminal emulators the alternate screen carries **no native scrollback**, so the host terminal's built-in scroll wheel/scrollbar does not capture the session's output. This is deliberate: a full-screen TUI owns its viewport and must not be conflated with the terminal's main-screen history, so `term-session` does **not** implement scrollback for its remote clients — `term-session attach` renders only the current viewport of the shared PTY.
+
+Scrollback is the host integration's responsibility. `term-session` is designed to work alongside [term-wm](https://crates.io/crates/term-wm), which provides its own scrollback handling for its windows. If you run `term-wm` inside a `term-session` session (the recommended integration above), scrolling is handled by the window manager rather than the session layer. Standalone `term-session` clients that need in-terminal scrollback are not supported.
