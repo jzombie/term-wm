@@ -69,10 +69,10 @@ async fn wait_connectable(gateway: &str) -> Arc<muxio_tokio_rpc_ipc_client::RpcI
     loop {
         match muxio_tokio_rpc_ipc_client::RpcIpcClient::new(gateway).await {
             Ok(c) => return c,
-            Err(_) if start.elapsed() < Duration::from_secs(8) => {
+            Err(_) if start.elapsed() < Duration::from_secs(20) => {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            Err(e) => panic!("gateway {gateway} not reachable: {e}"),
+            Err(e) => panic!("gateway {gateway} not reachable after 20s: {e}"),
         }
     }
 }

@@ -552,12 +552,22 @@ pub async fn run_gateway(
                 let _channel = get_or_create_channel(&state, &name).await;
                 let conn_id = ctx.conn_id;
                 let mut conns = state.conns.write().await;
-                if let Some(entry) = conns.get_mut(&conn_id) {
-                    entry.state = ConnState::Attached(name);
-                    entry.hostname = hostname;
-                    entry.connected_at_unix = now_unix();
-                    entry.pid = pid;
-                }
+                // The `ClientConnected` event is processed by a separate async
+                // loop, so it may not have inserted the entry yet when this
+                // handler runs. Ensure the entry exists before binding.
+                let entry = conns
+                    .entry(conn_id)
+                    .or_insert_with(|| ConnEntry {
+                        handle: RpcIpcConnectionContextHandle(ctx.clone()),
+                        state: ConnState::Unattached,
+                        hostname: String::new(),
+                        connected_at_unix: now_unix(),
+                        pid: 0,
+                    });
+                entry.state = ConnState::Attached(name);
+                entry.hostname = hostname;
+                entry.connected_at_unix = now_unix();
+                entry.pid = pid;
                 Attach::encode_response(conn_id).map_err(boxed_io)
             }
         })
