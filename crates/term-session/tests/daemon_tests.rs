@@ -117,7 +117,7 @@ async fn daemon_survives_all_clients_disconnecting() {
         (
             channel.to_string(),
             "t".to_string(),
-            std::process::id() as u64,
+            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
         ),
     )
     .await
@@ -146,7 +146,7 @@ async fn daemon_survives_all_clients_disconnecting() {
         (
             channel.to_string(),
             "t".to_string(),
-            std::process::id() as u64,
+            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
         ),
     )
     .await
@@ -195,7 +195,7 @@ async fn daemon_survives_parent_death() {
         (
             channel.to_string(),
             "t".to_string(),
-            std::process::id() as u64,
+            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
         ),
     )
     .await
@@ -420,7 +420,7 @@ async fn cli_kill_client_detaches_one_client() {
         (
             channel.to_string(),
             "one".to_string(),
-            std::process::id() as u64,
+            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
         ),
     )
     .await
@@ -430,7 +430,7 @@ async fn cli_kill_client_detaches_one_client() {
         (
             channel.to_string(),
             "two".to_string(),
-            std::process::id() as u64,
+            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
         ),
     )
     .await
@@ -606,7 +606,7 @@ async fn cli_stop_requires_force_when_live_sessions() {
         (
             channel.to_string(),
             "cli".to_string(),
-            std::process::id() as u64,
+            std::process::id() as u64, "test-user".to_string(), "test-version".to_string(), None,
         ),
     )
     .await

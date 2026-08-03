@@ -21,6 +21,12 @@ struct AttachRequest {
     pub hostname: String,
     /// The client process's OS PID, so `list` can show which PID is attached.
     pub pid: u64,
+    /// OS user running the client process (e.g. `jzombie`).
+    pub user: String,
+    /// Client binary version (`CARGO_PKG_VERSION`).
+    pub version: String,
+    /// Remote peer IP for SSH attaches; `None` for local attaches.
+    pub ssh_ip: Option<String>,
 }
 
 #[derive(Encode, Decode)]
@@ -34,7 +40,7 @@ impl RpcMethodPrebuffered for Attach {
     const METHOD_ID: u64 = rpc_method_id!("session.attach");
 
     // TODO: Use type aliases to simplify this
-    type Input = (String, String, u64);
+    type Input = (String, String, u64, String, String, Option<String>);
     type Output = usize;
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
@@ -42,13 +48,16 @@ impl RpcMethodPrebuffered for Attach {
             channel: input.0,
             hostname: input.1,
             pid: input.2,
+            user: input.3,
+            version: input.4,
+            ssh_ip: input.5,
         }))
     }
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
         let r = bitcode::decode::<AttachRequest>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok((r.channel, r.hostname, r.pid))
+        Ok((r.channel, r.hostname, r.pid, r.user, r.version, r.ssh_ip))
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
@@ -294,6 +303,12 @@ pub struct ClientInfo {
     pub connected_at_unix: u64,
     pub cols: u16,
     pub rows: u16,
+    /// OS user running the client process (reported at Attach).
+    pub user: String,
+    /// Client binary version (reported at Attach).
+    pub version: String,
+    /// Remote peer IP for SSH attaches; `None` for local attaches.
+    pub ssh_ip: Option<String>,
 }
 
 /// Public wire info for one channel on the gateway.

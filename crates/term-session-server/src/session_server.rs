@@ -72,6 +72,12 @@ struct ConnEntry {
     connected_at_unix: u64,
     /// Client process OS PID (reported at Attach).
     pid: u64,
+    /// OS user running the client process (reported at Attach).
+    user: String,
+    /// Client binary version (reported at Attach).
+    version: String,
+    /// Remote peer IP for SSH attaches; `None` for local (reported at Attach).
+    ssh_ip: Option<String>,
 }
 
 #[derive(Clone)]
@@ -80,6 +86,9 @@ struct ClientEntry {
     hostname: String,
     connected_at_unix: u64,
     pid: u64,
+    user: String,
+    version: String,
+    ssh_ip: Option<String>,
     cols: u16,
     rows: u16,
 }
@@ -291,6 +300,9 @@ impl ChannelState {
                 connected_at_unix: c.connected_at_unix,
                 cols: c.cols,
                 rows: c.rows,
+                user: c.user.clone(),
+                version: c.version.clone(),
+                ssh_ip: c.ssh_ip.clone(),
             })
             .collect();
         clients.sort_by_key(|c| c.conn_id);
@@ -572,7 +584,8 @@ pub async fn run_gateway(
                 if state.is_shutting_down.load(Ordering::SeqCst) {
                     return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-                let (channel_str, hostname, pid) = Attach::decode_request(&payload)?;
+                let (channel_str, hostname, pid, user, version, ssh_ip) =
+                    Attach::decode_request(&payload)?;
                 let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
                 let _channel = get_or_create_channel(&state, &name).await;
                 let conn_id = ctx.conn_id;
@@ -586,11 +599,17 @@ pub async fn run_gateway(
                     hostname: String::new(),
                     connected_at_unix: now_unix(),
                     pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
                 });
                 entry.state = ConnState::Attached(name);
                 entry.hostname = hostname;
                 entry.connected_at_unix = now_unix();
                 entry.pid = pid;
+                entry.user = user;
+                entry.version = version;
+                entry.ssh_ip = ssh_ip;
                 Attach::encode_response(conn_id).map_err(boxed_io)
             }
         })
@@ -622,6 +641,9 @@ pub async fn run_gateway(
                             c.hostname.clone(),
                             c.connected_at_unix,
                             c.pid,
+                            c.user.clone(),
+                            c.version.clone(),
+                            c.ssh_ip.clone(),
                         )
                     })
                 };
@@ -630,13 +652,22 @@ pub async fn run_gateway(
                     .clients
                     .entry(ctx.conn_id)
                     .or_insert_with(|| ClientEntry {
-                        caller: conn_meta.as_ref().map(|(h, _, _, _)| h.clone()),
+                        caller: conn_meta.as_ref().map(|(h, _, _, _, _, _, _)| h.clone()),
                         hostname: conn_meta
                             .as_ref()
-                            .map(|(_, n, _, _)| n.clone())
+                            .map(|(_, n, _, _, _, _, _)| n.clone())
                             .unwrap_or_default(),
-                        connected_at_unix: conn_meta.as_ref().map(|(_, _, t, _)| *t).unwrap_or(0),
-                        pid: conn_meta.as_ref().map(|(_, _, _, p)| *p).unwrap_or(0),
+                        connected_at_unix: conn_meta.as_ref().map(|(_, _, t, _, _, _, _)| *t).unwrap_or(0),
+                        pid: conn_meta.as_ref().map(|(_, _, _, p, _, _, _)| *p).unwrap_or(0),
+                        user: conn_meta
+                            .as_ref()
+                            .map(|(_, _, _, _, u, _, _)| u.clone())
+                            .unwrap_or_default(),
+                        version: conn_meta
+                            .as_ref()
+                            .map(|(_, _, _, _, _, v, _)| v.clone())
+                            .unwrap_or_default(),
+                        ssh_ip: conn_meta.as_ref().and_then(|(_, _, _, _, _, _, s)| s.clone()),
                         cols,
                         rows,
                     });
@@ -1108,6 +1139,9 @@ pub async fn run_gateway(
                         hostname: String::new(),
                         connected_at_unix: now_unix(),
                         pid: 0,
+                        user: String::new(),
+                        version: String::new(),
+                        ssh_ip: None,
                     });
                 }
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {

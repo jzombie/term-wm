@@ -179,6 +179,11 @@ fn list() -> io::Result<()> {
         );
         for c in &ch.clients {
             println!("    - conn: {}  (pid {})", c.conn_id, c.pid);
+            println!("      user: {}", c.user);
+            println!("      version: {}", c.version);
+            if let Some(ip) = &c.ssh_ip {
+                println!("      ssh: {}", ip);
+            }
             println!("      host: {}", c.hostname);
             println!("      size: {}x{}", c.cols, c.rows);
             println!(

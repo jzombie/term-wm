@@ -4,7 +4,7 @@ use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use term_session_muxio_service_definitions::{
-    CloseSession, KillChannel, KillClient, ResizePty, STREAM_INPUT_METHOD_ID,
+    Attach, CloseSession, KillChannel, KillClient, ResizePty, STREAM_INPUT_METHOD_ID,
     SUBSCRIBE_OUTPUT_METHOD_ID, ShutdownGateway, Spawn,
 };
 
@@ -1191,6 +1191,45 @@ async fn list_channels_orders_channels_and_clients_by_creation() {
         "clients must be in connection order, newest last"
     );
 
+    guard.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn list_channels_reports_client_identity() {
+    let guard = spawn_gateway().await;
+    let channel = test_channel("test/client_identity");
+    let client = connect_client_with_retry(guard.socket()).await;
+    Attach::call(
+        &*client,
+        (
+            channel.to_string(),
+            "host-a".to_string(),
+            1234u64,
+            "alice".to_string(),
+            "9.9.9".to_string(),
+            Some("192.168.1.50".to_string()),
+        ),
+    )
+    .await
+    .unwrap();
+    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS)).await.unwrap();
+
+    let resp = list_channels(&client).await;
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == "test/client_identity")
+        .expect("channel listed");
+    assert_eq!(ch.clients.len(), 1);
+    let c = &ch.clients[0];
+    assert_eq!(c.user, "alice", "user reported at Attach must surface in list");
+    assert_eq!(c.version, "9.9.9", "version reported at Attach must surface in list");
+    assert_eq!(
+        c.ssh_ip.as_deref(),
+        Some("192.168.1.50"),
+        "ssh_ip reported at Attach must surface in list"
+    );
     guard.shutdown().await;
 }
 

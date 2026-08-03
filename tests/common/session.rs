@@ -110,6 +110,9 @@ pub async fn attach_client(client: &RpcIpcClient, channel: &ChannelName) -> usiz
             channel.to_string(),
             "test-host".to_string(),
             std::process::id() as u64,
+            "test-user".to_string(),
+            "test-version".to_string(),
+            None,
         ),
     )
     .await
