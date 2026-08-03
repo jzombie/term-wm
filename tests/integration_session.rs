@@ -4,8 +4,8 @@ use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use term_session_muxio_service_definitions::{
-    Attach, AttachRequest, CloseSession, KillChannel, KillClient, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, ShutdownGateway, Spawn,
+    Attach, AttachRequest, CloseSession, KillChannel, KillClient, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, ShutdownGateway, Spawn,
 };
 
 mod common;
@@ -984,7 +984,11 @@ async fn spawn_cmd_ignored_on_live_session() {
     attach_client(&c2, &test_channel("test/cmd_ignored")).await;
     let (id2, _, _) = Spawn::call(
         &*c2,
-        (Some(vec![mock, "exit".into(), "0".into()]), TEST_COLS, TEST_ROWS),
+        (
+            Some(vec![mock, "exit".into(), "0".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
     )
     .await
     .unwrap();
@@ -1160,7 +1164,11 @@ async fn list_channels_orders_channels_and_clients_by_creation() {
     .unwrap();
     Spawn::call(
         &*cb,
-        (Some(vec![mock, "sleep".into(), "60000".into()]), TEST_COLS, TEST_ROWS),
+        (
+            Some(vec![mock, "sleep".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
     )
     .await
     .unwrap();
@@ -1170,7 +1178,9 @@ async fn list_channels_orders_channels_and_clients_by_creation() {
     // up in `list` once it has Spawned, so spawn it too.)
     let ca2 = connect_client_with_retry(&socket).await;
     attach_client(&ca2, &test_channel("test/order_a")).await;
-    Spawn::call(&*ca2, (None, TEST_COLS, TEST_ROWS)).await.unwrap();
+    Spawn::call(&*ca2, (None, TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
 
     let resp = list_channels(&ca).await;
     let names: Vec<&str> = resp.channels.iter().map(|c| c.name.as_str()).collect();
@@ -1213,7 +1223,9 @@ async fn list_channels_reports_client_identity() {
     )
     .await
     .unwrap();
-    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS)).await.unwrap();
+    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
 
     let resp = list_channels(&client).await;
     let ch = resp
@@ -1223,8 +1235,14 @@ async fn list_channels_reports_client_identity() {
         .expect("channel listed");
     assert_eq!(ch.clients.len(), 1);
     let c = &ch.clients[0];
-    assert_eq!(c.user, "alice", "user reported at Attach must surface in list");
-    assert_eq!(c.version, "9.9.9", "version reported at Attach must surface in list");
+    assert_eq!(
+        c.user, "alice",
+        "user reported at Attach must surface in list"
+    );
+    assert_eq!(
+        c.version, "9.9.9",
+        "version reported at Attach must surface in list"
+    );
     assert_eq!(
         c.ssh_ip.as_deref(),
         Some("192.168.1.50"),
@@ -1262,7 +1280,11 @@ async fn shutdown_refuses_without_force_when_live_sessions() {
 
     // Still reachable after the refusal.
     let resp = list_channels(&client).await;
-    assert_eq!(resp.channels.len(), 1, "gateway still serving after refusal");
+    assert_eq!(
+        resp.channels.len(),
+        1,
+        "gateway still serving after refusal"
+    );
 
     // With force: clean shutdown.
     ShutdownGateway::call(&*client, true).await.unwrap();

@@ -171,14 +171,7 @@ async fn daemon_survives_parent_death() {
     // session so its process survives the parent dying.
     let mut client = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .args([
-            "--channel",
-            channel,
-            "--",
-            &mock,
-            "sleep",
-            "60000",
-        ])
+        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -481,9 +474,18 @@ fn bare_term_session_shows_help_and_does_not_connect() {
         out.status.code()
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("--channel"), "help should mention --channel, got: {stderr}");
-    assert!(stderr.contains("list"), "help should list list, got: {stderr}");
-    assert!(stderr.contains("stop"), "help should list stop, got: {stderr}");
+    assert!(
+        stderr.contains("--channel"),
+        "help should mention --channel, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("list"),
+        "help should list list, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("stop"),
+        "help should list stop, got: {stderr}"
+    );
     // A bare run must NOT have auto-spawned a daemon on the gateway.
     let gw = ChannelName::parse(&gateway).expect("gateway name");
     assert!(
@@ -513,9 +515,10 @@ async fn top_level_channel_auto_attaches() {
     let start = Instant::now();
     loop {
         let resp = ListChannels::call(&*rpc, ()).await.unwrap();
-        let live = resp.channels.iter().any(|c| {
-            c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited)
-        });
+        let live = resp
+            .channels
+            .iter()
+            .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited));
         if live {
             break;
         }
@@ -550,7 +553,10 @@ async fn dash_dash_disambiguates_command_from_subcommand() {
         "`list` must parse as the admin subcommand, got: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(!probe_ipc_endpoint(&gw), "admin subcommand must not auto-spawn");
+    assert!(
+        !probe_ipc_endpoint(&gw),
+        "admin subcommand must not auto-spawn"
+    );
 
     // `term-session -- list` (after `--`) parses `list` as a COMMAND to run:
     // the implicit attach path auto-spawns a gateway.
@@ -611,7 +617,9 @@ async fn cli_stop_requires_force_when_live_sessions() {
     );
 
     // Gateway still reachable after the refusal.
-    ListChannels::call(&*client, ()).await.expect("gateway alive");
+    ListChannels::call(&*client, ())
+        .await
+        .expect("gateway alive");
 
     // `stop --force` succeeds and the daemon process exits on its own.
     let out = Command::new(bin())

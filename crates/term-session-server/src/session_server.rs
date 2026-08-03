@@ -651,7 +651,10 @@ pub async fn run_gateway(
                             .map(|c| c.connected_at_unix)
                             .unwrap_or(0),
                         pid: conn_meta.as_ref().map(|c| c.pid).unwrap_or(0),
-                        user: conn_meta.as_ref().map(|c| c.user.clone()).unwrap_or_default(),
+                        user: conn_meta
+                            .as_ref()
+                            .map(|c| c.user.clone())
+                            .unwrap_or_default(),
                         version: conn_meta
                             .as_ref()
                             .map(|c| c.version.clone())
@@ -906,7 +909,10 @@ pub async fn run_gateway(
             async move {
                 let channels = {
                     let chans = state.channels.read().await;
-                    chans.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()
+                    chans
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect::<Vec<_>>()
                 };
                 // Creation order, newest last (monotonic `created_seq`, not
                 // second-resolution wall clock). The seq is read under the same
