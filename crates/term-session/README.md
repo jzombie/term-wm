@@ -2,7 +2,7 @@
 
 A layout-agnostic, headless terminal session host and multiplexer.
 
-`term-session` provides the persistence layer for terminal applications. It operates similarly to `tmux` or `GNU screen`, ensuring that running processes survive client disconnects. Unlike traditional window managers, `term-session` enforces **no layout paradigm**. It is a pure session daemon.
+`term-session` provides the persistence layer for terminal applications. It operates similarly to `tmux` or `GNU screen`, ensuring that running processes survive client disconnects. Any number of clients can **attach to and share the same live session simultaneously** — every attached terminal sees the same viewport and can type into the same process, across local terminals, SSH hops, or mixed platforms. Unlike traditional window managers, `term-session` enforces **no layout paradigm**. It is a pure session daemon.
 
 Its clients render in **alternate-screen mode** (a full-screen TUI): the attached terminal switches into the alternate buffer for the duration of the session and restores the caller's screen on exit. See [Scrolling and Text Selection](#scrolling-and-text-selection) for what this means for scrollback and text selection.
 
