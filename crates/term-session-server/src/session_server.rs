@@ -1050,16 +1050,18 @@ pub async fn run_gateway(
                 RpcIpcServerEvent::ClientConnected(handle) => {
                     tracing::info!("Client {} connected", handle.0.conn_id);
                     let mut conns = st.conns.write().await;
-                    conns.insert(
-                        handle.0.conn_id,
-                        ConnEntry {
-                            handle: handle.clone(),
-                            state: ConnState::Unattached,
-                            hostname: String::new(),
-                            connected_at_unix: now_unix(),
-                            pid: 0,
-                        },
-                    );
+                    // A fast client may send Attach before this event is
+                    // processed; the Attach handler already inserted an
+                    // `Attached` entry. `insert` would clobber that binding and
+                    // a subsequent Spawn would see the state reset to
+                    // Unattached. Only create the entry if it is absent.
+                    conns.entry(handle.0.conn_id).or_insert_with(|| ConnEntry {
+                        handle: handle.clone(),
+                        state: ConnState::Unattached,
+                        hostname: String::new(),
+                        connected_at_unix: now_unix(),
+                        pid: 0,
+                    });
                 }
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {
                     tracing::info!("Client {conn_id} disconnected");
