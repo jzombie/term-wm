@@ -84,6 +84,13 @@ impl JobObject {
     }
 }
 
+// Job Object handles are thread-safe: `TerminateJobObject` and
+// `AssignProcessToJobObject` may be called from any thread, and the OS owns
+// the underlying object's lifetime. `HANDLE` is a pointer-sized value with no
+// thread-affinity semantics, so moving/cloning it across threads is sound.
+unsafe impl Send for JobObject {}
+unsafe impl Sync for JobObject {}
+
 impl Drop for JobObject {
     fn drop(&mut self) {
         // Closing the last job handle fires `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`,
