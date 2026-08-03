@@ -108,9 +108,10 @@ fn main() -> io::Result<()> {
             } else {
                 // No subcommand and nothing to attach: show help instead of
                 // auto-connecting (exit code 2, the clap missing-argument
-                // convention). `--daemon` is handled above.
+                // convention). `--daemon` is handled above. Long help so it
+                // matches `--help` exactly (version + long_about).
                 let mut stderr = io::stderr();
-                let _ = Cli::command().write_help(&mut stderr);
+                let _ = Cli::command().write_long_help(&mut stderr);
                 std::process::exit(2);
             }
         }
