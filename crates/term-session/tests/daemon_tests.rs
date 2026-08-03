@@ -170,7 +170,7 @@ async fn daemon_survives_parent_death() {
         .args([
             "--channel",
             channel,
-            "--",
+            "--command",
             &mock,
             "sleep",
             "60000",
@@ -524,7 +524,7 @@ async fn top_level_channel_auto_attaches() {
     // giving a channel must still auto-attach and auto-spawn the daemon.
     let mut client = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
+        .args(["--channel", channel, "--command", &mock, "sleep", "60000"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

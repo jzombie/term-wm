@@ -29,15 +29,15 @@ struct Cli {
 
     /// Channel name (namespace/name); falls back to TERM_WM_CHANNEL env, then "default/main".
     /// Implicitly attaches when given without a subcommand.
-    #[arg(short, long)]
+    #[arg(long)]
     channel: Option<String>,
 
     /// Command to run (and its arguments); if omitted, launches the default shell.
     /// Only used when the channel has no live session — attaching to a running
     /// session ignores the command and joins the existing process.
     /// Implicitly attaches when given without a subcommand.
-    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
-    cmd: Vec<String>,
+    #[arg(long = "command", alias = "cmd", value_name = "CMD", num_args = 1.., allow_hyphen_values = true)]
+    run_cmd: Vec<String>,
 
     /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
     #[arg(long)]
@@ -103,10 +103,10 @@ fn main() -> io::Result<()> {
         }
         Some(Command::Stop { force }) => stop(force),
         None => {
-            if cli.channel.is_some() || !cli.cmd.is_empty() {
+            if cli.channel.is_some() || !cli.run_cmd.is_empty() {
                 // A channel and/or command was given without a subcommand:
-                // implicit attach (the historical bare-run form).
-                attach(cli.channel, &cli.cmd)
+                // implicit attach.
+                attach(cli.channel, &cli.run_cmd)
             } else {
                 // No subcommand and nothing to attach: show help instead of
                 // auto-connecting (exit code 2, the clap missing-argument

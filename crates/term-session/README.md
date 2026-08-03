@@ -11,17 +11,17 @@ Its clients render in **alternate-screen mode** (a full-screen TUI): the attache
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
 
 ```sh
-cargo run --release --bin term-session -- --channel work -- vim    # attach to (or spawn) the "work" channel, running vim
-cargo run --release --bin term-session -- --channel work           # attach to (or spawn) the "work" channel (default shell)
-cargo run --release --bin term-session -- -- vim                   # attach to the default channel, running vim
-cargo run --release --bin term-session -- list                     # list channels, sessions, and connected sockets
-cargo run --release --bin term-session -- kill-client work 4       # detach client conn 4 from the "work" channel
-cargo run --release --bin term-session -- kill work                # kill the "work" channel's session + sockets
-cargo run --release --bin term-session -- stop                     # stop the gateway daemon
-cargo run --release --bin term-session -- stop --force             # stop even while live sessions are running
+cargo run --release --bin term-session -- --channel work --command vim    # attach to (or spawn) the "work" channel, running vim
+cargo run --release --bin term-session -- --channel work                  # attach to (or spawn) the "work" channel (default shell)
+cargo run --release --bin term-session -- --command vim                   # attach to the default channel, running vim
+cargo run --release --bin term-session -- list                            # list channels, sessions, and connected sockets
+cargo run --release --bin term-session -- kill-client work 4              # detach client conn 4 from the "work" channel
+cargo run --release --bin term-session -- kill work                       # kill the "work" channel's session + sockets
+cargo run --release --bin term-session -- stop                            # stop the gateway daemon
+cargo run --release --bin term-session -- stop --force                    # stop even while live sessions are running
 ```
 
-Running `term-session` with **no subcommand and no arguments** prints the help menu and exits (code 2) — it never auto-connects on its own. Giving a channel (`--channel <name>`) and/or a command attaches implicitly: the channel and command are the session to join or spawn, and the gateway daemon is auto-started if none is running.
+Running `term-session` with **no subcommand and no arguments** prints the help menu and exits (code 2) — it never auto-connects on its own. Giving a channel (`--channel <name>`) and/or a command (`--command <CMD>...`, alias `--cmd`) attaches implicitly: the channel and command are the session to join or spawn, and the gateway daemon is auto-started if none is running.
 
 **A command is honored only when the channel has no live session** (or its session has exited) — it then becomes the command the channel spawns/respawns. Attaching to a channel with a **running** session ignores the command entirely: you join the existing process, sharing its live viewport with every other attached client (like `tmux`/`screen`).
 
