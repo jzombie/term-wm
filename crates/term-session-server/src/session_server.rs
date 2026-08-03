@@ -20,10 +20,6 @@ use term_wm_pty_engine::PtyStatus;
 
 use crate::session::Session;
 
-/// Default terminal columns when no client constrains the PTY size.
-const FALLBACK_COLS: u16 = 80;
-/// Default terminal rows when no client constrains the PTY size.
-const FALLBACK_ROWS: u16 = 24;
 /// Session id per channel (each channel hosts a single PTY at a time).
 const SESSION_ID: u64 = 1;
 /// Bounded input channel capacity — memory safety against extreme input bursts.
@@ -206,27 +202,33 @@ impl ChannelState {
 
     /// Constrain the PTY to the smallest geometry across all connected clients.
     /// This guarantees the virtual buffer never exceeds any attached monitor.
+    ///
+    /// Geometry is strictly client-driven: if no connected client has reported
+    /// real dimensions yet (all are still `u16::MAX`), nothing is constrained
+    /// and the session keeps its spawn-time size. No hardcoded default size is
+    /// ever imposed.
     fn recalculate_pty_size(&mut self) {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        if self.clients.is_empty() {
-            return;
-        }
-        let min_cols = self
+        let Some(min_cols) = self
             .clients
             .values()
             .map(|c| c.cols)
             .filter(|&c| c != u16::MAX)
             .min()
-            .unwrap_or(FALLBACK_COLS);
-        let min_rows = self
+        else {
+            return;
+        };
+        let Some(min_rows) = self
             .clients
             .values()
             .map(|c| c.rows)
             .filter(|&r| r != u16::MAX)
             .min()
-            .unwrap_or(FALLBACK_ROWS);
+        else {
+            return;
+        };
         let size = PtySize {
             rows: min_rows,
             cols: min_cols,
@@ -459,13 +461,14 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     guard.clients.remove(&conn_id);
     guard.subscribers.retain(|s| s.conn_id != conn_id);
     guard.recalculate_pty_size();
-    let (ncols, nrows) = guard
-        .session
-        .as_ref()
-        .map(|s| (s.cols, s.rows))
-        .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
+    // Broadcast the session's actual (client-driven) geometry to remaining
+    // clients. If no session exists there is nothing to broadcast.
+    let session_size = guard.session.as_ref().map(|s| (s.cols, s.rows));
     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
     drop(guard);
+    let Some((ncols, nrows)) = session_size else {
+        return;
+    };
     // Best-effort geometry broadcast; the channel may be reaped concurrently,
     // in which case clients already see end-of-stream.
     if let Some(ch) = resolve_channel(state, &channel).await {
@@ -606,15 +609,12 @@ pub async fn run_gateway(
                 // If a session already exists and hasn't exited, reuse it.
                 if guard.session.as_ref().is_some_and(|s| !s.exited) {
                     guard.recalculate_pty_size();
-                    let (ncols, nrows) = guard
-                        .session
-                        .as_ref()
-                        .map(|s| (s.cols, s.rows))
-                        .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
+                    let session = guard.session.as_ref().unwrap();
+                    let (ncols, nrows) = (session.cols, session.rows);
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
-                    let id = guard.session.as_ref().map(|s| s.id).unwrap_or(SESSION_ID);
-                    let cols = guard.session.as_ref().map(|s| s.cols).unwrap_or(cols);
-                    let rows = guard.session.as_ref().map(|s| s.rows).unwrap_or(rows);
+                    let id = session.id;
+                    let cols = session.cols;
+                    let rows = session.rows;
                     drop(guard);
                     if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
                         let g = ch.lock().await;
@@ -639,14 +639,10 @@ pub async fn run_gateway(
                 let session = Session::spawn(id, effective_cmd, cols, rows, Some(&channel))?;
                 guard.set_session(session);
                 guard.recalculate_pty_size();
-                let (ncols, nrows) = guard
-                    .session
-                    .as_ref()
-                    .map(|s| (s.cols, s.rows))
-                    .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 let session = guard.session.as_ref().unwrap();
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
+                let (ncols, nrows) = (scol, srow);
                 drop(guard);
                 if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
                     let g = ch.lock().await;
@@ -952,14 +948,12 @@ pub async fn run_gateway(
                     }
                     guard.clients.remove(&conn_id);
                     guard.recalculate_pty_size();
-                    let (ncols, nrows) = guard
-                        .session
-                        .as_ref()
-                        .map(|s| (s.cols, s.rows))
-                        .unwrap_or((FALLBACK_COLS, FALLBACK_ROWS));
+                    let session_size = guard.session.as_ref().map(|s| (s.cols, s.rows));
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     drop(guard);
-                    if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    if let (Some((ncols, nrows)), Some(ch)) =
+                        (session_size, resolve_channel(state.as_ref(), &name).await)
+                    {
                         let g = ch.lock().await;
                         g.notify_clients(&targets, ncols, nrows);
                     }
