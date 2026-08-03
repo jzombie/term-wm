@@ -182,7 +182,7 @@ fn list() -> io::Result<()> {
             println!("      user: {}", c.user);
             println!("      version: {}", c.version);
             if let Some(ip) = &c.ssh_ip {
-                println!("      ssh: {}", ip);
+                println!("      ssh ip from: {}", ip);
             }
             println!("      host: {}", c.hostname);
             println!("      size: {}x{}", c.cols, c.rows);
