@@ -53,16 +53,16 @@ enum Command {
     /// List channels and their sessions/clients.
     #[command(name = "ls", alias = "list")]
     List,
-    /// Kill a channel's session and detach all its sockets.
+    /// Kill a channel's session and/or an attached client.
     Kill {
         /// Channel name to kill.
         channel: String,
-        /// Detach only the given socket (conn id) instead of the whole channel.
-        #[arg(long)]
-        socket: Option<usize>,
-        /// Detach this client's own socket after attaching.
-        #[arg(long)]
-        self_: bool,
+        /// Kill the channel's session and detach all its sockets (default).
+        #[arg(long, conflicts_with = "kill_client")]
+        kill_session: bool,
+        /// Detach a single client by its conn id (from `term-session list`).
+        #[arg(long, value_name = "CLIENT_ID")]
+        kill_client: Option<usize>,
     },
     /// Stop the gateway daemon.
     #[command(name = "stop")]
@@ -89,9 +89,9 @@ fn main() -> io::Result<()> {
         Some(Command::List) => list(),
         Some(Command::Kill {
             channel,
-            socket,
-            self_,
-        }) => kill(&channel, socket, self_),
+            kill_session,
+            kill_client,
+        }) => kill(&channel, kill_session, kill_client),
         Some(Command::Stop) => stop(),
         None => attach(cli.channel, &cli.cmd),
     }
@@ -139,7 +139,7 @@ fn list() -> io::Result<()> {
             }
         );
         for c in &ch.clients {
-            println!("    - pid: {}", c.pid);
+            println!("    - conn: {}  (pid {})", c.conn_id, c.pid);
             println!("      host: {}", c.hostname);
             println!("      size: {}x{}", c.cols, c.rows);
             println!(
@@ -151,21 +151,17 @@ fn list() -> io::Result<()> {
     Ok(())
 }
 
-fn kill(channel: &str, socket: Option<usize>, self_: bool) -> io::Result<()> {
-    if let Some(conn_id) = socket {
+fn kill(channel: &str, kill_session: bool, kill_client: Option<usize>) -> io::Result<()> {
+    if let Some(conn_id) = kill_client {
         term_session::kill_client(channel, conn_id)?;
-        println!("Detached socket {conn_id} from channel {channel}");
+        println!("Detached client {conn_id} from channel {channel}");
         return Ok(());
     }
 
-    if self_ {
-        // Attach to get our own conn id; `kill --self` detaches just ourselves.
-        let conn_id = term_session::attach_self(channel)?;
-        term_session::kill_client(channel, conn_id)?;
-        println!("Detached own socket ({conn_id}) from channel {channel}");
-        return Ok(());
+    // Bare `kill <channel>` defaults to `--kill-session`.
+    if !kill_session {
+        println!("Killing channel {channel} (session + all sockets)");
     }
-
     term_session::kill_channel(channel)?;
     println!("Killed channel {channel}");
     Ok(())

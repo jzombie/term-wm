@@ -432,6 +432,10 @@ async fn get_or_create_channel(
                         }
                     }
                 }
+                // Note: the daemon deliberately persists until an explicit
+                // `ShutdownGateway` / `term-session stop`. Sessions survive
+                // client disconnects; idle channels are reaped above but the
+                // gateway process itself is never torn down implicitly.
             }
         });
     }

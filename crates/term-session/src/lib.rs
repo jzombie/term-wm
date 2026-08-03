@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
 use term_session_muxio_service_definitions::{
-    Attach, KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
+    KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
 };
 
 pub const CHANNEL_ENV_VAR: &str = "TERM_WM_CHANNEL";
@@ -90,19 +90,6 @@ pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
         KillClient::call(&*client, (channel.to_string(), conn_id)).await
     })?
     .map_err(|e| io::Error::other(format!("kill client: {e}")))
-}
-
-/// Detach this process's own socket from a channel. Attaches to get a conn id,
-/// then reports it — the caller can use it with [`kill_client`].
-pub fn attach_self(channel: &str) -> io::Result<usize> {
-    with_gateway(|client| async move {
-        let hostname = hostname::get()
-            .map(|h| h.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "unknown".to_string());
-        Attach::call(&*client, (channel.to_string(), hostname, std::process::id() as u64))
-            .await
-            .map_err(|e| io::Error::other(format!("attach: {e}")))
-    })?
 }
 
 /// Stop the gateway daemon.
