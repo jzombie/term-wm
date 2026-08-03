@@ -38,13 +38,29 @@ Multiple terminals can attach to the same channel to share one session.
 
 ## Upgrading
 
-Replacing the `term-session` binary on disk has **no immediate effect** on a running gateway. The daemon is a detached process that keeps executing the already-loaded code, and the gateway socket name (`term-wm/<user>/gateway`) is stable across versions, so:
+Because session state resides entirely in daemon memory, upgrading across breaking schema changes requires terminating the running gateway. **Order of operations matters.**
 
-* **Existing sessions are unaffected** by the file swap — they keep running under the *old* daemon.
-* **New binaries connect to the old daemon.** Client mode only probes the socket and spawns a daemon if none is running; there is no version handshake. A freshly upgraded `term-session attach` talks to the stale daemon.
-* **New features do not take effect until the daemon restarts.** A command whose RPC method the old daemon does not know (e.g. a `kill-client` client talking to a daemon that predates it) fails, and Bitcode-serialized request/response structs changed incompatibly can fail to decode across versions.
+### Recommended Upgrade Path
 
-Because sessions live only in the daemon's memory, **upgrading is manual and destructive**: run `term-session stop` to shut the gateway down (this also tears down every session's process tree), then the next `attach` auto-spawns a fresh daemon from the new binary. Exit or migrate running sessions before `stop` if you need to keep them.
+Always stop the running daemon using the **currently installed** binary before replacing it on disk:
+
+```sh
+term-session stop       # 1. Stop the running v_old daemon
+cargo install --path .  # 2. Install the v_new binary on PATH
+term-session attach     # 3. Auto-spawn the v_new daemon
+```
+
+### Recovery if Binary is Replaced First
+
+If you replace the `term-session` binary on disk *while* a legacy daemon is running:
+
+1. Running `term-session stop` or `term-session list` using the new binary will fail with:
+   `FATAL: Protocol ABI mismatch. A legacy daemon is occupying the IPC socket. Manually terminate the daemon process before continuing.`
+2. The new client **cannot** issue `ShutdownGateway` to a legacy daemon with an incompatible protocol.
+3. You must terminate the old daemon process manually using operating system tools:
+   - **Linux / macOS:** `kill $(pgrep -f "term-session --daemon")`
+   - **Windows:** `taskkill /IM term-session.exe /F`
+4. Once the old process exits, launch the new binary as normal.
 
 ## Integration with term-wm
 
