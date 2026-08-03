@@ -11,14 +11,15 @@ mod common;
 use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin};
 use common::session::{
     TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin, list_channels,
-    shutdown_gateway, spawn_gateway, spawn_session, test_channel, wait_for_output,
+    spawn_gateway, spawn_session, test_channel, wait_for_output,
 };
 use term_wm_pty_engine::clipboard::Osc52Extractor;
 
 #[tokio::test]
 async fn session_spawn_returns_id() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/spawn_returns_id")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/spawn_returns_id")).await;
     let (id, _, _) = Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -26,12 +27,14 @@ async fn session_spawn_returns_id() {
     .await
     .unwrap();
     assert_eq!(id, 1);
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 async fn session_input_output_roundtrip() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/input_output")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/input_output")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -55,13 +58,15 @@ async fn session_input_output_roundtrip() {
         "Expected 'hello' in output, got: {:?}",
         String::from_utf8_lossy(&output)
     );
+    guard.shutdown().await;
 }
 
 #[cfg(not(windows))]
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/mouse_forward")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/mouse_forward")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -97,6 +102,7 @@ async fn session_mouse_bytes_forwarded() {
         "Mouse token params mismatch: expected '0;5;10', got {:?}",
         String::from_utf8_lossy(params)
     );
+    guard.shutdown().await;
 }
 
 /// On Windows, ConPTY intercepts escape sequences written to the PTY master's
@@ -107,7 +113,8 @@ async fn session_mouse_bytes_forwarded() {
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/mouse_forward")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/mouse_forward")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "capture".into()]), TEST_COLS, TEST_ROWS),
@@ -136,13 +143,15 @@ async fn session_mouse_bytes_forwarded() {
         output.len(),
         String::from_utf8_lossy(&output)
     );
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn session_osc52_in_output() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/osc52_output")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/osc52_output")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS),
@@ -163,6 +172,7 @@ async fn session_osc52_in_output() {
         "OSC 52 payload extraction failed, got stream: {:?}",
         String::from_utf8_lossy(&output)
     );
+    guard.shutdown().await;
 }
 
 // Note: [serial] was added due to some Windows flakiness
@@ -170,7 +180,8 @@ async fn session_osc52_in_output() {
 #[serial]
 async fn session_osc52_via_osc52extractor() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/osc52_extractor")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/osc52_extractor")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS),
@@ -219,12 +230,14 @@ async fn session_osc52_via_osc52extractor() {
         Some("test".to_string()),
         "Osc52Extractor should decode 'test' from real server byte stream"
     );
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 async fn session_resize() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/resize")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/resize")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -234,12 +247,14 @@ async fn session_resize() {
 
     let result = ResizePty::call(&*client, (1u64, 120u16, 40u16)).await;
     assert!(result.is_ok(), "Resize should succeed: {:?}", result.err());
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 async fn session_list_channels() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/list_channels")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/list_channels")).await;
     Spawn::call(
         &*client,
         (
@@ -262,12 +277,14 @@ async fn session_list_channels() {
     // Process visibility: the response identifies the daemon PID + socket.
     assert!(resp.gateway_pid > 0, "gateway pid reported");
     assert!(!resp.socket.is_empty(), "socket name reported");
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 async fn session_close_session() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/close_session")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/close_session")).await;
     Spawn::call(
         &*client,
         (
@@ -300,6 +317,7 @@ async fn session_close_session() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    guard.shutdown().await;
 }
 
 // Note: [serial] was added due to some Windows flakiness
@@ -307,7 +325,8 @@ async fn session_close_session() {
 #[serial]
 async fn session_child_exit() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/child_exit")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/child_exit")).await;
     Spawn::call(
         &*client,
         (
@@ -337,6 +356,7 @@ async fn session_child_exit() {
         }
     }
     assert!(got_end, "Stream should end when child exits");
+    guard.shutdown().await;
 }
 
 // Note: [serial] was added due to some Windows flakiness
@@ -344,7 +364,8 @@ async fn session_child_exit() {
 #[serial]
 async fn session_child_exit_before_subscribe() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/child_exit_early")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/child_exit_early")).await;
     Spawn::call(
         &*client,
         (
@@ -380,15 +401,16 @@ async fn session_child_exit_before_subscribe() {
         got_end,
         "Should get end-of-stream when subscribing after child exit"
     );
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 async fn session_reconnect() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/reconnect");
 
-    let client1 = connect_client_with_retry(&gateway).await;
+    let client1 = connect_client_with_retry(guard.socket()).await;
     attach_client(&client1, &channel).await;
     Spawn::call(
         &*client1,
@@ -413,7 +435,7 @@ async fn session_reconnect() {
     assert!(output1.windows(3).any(|w| w == b"one"));
     drop(client1);
 
-    let client2 = connect_client_with_retry(&gateway).await;
+    let client2 = connect_client_with_retry(guard.socket()).await;
     attach_client(&client2, &channel).await;
     let (_, mut reader2) = client2
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -426,6 +448,7 @@ async fn session_reconnect() {
     writer2.send(b"two\n".to_vec()).unwrap();
     let output2 = wait_for_output(&mut reader2, b"two", Duration::from_secs(2)).await;
     assert!(output2.windows(3).any(|w| w == b"two"));
+    guard.shutdown().await;
 }
 
 #[tokio::test]
@@ -436,7 +459,8 @@ async fn term_bench_runs_to_completion() {
         return;
     }
 
-    let (client, _conn_id) = spawn_session(&test_channel("test/bench")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/bench")).await;
     Spawn::call(
         &*client,
         (
@@ -473,6 +497,7 @@ async fn term_bench_runs_to_completion() {
     }
     drop(sender);
     assert!(got_end, "term-bench should exit within 10 seconds");
+    guard.shutdown().await;
 }
 
 #[test]
@@ -489,12 +514,12 @@ fn find_sgr_mouse_token_static() {
 #[serial]
 async fn two_channels_run_concurrently_with_isolated_io() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let chan_a = test_channel("test/iso_a");
     let chan_b = test_channel("test/iso_b");
 
-    let a = connect_client_with_retry(&gateway).await;
-    let b = connect_client_with_retry(&gateway).await;
+    let a = connect_client_with_retry(guard.socket()).await;
+    let b = connect_client_with_retry(guard.socket()).await;
     attach_client(&a, &chan_a).await;
     attach_client(&b, &chan_b).await;
     Spawn::call(
@@ -528,16 +553,17 @@ async fn two_channels_run_concurrently_with_isolated_io() {
         !out_b.windows(7).any(|w| w == b"hello-a"),
         "channel B output must not contain channel A's data"
     );
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn list_channels_reports_clients_and_geometry() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/list_geom");
-    let c1 = connect_client_with_retry(&gateway).await;
-    let c2 = connect_client_with_retry(&gateway).await;
+    let c1 = connect_client_with_retry(guard.socket()).await;
+    let c2 = connect_client_with_retry(guard.socket()).await;
     let _conn1 = attach_client(&c1, &channel).await;
     let _conn2 = attach_client(&c2, &channel).await;
     Spawn::call(
@@ -578,18 +604,19 @@ async fn list_channels_reports_clients_and_geometry() {
     // Process visibility: the response identifies the daemon PID + socket.
     assert!(resp.gateway_pid > 0, "gateway pid reported");
     assert!(!resp.socket.is_empty(), "socket name reported");
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn kill_channel_kills_only_that_channel() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let chan_a = test_channel("test/kill_a");
     let chan_b = test_channel("test/kill_b");
 
-    let a = connect_client_with_retry(&gateway).await;
-    let b = connect_client_with_retry(&gateway).await;
+    let a = connect_client_with_retry(guard.socket()).await;
+    let b = connect_client_with_retry(guard.socket()).await;
     attach_client(&a, &chan_a).await;
     attach_client(&b, &chan_b).await;
     Spawn::call(
@@ -633,15 +660,16 @@ async fn kill_channel_kills_only_that_channel() {
         // If the channel survived reaping, its session must be gone.
         assert!(ch.session.is_none(), "killed channel has no session");
     }
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn kill_channel_respawns_with_stored_cmd() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/kill_respawn");
-    let c = connect_client_with_retry(&gateway).await;
+    let c = connect_client_with_retry(guard.socket()).await;
     attach_client(&c, &channel).await;
     Spawn::call(
         &*c,
@@ -659,7 +687,7 @@ async fn kill_channel_respawns_with_stored_cmd() {
         .unwrap();
 
     // Re-attach (a fresh conn) and respawn — the stored cmd template is used.
-    let c2 = connect_client_with_retry(&gateway).await;
+    let c2 = connect_client_with_retry(guard.socket()).await;
     attach_client(&c2, &channel).await;
     let (id, _, _) = Spawn::call(&*c2, (None, TEST_COLS, TEST_ROWS))
         .await
@@ -672,17 +700,18 @@ async fn kill_channel_respawns_with_stored_cmd() {
         .find(|c| c.name == "test/kill_respawn")
         .unwrap();
     assert!(ch.session.is_some(), "session respawned");
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn kill_client_detaches_one_socket_only() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/kill_client");
-    let c1 = connect_client_with_retry(&gateway).await;
-    let c2 = connect_client_with_retry(&gateway).await;
-    let admin = connect_client_with_retry(&gateway).await;
+    let c1 = connect_client_with_retry(guard.socket()).await;
+    let c2 = connect_client_with_retry(guard.socket()).await;
+    let admin = connect_client_with_retry(guard.socket()).await;
     let conn1 = attach_client(&c1, &channel).await;
     attach_client(&c2, &channel).await;
     Spawn::call(
@@ -743,14 +772,15 @@ async fn kill_client_detaches_one_socket_only() {
     writer2.send(b"c2-alive\n".to_vec()).unwrap();
     let out2 = wait_for_output(&mut reader2, b"c2-alive", Duration::from_secs(3)).await;
     assert!(out2.windows(8).any(|w| w == b"c2-alive"));
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn kill_client_rejects_nonexistent_conn() {
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/kill_missing");
-    let client = connect_client_with_retry(&gateway).await;
+    let client = connect_client_with_retry(guard.socket()).await;
     attach_client(&client, &channel).await;
     Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
         .await
@@ -765,16 +795,17 @@ async fn kill_client_rejects_nonexistent_conn() {
         err.to_string().contains("not attached"),
         "expected a 'not attached' error, got: {err}"
     );
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn kill_client_rejects_wrong_channel() {
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel_a = test_channel("test/kill_chan_a");
     let channel_b = test_channel("test/kill_chan_b");
-    let a = connect_client_with_retry(&gateway).await;
-    let b = connect_client_with_retry(&gateway).await;
+    let a = connect_client_with_retry(guard.socket()).await;
+    let b = connect_client_with_retry(guard.socket()).await;
     let conn_a = attach_client(&a, &channel_a).await;
     attach_client(&b, &channel_b).await;
     Spawn::call(&*a, (None, TEST_COLS, TEST_ROWS))
@@ -805,22 +836,25 @@ async fn kill_client_rejects_wrong_channel() {
         ch.clients.iter().any(|c| c.conn_id == conn_a),
         "client must remain attached after a rejected wrong-channel kill"
     );
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn unattached_client_rejected() {
-    let gateway = spawn_gateway().await;
-    let client = connect_client_with_retry(&gateway).await;
+    let guard = spawn_gateway().await;
+    let client = connect_client_with_retry(guard.socket()).await;
     let result = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS)).await;
     assert!(result.is_err(), "unattached Spawn must be rejected");
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn spawn_idempotent_on_live_session() {
     let mock = get_mock_bin();
-    let (client, _conn_id) = spawn_session(&test_channel("test/spawn_idem")).await;
+    let (client, _conn_id, guard) =
+        spawn_session(&test_channel("test/spawn_idem")).await;
     let (id1, _, _) = Spawn::call(
         &*client,
         (
@@ -841,18 +875,19 @@ async fn spawn_idempotent_on_live_session() {
     assert_eq!(id1, id2, "same session id reused");
     assert_eq!(cols, 80, "geometry constrained to the smaller request");
     assert_eq!(rows, 24);
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn session_multi_client_pty_constrained_to_smallest() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/multi_client_smallest");
 
-    let c1 = connect_client_with_retry(&gateway).await;
-    let c2 = connect_client_with_retry(&gateway).await;
-    let c3 = connect_client_with_retry(&gateway).await;
+    let c1 = connect_client_with_retry(guard.socket()).await;
+    let c2 = connect_client_with_retry(guard.socket()).await;
+    let c3 = connect_client_with_retry(guard.socket()).await;
     attach_client(&c1, &channel).await;
     attach_client(&c2, &channel).await;
     attach_client(&c3, &channel).await;
@@ -883,18 +918,19 @@ async fn session_multi_client_pty_constrained_to_smallest() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn session_multi_client_disconnect_expands_pty() {
     let mock = get_mock_bin();
-    let gateway = spawn_gateway().await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/multi_client_expand");
 
-    let c1 = connect_client_with_retry(&gateway).await;
-    let c2 = connect_client_with_retry(&gateway).await;
-    let c3 = connect_client_with_retry(&gateway).await;
+    let c1 = connect_client_with_retry(guard.socket()).await;
+    let c2 = connect_client_with_retry(guard.socket()).await;
+    let c3 = connect_client_with_retry(guard.socket()).await;
     attach_client(&c1, &channel).await;
     attach_client(&c2, &channel).await;
     attach_client(&c3, &channel).await;
@@ -940,16 +976,16 @@ async fn session_multi_client_disconnect_expands_pty() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    guard.shutdown().await;
 }
 
 #[tokio::test]
 #[serial]
 async fn shutdown_gateway_stops_daemon() {
     let mock = get_mock_bin();
-    let gateway_name = spawn_gateway().await;
-    let admin = connect_client_with_retry(&gateway_name).await;
+    let guard = spawn_gateway().await;
     let channel = test_channel("test/shutdown");
-    let client = connect_client_with_retry(&gateway_name).await;
+    let client = connect_client_with_retry(guard.socket()).await;
     attach_client(&client, &channel).await;
     Spawn::call(
         &*client,
@@ -962,7 +998,7 @@ async fn shutdown_gateway_stops_daemon() {
     .await
     .unwrap();
 
-    shutdown_gateway(&admin).await;
+    guard.shutdown().await;
 
     // After the deferred flush grace, the gateway process ends; the tokio
     // task is aborted, so the session cannot be reached anymore. We simply

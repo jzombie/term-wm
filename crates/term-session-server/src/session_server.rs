@@ -47,6 +47,7 @@ const SIGTERM: i32 = 15;
 #[cfg(unix)]
 const SIGKILL: i32 = libc::SIGKILL;
 #[cfg(not(unix))]
+#[allow(dead_code)]
 const SIGKILL: i32 = 9;
 
 /// Grace before the gateway exits after the last ShutdownGateway response is
@@ -172,7 +173,7 @@ impl ChannelState {
     /// escalation flag. The caller is responsible for spawning the detached
     /// escalation task (see `spawn_kill_escalation`). Mechanism only — no
     /// sleeps, no waits, no `SIGKILL` here.
-    fn request_session_kill(&mut self, signal: i32) {
+    fn request_session_kill(&mut self, _signal: i32) {
         if let Some(session) = self.session.as_mut() {
             #[cfg(unix)]
             let _ = session.pty.signal_process_group(signal);

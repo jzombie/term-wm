@@ -16,10 +16,54 @@ pub fn test_channel(name: &str) -> ChannelName {
     ChannelName::parse(name).expect("test channel")
 }
 
+// ---------------------------------------------------------------------------
+// GatewayGuard — RAII cleanup for in-process gateways
+//
+// Root cause: `#[tokio::test]` uses a `current_thread` runtime. When the
+// test body returns, `Runtime::drop` does NOT cancel spawned tasks. The
+// `run_gateway` future (spawned via `tokio::spawn`) survives the runtime
+// teardown, holding `Arc<ServerState>` → `ChannelState` → `Session` → `Pty`
+// → child process alive. The leaked mock children (echo, sleep) keep
+// running until they are manually killed or the OS reclaims them.
+//
+// The only reliable way to terminate a gateway is to call `ShutdownGateway`
+// over the IPC channel. This RPC kills every session's child process, then
+// signals the `run_gateway` future to return, which drops `ServerState` and
+// all associated state.
+//
+// `GatewayGuard` wraps the client connection and provides an explicit
+// `shutdown()` method. Every test that spawns a gateway or session MUST
+// store the guard and call `guard.shutdown().await` before the test ends.
+// ---------------------------------------------------------------------------
+
+#[must_use = "gateway must be shut down via .shutdown().await to avoid leaking mock processes"]
+pub struct GatewayGuard {
+    client: Arc<RpcIpcClient>,
+    socket: String,
+}
+
+impl GatewayGuard {
+    /// Returns the underlying RPC client for this gateway.
+    pub fn client(&self) -> &Arc<RpcIpcClient> {
+        &self.client
+    }
+
+    /// Returns the IPC socket path (useful for connecting additional clients).
+    pub fn socket(&self) -> &str {
+        &self.socket
+    }
+
+    /// Shut down the gateway, killing all child processes and dropping
+    /// `ServerState`. Must be called before the test ends.
+    pub async fn shutdown(self) {
+        shutdown_gateway(&self.client).await;
+    }
+}
+
 /// Spawn one shared gateway daemon for the current test, using a unique
-/// gateway name so parallel tests never collide. Returns the gateway socket
-/// name string that clients connect to.
-pub async fn spawn_gateway() -> String {
+/// gateway name so parallel tests never collide. Returns a [`GatewayGuard`]
+/// that MUST be shut down via `.shutdown().await` before the test ends.
+pub async fn spawn_gateway() -> GatewayGuard {
     static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let gateway = ChannelName::parse(&format!("term-wm/testgw-{id}")).expect("unique gateway");
@@ -28,8 +72,9 @@ pub async fn spawn_gateway() -> String {
         async move { run_gateway(gateway).await }
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    connect_client_with_retry(&gateway.to_string()).await;
-    gateway.to_string()
+    let socket = gateway.to_string();
+    let client = connect_client_with_retry(&socket).await;
+    GatewayGuard { client, socket }
 }
 
 pub fn get_bench_bin() -> PathBuf {
@@ -101,12 +146,12 @@ pub async fn wait_for_output(
 }
 
 /// Convenience: spawn the gateway, connect, and attach to a channel,
-/// returning `(client, conn_id)`.
-pub async fn spawn_session(channel: &ChannelName) -> (Arc<RpcIpcClient>, usize) {
-    let gateway = spawn_gateway().await;
-    let client = connect_client_with_retry(&gateway).await;
-    let conn_id = attach_client(&client, channel).await;
-    (client, conn_id)
+/// returning `(client, conn_id, guard)`. The guard MUST be shut down
+/// via `.shutdown().await` before the test ends.
+pub async fn spawn_session(channel: &ChannelName) -> (Arc<RpcIpcClient>, usize, GatewayGuard) {
+    let guard = spawn_gateway().await;
+    let conn_id = attach_client(guard.client(), channel).await;
+    (guard.client().clone(), conn_id, guard)
 }
 
 /// List channels via the admin method (no attach required).
