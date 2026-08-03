@@ -367,6 +367,11 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                     break;
                 }
             }
+            // Flush any buffered OSC 52 payload at EOF (Windows ConPTY
+            // consumes the BEL/ST terminator).
+            if let Some(text) = osc52.finish() {
+                let _ = clip_tx.try_send(text);
+            }
         });
 
         // Open streaming channel for PTY input.
