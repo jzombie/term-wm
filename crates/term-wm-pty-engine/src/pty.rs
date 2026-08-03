@@ -156,6 +156,17 @@ impl Pty {
             // not block this. There is a bounded race — the child may start
             // before assignment — but once assigned, every descendant is
             // contained and dies with the job (or on job-handle close).
+            //
+            // TODO(windows): this is post-spawn assignment, so a descendant
+            // spawned within the CreateProcessW→assign window escapes the job.
+            // The formal guarantee (zero escapees) requires spawning with
+            // `CREATE_SUSPENDED`, assigning the suspended process to the job,
+            // then `ResumeThread` — but portable-pty 0.9.0 owns the
+            // CreateProcessW call and does not expose the creation flags or
+            // the ConPTY handle, so that is not reachable from this crate.
+            // If the formal guarantee is ever needed, upstream the
+            // CREATE_SUSPENDED + Job Object patch to portable-pty rather than
+            // forking it locally.
             let job = JobObject::new().ok();
             if let (Some(job), Some(proc)) = (&job, child.as_raw_handle())
                 && let Err(err) = unsafe { job.assign(proc) }
