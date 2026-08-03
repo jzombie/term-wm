@@ -17,7 +17,10 @@ cargo run --release --bin term-session -- list                            # list
 cargo run --release --bin term-session -- kill-client work 4              # detach client conn 4 from the "work" channel
 cargo run --release --bin term-session -- kill work                       # kill the "work" channel's session + sockets
 cargo run --release --bin term-session -- stop                            # stop the gateway daemon
+cargo run --release --bin term-session -- stop --force                    # stop even while live sessions are running
 ```
+
+Running `term-session` with **no subcommand and no arguments** prints the help menu and exits (code 2) — it never auto-connects on its own. Giving a channel (`--channel <name>`) or a command without a subcommand still attaches implicitly (the historical bare-run form): `term-session --channel work -- vim` attaches to `work` running `vim`. Use the `attach` subcommand explicitly for the default case.
 
 Multiple terminals can attach to the same channel to share one session.
 

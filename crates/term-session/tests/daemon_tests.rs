@@ -13,7 +13,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-use term_session_muxio_service_definitions::{Attach, ListChannels, ShutdownGateway, Spawn};
+use term_session_muxio_service_definitions::{
+    Attach, ChannelName, ListChannels, ShutdownGateway, Spawn, probe_ipc_endpoint,
+};
 
 /// The compiled `term-session` binary under test.
 fn bin() -> PathBuf {
@@ -99,7 +101,7 @@ async fn daemon_detaches_and_reports_proof() {
 
     // Clean up.
     let client = wait_connectable(&gateway).await;
-    ShutdownGateway::call(&*client, ()).await.unwrap();
+    ShutdownGateway::call(&*client, true).await.unwrap();
     let _ = child.wait();
 }
 
@@ -151,7 +153,7 @@ async fn daemon_survives_all_clients_disconnecting() {
     .unwrap();
     Spawn::call(&*client2, (None, 80u16, 24u16)).await.unwrap();
 
-    ShutdownGateway::call(&*client2, ()).await.unwrap();
+    ShutdownGateway::call(&*client2, true).await.unwrap();
     let _ = child.wait();
 }
 
@@ -202,7 +204,7 @@ async fn daemon_survives_parent_death() {
     let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
-    ShutdownGateway::call(&*client, ()).await.unwrap();
+    ShutdownGateway::call(&*client, true).await.unwrap();
     // Give the daemon time to run its teardown and exit.
     tokio::time::sleep(Duration::from_millis(1000)).await;
 }
@@ -250,7 +252,7 @@ async fn daemon_does_not_inherit_parent_handles() {
 
     // Clean up the daemon.
     let client = wait_connectable(&gateway).await;
-    ShutdownGateway::call(&*client, ()).await.unwrap();
+    ShutdownGateway::call(&*client, true).await.unwrap();
 }
 
 /// Create an inheritable named pipe whose read end we keep. Both ends are
@@ -485,6 +487,136 @@ async fn cli_kill_client_detaches_one_client() {
         "one client should remain after kill-client"
     );
 
-    ShutdownGateway::call(&*c1, ()).await.unwrap();
+    ShutdownGateway::call(&*c1, true).await.unwrap();
+    let _ = child.wait();
+}
+
+#[test]
+fn bare_term_session_shows_help_and_does_not_connect() {
+    let gateway = unique_gateway("bare");
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .output()
+        .expect("run bare term-session");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "bare run must exit 2 (help, not auto-connect), got: {:?}",
+        out.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("attach"), "help should list attach, got: {stderr}");
+    assert!(stderr.contains("stop"), "help should list stop, got: {stderr}");
+    // A bare run must NOT have auto-spawned a daemon on the gateway.
+    let gw = ChannelName::parse(&gateway).expect("gateway name");
+    assert!(
+        !probe_ipc_endpoint(&gw),
+        "bare run must not auto-spawn a daemon"
+    );
+}
+
+#[tokio::test]
+async fn top_level_channel_auto_attaches() {
+    let gateway = unique_gateway("autoattach");
+    let channel = "test/autoattach";
+    let mock = mock_bin().to_string_lossy().to_string();
+    // `term-session --channel <ch> -- <mock> sleep 60000` (no subcommand):
+    // giving a channel must still auto-attach and auto-spawn the daemon.
+    let mut client = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn auto-attach client");
+
+    // The auto-spawned daemon becomes reachable and hosts a live session.
+    let rpc = wait_connectable(&gateway).await;
+    let start = Instant::now();
+    loop {
+        let resp = ListChannels::call(&*rpc, ()).await.unwrap();
+        let live = resp.channels.iter().any(|c| {
+            c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited)
+        });
+        if live {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "session never appeared on the auto-attached channel"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Cleanup: kill the client process; the daemon (and its live session)
+    // survives, so stop it explicitly with force.
+    let _ = client.kill();
+    let _ = client.wait();
+    ShutdownGateway::call(&*rpc, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn cli_stop_requires_force_when_live_sessions() {
+    let gateway = unique_gateway("stop_force");
+    let channel = "test/stop_force";
+    let (mut child, _marker) = spawn_daemon(&gateway, false);
+
+    let client = wait_connectable(&gateway).await;
+    Attach::call(
+        &*client,
+        (
+            channel.to_string(),
+            "cli".to_string(),
+            std::process::id() as u64,
+        ),
+    )
+    .await
+    .unwrap();
+    Spawn::call(
+        &*client,
+        (
+            Some(vec![
+                mock_bin().to_string_lossy().to_string(),
+                "sleep".into(),
+                "60000".into(),
+            ]),
+            80u16,
+            24u16,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // `stop` without --force: refused, non-zero exit, daemon keeps running.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("stop")
+        .output()
+        .expect("run stop");
+    assert!(
+        !out.status.success(),
+        "stop must refuse while a live session runs"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("live session"),
+        "refusal message should mention live sessions, got: {stderr}"
+    );
+
+    // Gateway still reachable after the refusal.
+    ListChannels::call(&*client, ()).await.expect("gateway alive");
+
+    // `stop --force` succeeds and the daemon process exits on its own.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["stop", "--force"])
+        .output()
+        .expect("run stop --force");
+    assert!(
+        out.status.success(),
+        "stop --force failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let _ = child.wait();
 }

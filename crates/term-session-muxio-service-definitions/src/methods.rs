@@ -10,6 +10,8 @@ use muxio_rpc_service::{prebuffered::RpcMethodPrebuffered, rpc_method_id};
 pub const RPC_ERROR_UNATTACHED: &str =
     "gateway: connection is not attached to a channel; call Attach first";
 pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
+pub const RPC_ERROR_LIVE_SESSIONS: &str =
+    "gateway: live session(s) running; use `term-session stop --force` to stop anyway";
 
 // ── Attach ──────────────────────────────────────────────────────────
 
@@ -429,20 +431,27 @@ impl RpcMethodPrebuffered for KillClient {
 
 // ── ShutdownGateway ──────────────────────────────────────────────────
 
+#[derive(Encode, Decode)]
+struct ShutdownGatewayRequest {
+    pub force: bool,
+}
+
 pub struct ShutdownGateway;
 
 impl RpcMethodPrebuffered for ShutdownGateway {
     const METHOD_ID: u64 = rpc_method_id!("session.shutdown_gateway");
 
-    type Input = ();
+    type Input = bool;
     type Output = ();
 
-    fn encode_request(_input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(Vec::new())
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&ShutdownGatewayRequest { force: input }))
     }
 
-    fn decode_request(_bytes: &[u8]) -> Result<Self::Input, io::Error> {
-        Ok(())
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<ShutdownGatewayRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(r.force)
     }
 
     fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {

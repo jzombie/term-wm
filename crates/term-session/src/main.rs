@@ -1,6 +1,6 @@
 use std::io;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use term_session::auto_spawn::connect_or_spawn_server;
 use term_session_client::run_session;
 use term_session_muxio_service_definitions::ChannelName;
@@ -32,17 +32,19 @@ struct Cli {
     daemon_selfcheck: Option<std::path::PathBuf>,
 
     /// Channel name (namespace/name); falls back to TERM_WM_CHANNEL env, then "default/main".
+    /// Implicitly attaches when given without a subcommand.
     #[arg(short, long)]
     channel: Option<String>,
 
     /// Command to run (and its arguments); if omitted, launches the default shell.
+    /// Implicitly attaches when given without a subcommand.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmd: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Attach to a channel (default when no subcommand given).
+    /// Attach to a channel.
     #[command(name = "attach")]
     Attach {
         #[arg(short, long)]
@@ -71,7 +73,12 @@ enum Command {
     },
     /// Stop the gateway daemon.
     #[command(name = "stop")]
-    Stop,
+    Stop {
+        /// Stop even if live sessions are running (otherwise the gateway
+        /// refuses while any session is active).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> io::Result<()> {
@@ -101,8 +108,21 @@ fn main() -> io::Result<()> {
             println!("Detached client {client_id} from channel {channel}");
             Ok(())
         }
-        Some(Command::Stop) => stop(),
-        None => attach(cli.channel, &cli.cmd),
+        Some(Command::Stop { force }) => stop(force),
+        None => {
+            if cli.channel.is_some() || !cli.cmd.is_empty() {
+                // A channel and/or command was given without a subcommand:
+                // implicit attach (the historical bare-run form).
+                attach(cli.channel, &cli.cmd)
+            } else {
+                // No subcommand and nothing to attach: show help instead of
+                // auto-connecting (exit code 2, the clap missing-argument
+                // convention). `--daemon` is handled above.
+                let mut stderr = io::stderr();
+                let _ = Cli::command().write_help(&mut stderr);
+                std::process::exit(2);
+            }
+        }
     }
 }
 
@@ -169,8 +189,8 @@ fn kill(channel: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn stop() -> io::Result<()> {
-    term_session::stop_gateway()?;
+fn stop(force: bool) -> io::Result<()> {
+    term_session::stop_gateway(force)?;
     println!("Gateway shutdown initiated");
     Ok(())
 }

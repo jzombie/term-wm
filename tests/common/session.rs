@@ -165,7 +165,7 @@ pub async fn list_channels(
 
 /// Stop the gateway daemon.
 pub async fn shutdown_gateway(client: &Arc<RpcIpcClient>) {
-    ShutdownGateway::call(&**client, ())
+    ShutdownGateway::call(&**client, true)
         .await
         .expect("shutdown");
 }

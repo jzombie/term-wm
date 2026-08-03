@@ -91,8 +91,11 @@ pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
 }
 
 /// Stop the gateway daemon.
-pub fn stop_gateway() -> io::Result<()> {
-    with_gateway(|client| async move { ShutdownGateway::call(&*client, ()).await })?
+///
+/// The daemon refuses to shut down while any live session is running unless
+/// `force` is true (see `RPC_ERROR_LIVE_SESSIONS`).
+pub fn stop_gateway(force: bool) -> io::Result<()> {
+    with_gateway(|client| async move { ShutdownGateway::call(&*client, force).await })?
         .map_err(|e| io::Error::other(format!("shutdown: {e}")))
 }
 
