@@ -655,7 +655,15 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
-                // EOF — child exited. Send wakeup for final screen, then exited.
+                // EOF — child exited. Flush any buffered OSC 52 payload
+                // (Windows ConPTY may have consumed the terminator).
+                if let Some(text) = osc52.finish() {
+                    clipboard.set(&text);
+                    if let Some(ref capture) = osc52_text {
+                        *capture.lock().unwrap() = Some(text);
+                    }
+                }
+                // Send wakeup for final screen, then exited.
                 if let Ok(guard) = status_cb.lock()
                     && let Some(ref cb) = *guard
                 {

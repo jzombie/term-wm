@@ -208,6 +208,12 @@ async fn session_osc52_via_osc52extractor() {
         }
     }
 
+    // End-of-stream: Windows ConPTY consumes the BEL terminator, so the
+    // payload may be the last bytes with no terminator. Flush it.
+    if extracted.is_none() {
+        extracted = extractor.finish();
+    }
+
     assert_eq!(
         extracted,
         Some("test".to_string()),
@@ -599,7 +605,7 @@ async fn kill_channel_kills_only_that_channel() {
     Spawn::call(
         &*b,
         (
-            Some(vec![mock, "sleep".into(), "60000".into()]),
+            Some(vec![mock, "echo".into()]),
             TEST_COLS,
             TEST_ROWS,
         ),
@@ -682,7 +688,7 @@ async fn kill_client_detaches_one_socket_only() {
     Spawn::call(
         &*c1,
         (
-            Some(vec![mock, "sleep".into(), "60000".into()]),
+            Some(vec![mock, "echo".into()]),
             TEST_COLS,
             TEST_ROWS,
         ),
