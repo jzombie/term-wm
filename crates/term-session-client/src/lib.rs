@@ -291,16 +291,11 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(PTY_OUTPUT_CHANNEL_CAPACITY);
     let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(CLIPBOARD_CHANNEL_CAPACITY);
 
-    // Terminal geometry: caller-provided seed, or fall back to the local size.
-    // The vt100 parser requires a non-zero grid (it computes `rows - 1` at
-    // construction), so clamp a degenerate 0x0 from a headless pty to a
-    // sane minimum rather than panicking.
+    // Terminal geometry comes from the real terminal (no cols/rows are threaded
+    // through the API). The vt100 parser computes `rows - 1` at construction, so
+    // clamp a degenerate 0x0 report up to a non-zero grid rather than panicking.
     let (term_cols, term_rows) = {
-        let (c, r) = if cols > 0 && rows > 0 {
-            (cols, rows)
-        } else {
-            crossterm::terminal::size()?
-        };
+        let (c, r) = crossterm::terminal::size()?;
         (c.max(MIN_TERM_COLS), r.max(MIN_TERM_ROWS))
     };
     let hostname = hostname::get()
