@@ -77,7 +77,16 @@ enum Command {
     },
 }
 
-fn main() -> io::Result<()> {
+fn main() {
+    // Print errors as readable messages (Display), not Rust's Debug dump that
+    // `main() -> Result` emits by default (e.g. `Custom { kind: ..., ... }`).
+    if let Err(e) = run() {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> io::Result<()> {
     let cli = Cli::parse();
 
     // Gateway name resolution: explicit --gateway wins; else TERM_WM_GATEWAY
