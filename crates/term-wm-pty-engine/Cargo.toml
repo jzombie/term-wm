@@ -1,6 +1,6 @@
 [package]
 name = "term-wm-pty-engine"
-description = "PTY engine for term-wm."
+description = "Cross-platform PTY engine for term-wm (Unix PTY and Windows ConPTY), with vt100 emulation and OSC/clipboard handling."
 keywords = ["pty", "terminal", "vt100", "conpty", "cross-platform"]
 categories = ["emulators", "os", "external-ffi-bindings", "concurrency"]
 version.workspace = true
