@@ -747,6 +747,68 @@ async fn kill_client_detaches_one_socket_only() {
 
 #[tokio::test]
 #[serial]
+async fn kill_client_rejects_nonexistent_conn() {
+    let gateway = spawn_gateway().await;
+    let channel = test_channel("test/kill_missing");
+    let client = connect_client_with_retry(&gateway).await;
+    attach_client(&client, &channel).await;
+    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
+
+    // A conn_id that was never assigned must be rejected, not silently
+    // accepted (KillClient must target a real attached client).
+    let err = KillClient::call(&*client, ("test/kill_missing".to_string(), 999_999))
+        .await
+        .expect_err("kill of a nonexistent conn must fail");
+    assert!(
+        err.to_string().contains("not attached"),
+        "expected a 'not attached' error, got: {err}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn kill_client_rejects_wrong_channel() {
+    let gateway = spawn_gateway().await;
+    let channel_a = test_channel("test/kill_chan_a");
+    let channel_b = test_channel("test/kill_chan_b");
+    let a = connect_client_with_retry(&gateway).await;
+    let b = connect_client_with_retry(&gateway).await;
+    let conn_a = attach_client(&a, &channel_a).await;
+    attach_client(&b, &channel_b).await;
+    Spawn::call(&*a, (None, TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
+    Spawn::call(&*b, (None, TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
+
+    // conn_a is attached to channel_a; killing it "on channel_b" must fail and
+    // must not detach it.
+    let err = KillClient::call(&*b, ("test/kill_chan_b".to_string(), conn_a))
+        .await
+        .expect_err("kill of a client on the wrong channel must fail");
+    assert!(
+        err.to_string().contains("not attached"),
+        "expected a 'not attached' error, got: {err}"
+    );
+
+    // The client is still attached (was not evicted by the rejected call).
+    let resp = list_channels(&a).await;
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == "test/kill_chan_a")
+        .unwrap();
+    assert!(
+        ch.clients.iter().any(|c| c.conn_id == conn_a),
+        "client must remain attached after a rejected wrong-channel kill"
+    );
+}
+
+#[tokio::test]
+#[serial]
 async fn unattached_client_rejected() {
     let gateway = spawn_gateway().await;
     let client = connect_client_with_retry(&gateway).await;
