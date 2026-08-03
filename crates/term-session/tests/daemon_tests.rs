@@ -170,7 +170,7 @@ async fn daemon_survives_parent_death() {
         .args([
             "--channel",
             channel,
-            "--command",
+            "--",
             &mock,
             "sleep",
             "60000",
@@ -524,7 +524,7 @@ async fn top_level_channel_auto_attaches() {
     // giving a channel must still auto-attach and auto-spawn the daemon.
     let mut client = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .args(["--channel", channel, "--command", &mock, "sleep", "60000"])
+        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -554,6 +554,44 @@ async fn top_level_channel_auto_attaches() {
     let _ = client.kill();
     let _ = client.wait();
     ShutdownGateway::call(&*rpc, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn dash_dash_disambiguates_command_from_subcommand() {
+    let gateway = unique_gateway("disambig");
+    let gw = ChannelName::parse(&gateway).expect("gateway name");
+
+    // `term-session list` (no `--`) parses `list` as the admin SUBCOMMAND: it
+    // connects to a gateway and never auto-spawns one.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("list")
+        .output()
+        .expect("run list");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("No gateway"),
+        "`list` must parse as the admin subcommand, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!probe_ipc_endpoint(&gw), "admin subcommand must not auto-spawn");
+
+    // `term-session -- list` (after `--`) parses `list` as a COMMAND to run:
+    // the implicit attach path auto-spawns a gateway.
+    let mut client = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--", "list"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("run -- list");
+
+    // The auto-spawned gateway becomes reachable (the `list` command itself
+    // does not exist, so the session spawn fails — but the daemon persists).
+    let rpc = wait_connectable(&gateway).await;
+    ShutdownGateway::call(&*rpc, true).await.unwrap();
+    let _ = client.kill();
+    let _ = client.wait();
 }
 
 #[tokio::test]

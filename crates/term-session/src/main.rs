@@ -33,11 +33,13 @@ struct Cli {
     channel: Option<String>,
 
     /// Command to run (and its arguments); if omitted, launches the default shell.
-    /// Only used when the channel has no live session — attaching to a running
-    /// session ignores the command and joins the existing process.
-    /// Implicitly attaches when given without a subcommand.
-    #[arg(long = "command", alias = "cmd", value_name = "CMD", num_args = 1..)]
-    run_cmd: Vec<String>,
+    /// Anything after `--` is passed straight through as the spawned argv
+    /// (e.g. `--channel work -- git log --oneline`). Only used when the channel
+    /// has no live session; attaching to a running session ignores the command
+    /// and joins the existing process. Implicitly attaches when given without
+    /// a subcommand.
+    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+    cmd: Vec<String>,
 
     /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
     #[arg(long)]
@@ -103,10 +105,10 @@ fn main() -> io::Result<()> {
         }
         Some(Command::Stop { force }) => stop(force),
         None => {
-            if cli.channel.is_some() || !cli.run_cmd.is_empty() {
+            if cli.channel.is_some() || !cli.cmd.is_empty() {
                 // A channel and/or command was given without a subcommand:
                 // implicit attach.
-                attach(cli.channel, &cli.run_cmd)
+                attach(cli.channel, &cli.cmd)
             } else {
                 // No subcommand and nothing to attach: show help instead of
                 // auto-connecting (exit code 2, the clap missing-argument
@@ -125,6 +127,8 @@ fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
     let channel = ChannelName::parse(&channel_str).map_err(|e| {
         io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
     })?;
+    // The argv comes straight from the outer shell (split exactly once);
+    // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
     run_session(&socket_name, &channel.to_string(), cmd)
 }
@@ -185,6 +189,6 @@ fn kill(channel: &str) -> io::Result<()> {
 
 fn stop(force: bool) -> io::Result<()> {
     term_session::stop_gateway(force)?;
-    println!("Gateway shutdown initiated");
+    println!("Gateway shutdown initiated.");
     Ok(())
 }
