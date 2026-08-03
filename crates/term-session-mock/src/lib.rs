@@ -97,6 +97,9 @@ fn build_mock_bin() {
     }
 }
 
+// TODO: The following `process_is_alive` utils could be migrated somewhere else.
+// Here's an issue/comment with ideas: https://github.com/jzombie/term-wm/issues/204#issuecomment-5170285844
+
 /// Exit code for `check_pid` when the process is alive.
 pub const CHECK_PID_ALIVE: i32 = 0;
 /// Exit code for `check_pid` when the process is not running.
