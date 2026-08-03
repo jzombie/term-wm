@@ -158,15 +158,26 @@ fn run_daemon_mode(cli: &Cli) -> io::Result<()> {
     // Manager show `term-session-daemon` instead of generic `term-session`.
     set_daemon_process_name();
 
-    // Self-detach: a `--daemon` that was not already started as a session
-    // leader (e.g. spawned directly by a test or wrapper, not via
+    // Self-detach: a `--daemon` that was not already started detached (e.g.
+    // spawned directly by a test or wrapper, not via
     // `auto_spawn::connect_or_spawn_server`) detaches itself from the
-    // launching terminal so Ctrl+C / SIGHUP never reach it. `setsid()` fails
-    // with EPERM if the process is already a process-group leader, which is
-    // exactly the already-detached case — so ignore that error.
+    // launching terminal so Ctrl+C / SIGHUP never reach it.
+    //
+    // - Unix: `setsid()` starts a new session and process group and drops the
+    //   controlling terminal. It fails with EPERM if the process is already a
+    //   process-group leader, which is exactly the already-detached case — so
+    //   ignore that error.
+    // - Windows: `FreeConsole()` detaches from the launching console so no
+    //   console control events (Ctrl+C, Ctrl+Close) are ever delivered to the
+    //   daemon. It reports failure when there is no console to detach from,
+    //   which is the already-detached `auto_spawn` case — so ignore that too.
     #[cfg(unix)]
     unsafe {
         libc::setsid();
+    }
+    #[cfg(windows)]
+    unsafe {
+        let _ = windows_sys::Win32::System::Console::FreeConsole();
     }
 
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
