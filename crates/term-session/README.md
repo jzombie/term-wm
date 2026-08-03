@@ -66,6 +66,14 @@ If you replace the `term-session` binary on disk *while* a legacy daemon is runn
 
 To deploy a persistent, tiling terminal workspace, run `term-wm` as a child process inside `term-session`. This architecture guarantees that the window manager and its layout state survive terminal emulator restarts or SSH disconnects.
 
+## Session Nesting
+
+Invoking `term-session attach` inside a shell that is already running within an active `term-session` client (session inception) is discouraged due to operational tradeoffs:
+
+- **TUI Buffer Conflicts:** Both the inner and outer clients manipulate terminal raw mode and the alternate screen buffer (`smcup`/`rmcup`). An unhandled exit or panic in the nested client can leave the outer viewport in a corrupted terminal state, requiring a manual reset or clear.
+- **Daemon Scope Ambiguity:** Unless overridden via `TERM_WM_GATEWAY`, both the outer session and inner nested client communicate with the same gateway daemon. Running `term-session stop` from inside a nested session will shut down the gateway hosting both the inner and outer sessions.
+- **Event Overhead & Latency:** Input sequences pass through multiple layers of Crossterm event parsing and Crossterm/VT100 serialization, introducing extra event-loop overhead and potential key-encoding edge cases.
+
 ## Scrolling
 
 The standalone `term-session attach` client runs the terminal in **alternate-screen mode** (`smcup`), the standard full-screen TUI convention. On most terminal emulators the alternate screen carries **no native scrollback**, so the host terminal's built-in scroll wheel/scrollbar does not capture the session's output. This is deliberate: a full-screen TUI owns its viewport and must not be conflated with the terminal's main-screen history, so `term-session` does **not** implement scrollback for its remote clients — `term-session attach` renders only the current viewport of the shared PTY.
