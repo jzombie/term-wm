@@ -36,6 +36,16 @@ Multiple terminals can attach to the same channel to share one session.
 * **macOS & Linux:** The gateway detaches into its own session via `setsid()`, so it survives terminal closure and client disconnects. Killing a channel terminates the session's entire process group (SIGTERM → SIGKILL escalation), so background jobs are not orphaned.
 * **Windows:** `term-session` auto-daemonizes on Windows too. The gateway is spawned with `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` (giving it no console, so the parent's `CTRL_CLOSE_EVENT` never reaches it) and disinherits standard handles. PTY children are contained in a Win32 Job Object so the whole process tree is terminated on kill.
 
+## Upgrading
+
+Replacing the `term-session` binary on disk has **no immediate effect** on a running gateway. The daemon is a detached process that keeps executing the already-loaded code, and the gateway socket name (`term-wm/<user>/gateway`) is stable across versions, so:
+
+* **Existing sessions are unaffected** by the file swap — they keep running under the *old* daemon.
+* **New binaries connect to the old daemon.** Client mode only probes the socket and spawns a daemon if none is running; there is no version handshake. A freshly upgraded `term-session attach` talks to the stale daemon.
+* **New features do not take effect until the daemon restarts.** A command whose RPC method the old daemon does not know (e.g. a `kill-client` client talking to a daemon that predates it) fails, and Bitcode-serialized request/response structs changed incompatibly can fail to decode across versions.
+
+Because sessions live only in the daemon's memory, **upgrading is manual and destructive**: run `term-session stop` to shut the gateway down (this also tears down every session's process tree), then the next `attach` auto-spawns a fresh daemon from the new binary. Exit or migrate running sessions before `stop` if you need to keep them.
+
 ## Integration with term-wm
 
 To deploy a persistent, tiling terminal workspace, run `term-wm` as a child process inside `term-session`. This architecture guarantees that the window manager and its layout state survive terminal emulator restarts or SSH disconnects.
