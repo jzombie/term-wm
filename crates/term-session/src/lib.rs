@@ -62,7 +62,7 @@ where
                 io::Error::new(
                     io::ErrorKind::ConnectionRefused,
                     format!(
-                        "No gateway daemon is running on '{gateway}'. Start one with `term-session attach` or `term-session --daemon` first.\n  cause: {e}"
+                        "No gateway daemon is running on '{gateway}'. Start one with `term-session --channel <name>` or `term-session --daemon` first.\n  cause: {e}"
                     ),
                 )
             })?;

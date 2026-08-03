@@ -163,12 +163,11 @@ async fn daemon_survives_parent_death() {
     let channel = "test/daemon_parent_death";
     let mock = mock_bin().to_string_lossy().to_string();
 
-    // Spawn an `attach` subprocess that auto-spawns the daemon, running a
-    // LONG-LIVED session so its process survives the parent dying.
-    let mut attach = Command::new(bin())
+    // Spawn a client that auto-spawns the daemon, running a LONG-LIVED
+    // session so its process survives the parent dying.
+    let mut client = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
         .args([
-            "attach",
             "--channel",
             channel,
             "--",
@@ -180,12 +179,12 @@ async fn daemon_survives_parent_death() {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn attach");
+        .expect("spawn auto-attach client");
 
     // Give it time to auto-spawn the daemon and attach.
     tokio::time::sleep(Duration::from_millis(2000)).await;
-    let _ = attach.kill();
-    let _ = attach.wait();
+    let _ = client.kill();
+    let _ = client.wait();
 
     // The daemon it spawned must still be reachable and the session alive
     // (the `sleep` process is still running, so the daemon must not have
@@ -505,7 +504,8 @@ fn bare_term_session_shows_help_and_does_not_connect() {
         out.status.code()
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("attach"), "help should list attach, got: {stderr}");
+    assert!(stderr.contains("--channel"), "help should mention --channel, got: {stderr}");
+    assert!(stderr.contains("list"), "help should list list, got: {stderr}");
     assert!(stderr.contains("stop"), "help should list stop, got: {stderr}");
     // A bare run must NOT have auto-spawned a daemon on the gateway.
     let gw = ChannelName::parse(&gateway).expect("gateway name");

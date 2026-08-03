@@ -44,14 +44,6 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Attach to a channel.
-    #[command(name = "attach")]
-    Attach {
-        #[arg(short, long)]
-        channel: Option<String>,
-        #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
-        cmd: Vec<String>,
-    },
     /// List channels and their sessions/clients.
     #[command(name = "ls", alias = "list")]
     List,
@@ -97,7 +89,6 @@ fn main() -> io::Result<()> {
     }
 
     match cli.command {
-        Some(Command::Attach { channel, cmd }) => attach(channel, &cmd),
         Some(Command::List) => list(),
         Some(Command::Kill {
             channel,

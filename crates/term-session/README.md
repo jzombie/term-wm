@@ -11,16 +11,17 @@ Its clients render in **alternate-screen mode** (a full-screen TUI): the attache
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
 
 ```sh
-cargo run --release --bin term-session -- attach                          # attach to default/main, auto-spawning the gateway
-cargo run --release --bin term-session -- attach --channel work -- vim    # attach to (or spawn) the "work" channel
-cargo run --release --bin term-session -- list                            # list channels, sessions, and connected sockets
-cargo run --release --bin term-session -- kill-client work 4              # detach client conn 4 from the "work" channel
-cargo run --release --bin term-session -- kill work                       # kill the "work" channel's session + sockets
-cargo run --release --bin term-session -- stop                            # stop the gateway daemon
-cargo run --release --bin term-session -- stop --force                    # stop even while live sessions are running
+cargo run --release --bin term-session -- --channel work -- vim    # attach to (or spawn) the "work" channel, running vim
+cargo run --release --bin term-session -- --channel work           # attach to (or spawn) the "work" channel (default shell)
+cargo run --release --bin term-session -- -- vim                   # attach to the default channel, running vim
+cargo run --release --bin term-session -- list                     # list channels, sessions, and connected sockets
+cargo run --release --bin term-session -- kill-client work 4       # detach client conn 4 from the "work" channel
+cargo run --release --bin term-session -- kill work                # kill the "work" channel's session + sockets
+cargo run --release --bin term-session -- stop                     # stop the gateway daemon
+cargo run --release --bin term-session -- stop --force             # stop even while live sessions are running
 ```
 
-Running `term-session` with **no subcommand and no arguments** prints the help menu and exits (code 2) — it never auto-connects on its own. Giving a channel (`--channel <name>`) or a command without a subcommand still attaches implicitly (the historical bare-run form): `term-session --channel work -- vim` attaches to `work` running `vim`. Use the `attach` subcommand explicitly for the default case.
+Running `term-session` with **no subcommand and no arguments** prints the help menu and exits (code 2) — it never auto-connects on its own. Giving a channel (`--channel <name>`) and/or a command attaches implicitly: the channel and command are the session to join or spawn, and the gateway daemon is auto-started if none is running.
 
 Multiple terminals can attach to the same channel to share one session.
 
@@ -50,7 +51,7 @@ Always stop the running daemon using the **currently installed** binary before r
 ```sh
 term-session stop       # 1. Stop the running v_old daemon
 cargo install --path .  # 2. Install the v_new binary on PATH
-term-session attach     # 3. Auto-spawn the v_new daemon
+term-session --channel work   # 3. Auto-spawn the v_new daemon and attach
 ```
 
 ### Recovery if Binary is Replaced First
@@ -71,7 +72,7 @@ To deploy a persistent, tiling terminal workspace, run `term-wm` as a child proc
 
 ## Session Nesting
 
-Invoking `term-session attach` inside a shell that is already running within an active `term-session` client (session inception) is discouraged due to operational tradeoffs:
+Invoking a `term-session` client (e.g. `term-session --channel work`) inside a shell that is already running within an active `term-session` client (session inception) is discouraged due to operational tradeoffs:
 
 - **TUI Buffer Conflicts:** Both the inner and outer clients manipulate terminal raw mode and the alternate screen buffer (`smcup`/`rmcup`). An unhandled exit or panic in the nested client can leave the outer viewport in a corrupted terminal state, requiring a manual reset or clear.
 - **Daemon Scope Ambiguity:** Unless overridden via `TERM_WM_GATEWAY`, both the outer session and inner nested client communicate with the same gateway daemon. Running `term-session stop` from inside a nested session will shut down the gateway hosting both the inner and outer sessions.
@@ -79,7 +80,7 @@ Invoking `term-session attach` inside a shell that is already running within an 
 
 ## Scrolling and Text Selection
 
-The standalone `term-session attach` client runs the terminal in **alternate-screen mode** (`smcup`), the standard full-screen TUI convention. On most terminal emulators the alternate screen carries **no native scrollback**, so the host terminal's built-in scroll wheel/scrollbar does not capture the session's output. This is deliberate: a full-screen TUI owns its viewport and must not be conflated with the terminal's main-screen history, so `term-session` does **not** implement scrollback for its remote clients — `term-session attach` renders only the current viewport of the shared PTY.
+The standalone `term-session` client (e.g. `term-session --channel work`) runs the terminal in **alternate-screen mode** (`smcup`), the standard full-screen TUI convention. On most terminal emulators the alternate screen carries **no native scrollback**, so the host terminal's built-in scroll wheel/scrollbar does not capture the session's output. This is deliberate: a full-screen TUI owns its viewport and must not be conflated with the terminal's main-screen history, so `term-session` does **not** implement scrollback for its remote clients — the client renders only the current viewport of the shared PTY.
 
 Scrollback is the host integration's responsibility. `term-session` is designed to work alongside [term-wm](https://crates.io/crates/term-wm), which provides its own scrollback handling for its windows. If you run `term-wm` inside a `term-session` session (the recommended integration above), scrolling is handled by the window manager rather than the session layer. Standalone `term-session` clients that need in-terminal scrollback are not supported.
 
