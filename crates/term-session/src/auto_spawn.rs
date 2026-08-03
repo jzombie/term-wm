@@ -47,11 +47,14 @@ fn spawn_detached_server(bin: &std::path::Path) -> io::Result<Child> {
         use std::os::windows::process::CommandExt;
         // Detached process: no console, so the parent console's CTRL_CLOSE_EVENT
         // never reaches the daemon. CREATE_NO_WINDOW is ignored when
-        // DETACHED_PROCESS is set, so it is not passed. The daemon also
-        // disinherits standard handles (Stdio::null above), so wrappers/CI/SSH
-        // runners never wait on inherited pipes.
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-        cmd.inherit_handles(false);
+        // DETACHED_PROCESS is set, so it is not passed. CREATE_NO_INHERIT
+        // (in place of the unstable Command::inherit_handles, rust-lang
+        // issue #146407) prevents the daemon from inheriting any caller
+        // handles. Combined with Stdio::null above, wrappers/CI/SSH runners
+        // never wait on inherited pipes.
+        cmd.creation_flags(
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_INHERIT,
+        );
     }
     cmd.spawn()
 }
@@ -62,6 +65,9 @@ const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 /// Detach the child from the parent's console entirely.
 #[cfg(windows)]
 const DETACHED_PROCESS: u32 = 0x00000008;
+/// Do not inherit the parent's handles (bInheritHandles=false).
+#[cfg(windows)]
+const CREATE_NO_INHERIT: u32 = 0x00800000;
 
 /// Wait for the gateway to become reachable, spawning a detached daemon if
 /// none is running.

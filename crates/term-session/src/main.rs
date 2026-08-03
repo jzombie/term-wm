@@ -206,7 +206,7 @@ fn write_selfcheck_marker(marker: &std::path::Path) {
         };
         let mut pids = [0u32; 4];
         let count = unsafe {
-            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            let _handle = GetStdHandle(STD_INPUT_HANDLE);
             GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32)
         };
         if count == 0 {
