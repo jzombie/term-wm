@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
-## [0.9.4-alpha] - TBD
+## [0.9.4-alpha] - 2026-08-03
 
 ### Added
 
