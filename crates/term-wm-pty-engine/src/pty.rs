@@ -149,24 +149,26 @@ impl Pty {
             .map_err(|err| wrap_err("spawn_command", err))?;
         #[cfg(windows)]
         let job = {
-            // Contain the child's entire process tree in a Job Object so kill
-            // paths tear down grandchildren too (the Windows analogue of
+            // Contain the child's process tree in a Job Object so kill paths
+            // tear down grandchildren too (the Windows analogue of
             // `kill(-pgid, sig)`). Assignment happens immediately after spawn:
             // Win32 allows nested jobs, so membership in any parent job does
-            // not block this. There is a bounded race — the child may start
-            // before assignment — but once assigned, every descendant is
-            // contained and dies with the job (or on job-handle close).
+            // not block this. Once the child is assigned, every descendant it
+            // subsequently spawns inherits job membership and dies with the
+            // job (or on job-handle close).
             //
-            // TODO(windows): this is post-spawn assignment, so a descendant
-            // spawned within the CreateProcessW→assign window escapes the job.
-            // The formal guarantee (zero escapees) requires spawning with
-            // `CREATE_SUSPENDED`, assigning the suspended process to the job,
-            // then `ResumeThread` — but portable-pty 0.9.0 owns the
-            // CreateProcessW call and does not expose the creation flags or
-            // the ConPTY handle, so that is not reachable from this crate.
-            // If the formal guarantee is ever needed, upstream the
-            // CREATE_SUSPENDED + Job Object patch to portable-pty rather than
-            // forking it locally.
+            // TODO(windows): assignment is post-spawn, so a descendant spawned
+            // in the window between portable-pty's `CreateProcessW` returning
+            // and our `AssignProcessToJobObject` call escapes the job and
+            // would be orphaned by a kill. The formal zero-escape guarantee
+            // requires spawning the child with `CREATE_SUSPENDED`, assigning
+            // the suspended process to the job, then `ResumeThread`. portable-pty
+            // 0.9.0 hardcodes the creation flags (`psuedocon.rs`:
+            // `EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT`) and
+            // `CommandBuilder` exposes no creation-flags hook, so the suspended
+            // spawn must be added upstream (or the crate forked). Until then
+            // the guarantee is: descendants spawned after assignment are
+            // contained; descendants spawned during the startup race are not.
             let job = JobObject::new().ok();
             if let (Some(job), Some(proc)) = (&job, child.as_raw_handle())
                 && let Err(err) = unsafe { job.assign(proc) }
