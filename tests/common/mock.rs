@@ -2,14 +2,24 @@
 
 pub const EXPECTED_OSC52_PAYLOAD: &[u8] = b"c;dGVzdA==";
 
+/// Locate the `term-session-mock` binary. Delegates to the shared helper in
+/// the mock crate's library so every test suite resolves it the same way.
 pub fn get_mock_bin() -> String {
-    let mut path = std::env::current_exe().expect("test exe path");
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push(format!("term-session-mock{}", std::env::consts::EXE_SUFFIX));
-    path.to_string_lossy().to_string()
+    term_session_mock::get_mock_bin()
+        .to_string_lossy()
+        .to_string()
+}
+
+/// Probe whether a process with the given OS PID is alive by asking the mock
+/// binary's `check_pid` subcommand. Cross-platform (uses `OpenProcess` on
+/// Windows, `kill(pid, 0)` elsewhere), so tests can assert tree-kill behavior
+/// without platform-specific APIs in the harness.
+pub fn mock_pid_alive(mock_bin: &str, pid: u32) -> bool {
+    std::process::Command::new(mock_bin)
+        .args(["check_pid", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Scan for a complete SGR 1006 mouse sequence: `\x1b[<...M` or `\x1b[<...m`.

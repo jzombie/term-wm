@@ -1,6 +1,7 @@
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
-use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
 use serial_test::serial;
+use std::sync::Arc;
 use std::time::Duration;
 use term_session_muxio_service_definitions::{
     CloseSession, KillChannel, KillClient, ResizePty, STREAM_INPUT_METHOD_ID,
@@ -8,7 +9,7 @@ use term_session_muxio_service_definitions::{
 };
 
 mod common;
-use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin};
+use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin, mock_pid_alive};
 use common::session::{
     TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin, list_channels,
     spawn_gateway, spawn_session, test_channel, wait_for_output,
@@ -592,6 +593,112 @@ async fn list_channels_reports_clients_and_geometry() {
     // Process visibility: the response identifies the daemon PID + socket.
     assert!(resp.gateway_pid > 0, "gateway pid reported");
     assert!(!resp.socket.is_empty(), "socket name reported");
+    guard.shutdown().await;
+}
+
+/// Spawn a session running the mock in `spawn_child` mode on the client's
+/// bound channel, read the grandchild PID it reports, and return it.
+/// Panics if the marker never appears.
+async fn spawn_session_with_grandchild(client: &Arc<RpcIpcClient>, mock: &str) -> u32 {
+    Spawn::call(
+        &**client,
+        (
+            Some(vec![mock.to_string(), "spawn_child".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .expect("spawn with grandchild");
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .expect("subscribe output");
+
+    const MARKER: &[u8] = b"GRANDCHILD_PID:";
+    let output = wait_for_output(&mut reader, MARKER, Duration::from_secs(5)).await;
+    let idx = output
+        .windows(MARKER.len())
+        .position(|w| w == MARKER)
+        .unwrap_or_else(|| panic!("grandchild PID marker not found; got {output:?}"));
+    let rest = &output[idx + MARKER.len()..];
+    let pid_str: String = rest
+        .iter()
+        .take_while(|b| b.is_ascii_digit())
+        .map(|b| *b as char)
+        .collect();
+    pid_str
+        .parse()
+        .unwrap_or_else(|_| panic!("invalid grandchild PID in {rest:?}"))
+}
+
+/// Assert that after a kill RPC completes, the grandchild process dies too
+/// (whole-tree containment, nothing orphaned). Polls briefly since
+/// termination is asynchronous.
+async fn assert_grandchild_dies(mock: &str, grandchild_pid: u32, via: &str) {
+    let start = std::time::Instant::now();
+    loop {
+        if !mock_pid_alive(mock, grandchild_pid) {
+            return;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "grandchild {grandchild_pid} should be dead after {via}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// KillChannel must terminate the *entire* process tree — grandchildren
+/// included, not just the PTY session leader. The mock's `spawn_child` mode
+/// forks a grandchild and reports its PID on stdout; this test reads that
+/// PID, confirms the grandchild is alive, kills the channel, then confirms
+/// the grandchild died.
+///
+/// On Windows this exercises the Win32 Job Object containment
+/// (`TerminateJobObject` on a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job); on
+/// Unix it exercises the process-group SIGTERM→SIGKILL escalation.
+#[tokio::test]
+#[serial]
+async fn kill_channel_terminates_process_tree() {
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/kill_tree")).await;
+    let grandchild_pid = spawn_session_with_grandchild(&client, &mock).await;
+
+    assert!(
+        mock_pid_alive(&mock, grandchild_pid),
+        "grandchild {grandchild_pid} should be alive before KillChannel"
+    );
+
+    KillChannel::call(&*client, "test/kill_tree".to_string())
+        .await
+        .unwrap();
+
+    assert_grandchild_dies(&mock, grandchild_pid, "KillChannel").await;
+    guard.shutdown().await;
+}
+
+/// CloseSession must terminate the *entire* process tree — grandchildren
+/// included, not just the PTY session leader. Same containment guarantee as
+/// KillChannel (both route through `request_session_kill` → `kill_child` →
+/// `TerminateJobObject` on Windows / process-group kill on Unix), so the
+/// grandchild must die here too.
+#[tokio::test]
+#[serial]
+async fn close_session_terminates_process_tree() {
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/close_tree")).await;
+    let grandchild_pid = spawn_session_with_grandchild(&client, &mock).await;
+
+    assert!(
+        mock_pid_alive(&mock, grandchild_pid),
+        "grandchild {grandchild_pid} should be alive before CloseSession"
+    );
+
+    CloseSession::call(&*client, 1u64).await.unwrap();
+
+    assert_grandchild_dies(&mock, grandchild_pid, "CloseSession").await;
     guard.shutdown().await;
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "term-wm-pty-engine"
-description = "PTY engine for term-wm."
+description = "Cross-platform PTY engine for term-wm (Unix PTY and Windows ConPTY), with vt100 emulation and OSC/clipboard handling."
 keywords = ["pty", "terminal", "vt100", "conpty", "cross-platform"]
 categories = ["emulators", "os", "external-ffi-bindings", "concurrency"]
 version.workspace = true
@@ -20,4 +20,15 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 vt100 = { workspace = true }
 vte = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+# Only the `#[cfg(windows)]` Job Object test (`spawn_assigns_job_object_containing_child`
+# in src/pty.rs) consumes the mock binary (`get_mock_bin` / `process_is_alive`). On
+# Unix/Linux all of those references compile out, so an unconditional dev-dependency
+# is dead there — cargo-udeps reports it as unused. Gating it to Windows keeps the
+# binary built exactly where the test needs it and keeps the Linux/Unix build clean.
+term-session-mock = { workspace = true }
 
