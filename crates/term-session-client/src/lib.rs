@@ -20,7 +20,8 @@ use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
-    OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    Attach, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    Spawn,
 };
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
@@ -138,6 +139,12 @@ const BRACKETED_PASTE_OVERHEAD: usize = 12;
 /// Rough per-cell ANSI byte multiplier for initial render-buffer capacity.
 const RENDER_BUF_CELL_MULTIPLIER: usize = 3;
 
+/// Minimum terminal grid size: the vt100 parser computes `rows - 1` at
+/// construction, so a 0-size grid would overflow. Headless ptys (e.g. under
+/// `script` with `/dev/null`) can report 0x0; clamp to these.
+const MIN_TERM_COLS: u16 = 2;
+const MIN_TERM_ROWS: u16 = 2;
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -206,12 +213,17 @@ fn is_coalescable_mouse(
     }
 }
 
-/// Connect to a term-session-server and run the TUI viewer.
+/// Connect to a term-session gateway and run the TUI viewer for `channel`.
 ///
-/// This function is synchronous. It creates a background tokio runtime
-/// for muxio IPC, then runs the synchronous crossterm event loop on the
-/// calling thread.
-pub fn run_session(socket_path: &str) -> io::Result<()> {
+/// This function is synchronous. It creates a background tokio runtime for
+/// muxio IPC, attaches to the gateway channel, spawns/joins the session, then
+/// runs the synchronous crossterm event loop on the calling thread.
+///
+/// `socket_path` is the gateway channel name (the muxio socket identity);
+/// `channel` is the logical channel to attach to; `cmd` is the command to run
+/// (empty = the gateway's default shell). PTY geometry is read from the real
+/// terminal.
+pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Result<()> {
     // Windows console hosts default to "QuickEdit" mode: clicking the window
     // enters text-selection mode, during which the kernel suspends the
     // process's console I/O until the selection is cleared (Esc). A stray
@@ -233,8 +245,17 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
         .block_on(RpcIpcClient::new(socket_path))
         .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, format!("{e:?}")))?;
 
+    // ABI/transport fault interception: a decode/parse fault during the
+    // handshake (e.g. an upgraded client against a legacy daemon on the same
+    // socket) must produce a clear diagnostic, never a panic or silent drop.
+    let abi_fault = |e: &dyn std::fmt::Display| -> io::Error {
+        io::Error::other(format!(
+            "FATAL: Protocol ABI mismatch. A legacy daemon may be occupying the IPC socket. Manually terminate the daemon process before continuing. (cause: {e})"
+        ))
+    };
+
     // Atomic registers for server-initiated geometry changes (OnPtyResized).
-    // Initialised before Spawn::call() so the handler is registered before
+    // Initialised before Attach/Spawn so the handler is registered before
     // the server can send any notifications — prevents RpcMethodNotFound.
     let server_cols = Arc::new(AtomicU16::new(0));
     let server_rows = Arc::new(AtomicU16::new(0));
@@ -270,13 +291,38 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
     let (push_tx, push_rx) = crossbeam_channel::bounded::<Vec<u8>>(PTY_OUTPUT_CHANNEL_CAPACITY);
     let (clip_tx, clip_rx) = crossbeam_channel::bounded::<String>(CLIPBOARD_CHANNEL_CAPACITY);
 
-    // Get terminal size
-    let (term_cols, term_rows) = crossterm::terminal::size()?;
+    // Terminal geometry comes from the real terminal (no cols/rows are threaded
+    // through the API). The vt100 parser computes `rows - 1` at construction, so
+    // clamp a degenerate 0x0 report up to a non-zero grid rather than panicking.
+    let (term_cols, term_rows) = {
+        let (c, r) = crossterm::terminal::size()?;
+        (c.max(MIN_TERM_COLS), r.max(MIN_TERM_ROWS))
+    };
+    let hostname = hostname::get()
+        .map(|h| h.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "unknown".to_string());
 
-    let (_session_id, actual_cols, actual_rows) = rt.block_on(async {
-        Spawn::call(&*client, (None, term_cols, term_rows))
-            .await
-            .map_err(|e| io::Error::other(format!("spawn: {e:?}")))
+    let (actual_cols, actual_rows) = rt.block_on(async {
+        // 1) Attach: bind this connection to the channel (server-assigned
+        // conn_id); report our OS PID so `list` can show which client is which.
+        let conn_id = Attach::call(
+            &*client,
+            (channel.to_string(), hostname, std::process::id() as u64),
+        )
+        .await
+        .map_err(|e| abi_fault(&e))?;
+        // 2) Spawn: join/respawn the session (cmd travels via Spawn).
+        let cmd = if cmd.is_empty() {
+            None
+        } else {
+            Some(cmd.to_vec())
+        };
+        let (_session_id, actual_cols, actual_rows) =
+            Spawn::call(&*client, (cmd, term_cols, term_rows))
+                .await
+                .map_err(|e| abi_fault(&e))?;
+        let _ = conn_id;
+        Ok::<(u16, u16), io::Error>((actual_cols, actual_rows))
     })?;
 
     // Open streaming channels for output subscription and input
@@ -320,6 +366,11 @@ pub fn run_session(socket_path: &str) -> io::Result<()> {
                 } else {
                     break;
                 }
+            }
+            // Flush any buffered OSC 52 payload at EOF (Windows ConPTY
+            // consumes the BEL/ST terminator).
+            if let Some(text) = osc52.finish() {
+                let _ = clip_tx.try_send(text);
             }
         });
 

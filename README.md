@@ -9,6 +9,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](#)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](#)
 
+**term-wm** is a modular, high-performance window manager and multiplexer that operates entirely within your terminal emulator. 
+
 <div align="center">
   <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.1-alpha-linux.png?raw=true" alt="term-wm v0.9.1-alpha on Linux" /><br />
   <em>pictured: term-wm v0.9.1-alpha on Linux</em>
@@ -18,9 +20,7 @@
   <em>pictured: term-wm v0.9.0-alpha on macOS</em>
 </div>
 
-**term-wm** is a modular, high-performance window manager and multiplexer that operates entirely within your terminal emulator. 
-
-Designed for Linux, macOS, and Windows, it brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line. Whether you require mathematically precise tiling for development workflows or overlapping floating windows with mouse support, `term-wm` delivers a native window management experience without requiring a display server.
+Designed for Linux, macOS, and Windows, `term-wm` brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line. Whether you require mathematically precise tiling for development workflows or overlapping floating windows with mouse support, `term-wm` delivers a native window management experience without requiring a display server.
 
 ---
 

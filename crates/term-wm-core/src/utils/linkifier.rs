@@ -437,9 +437,7 @@ impl RowLinks {
     }
 
     fn clear_links(&mut self) {
-        for cell in &mut self.cols {
-            *cell = None;
-        }
+        self.cols.fill(None);
     }
 }
 
