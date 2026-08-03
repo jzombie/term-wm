@@ -43,14 +43,6 @@ struct Cli {
     #[arg(short, long)]
     channel: Option<String>,
 
-    /// Initial columns for the PTY.
-    #[arg(long, default_value_t = 0)]
-    cols: u16,
-
-    /// Initial rows for the PTY.
-    #[arg(long, default_value_t = 0)]
-    rows: u16,
-
     /// Command to run (and its arguments); if omitted, launches the default shell.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmd: Vec<String>,
@@ -63,10 +55,6 @@ enum Command {
     Attach {
         #[arg(short, long)]
         channel: Option<String>,
-        #[arg(long, default_value_t = 0)]
-        cols: u16,
-        #[arg(long, default_value_t = 0)]
-        rows: u16,
         #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
     },
@@ -112,18 +100,13 @@ fn main() -> io::Result<()> {
     }
 
     match cli.command {
-        Some(Command::Attach {
-            channel,
-            cols,
-            rows,
-            cmd,
-        }) => {
+        Some(Command::Attach { channel, cmd }) => {
             let channel_str = resolve_channel(channel);
             let channel = ChannelName::parse(&channel_str).map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
             })?;
             let socket_name = connect_or_spawn_server(None)?;
-            run_session(&socket_name, &channel.to_string(), &cmd, cols, rows)
+            run_session(&socket_name, &channel.to_string(), &cmd)
         }
         Some(Command::List) => list_channels(),
         Some(Command::Kill {
@@ -139,13 +122,7 @@ fn main() -> io::Result<()> {
                 io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
             })?;
             let socket_name = connect_or_spawn_server(None)?;
-            run_session(
-                &socket_name,
-                &channel.to_string(),
-                &cli.cmd,
-                cli.cols,
-                cli.rows,
-            )
+            run_session(&socket_name, &channel.to_string(), &cli.cmd)
         }
     }
 }

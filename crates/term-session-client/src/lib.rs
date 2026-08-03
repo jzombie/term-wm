@@ -221,14 +221,9 @@ fn is_coalescable_mouse(
 ///
 /// `socket_path` is the gateway channel name (the muxio socket identity);
 /// `channel` is the logical channel to attach to; `cmd` is the command to run
-/// (empty = the gateway's default shell); `cols`/`rows` seed the PTY geometry.
-pub fn run_session(
-    socket_path: &str,
-    channel: &str,
-    cmd: &[String],
-    cols: u16,
-    rows: u16,
-) -> io::Result<()> {
+/// (empty = the gateway's default shell). PTY geometry is read from the real
+/// terminal.
+pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Result<()> {
     // Windows console hosts default to "QuickEdit" mode: clicking the window
     // enters text-selection mode, during which the kernel suspends the
     // process's console I/O until the selection is cleared (Esc). A stray
