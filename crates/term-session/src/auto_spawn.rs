@@ -58,9 +58,7 @@ impl DaemonChild {
     fn try_wait(&mut self) -> io::Result<Option<DaemonExitStatus>> {
         match self {
             #[cfg(unix)]
-            DaemonChild::Unix(child) => {
-                Ok(child.try_wait()?.map(DaemonExitStatus::Unix))
-            }
+            DaemonChild::Unix(child) => Ok(child.try_wait()?.map(DaemonExitStatus::Unix)),
             #[cfg(windows)]
             DaemonChild::Windows(proc) => proc.try_wait(),
         }
@@ -78,12 +76,8 @@ struct WindowsDaemonProcess {
 #[cfg(windows)]
 impl WindowsDaemonProcess {
     fn try_wait(&mut self) -> io::Result<Option<DaemonExitStatus>> {
-        use windows_sys::Win32::Foundation::{
-            WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
-        };
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, WaitForSingleObject,
-        };
+        use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
         unsafe {
             match WaitForSingleObject(self.process, 0) {
                 WAIT_TIMEOUT => Ok(None),
@@ -169,8 +163,8 @@ fn windows_spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChil
         CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+        CREATE_NEW_PROCESS_GROUP, CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION,
+        STARTF_USESTDHANDLES, STARTUPINFOW,
     };
 
     // The Unix side detaches via setsid(); on Windows the same guarantee needs

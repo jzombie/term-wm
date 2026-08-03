@@ -170,7 +170,15 @@ async fn daemon_survives_parent_death() {
     // LONG-LIVED session so its process survives the parent dying.
     let mut attach = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .args(["attach", "--channel", channel, "--", &mock, "sleep", "60000"])
+        .args([
+            "attach",
+            "--channel",
+            channel,
+            "--",
+            &mock,
+            "sleep",
+            "60000",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -349,9 +357,7 @@ fn assert_eof_on_read_end(fd: libc::c_int, timeout: Duration) -> io::Result<()> 
             // Drain any buffered bytes; EOF is a zero-length read.
             let mut buf = [0u8; 64];
             loop {
-                let r = unsafe {
-                    libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-                };
+                let r = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
                 if r < 0 {
                     if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                         continue;
@@ -415,13 +421,21 @@ async fn cli_kill_client_detaches_one_client() {
     let c2 = wait_connectable(&gateway).await;
     Attach::call(
         &*c1,
-        (channel.to_string(), "one".to_string(), std::process::id() as u64),
+        (
+            channel.to_string(),
+            "one".to_string(),
+            std::process::id() as u64,
+        ),
     )
     .await
     .unwrap();
     Attach::call(
         &*c2,
-        (channel.to_string(), "two".to_string(), std::process::id() as u64),
+        (
+            channel.to_string(),
+            "two".to_string(),
+            std::process::id() as u64,
+        ),
     )
     .await
     .unwrap();
@@ -470,7 +484,11 @@ async fn cli_kill_client_detaches_one_client() {
         .iter()
         .find(|c| c.name == channel)
         .expect("channel listed");
-    assert_eq!(ch.clients.len(), 1, "one client should remain after kill-client");
+    assert_eq!(
+        ch.clients.len(),
+        1,
+        "one client should remain after kill-client"
+    );
 
     ShutdownGateway::call(&*c1, ()).await.unwrap();
     let _ = child.wait();

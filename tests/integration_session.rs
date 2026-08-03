@@ -18,8 +18,7 @@ use term_wm_pty_engine::clipboard::Osc52Extractor;
 #[tokio::test]
 async fn session_spawn_returns_id() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/spawn_returns_id")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/spawn_returns_id")).await;
     let (id, _, _) = Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -33,8 +32,7 @@ async fn session_spawn_returns_id() {
 #[tokio::test]
 async fn session_input_output_roundtrip() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/input_output")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/input_output")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -65,8 +63,7 @@ async fn session_input_output_roundtrip() {
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/mouse_forward")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/mouse_forward")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -113,8 +110,7 @@ async fn session_mouse_bytes_forwarded() {
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/mouse_forward")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/mouse_forward")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "capture".into()]), TEST_COLS, TEST_ROWS),
@@ -150,8 +146,7 @@ async fn session_mouse_bytes_forwarded() {
 #[serial]
 async fn session_osc52_in_output() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/osc52_output")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_output")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS),
@@ -180,8 +175,7 @@ async fn session_osc52_in_output() {
 #[serial]
 async fn session_osc52_via_osc52extractor() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/osc52_extractor")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_extractor")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS),
@@ -236,8 +230,7 @@ async fn session_osc52_via_osc52extractor() {
 #[tokio::test]
 async fn session_resize() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/resize")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/resize")).await;
     Spawn::call(
         &*client,
         (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
@@ -253,8 +246,7 @@ async fn session_resize() {
 #[tokio::test]
 async fn session_list_channels() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/list_channels")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/list_channels")).await;
     Spawn::call(
         &*client,
         (
@@ -283,8 +275,7 @@ async fn session_list_channels() {
 #[tokio::test]
 async fn session_close_session() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/close_session")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/close_session")).await;
     Spawn::call(
         &*client,
         (
@@ -325,8 +316,7 @@ async fn session_close_session() {
 #[serial]
 async fn session_child_exit() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/child_exit")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/child_exit")).await;
     Spawn::call(
         &*client,
         (
@@ -364,8 +354,7 @@ async fn session_child_exit() {
 #[serial]
 async fn session_child_exit_before_subscribe() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/child_exit_early")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/child_exit_early")).await;
     Spawn::call(
         &*client,
         (
@@ -459,8 +448,7 @@ async fn term_bench_runs_to_completion() {
         return;
     }
 
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/bench")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/bench")).await;
     Spawn::call(
         &*client,
         (
@@ -629,16 +617,9 @@ async fn kill_channel_kills_only_that_channel() {
     )
     .await
     .unwrap();
-    Spawn::call(
-        &*b,
-        (
-            Some(vec![mock, "echo".into()]),
-            TEST_COLS,
-            TEST_ROWS,
-        ),
-    )
-    .await
-    .unwrap();
+    Spawn::call(&*b, (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
 
     let (_, mut reader_b) = b.open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0).await.unwrap();
 
@@ -716,11 +697,7 @@ async fn kill_client_detaches_one_socket_only() {
     attach_client(&c2, &channel).await;
     Spawn::call(
         &*c1,
-        (
-            Some(vec![mock, "echo".into()]),
-            TEST_COLS,
-            TEST_ROWS,
-        ),
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
     )
     .await
     .unwrap();
@@ -853,8 +830,7 @@ async fn unattached_client_rejected() {
 #[serial]
 async fn spawn_idempotent_on_live_session() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) =
-        spawn_session(&test_channel("test/spawn_idem")).await;
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/spawn_idem")).await;
     let (id1, _, _) = Spawn::call(
         &*client,
         (

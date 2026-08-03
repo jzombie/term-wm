@@ -137,7 +137,10 @@ fn list() -> io::Result<()> {
         let nclients = ch.clients.len();
         println!();
         println!("channel: {}", ch.name);
-        println!("  created: {}", term_session::format_unix_relative(ch.created_at_unix));
+        println!(
+            "  created: {}",
+            term_session::format_unix_relative(ch.created_at_unix)
+        );
         println!("  session: {}", session);
         println!(
             "  clients: {}",

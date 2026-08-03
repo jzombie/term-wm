@@ -78,10 +78,8 @@ pub fn list_channels() -> io::Result<ListChannelsResponse> {
 
 /// Kill a channel's session and detach all its sockets.
 pub fn kill_channel(channel: &str) -> io::Result<()> {
-    with_gateway(|client| async move {
-        KillChannel::call(&*client, channel.to_string()).await
-    })?
-    .map_err(|e| io::Error::other(format!("kill channel: {e}")))
+    with_gateway(|client| async move { KillChannel::call(&*client, channel.to_string()).await })?
+        .map_err(|e| io::Error::other(format!("kill channel: {e}")))
 }
 
 /// Detach a single client socket from a channel by `conn_id`.
