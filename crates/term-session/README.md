@@ -23,6 +23,8 @@ cargo run --release --bin term-session -- stop --force             # stop even w
 
 Running `term-session` with **no subcommand and no arguments** prints the help menu and exits (code 2) — it never auto-connects on its own. Giving a channel (`--channel <name>`) and/or a command attaches implicitly: the channel and command are the session to join or spawn, and the gateway daemon is auto-started if none is running.
 
+**A command is honored only when the channel has no live session** (or its session has exited) — it then becomes the command the channel spawns/respawns. Attaching to a channel with a **running** session ignores the command entirely: you join the existing process, sharing its live viewport with every other attached client (like `tmux`/`screen`).
+
 Multiple terminals can attach to the same channel to share one session.
 
 ## Architecture

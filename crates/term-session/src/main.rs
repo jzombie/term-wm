@@ -33,6 +33,8 @@ struct Cli {
     channel: Option<String>,
 
     /// Command to run (and its arguments); if omitted, launches the default shell.
+    /// Only used when the channel has no live session — attaching to a running
+    /// session ignores the command and joins the existing process.
     /// Implicitly attaches when given without a subcommand.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmd: Vec<String>,

@@ -963,6 +963,51 @@ async fn spawn_idempotent_on_live_session() {
 
 #[tokio::test]
 #[serial]
+async fn spawn_cmd_ignored_on_live_session() {
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/cmd_ignored")).await;
+    Spawn::call(
+        &*client,
+        (
+            Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // A second client joins the live session with a DIFFERENT cmd (`exit 0`).
+    // If honored, the session would terminate immediately; instead it must be
+    // ignored and the original `sleep` process kept running.
+    let c2 = connect_client_with_retry(guard.socket()).await;
+    attach_client(&c2, &test_channel("test/cmd_ignored")).await;
+    let (id2, _, _) = Spawn::call(
+        &*c2,
+        (Some(vec![mock, "exit".into(), "0".into()]), TEST_COLS, TEST_ROWS),
+    )
+    .await
+    .unwrap();
+
+    // Give a would-be `exit` time to take effect: the session must still be
+    // live, proving the command was ignored and the original process survived.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let resp = list_channels(&client).await;
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == "test/cmd_ignored")
+        .expect("channel listed");
+    assert!(
+        ch.session.as_ref().is_some_and(|s| !s.exited),
+        "session must stay alive when a different cmd is supplied"
+    );
+    assert_eq!(id2, 1, "reused session id");
+    guard.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
 async fn session_multi_client_pty_constrained_to_smallest() {
     let mock = get_mock_bin();
     let guard = spawn_gateway().await;
