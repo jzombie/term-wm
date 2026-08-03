@@ -20,15 +20,10 @@ fn bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_term-session"))
 }
 
-/// Path to the mock PTY binary used as a session child.
+/// Path to the mock PTY binary used as a session child. Delegates to the
+/// shared helper in the mock crate's library.
 fn mock_bin() -> PathBuf {
-    let mut path = std::env::current_exe().expect("test exe path");
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push(format!("term-session-mock{}", std::env::consts::EXE_SUFFIX));
-    path
+    term_session_mock::get_mock_bin()
 }
 
 /// A unique per-test gateway name.

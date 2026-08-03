@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.5-alpha] - 2026-08-03
+
+### Added
+
+- **Windows Win32 Job Object process-tree containment:** the PTY engine now contains each Windows PTY child in a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job, so killing a session also kills the background processes it spawned — not just the session's own process. This makes the v0.9.4-alpha containment claim true for processes spawned after startup (see Errata). A known limitation: a process spawned in the brief moment during startup can escape the job; the full fix needs a portable-pty change and is tracked in the code. Windows-gated unit test `spawn_assigns_job_object_containing_child` verifies the behavior.
+- **Behavioral whole-tree-kill proof:** `term-session-mock` gained a `spawn_child <ms>` subcommand that spawns a real grandchild process and reports its PID; integration tests assert that both `KillChannel` and `CloseSession` terminate the grandchild too (nothing re-parents to init), backed by a cross-platform `check_pid` liveness probe.
+- **`term-session-mock` promoted to a workspace crate:** a single canonical `get_mock_bin()` resolver (honors `CARGO_BIN_EXE_term-session-mock`, falls back to the workspace `target/` build locations, and **builds the binary on demand** so tests never silently skip) now serves every test suite, with a dedicated README.
+
+### Changed
+
+- Docs: `term-session` README (session sharing, session nesting, upgrade ordering, scrolling & text selection), `term-session-server` README, `term-session-mock` README, and `docs/COMPATIBILITY.md` refreshed to match the shipped CLI and daemon behavior.
+- Package metadata (description/keywords/categories) updated.
+
+## Errata / Corrections for v0.9.4-alpha
+
+- **Windows process-tree containment (correction):** the v0.9.4-alpha changelog entry "Gateway process supervision" stated that kill paths terminate the whole process tree on Windows via "Win32 Job Object containment". That was inaccurate for the shipped binary: at release time the Windows kill path (`Pty::kill_child`) delegated to portable-pty's `WinChild`, which performs a bare `TerminateProcess` on the **single session leader** — grandchildren were not contained and could be orphaned. Only the Unix process-group path (SIGTERM → exited-checked SIGKILL escalation) actually matched the description.
+  - **Resolution:** the Job Object containment described in that entry is now genuinely implemented: killing a Windows session also kills the processes it spawned, not just its own process. There is a known startup race (see the 0.9.5-alpha entry) where a process spawned in the brief startup moment can escape; the full fix needs a portable-pty change and is tracked in the code. Covered by the Windows-gated test `spawn_assigns_job_object_containing_child`.
+- **`term-session` admin CLI (`--json` / `--socket`):** the v0.9.4-alpha "term-session admin CLI" entry described a `--json` list mode and a `kill <channel> [--socket CONN_ID]` flag. Neither exists in the shipped binary: `list` is plain-text only, and socket detachment is performed by the top-level `kill-client <channel> <CLIENT_ID>` subcommand (the `--socket` form was removed during development in favor of the explicit `kill-client`).
+
 ## [0.9.4-alpha] - 2026-08-03
 
 ### Added

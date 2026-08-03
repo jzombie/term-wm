@@ -9,6 +9,8 @@ use std::time::Instant;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::clipboard::{Clipboard, Osc52Extractor};
+#[cfg(windows)]
+use crate::job_object::JobObject;
 use crate::pty_state_tracker::PtyPerformAdapter;
 
 /// Size of the PTY master read buffer (single `read()` call).
@@ -94,6 +96,12 @@ pub struct Pty {
     pty_size: PtySize,
     scrollback_len: usize,
     child: Option<Box<dyn Child + Send + Sync>>,
+    /// Win32 Job Object containing the child's process tree (Windows only).
+    /// Dropping it with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates any
+    /// processes still in the job, so an un-killed `Pty` never orphans
+    /// descendants. The Windows analogue of the Unix process group.
+    #[cfg(windows)]
+    job: Option<JobObject>,
     exited: bool,
     exit_status: Option<portable_pty::ExitStatus>,
     /// Guards against double-fire of the Exited callback from both
@@ -139,6 +147,38 @@ impl Pty {
             .slave
             .spawn_command(command)
             .map_err(|err| wrap_err("spawn_command", err))?;
+        #[cfg(windows)]
+        let job = {
+            // Contain the child's process tree in a Job Object so kill paths
+            // tear down grandchildren too (the Windows analogue of
+            // `kill(-pgid, sig)`). Assignment happens immediately after spawn:
+            // Win32 allows nested jobs, so membership in any parent job does
+            // not block this. Once the child is assigned, every descendant it
+            // subsequently spawns inherits job membership and dies with the
+            // job (or on job-handle close).
+            //
+            // TODO(windows): assignment is post-spawn, so a descendant spawned
+            // in the window between portable-pty's `CreateProcessW` returning
+            // and our `AssignProcessToJobObject` call escapes the job and
+            // would be orphaned by a kill. The formal zero-escape guarantee
+            // requires spawning the child with `CREATE_SUSPENDED`, assigning
+            // the suspended process to the job, then `ResumeThread`. portable-pty
+            // 0.9.0 hardcodes the creation flags (`psuedocon.rs`:
+            // `EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT`) and
+            // `CommandBuilder` exposes no creation-flags hook, so the suspended
+            // spawn must be added upstream (or the crate forked). Until then
+            // the guarantee is: descendants spawned after assignment are
+            // contained; descendants spawned during the startup race are not.
+            let job = JobObject::new().ok();
+            if let (Some(job), Some(proc)) = (&job, child.as_raw_handle())
+                && let Err(err) = unsafe { job.assign(proc) }
+            {
+                tracing::warn!(
+                    "AssignProcessToJobObject failed: {err}; falling back to single-process kill"
+                );
+            }
+            job
+        };
         let reader = pair
             .master
             .try_clone_reader()
@@ -212,6 +252,8 @@ impl Pty {
             pty_size: size,
             scrollback_len,
             child: Some(child),
+            #[cfg(windows)]
+            job,
             exited: false,
             exit_status: None,
             reader: Some(reader_handle),
@@ -445,7 +487,16 @@ impl Pty {
     }
 
     /// Kill the child process if present.
+    ///
+    /// On Windows the whole contained tree is terminated via the Job Object
+    /// (grandchildren included), falling back to single-process termination
+    /// when containment was not established. The job handle is taken so its
+    /// `Drop` (KILL_ON_JOB_CLOSE) is the last line of defense for stragglers.
     pub fn kill_child(&mut self) -> PtyResult<()> {
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            let _ = job.terminate(1);
+        }
         if let Some(mut child) = self.child.take() {
             child.kill().map_err(|err| wrap_err("kill", err))?;
             self.exited = true;
@@ -970,6 +1021,16 @@ mod tests {
         }
     }
 
+    /// Locate the `term-session-mock` binary so the Job Object test can spawn
+    /// a child that itself forks a grandchild. Resolution is delegated to the
+    /// shared helper in the mock crate's library (see
+    /// `term_session_mock::get_mock_bin`), which is a dev-dependency of this
+    /// crate so the binary is always built for tests.
+    #[cfg(windows)]
+    fn get_mock_bin() -> std::path::PathBuf {
+        term_session_mock::get_mock_bin()
+    }
+
     // ── bytes_to_debug_text ──────────────────────────────────────────
 
     #[test]
@@ -1204,6 +1265,88 @@ mod tests {
             woke.load(Ordering::Relaxed),
             "status callback must fire on Wakeup when PTY outputs data"
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn spawn_assigns_job_object_containing_child() {
+        // The Windows child must be contained in a Job Object so kill paths
+        // terminate the whole tree (grandchildren included), not just the
+        // session leader. We spawn the mock in `spawn_child` mode: it forks a
+        // grandchild (another mock instance in `sleep` mode) and prints
+        // `GRANDCHILD_PID:<n>` to stdout. We read that PID, confirm the
+        // grandchild is alive, kill the child via `kill_child` (which calls
+        // `TerminateJobObject`), and confirm the grandchild died too — the
+        // whole-tree guarantee.
+        let mock = get_mock_bin();
+        let mut cmd = CommandBuilder::new(mock);
+        cmd.arg("spawn_child");
+        cmd.arg("60000");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+
+        assert!(
+            pty.job.is_some(),
+            "spawned child must be contained in a Job Object on Windows"
+        );
+
+        // Poll `screen()` — which answers the child's startup DSR
+        // cursor-position request — while accumulating output until the
+        // `GRANDCHILD_PID:` marker appears.
+        let mut accumulated = Vec::new();
+        let start = std::time::Instant::now();
+        let grandchild = loop {
+            pty.screen();
+            accumulated.extend_from_slice(&pty.drain_pending());
+            if let Some(idx) = accumulated
+                .windows(b"GRANDCHILD_PID:".len())
+                .position(|w| w == b"GRANDCHILD_PID:")
+            {
+                let rest = &accumulated[idx + b"GRANDCHILD_PID:".len()..];
+                let pid_str: String = rest
+                    .iter()
+                    .take_while(|b| b.is_ascii_digit())
+                    .map(|b| *b as char)
+                    .collect();
+                break pid_str
+                    .parse()
+                    .unwrap_or_else(|_| panic!("invalid grandchild PID in {rest:?}"));
+            }
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "mock spawn_child should print a grandchild PID; got {accumulated:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+
+        // The grandchild must be alive before the kill.
+        assert!(
+            term_session_mock::process_is_alive(grandchild),
+            "grandchild {grandchild} should be alive before kill_child"
+        );
+
+        // kill_child must consume the job (its Drop then fires
+        // KILL_ON_JOB_CLOSE for any stragglers) and reap the child.
+        pty.kill_child().expect("kill_child");
+        assert!(pty.job.is_none(), "job must be taken on kill_child");
+        assert!(pty.child.is_none(), "child must be reaped on kill_child");
+        assert!(pty.exited, "pty must be marked exited after kill_child");
+
+        // The grandchild must die with the tree — the whole point of the
+        // Job Object containment. Poll briefly since termination is async.
+        let start = std::time::Instant::now();
+        while term_session_mock::process_is_alive(grandchild) {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "grandchild {grandchild} should be dead after kill_child"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]

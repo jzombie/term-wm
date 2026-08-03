@@ -1,9 +1,21 @@
 [package]
 name = "term-session-mock"
-description = "Isolated workspace binary for simulating cross-platform raw virtual terminal streams and ConPTY byte sequences in integration tests."
-keywords = ["terminal", "conpty", "windows", "testing", "simulation"]
-categories = ["emulators", "development-tools", "simulation"]
-version = "0.0.0"
-edition = "2024"
-# Never publish this; only used for testing
-publish = false
+description = "Internal test tooling for term-wm: a mock PTY binary and shared test helpers for cross-platform terminal stream simulation, including Windows ConPTY byte-sequence handling."
+keywords = ["terminal", "pty", "testing", "simulation", "cross-platform"]
+categories = ["development-tools", "emulators", "simulation"]
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "term_session_mock"
+path = "src/lib.rs"
+
+[dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
