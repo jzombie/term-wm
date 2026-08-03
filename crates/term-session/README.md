@@ -14,6 +14,7 @@ Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
 cargo run --release --bin term-session -- attach                          # attach to default/main, auto-spawning the gateway
 cargo run --release --bin term-session -- attach --channel work -- vim    # attach to (or spawn) the "work" channel
 cargo run --release --bin term-session -- list                            # list channels, sessions, and connected sockets
+cargo run --release --bin term-session -- kill-client work 4              # detach client conn 4 from the "work" channel
 cargo run --release --bin term-session -- kill work                       # kill the "work" channel's session + sockets
 cargo run --release --bin term-session -- stop                            # stop the gateway daemon
 ```
