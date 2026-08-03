@@ -1,12 +1,18 @@
 [package]
 name = "term-session-mock"
-description = "Isolated workspace binary for simulating cross-platform raw virtual terminal streams and ConPTY byte sequences in integration tests."
+description = "Isolated workspace binary + shared test helpers for simulating cross-platform raw virtual terminal streams and ConPTY byte sequences in integration tests."
 keywords = ["terminal", "conpty", "windows", "testing", "simulation"]
 categories = ["emulators", "development-tools", "simulation"]
-version = "0.0.0"
-edition = "2024"
-# Never publish this; only used for testing
-publish = false
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "term_session_mock"
+path = "src/lib.rs"
 
 [dependencies]
 libc = { workspace = true }

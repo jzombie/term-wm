@@ -2,13 +2,7 @@ use std::process::Command;
 use std::time::Duration;
 
 fn mock_bin() -> String {
-    let mut path = std::env::current_exe().expect("test exe path");
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push(format!("term-session-mock{}", std::env::consts::EXE_SUFFIX));
-    path.to_string_lossy().to_string()
+    term_session_mock::get_mock_bin().to_string_lossy().to_string()
 }
 
 fn find_osc52_payload(stream: &[u8]) -> Option<&[u8]> {

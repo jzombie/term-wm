@@ -1008,43 +1008,14 @@ mod tests {
         }
     }
 
-    /// Locate the `term-session-mock` binary (a workspace member built into
-    /// `target/debug`) so the Job Object test can spawn a child that itself
-    /// forks a grandchild. No Cargo dependency: the mock is discovered by
-    /// walking up from the test binary's directory, exactly like the
-    /// integration tests do. Returns `None` when the mock has not been built.
+    /// Locate the `term-session-mock` binary so the Job Object test can spawn
+    /// a child that itself forks a grandchild. Resolution is delegated to the
+    /// shared helper in the mock crate's library (see
+    /// `term_session_mock::get_mock_bin`), which is a dev-dependency of this
+    /// crate so the binary is always built for tests.
     #[cfg(windows)]
-    fn get_mock_bin() -> Option<std::path::PathBuf> {
-        let mut path = std::env::current_exe().expect("test exe path");
-        path.pop();
-        if path.ends_with("deps") {
-            path.pop();
-        }
-        let candidate = path.join(format!("term-session-mock{}", std::env::consts::EXE_SUFFIX));
-        if candidate.exists() {
-            Some(candidate)
-        } else {
-            None
-        }
-    }
-
-    /// Whether a process with the given OS PID is still running.
-    #[cfg(windows)]
-    fn process_is_alive(pid: u32) -> bool {
-        use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() {
-                return false;
-            }
-            let mut code: u32 = 0;
-            let ok = GetExitCodeProcess(handle, &mut code);
-            let _ = CloseHandle(handle);
-            ok != 0 && code == STILL_ACTIVE as u32
-        }
+    fn get_mock_bin() -> std::path::PathBuf {
+        term_session_mock::get_mock_bin()
     }
 
     // ── bytes_to_debug_text ──────────────────────────────────────────
@@ -1294,13 +1265,7 @@ mod tests {
         // grandchild is alive, kill the child via `kill_child` (which calls
         // `TerminateJobObject`), and confirm the grandchild died too — the
         // whole-tree guarantee.
-        //
-        // Skipped when the mock binary hasn't been built (e.g. a standalone
-        // `cargo test -p term-wm-pty-engine` without a prior workspace build).
-        let Some(mock) = get_mock_bin() else {
-            eprintln!("skipping spawn_assigns_job_object_containing_child: mock binary not built");
-            return;
-        };
+        let mock = get_mock_bin();
         let mut cmd = CommandBuilder::new(mock);
         cmd.arg("spawn_child");
         cmd.arg("60000");
@@ -1348,7 +1313,7 @@ mod tests {
 
         // The grandchild must be alive before the kill.
         assert!(
-            process_is_alive(grandchild),
+            term_session_mock::process_is_alive(grandchild),
             "grandchild {grandchild} should be alive before kill_child"
         );
 
@@ -1362,7 +1327,7 @@ mod tests {
         // The grandchild must die with the tree — the whole point of the
         // Job Object containment. Poll briefly since termination is async.
         let start = std::time::Instant::now();
-        while process_is_alive(grandchild) {
+        while term_session_mock::process_is_alive(grandchild) {
             assert!(
                 start.elapsed() < std::time::Duration::from_secs(5),
                 "grandchild {grandchild} should be dead after kill_child"

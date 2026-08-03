@@ -1,6 +1,8 @@
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
+use term_session_mock::{CHECK_PID_ALIVE, CHECK_PID_DEAD, process_is_alive};
+
 /// Deterministic mock binary for session server E2E tests.
 ///
 /// Subcommands:
@@ -62,38 +64,6 @@ mod win_console {
             }
         }
     }
-}
-
-/// Exit code for `check_pid` when the process is alive.
-const CHECK_PID_ALIVE: i32 = 0;
-/// Exit code for `check_pid` when the process is not running.
-const CHECK_PID_DEAD: i32 = 1;
-
-/// Whether a process with the given OS PID is currently running.
-#[cfg(windows)]
-fn process_is_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut code: u32 = 0;
-        let ok = GetExitCodeProcess(handle, &mut code);
-        let _ = CloseHandle(handle);
-        ok != 0 && code == STILL_ACTIVE as u32
-    }
-}
-
-/// Whether a process with the given OS PID is currently running.
-#[cfg(not(windows))]
-fn process_is_alive(pid: u32) -> bool {
-    // kill(pid, 0) probes existence without signalling.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 fn main() {

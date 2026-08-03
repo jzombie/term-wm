@@ -88,6 +88,7 @@ strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
 term-session = { path = "crates/term-session", version = "0.9.4-alpha" }
 term-session-client = { path = "crates/term-session-client", version = "0.9.4-alpha" }
+term-session-mock = { path = "crates/term-session-mock", version = "0.9.4-alpha" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.9.4-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.9.4-alpha" }
 term-wm = { path = ".", version = "0.9.4-alpha" }
@@ -163,6 +164,7 @@ proptest = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 term-session-client = { path = "crates/term-session-client" }
+term-session-mock = { workspace = true }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions" }
 term-session-server = { path = "crates/term-session-server" }
 term-wm-render = { workspace = true }

@@ -3035,6 +3035,7 @@ dependencies = [
  "libc",
  "muxio-tokio-rpc-ipc-client",
  "term-session-client",
+ "term-session-mock",
  "term-session-muxio-service-definitions",
  "term-session-server",
  "tokio",
@@ -3071,7 +3072,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.0.0"
+version = "0.9.4-alpha"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
@@ -3126,6 +3127,7 @@ dependencies = [
  "serial_test",
  "tempfile",
  "term-session-client",
+ "term-session-mock",
  "term-session-muxio-service-definitions",
  "term-session-server",
  "term-wm-console",
@@ -3215,6 +3217,7 @@ dependencies = [
  "ctrlc",
  "libc",
  "portable-pty",
+ "term-session-mock",
  "term-wm-events",
  "thiserror 2.0.19",
  "tracing",
