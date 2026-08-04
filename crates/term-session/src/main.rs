@@ -187,7 +187,7 @@ fn list() -> io::Result<()> {
         let session = ch
             .session
             .as_ref()
-            .map(|s| format!("session size: {}x{}", s.cols, s.rows))
+            .map(|s| format!("shared size: {}x{}", s.cols, s.rows))
             .unwrap_or_else(|| "none".to_string());
         let nclients = ch.clients.len();
         println!();
@@ -196,7 +196,7 @@ fn list() -> io::Result<()> {
             "  created: {}",
             term_session::format_unix_relative(ch.created_at_unix)
         );
-        println!("  session: {}", session);
+        println!("  {session}");
         println!(
             "  clients: {}",
             if nclients == 0 {
