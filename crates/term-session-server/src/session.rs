@@ -183,9 +183,12 @@ mod tests {
 
     /// Poll `report` until the mock `pwd` child has written its cwd, with a
     /// generous timeout so a broken spawn fails the assertion instead of
-    /// hanging the test. Returns the raw report bytes so losslessness is
-    /// asserted byte-for-byte.
-    fn read_report(report: &Path) -> Vec<u8> {
+    /// hanging the test. Meanwhile `read_output()` pumps the PTY so the
+    /// child's DSR startup handshake completes (a Windows console child
+    /// stalls until the host answers `\x1b[6n`) — otherwise the mock never
+    /// runs and no report is written. Returns the raw report bytes so
+    /// losslessness is asserted byte-for-byte.
+    fn read_report(session: &mut Session, report: &Path) -> Vec<u8> {
         let deadline = Instant::now() + Duration::from_secs(REPORT_TIMEOUT_SECS);
         loop {
             if let Ok(content) = std::fs::read(report) {
@@ -195,12 +198,18 @@ mod tests {
                 Instant::now() < deadline,
                 "mock pwd never wrote the report at {report:?}"
             );
+            session.read_output();
             std::thread::sleep(Duration::from_millis(50));
         }
     }
 
     /// Spawn a session running `mock pwd <report>` with the given wire-encoded
     /// cwd and return the wire bytes the child reports.
+    ///
+    /// The mock is a console app spawned through a PTY, which on Windows
+    /// stalls at startup until the host answers its DSR cursor-position query
+    /// (`\x1b[6n` → `\x1b[row;colR`). The wait loop therefore pumps the PTY via
+    /// `read_output()` → `screen()`, mirroring the real daemon's poll/sync loop.
     fn spawn_pwd_report(cwd: Option<&PathWire>) -> PathWire {
         let dir = tempfile::tempdir().expect("report tempdir");
         let report = dir.path().join("pwd.txt");
@@ -210,9 +219,11 @@ mod tests {
             "pwd".to_string(),
             report.to_string_lossy().into_owned(),
         ];
-        let _session =
+        let mut session =
             Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, cwd).expect("spawn session");
-        PathWire::from(read_report(&report))
+        let bytes = read_report(&mut session, &report);
+        session.pty.kill_child().ok();
+        PathWire::from(bytes)
     }
 
     fn canonical_process_cwd() -> PathBuf {
@@ -225,19 +236,22 @@ mod tests {
         let client_dir = tempfile::tempdir().expect("client tempdir");
         let expected = std::fs::canonicalize(client_dir.path()).expect("canonicalize client dir");
         let reported = spawn_pwd_report(Some(&path_wire::encode_path(client_dir.path())));
-        assert_eq!(path_wire::decode_path(&reported), expected);
+        let reported = std::fs::canonicalize(&reported.decode()).expect("canonicalize reported");
+        assert_eq!(reported, expected);
     }
 
     #[test]
     fn spawn_falls_back_to_process_cwd_when_cwd_none() {
         let reported = spawn_pwd_report(None);
-        assert_eq!(path_wire::decode_path(&reported), canonical_process_cwd());
+        let reported = std::fs::canonicalize(&reported.decode()).expect("canonicalize reported");
+        assert_eq!(reported, canonical_process_cwd());
     }
 
     #[test]
     fn spawn_falls_back_to_process_cwd_when_cwd_empty() {
         let reported = spawn_pwd_report(Some(&PathWire::default()));
-        assert_eq!(path_wire::decode_path(&reported), canonical_process_cwd());
+        let reported = std::fs::canonicalize(&reported.decode()).expect("canonicalize reported");
+        assert_eq!(reported, canonical_process_cwd());
     }
 
     /// End-to-end losslessness proof: a non-UTF-8 cwd survives the full
