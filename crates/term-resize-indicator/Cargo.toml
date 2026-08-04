@@ -8,7 +8,9 @@ edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
-publish.workspace = true
+
+# Internal debug tool; not publishing for now
+publish = false
 
 [dependencies]
 crossterm = { workspace = true }
