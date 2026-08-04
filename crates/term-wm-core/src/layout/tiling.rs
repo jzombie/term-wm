@@ -124,6 +124,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
     pub fn insert_window_balanced(&mut self, insert: Id, area: Rect) {
         // 1. Unified topological fallback — fill voids before splitting
         if self.consume_first_void(insert, area) {
+            self.root.reweight_by_leaf_count();
             return;
         }
 
@@ -131,6 +132,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         let regions = self.regions(area);
         if regions.is_empty() {
             self.split_root(insert, InsertPosition::Right);
+            self.root.reweight_by_leaf_count();
             return;
         }
 
@@ -157,6 +159,8 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         if !self.root.insert_leaf(largest_id, insert, pos) {
             self.split_root(insert, pos);
         }
+        // Equal-area rebalancing: every leaf gets 1/N regardless of tree depth.
+        self.root.reweight_by_leaf_count();
     }
 
     pub fn project_insert_void(&self, insert: Id, void_id: usize, area: Rect) -> Option<Rect> {
@@ -249,6 +253,8 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.remove_leaf(key);
         self.root.cleanup_after_removal();
         self.root.clear_leaf(key);
+        // Rebalance the remaining leaves; the pre-removal weights are stale.
+        self.root.reweight_by_leaf_count();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -333,6 +339,51 @@ mod tests {
         } else {
             panic!("Root must remain a Split");
         }
+    }
+
+    /// Assert every tiled leaf region occupies near-equal area (within a few
+    /// percent; integer rounding and split gaps cause small deviations, but a
+    /// real imbalance such as ½ vs ¼ must fail).
+    fn assert_equal_tiled_areas(layout: &TilingLayout<usize>, area: Rect) {
+        let regions = layout.regions(area);
+        assert!(!regions.is_empty(), "expected at least one tiled leaf");
+        let areas: Vec<u32> = regions
+            .iter()
+            .map(|(_, r)| (r.width as u32) * (r.height as u32))
+            .collect();
+        let min_a = *areas.iter().min().unwrap();
+        let max_a = *areas.iter().max().unwrap();
+        assert!(
+            (max_a as u64) * 100 <= (min_a as u64) * 115,
+            "tiled leaves must be near equal-area, got {areas:?}"
+        );
+    }
+
+    #[test]
+    fn insert_window_balanced_yields_equal_areas() {
+        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        // First window becomes a single leaf (as the window manager does).
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        for id in 2..=4 {
+            layout.insert_window_balanced(id, area);
+        }
+        assert_eq!(layout.regions(area).len(), 4);
+        assert_equal_tiled_areas(&layout, area);
+    }
+
+    #[test]
+    fn remove_window_rebalances_remaining_leaves() {
+        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        for id in 2..=4 {
+            layout.insert_window_balanced(id, area);
+        }
+        assert_equal_tiled_areas(&layout, area);
+
+        // Removing one of four windows must rebalance the remaining three.
+        layout.remove_window(1);
+        assert_eq!(layout.regions(area).len(), 3);
+        assert_equal_tiled_areas(&layout, area);
     }
 
     #[test]
