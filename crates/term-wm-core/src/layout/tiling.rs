@@ -386,7 +386,12 @@ mod tests {
 
     #[test]
     fn insert_window_balanced_yields_equal_areas() {
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         // First window becomes a single leaf (as the window manager does).
         let mut layout = TilingLayout::new(LayoutNode::leaf(1));
         for id in 2..=4 {
@@ -401,7 +406,12 @@ mod tests {
         // A half-screen column (60 cols x 24 rows, e.g. in a 120x24 terminal)
         // must split vertically: a horizontal split would leave two 30-wide
         // full-height strips (the "narrow column" bug).
-        let area = Rect { x: 0, y: 0, width: 60, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 24,
+        };
         let mut layout = TilingLayout::new(LayoutNode::leaf(1));
         layout.insert_window_balanced(2, area);
         let regions = layout.regions(area);
@@ -419,7 +429,12 @@ mod tests {
     fn insert_window_balanced_splits_square_panes_horizontally() {
         // A genuinely wide tile (96 cols x 24 rows) still splits side-by-side
         // into two ~48-wide square panes (a 1-col resize gap is subtracted).
-        let area = Rect { x: 0, y: 0, width: 96, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 96,
+            height: 24,
+        };
         let mut layout = TilingLayout::new(LayoutNode::leaf(1));
         layout.insert_window_balanced(2, area);
         let regions = layout.regions(area);
@@ -439,7 +454,12 @@ mod tests {
     fn insert_window_balanced_two_up_landscape_stays_side_by_side() {
         // Regression guard: the standard 80x24 two-window layout must remain a
         // side-by-side split, not regress to stacked.
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let mut layout = TilingLayout::new(LayoutNode::leaf(1));
         layout.insert_window_balanced(2, area);
         let regions = layout.regions(area);
@@ -451,7 +471,12 @@ mod tests {
 
     #[test]
     fn remove_window_rebalances_remaining_leaves() {
-        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
         let mut layout = TilingLayout::new(LayoutNode::leaf(1));
         for id in 2..=4 {
             layout.insert_window_balanced(id, area);
@@ -469,8 +494,18 @@ mod tests {
         // Startup inserts happen before the first render pass when the managed
         // area is still 0x0; they must still form a balanced 2D grid, not a
         // vertical strip stack (the SEV-1 degenerate-area failure).
-        let uninitialized = Rect { x: 0, y: 0, width: 0, height: 0 };
-        let viewport = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let uninitialized = Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
 
         let mut layout = TilingLayout::new_void();
         for id in 1..=4 {
@@ -482,8 +517,7 @@ mod tests {
         // Equal-area rebalance, and horizontally partitioned (not a full-width
         // vertical strip stack where every window has the same x).
         assert_equal_tiled_areas(&layout, viewport);
-        let x_coords: std::collections::BTreeSet<_> =
-            regions.iter().map(|(_, r)| r.x).collect();
+        let x_coords: std::collections::BTreeSet<_> = regions.iter().map(|(_, r)| r.x).collect();
         assert!(
             x_coords.len() > 1,
             "must have horizontal division, not vertical strips"

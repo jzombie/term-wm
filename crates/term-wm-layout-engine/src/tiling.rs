@@ -1696,7 +1696,12 @@ mod tests {
             resizable: true,
         };
         node.reweight_by_leaf_count();
-        let area = LayoutRect { x: 0, y: 0, width: 90, height: 30 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 90,
+            height: 30,
+        };
         assert_equal_leaf_areas(&node, area);
     }
 
@@ -1726,7 +1731,12 @@ mod tests {
             resizable: true,
         };
         node.reweight_by_leaf_count();
-        let area = LayoutRect { x: 0, y: 0, width: 80, height: 40 };
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 40,
+        };
         assert_equal_leaf_areas(&node, area);
     }
 
