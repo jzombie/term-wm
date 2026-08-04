@@ -1000,6 +1000,51 @@ mod tests {
     }
 
     #[test]
+    fn three_windows_on_wide_area_do_not_form_narrow_columns() {
+        // Regression: on a wide 120x24 viewport, the third window lands in a
+        // half-screen column (60x24). It must stack there rather than split
+        // side-by-side into narrow full-height strips.
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
+        let mut wm = WindowManager::<NoopComponent>::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
+        let k2 = wm.create_window(NoopComponent);
+        wm.transition_window(k0, WindowState::Mapped);
+        wm.transition_window(k1, WindowState::Mapped);
+        wm.transition_window(k2, WindowState::Mapped);
+
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 120,
+            height: 24,
+        });
+
+        let regions = [wm.region(k0), wm.region(k1), wm.region(k2)];
+        for r in &regions {
+            assert!(
+                r.width >= 38,
+                "no window may be a narrow strip, got width {}",
+                r.width
+            );
+        }
+        let xs: std::collections::HashSet<i32> = regions.iter().map(|r| r.x).collect();
+        assert!(
+            xs.len() < 3,
+            "windows must share a column rather than all sit side-by-side"
+        );
+    }
+
+    #[test]
     fn register_managed_layout_retains_iconic_windows_in_z_order() {
         let mut wm = make_wm();
 

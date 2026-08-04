@@ -168,7 +168,12 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             _ => {
                 let visual_h = (largest_rect.height as u32) * crate::constants::CELL_ASPECT_RATIO;
                 let visual_w = largest_rect.width as u32;
-                if visual_w >= visual_h {
+                // Horizontal splits halve the tile's width; bias them to only
+                // fire when the region is clearly wider than tall (>= 1.5x
+                // visual height), so they never create narrow vertical strips.
+                if visual_w * crate::constants::TILING_HORIZONTAL_BIAS_DENOMINATOR
+                    >= visual_h * crate::constants::TILING_HORIZONTAL_BIAS_NUMERATOR
+                {
                     InsertPosition::Right
                 } else {
                     InsertPosition::Bottom
@@ -389,6 +394,59 @@ mod tests {
         }
         assert_eq!(layout.regions(area).len(), 4);
         assert_equal_tiled_areas(&layout, area);
+    }
+
+    #[test]
+    fn insert_window_balanced_avoids_narrow_vertical_strips() {
+        // A half-screen column (60 cols x 24 rows, e.g. in a 120x24 terminal)
+        // must split vertically: a horizontal split would leave two 30-wide
+        // full-height strips (the "narrow column" bug).
+        let area = Rect { x: 0, y: 0, width: 60, height: 24 };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        layout.insert_window_balanced(2, area);
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 2);
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
+        assert_eq!(r1.x, 0, "window 1 starts at column 0");
+        assert_eq!(r2.x, 0, "window 2 starts at column 0");
+        assert_eq!(r1.width, 60, "window 1 spans full width");
+        assert_eq!(r2.width, 60, "window 2 spans full width");
+        assert!(r1.y < r2.y, "windows must stack, not form narrow columns");
+    }
+
+    #[test]
+    fn insert_window_balanced_splits_square_panes_horizontally() {
+        // A genuinely wide tile (96 cols x 24 rows) still splits side-by-side
+        // into two ~48-wide square panes (a 1-col resize gap is subtracted).
+        let area = Rect { x: 0, y: 0, width: 96, height: 24 };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        layout.insert_window_balanced(2, area);
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 2);
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
+        assert!(r1.x < r2.x, "windows must be side by side on a wide tile");
+        assert!(
+            r1.width >= 47 && r2.width >= 47,
+            "each pane must be ~half the tile, got {} and {}",
+            r1.width,
+            r2.width
+        );
+    }
+
+    #[test]
+    fn insert_window_balanced_two_up_landscape_stays_side_by_side() {
+        // Regression guard: the standard 80x24 two-window layout must remain a
+        // side-by-side split, not regress to stacked.
+        let area = Rect { x: 0, y: 0, width: 80, height: 24 };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        layout.insert_window_balanced(2, area);
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 2);
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
+        assert!(r1.x < r2.x, "80x24 two-up must stay side by side");
     }
 
     #[test]
