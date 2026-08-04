@@ -479,8 +479,8 @@ fn bare_term_session_shows_help_and_does_not_connect() {
         "help should mention --channel, got: {stderr}"
     );
     assert!(
-        stderr.contains("list"),
-        "help should list list, got: {stderr}"
+        stderr.contains("ls"),
+        "help should list the ls subcommand, got: {stderr}"
     );
     assert!(
         stderr.contains("stop"),
@@ -575,6 +575,37 @@ async fn dash_dash_disambiguates_command_from_subcommand() {
     ShutdownGateway::call(&*rpc, true).await.unwrap();
     let _ = client.kill();
     let _ = client.wait();
+}
+
+#[tokio::test]
+async fn unknown_flag_errors_without_spawning_gateway() {
+    // A leading-hyphen token that is not a real flag (e.g. `--list`, a typo for
+    // the `list` subcommand) must be rejected by clap, never swallowed into the
+    // trailing command and auto-attached. Each must exit non-zero and leave no
+    // gateway behind.
+    for flag in ["--list", "--bogus", "-x"] {
+        let gateway = unique_gateway("unknown_flag");
+        let gw = ChannelName::parse(&gateway).expect("gateway name");
+        let out = Command::new(bin())
+            .env("TERM_WM_GATEWAY", &gateway)
+            .arg(flag)
+            .output()
+            .expect("run with unknown flag");
+        assert_ne!(
+            out.status.code(),
+            Some(0),
+            "`{flag}` must not exit successfully"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("unexpected argument"),
+            "`{flag}` must be reported as an unexpected argument, got: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !probe_ipc_endpoint(&gw),
+            "`{flag}` must not auto-spawn a gateway"
+        );
+    }
 }
 
 #[tokio::test]

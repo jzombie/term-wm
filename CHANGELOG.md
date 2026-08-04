@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.8-alpha] - 2026-08-04
+
+### Fixed
+
+- **`term-session` rejects unknown flags instead of auto-attaching:** a leading-hyphen token that is not a real flag (e.g. `term-session --list`, a typo for the `list` subcommand) previously slipped into the trailing command and silently opened the default channel session. The trailing command no longer accepts hyphen values before `--`, so clap now rejects unknown flags with `unexpected argument ...` and exits (code 2) without spawning a gateway. Commands passed after `--` (or trailing args after the first command word) still pass hyphen flags through untouched.
+
+### Changed
+
+- **`term-session` CLI help rewritten:** `--help` / bare-run help now opens with a concise one-line description sourced from the crate's new `Cargo.toml` description ("Run terminal sessions in a detached daemon and attach locally or over SSH."), and the subcommand/argument descriptions were trimmed to single-line summaries — `kill` no longer appends "(default)", `kill-client` drops the "from `term-session list`" hint, and `--channel` / `--gateway` state their defaults / env overrides inline.
+
+### Docs
+
+- **`term-session` commands must be interactive or long-running:** the README and CLI help now state that the spawned command must be interactive or long-running (a shell, editor, or long-lived process) — a short command like `ls` exits immediately and ends the session.
+
 ## [0.9.7-alpha] - 2026-08-03
 
 ### Added
