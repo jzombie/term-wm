@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.7-alpha] - 2026-08-03
+
+### Added
+
+- **`term-wm` multi-window commands:** a repeatable `-r, --run <CMD>` flag opens one window per command, and the trailing `-- CMD...` runs a single command (the whole argv joined) in a window after the `--run` windows; `-n, --count` sets the total window count. Fixes `-n 3 -- ls -la` previously spawning one window per token (`ls`, `-la`).
+- **`term-wm` balanced tiling:** the tiling layout now reweights every split to its descendant leaf count on each window insert and remove, so all windows share equal area regardless of tree depth — fixing the uneven startup layout (one ½ window + two ¼ windows) and keeping tiles balanced as windows are opened or closed interactively. Startup windows are no longer tiled against an uninitialized 0×0 area: `tile_window` defers layout construction until the first render frame, and the tree is then built from the mapped, non-floating windows against the measured viewport — so multi-window launch orients to the real terminal aspect ratio instead of being baked early against a landscape fallback. Horizontal splits are biased so a tile must be at least 1.5× as wide as it is tall (in visual cell units) to split side-by-side — inserting windows into a half-screen column stacks them instead of spawning narrow full-height strips.
+
+### Fixed
+
+- **`term-wm` startup window orientation:** two windows launched in a tall/narrow terminal previously split side-by-side into thin vertical strips because the tiling tree was built before the real viewport was known (against a fixed landscape fallback size). Tiling is now deferred until the first render frame and built from the mapped windows against the measured terminal size, so startup orientation matches the actual aspect ratio (stacked when tall/narrow, side-by-side when wide).
+- **`term-wm` trailing-command example:** the README's `-n 3 -- ls -la` (documented as running `ls -la` in the first window) didn't work — it spawned one window per token (`ls`, then `-la`). The `--` argv is now treated as a single command, and the README Usage section was updated to match (plus the new `-r, --run` multi-window syntax).
+
 ## [0.9.6-alpha] - 2026-08-03
 
 ### Added

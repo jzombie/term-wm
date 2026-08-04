@@ -122,8 +122,24 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
     }
 
     pub fn insert_window_balanced(&mut self, insert: Id, area: Rect) {
+        // Startup inserts can run before the first render pass, when
+        // `managed_area` is still `Rect { 0, 0, 0, 0 }`; a degenerate area would
+        // force every split to `InsertPosition::Bottom` (a vertical strip stack).
+        // Fall back to a standard terminal size so the tree is a real 2D grid.
+        let area = if area.width == 0 || area.height == 0 {
+            Rect {
+                x: 0,
+                y: 0,
+                width: crate::constants::DEFAULT_FLOAT_WIDTH,
+                height: crate::constants::DEFAULT_FLOAT_HEIGHT,
+            }
+        } else {
+            area
+        };
+
         // 1. Unified topological fallback — fill voids before splitting
         if self.consume_first_void(insert, area) {
+            self.root.reweight_by_leaf_count();
             return;
         }
 
@@ -131,6 +147,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         let regions = self.regions(area);
         if regions.is_empty() {
             self.split_root(insert, InsertPosition::Right);
+            self.root.reweight_by_leaf_count();
             return;
         }
 
@@ -140,23 +157,35 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             .copied()
             .unwrap();
 
-        let pos = if largest_rect.width / 2 < crate::constants::MIN_TILE_WIDTH {
-            InsertPosition::Bottom
-        } else if largest_rect.height / 2 < crate::constants::MIN_TILE_HEIGHT {
-            InsertPosition::Right
-        } else {
-            let visual_h = (largest_rect.height as u32) * crate::constants::CELL_ASPECT_RATIO;
-            let visual_w = largest_rect.width as u32;
-            if visual_w >= visual_h {
-                InsertPosition::Right
-            } else {
-                InsertPosition::Bottom
+        // Split direction: only one axis fits → that axis; both fit (or neither)
+        // → decide by visual aspect ratio. Checking each axis independently avoids
+        // the old `width/2` first bias that forced vertical stacking on small areas.
+        let can_split_h = largest_rect.width / 2 >= crate::constants::MIN_TILE_WIDTH;
+        let can_split_v = largest_rect.height / 2 >= crate::constants::MIN_TILE_HEIGHT;
+        let pos = match (can_split_h, can_split_v) {
+            (true, false) => InsertPosition::Right,
+            (false, true) => InsertPosition::Bottom,
+            _ => {
+                let visual_h = (largest_rect.height as u32) * crate::constants::CELL_ASPECT_RATIO;
+                let visual_w = largest_rect.width as u32;
+                // Horizontal splits halve the tile's width; bias them to only
+                // fire when the region is clearly wider than tall (>= 1.5x
+                // visual height), so they never create narrow vertical strips.
+                if visual_w * crate::constants::TILING_HORIZONTAL_BIAS_DENOMINATOR
+                    >= visual_h * crate::constants::TILING_HORIZONTAL_BIAS_NUMERATOR
+                {
+                    InsertPosition::Right
+                } else {
+                    InsertPosition::Bottom
+                }
             }
         };
 
         if !self.root.insert_leaf(largest_id, insert, pos) {
             self.split_root(insert, pos);
         }
+        // Equal-area rebalancing: every leaf gets 1/N regardless of tree depth.
+        self.root.reweight_by_leaf_count();
     }
 
     pub fn project_insert_void(&self, insert: Id, void_id: usize, area: Rect) -> Option<Rect> {
@@ -249,6 +278,8 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
         self.root.remove_leaf(key);
         self.root.cleanup_after_removal();
         self.root.clear_leaf(key);
+        // Rebalance the remaining leaves; the pre-removal weights are stale.
+        self.root.reweight_by_leaf_count();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -333,6 +364,164 @@ mod tests {
         } else {
             panic!("Root must remain a Split");
         }
+    }
+
+    /// Assert every tiled leaf region occupies near-equal area (within a few
+    /// percent; integer rounding and split gaps cause small deviations, but a
+    /// real imbalance such as ½ vs ¼ must fail).
+    fn assert_equal_tiled_areas(layout: &TilingLayout<usize>, area: Rect) {
+        let regions = layout.regions(area);
+        assert!(!regions.is_empty(), "expected at least one tiled leaf");
+        let areas: Vec<u32> = regions
+            .iter()
+            .map(|(_, r)| (r.width as u32) * (r.height as u32))
+            .collect();
+        let min_a = *areas.iter().min().unwrap();
+        let max_a = *areas.iter().max().unwrap();
+        assert!(
+            (max_a as u64) * 100 <= (min_a as u64) * 115,
+            "tiled leaves must be near equal-area, got {areas:?}"
+        );
+    }
+
+    #[test]
+    fn insert_window_balanced_yields_equal_areas() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        // First window becomes a single leaf (as the window manager does).
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        for id in 2..=4 {
+            layout.insert_window_balanced(id, area);
+        }
+        assert_eq!(layout.regions(area).len(), 4);
+        assert_equal_tiled_areas(&layout, area);
+    }
+
+    #[test]
+    fn insert_window_balanced_avoids_narrow_vertical_strips() {
+        // A half-screen column (60 cols x 24 rows, e.g. in a 120x24 terminal)
+        // must split vertically: a horizontal split would leave two 30-wide
+        // full-height strips (the "narrow column" bug).
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 24,
+        };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        layout.insert_window_balanced(2, area);
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 2);
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
+        assert_eq!(r1.x, 0, "window 1 starts at column 0");
+        assert_eq!(r2.x, 0, "window 2 starts at column 0");
+        assert_eq!(r1.width, 60, "window 1 spans full width");
+        assert_eq!(r2.width, 60, "window 2 spans full width");
+        assert!(r1.y < r2.y, "windows must stack, not form narrow columns");
+    }
+
+    #[test]
+    fn insert_window_balanced_splits_square_panes_horizontally() {
+        // A genuinely wide tile (96 cols x 24 rows) still splits side-by-side
+        // into two ~48-wide square panes (a 1-col resize gap is subtracted).
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 96,
+            height: 24,
+        };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        layout.insert_window_balanced(2, area);
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 2);
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
+        assert!(r1.x < r2.x, "windows must be side by side on a wide tile");
+        assert!(
+            r1.width >= 47 && r2.width >= 47,
+            "each pane must be ~half the tile, got {} and {}",
+            r1.width,
+            r2.width
+        );
+    }
+
+    #[test]
+    fn insert_window_balanced_two_up_landscape_stays_side_by_side() {
+        // Regression guard: the standard 80x24 two-window layout must remain a
+        // side-by-side split, not regress to stacked.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        layout.insert_window_balanced(2, area);
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 2);
+        let r1 = regions.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let r2 = regions.iter().find(|(id, _)| *id == 2).unwrap().1;
+        assert!(r1.x < r2.x, "80x24 two-up must stay side by side");
+    }
+
+    #[test]
+    fn remove_window_rebalances_remaining_leaves() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut layout = TilingLayout::new(LayoutNode::leaf(1));
+        for id in 2..=4 {
+            layout.insert_window_balanced(id, area);
+        }
+        assert_equal_tiled_areas(&layout, area);
+
+        // Removing one of four windows must rebalance the remaining three.
+        layout.remove_window(1);
+        assert_eq!(layout.regions(area).len(), 3);
+        assert_equal_tiled_areas(&layout, area);
+    }
+
+    #[test]
+    fn insert_four_windows_uninitialized_area_forms_balanced_2d_grid() {
+        // Startup inserts happen before the first render pass when the managed
+        // area is still 0x0; they must still form a balanced 2D grid, not a
+        // vertical strip stack (the SEV-1 degenerate-area failure).
+        let uninitialized = Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+
+        let mut layout = TilingLayout::new_void();
+        for id in 1..=4 {
+            layout.insert_window_balanced(id, uninitialized);
+        }
+
+        let regions = layout.regions(viewport);
+        assert_eq!(regions.len(), 4);
+        // Equal-area rebalance, and horizontally partitioned (not a full-width
+        // vertical strip stack where every window has the same x).
+        assert_equal_tiled_areas(&layout, viewport);
+        let x_coords: std::collections::BTreeSet<_> = regions.iter().map(|(_, r)| r.x).collect();
+        assert!(
+            x_coords.len() > 1,
+            "must have horizontal division, not vertical strips"
+        );
     }
 
     #[test]

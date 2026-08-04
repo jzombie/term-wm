@@ -1227,6 +1227,13 @@ mod drag_snap_pipeline {
         wm.set_panel_visible(false);
 
         let k0 = wm.create_window(NoopComponent);
+
+        // tile_window_key defers layout construction while managed_area is
+        // unmeasured (0x0, pre-first-render); register_managed_layout below
+        // builds the tree lazily from Mapped, non-floating windows. Explicitly
+        // map the window so it is picked up by that lazy build.
+        wm.transition_window(k0, term_wm_core::window::WindowState::Mapped);
+
         assert!(wm.tile_window(k0));
         wm.register_managed_layout(AREA);
 

@@ -73,6 +73,12 @@ pub const MIN_TILE_HEIGHT: u16 = 6;
 /// Terminal cell aspect ratio (height ~2x width) for visual split direction.
 pub const CELL_ASPECT_RATIO: u32 = 2;
 
+/// Horizontal-split bias for `insert_window_balanced`: visual width must be at
+/// least 1.5x (3/2) visual height before a tile splits side-by-side, so a
+/// horizontal split never produces tall, narrow vertical child strips.
+pub const TILING_HORIZONTAL_BIAS_NUMERATOR: u32 = 3;
+pub const TILING_HORIZONTAL_BIAS_DENOMINATOR: u32 = 2;
+
 /// Width threshold (in columns) below which auto-monocle mode activates.
 pub const MONOCLE_WIDTH_THRESHOLD: u16 = 80;
 

@@ -438,6 +438,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         self.clear_floating_rect(key);
 
+        if self.managed_area.width == 0 || self.managed_area.height == 0 {
+            // Viewport not measured yet (pre-first-render startup): defer layout
+            // construction. register_managed_layout builds the tree on frame 1
+            // from the mapped windows against the real area.
+            self.focus_window_key(key);
+            return true;
+        }
+
         if self.layout_contains(key)
             && let Some(layout) = &mut self.managed_layout
         {

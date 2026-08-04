@@ -42,11 +42,14 @@ This opens a new workspace with two terminal windows by default. Pass programs a
 cargo run --release -- vim
 cargo run --release -- -n 4              # open 4 windows
 cargo run --release -- -n 3 -- ls -la    # 3 windows; the first runs `ls -la`
+cargo run --release -- -r "vim -l" -r "htop"                            # 2 windows, one command each
+cargo run --release -- -n 4 -r "vim -l" -r "htop" -- git log --oneline  # 4 windows: 3 commands + 1 default shell
 ```
 
 Options (`term-wm -h`):
 
 - `-n, --count <N>` — number of windows to open (default 2; min 1)
+- `-r, --run <CMD>` — command to run in a window; repeatable, one window per `--run`. A trailing `-- CMD...` runs one command in a window after the `--run` windows. Remaining windows launch default shells.
 - `-h, --help`, `-V, --version`
 
 New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
