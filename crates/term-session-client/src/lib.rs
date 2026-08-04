@@ -21,7 +21,7 @@ use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCal
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse, path_wire,
 };
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
@@ -408,16 +408,11 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
             Some(cmd.to_vec())
         };
         // The launch directory is captured here so a newly spawned session
-        // starts in the caller's cwd, not the daemon's. `None` (current_dir
+        // starts in the caller's cwd, not the daemon's. It is encoded
+        // losslessly (platform-native raw bytes, see `path_wire`), so even
+        // non-UTF-8 paths survive the wire byte-for-byte. `None` (current_dir
         // failing) lets the server fall back to the daemon's cwd.
-        // The wire carries UTF-8 `String`s, so `to_string_lossy` substitutes
-        // U+FFFD for any non-UTF-8 path bytes; a lossless round-trip would
-        // require sending raw bytes (e.g. via `OsStrExt`). Acceptable here:
-        // non-UTF-8 cwd paths are rare and only affect the launch directory,
-        // never session I/O.
-        let launch_cwd = std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned());
+        let launch_cwd = std::env::current_dir().ok().map(path_wire::encode_path);
         let SpawnResponse {
             id: _session_id,
             cols: actual_cols,

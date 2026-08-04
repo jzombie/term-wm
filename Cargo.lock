@@ -3076,6 +3076,7 @@ name = "term-session-mock"
 version = "0.9.8-alpha"
 dependencies = [
  "libc",
+ "term-session-muxio-service-definitions",
  "windows-sys 0.59.0",
 ]
 

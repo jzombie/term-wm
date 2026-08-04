@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
 use term_session_muxio_service_definitions::{
     Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, SpawnRequest,
-    SpawnResponse, probe_ipc_endpoint,
+    SpawnResponse, path_wire, probe_ipc_endpoint,
 };
 
 /// The compiled `term-session` binary under test.
@@ -273,16 +273,17 @@ async fn session_starts_in_client_cwd() {
             ]),
             cols: 80u16,
             rows: 24u16,
-            cwd: Some(client_dir.path().to_string_lossy().to_string()),
+            cwd: Some(path_wire::encode_path(client_dir.path())),
         },
     )
     .await
     .unwrap();
 
-    // Poll for the report: the mock writes it right before exiting.
+    // Poll for the report: the mock writes it right before exiting. The mock
+    // reports its cwd as raw wire bytes (lossless), so read them byte-for-byte.
     let start = Instant::now();
     let got = loop {
-        if let Ok(content) = std::fs::read_to_string(&report) {
+        if let Ok(content) = std::fs::read(&report) {
             break content;
         }
         assert!(
@@ -293,12 +294,9 @@ async fn session_starts_in_client_cwd() {
     };
     // The child's `current_dir()` is the OS-canonical path (on macOS `/var`
     // resolves to `/private/var`), so canonicalize the expected dir.
-    let expected = std::fs::canonicalize(client_dir.path())
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+    let expected = std::fs::canonicalize(client_dir.path()).unwrap();
     assert_eq!(
-        got,
+        path_wire::decode_path(&got),
         expected,
         "session must start in the client's launch directory, not the daemon's \
          startup directory ({:?})",

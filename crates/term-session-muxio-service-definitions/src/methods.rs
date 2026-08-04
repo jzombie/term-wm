@@ -74,8 +74,10 @@ pub struct SpawnRequest {
     pub rows: u16,
     /// The client process's working directory at the time it launched, so a
     /// newly spawned session starts there rather than in the daemon's cwd.
-    /// `None`/empty falls back to the daemon's cwd.
-    pub cwd: Option<String>,
+    /// Encoded losslessly via [`crate::path_wire::encode_path`], so non-UTF-8
+    /// paths survive the wire byte-for-byte. `None`/empty falls back to the
+    /// daemon's cwd.
+    pub cwd: Option<Vec<u8>>,
 }
 
 /// Response for `Spawn`: the (possibly reused) session id and its geometry.

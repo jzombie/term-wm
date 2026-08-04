@@ -2,6 +2,7 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 use term_session_mock::{CHECK_PID_ALIVE, CHECK_PID_DEAD, process_is_alive};
+use term_session_muxio_service_definitions::path_wire;
 
 /// Deterministic mock binary for session server E2E tests.
 ///
@@ -198,18 +199,17 @@ fn main() {
             // file path (the session may be running in a different cwd than the
             // test harness, so the output file must be given as an absolute
             // path). Lets E2E tests verify where the daemon spawned the session.
-            let file = args
-                .get(2)
+            let file = std::env::args_os()
+                .nth(2)
                 .expect("pwd requires an absolute output file path");
-            // Lossy conversion (U+FFFD substitution) keeps the report directly
-            // comparable to the test harness's own `to_string_lossy`
-            // canonicalization; raw bytes would need OsStrExt and aren't worth
-            // it for a test probe.
+            // Report the child's actual cwd as raw wire bytes (lossless, see
+            // `path_wire`), so the harness can assert a byte-for-byte round-trip
+            // even for non-UTF-8 paths.
             let cwd = std::env::current_dir()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| "<unavailable>".to_string());
-            if let Err(e) = std::fs::write(file, &cwd) {
-                eprintln!("pwd: failed to write {file}: {e}");
+                .map(|p| path_wire::encode_path(&p))
+                .unwrap_or_default();
+            if let Err(e) = std::fs::write(&file, &cwd) {
+                eprintln!("pwd: failed to write {:?}: {e}", file);
                 std::process::exit(1);
             }
         }
