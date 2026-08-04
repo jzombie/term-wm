@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 libc = { workspace = true }
+term-session-muxio-service-definitions = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

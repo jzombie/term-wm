@@ -1,5 +1,6 @@
 use portable_pty::{CommandBuilder, PtySize};
 use term_session_muxio_service_definitions::ChannelName;
+use term_session_muxio_service_definitions::PathWire;
 use term_wm_pty_engine::{Pty, PtyResult, PtyStatus};
 
 pub struct Session {
@@ -17,11 +18,18 @@ fn default_shell_command() -> CommandBuilder {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
     #[cfg(windows)]
     let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
-    let mut cmd = CommandBuilder::new(shell);
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
+    CommandBuilder::new(shell)
+}
+
+/// Resolve the working directory a newly spawned session should start in.
+/// Prefers the caller's launch directory (losslessly decoded wire bytes);
+/// falls back to this process's cwd (the daemon's) for legacy clients that
+/// send `None` or an empty payload.
+fn resolve_cwd(cwd: Option<&PathWire>) -> Option<std::path::PathBuf> {
+    match cwd {
+        Some(c) if !c.is_empty() => Some(c.decode()),
+        _ => std::env::current_dir().ok(),
     }
-    cmd
 }
 
 impl Session {
@@ -31,6 +39,7 @@ impl Session {
         cols: u16,
         rows: u16,
         channel: Option<&ChannelName>,
+        cwd: Option<&PathWire>,
     ) -> PtyResult<Self> {
         let size = PtySize {
             rows,
@@ -38,25 +47,25 @@ impl Session {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let pty = if let Some(cmd_parts) = &cmd {
-            let mut builder = CommandBuilder::new(&cmd_parts[0]);
+        // Prefer the caller's launch directory; fall back to this process's
+        // cwd (the daemon's) for legacy clients that send no cwd.
+        let resolved_cwd = resolve_cwd(cwd);
+        let mut builder = if let Some(cmd_parts) = &cmd {
+            let mut b = CommandBuilder::new(&cmd_parts[0]);
             for arg in &cmd_parts[1..] {
-                builder.arg(arg);
+                b.arg(arg);
             }
-            if let Some(ch) = channel {
-                builder.env("TERM_WM_CHANNEL", ch.to_string());
-            }
-            if let Ok(cwd) = std::env::current_dir() {
-                builder.cwd(cwd);
-            }
-            Pty::spawn(builder, size)?
+            b
         } else {
-            let mut builder = default_shell_command();
-            if let Some(ch) = channel {
-                builder.env("TERM_WM_CHANNEL", ch.to_string());
-            }
-            Pty::spawn(builder, size)?
+            default_shell_command()
         };
+        if let Some(ch) = channel {
+            builder.env("TERM_WM_CHANNEL", ch.to_string());
+        }
+        if let Some(c) = resolved_cwd {
+            builder.cwd(c);
+        }
+        let pty = Pty::spawn(builder, size)?;
         Ok(Self {
             id,
             pty,
@@ -109,5 +118,141 @@ impl Session {
 
     pub fn set_status_callback(&mut self, cb: Option<Box<dyn Fn(PtyStatus) + Send + Sync>>) {
         self.pty.set_status_callback(cb);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Session, resolve_cwd};
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+
+    use term_session_muxio_service_definitions::path_wire;
+    use term_session_muxio_service_definitions::path_wire::PathWire;
+
+    const TEST_COLS: u16 = 80;
+    const TEST_ROWS: u16 = 24;
+    const REPORT_TIMEOUT_SECS: u64 = 10;
+
+    #[test]
+    fn resolve_cwd_uses_provided_dir() {
+        let dir = std::env::temp_dir().join("resolve-cwd-probe");
+        let probe = path_wire::encode_path(&dir);
+        assert_eq!(resolve_cwd(Some(&probe)), Some(dir));
+    }
+
+    #[test]
+    fn resolve_cwd_falls_back_to_process_dir_when_none() {
+        assert_eq!(resolve_cwd(None), std::env::current_dir().ok());
+    }
+
+    #[test]
+    fn resolve_cwd_falls_back_to_process_dir_when_empty() {
+        assert_eq!(
+            resolve_cwd(Some(&PathWire::default())),
+            std::env::current_dir().ok()
+        );
+    }
+
+    /// Try to create a directory whose name contains bytes that are not valid
+    /// UTF-8. Only possible on Unix, and some filesystems refuse it: macOS
+    /// requires valid UTF-8 filenames, so this returns `None` there and the
+    /// tests skip (losslessness is still covered by the pure `path_wire`
+    /// round-trip test, which needs no filesystem). Returns `Some` on Linux
+    /// etc., proving the cwd round-trip is byte-for-byte, not merely
+    /// UTF-8-equivalent.
+    #[cfg(unix)]
+    fn try_non_utf8_dir(base: &Path) -> Option<PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::OsStr::from_bytes(b"cwd-\xff\xfe-non-utf8");
+        let dir = base.join(name);
+        std::fs::create_dir_all(&dir).ok().map(|()| dir)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_cwd_round_trips_non_utf8_dir() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let Some(dir) = try_non_utf8_dir(base.path()) else {
+            eprintln!("skipping: filesystem rejects non-UTF-8 directory names");
+            return;
+        };
+        let probe = path_wire::encode_path(&dir);
+        assert_eq!(resolve_cwd(Some(&probe)), Some(dir));
+    }
+
+    /// Poll `report` until the mock `pwd` child has written its cwd, with a
+    /// generous timeout so a broken spawn fails the assertion instead of
+    /// hanging the test. Returns the raw report bytes so losslessness is
+    /// asserted byte-for-byte.
+    fn read_report(report: &Path) -> Vec<u8> {
+        let deadline = Instant::now() + Duration::from_secs(REPORT_TIMEOUT_SECS);
+        loop {
+            if let Ok(content) = std::fs::read(report) {
+                return content;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "mock pwd never wrote the report at {report:?}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Spawn a session running `mock pwd <report>` with the given wire-encoded
+    /// cwd and return the wire bytes the child reports.
+    fn spawn_pwd_report(cwd: Option<&PathWire>) -> PathWire {
+        let dir = tempfile::tempdir().expect("report tempdir");
+        let report = dir.path().join("pwd.txt");
+        let mock = term_session_mock::get_mock_bin();
+        let cmd = vec![
+            mock.to_string_lossy().into_owned(),
+            "pwd".to_string(),
+            report.to_string_lossy().into_owned(),
+        ];
+        let _session =
+            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, cwd).expect("spawn session");
+        PathWire::from(read_report(&report))
+    }
+
+    fn canonical_process_cwd() -> PathBuf {
+        std::fs::canonicalize(std::env::current_dir().expect("process cwd"))
+            .expect("canonicalize process cwd")
+    }
+
+    #[test]
+    fn spawn_starts_in_specified_cwd() {
+        let client_dir = tempfile::tempdir().expect("client tempdir");
+        let expected = std::fs::canonicalize(client_dir.path()).expect("canonicalize client dir");
+        let reported = spawn_pwd_report(Some(&path_wire::encode_path(client_dir.path())));
+        assert_eq!(path_wire::decode_path(&reported), expected);
+    }
+
+    #[test]
+    fn spawn_falls_back_to_process_cwd_when_cwd_none() {
+        let reported = spawn_pwd_report(None);
+        assert_eq!(path_wire::decode_path(&reported), canonical_process_cwd());
+    }
+
+    #[test]
+    fn spawn_falls_back_to_process_cwd_when_cwd_empty() {
+        let reported = spawn_pwd_report(Some(&PathWire::default()));
+        assert_eq!(path_wire::decode_path(&reported), canonical_process_cwd());
+    }
+
+    /// End-to-end losslessness proof: a non-UTF-8 cwd survives the full
+    /// `Session::spawn` → child cwd → report pipeline byte-for-byte (skipped on
+    /// filesystems that reject non-UTF-8 names, e.g. macOS).
+    #[cfg(unix)]
+    #[test]
+    fn spawn_round_trips_non_utf8_cwd() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let Some(dir) = try_non_utf8_dir(base.path()) else {
+            eprintln!("skipping: filesystem rejects non-UTF-8 directory names");
+            return;
+        };
+        let reported = spawn_pwd_report(Some(&path_wire::encode_path(&dir)));
+        let expected = std::fs::canonicalize(&dir).expect("canonicalize non-utf8 dir");
+        assert_eq!(path_wire::decode_path(&reported), expected);
     }
 }

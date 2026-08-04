@@ -21,7 +21,7 @@ use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCal
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse, path_wire,
 };
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
@@ -311,12 +311,6 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     #[cfg(windows)]
     disable_quick_edit();
 
-    // Redirect stderr to tracing so macOS AppKit/NSPasteboard noise doesn't
-    // leak to the terminal display.  Best-effort: if it fails (non-Unix, etc.)
-    // the session still works, just without the noise suppression.
-    #[cfg(unix)]
-    let _ = redirect_fd_to_tracing(libc::STDERR_FILENO, true);
-
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
 
@@ -407,10 +401,28 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         } else {
             Some(cmd.to_vec())
         };
-        let (_session_id, actual_cols, actual_rows) =
-            Spawn::call(&*client, (cmd, term_cols, term_rows))
-                .await
-                .map_err(|e| abi_fault(&e))?;
+        // The launch directory is captured here so a newly spawned session
+        // starts in the caller's cwd, not the daemon's. It is encoded
+        // losslessly (platform-native raw bytes, see `path_wire`), so even
+        // non-UTF-8 paths survive the wire byte-for-byte. `None` (current_dir
+        // failing) lets the server fall back to the daemon's cwd.
+        let launch_cwd = std::env::current_dir().ok().map(path_wire::encode_path);
+        let SpawnResponse {
+            id: _session_id,
+            cols: actual_cols,
+            rows: actual_rows,
+            ..
+        } = Spawn::call(
+            &*client,
+            SpawnRequest {
+                cmd,
+                cols: term_cols,
+                rows: term_rows,
+                cwd: launch_cwd,
+            },
+        )
+        .await
+        .map_err(|e| abi_fault(&e))?;
         let _ = conn_id;
         Ok::<(u16, u16), io::Error>((actual_cols, actual_rows))
     })?;
@@ -516,6 +528,16 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
 
     // Pass one stdout handle to init_terminal for the startup sequences
     // and TerminalGuard teardown; keep a second handle for rendering.
+    //
+    // Redirect stderr to tracing only now that the terminal UI is about to
+    // take over, so macOS AppKit/NSPasteboard noise doesn't leak to the
+    // terminal display. Deferred until AFTER the Attach/Spawn/channel handshake
+    // so any connect/ABI error above reaches the real stderr and `main` can
+    // print it, instead of being swallowed into the (unsubscribed) tracing
+    // pipe. Best-effort: if it fails the session still works, just without the
+    // noise suppression.
+    #[cfg(unix)]
+    let _ = redirect_fd_to_tracing(libc::STDERR_FILENO, true);
     let _guard = init_terminal(stdout())?;
     let mut out = stdout();
 

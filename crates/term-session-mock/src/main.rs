@@ -2,6 +2,7 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 use term_session_mock::{CHECK_PID_ALIVE, CHECK_PID_DEAD, process_is_alive};
+use term_session_muxio_service_definitions::path_wire;
 
 /// Deterministic mock binary for session server E2E tests.
 ///
@@ -20,6 +21,8 @@ use term_session_mock::{CHECK_PID_ALIVE, CHECK_PID_DEAD, process_is_alive};
 ///   included), not just the session leader.
 /// - `check_pid <pid>` — exits 0 if the process is alive, non-zero otherwise.
 ///   Cross-platform liveness probe for tree-kill assertions.
+/// - `pwd <file>` — writes the process's current working directory to the given
+///   (absolute) file path, then exits. Lets E2E tests verify session cwd.
 pub const OSC52_TEST_PAYLOAD: &[u8] = b"c;dGVzdA==";
 
 #[cfg(windows)]
@@ -69,7 +72,9 @@ mod win_console {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: term_session_mock <echo|osc52|sleep|exit|spawn_child|check_pid> [args]");
+        eprintln!(
+            "Usage: term_session_mock <echo|osc52|sleep|exit|spawn_child|check_pid|pwd> [args]"
+        );
         std::process::exit(1);
     }
 
@@ -188,6 +193,25 @@ fn main() {
         "exit" => {
             let code: i32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             std::process::exit(code);
+        }
+        "pwd" => {
+            // Write the child process's actual working directory to an absolute
+            // file path (the session may be running in a different cwd than the
+            // test harness, so the output file must be given as an absolute
+            // path). Lets E2E tests verify where the daemon spawned the session.
+            let file = std::env::args_os()
+                .nth(2)
+                .expect("pwd requires an absolute output file path");
+            // Report the child's actual cwd as raw wire bytes (lossless, see
+            // `path_wire`), so the harness can assert a byte-for-byte round-trip
+            // even for non-UTF-8 paths.
+            let cwd = std::env::current_dir()
+                .map(|p| path_wire::encode_path(&p))
+                .unwrap_or_default();
+            if let Err(e) = std::fs::write(&file, &cwd) {
+                eprintln!("pwd: failed to write {:?}: {e}", file);
+                std::process::exit(1);
+            }
         }
         other => {
             eprintln!("Unknown subcommand: {other}");

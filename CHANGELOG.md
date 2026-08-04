@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.9-alpha] - 2026-08-04
+
+### Added
+
+- **`PathWire` — a lossless path wire type:** `term-session` now transmits the caller's working directory as a dedicated `PathWire` newtype (`Option<PathWire>` on `SpawnRequest.cwd`) with a platform-native, byte-for-byte reversible encoding: Unix sends the raw `OsStr` bytes and Windows sends UTF-16 code units packed as little-endian `u16` pairs, so even non-UTF-8 Unix paths and unpaired-surrogate (WTF-16) Windows paths round-trip intact. The type ships inherent `encode` / `decode` / `to_path_buf` methods plus concrete `From<&Path>` / `From<PathBuf>` / `From<&str>` / `From<String>` conversions, and is wire-identical to a plain `Vec<u8>` (no ABI break). It is documented as **strictly same-host local IPC**: payloads carry no platform tag and are not portable across platforms — cross-OS decoding would silently garble; SSH remote sessions are unaffected (the daemon resolves the cwd on the remote host), and a canonical multi-platform encoding (e.g. WTF-8) was deliberately deferred.
+
+### Changed
+
+- **New sessions start in the caller's working directory:** a freshly spawned session now starts in the client's `current_dir` (captured at launch) instead of the daemon's frozen startup directory — previously every new channel's session inherited the daemon's cwd. The directory travels losslessly over the wire; `None`/empty falls back to the daemon's cwd; the mock/daemon E2E tests verify byte-for-byte fidelity for non-UTF-8 paths.
+
+### Fixed
+
+- **`term-session` connection failures print instead of silently exiting:** the client `dup2`'d its stderr into a tracing pipe at startup but never installed a tracing subscriber, so every connect/handshake/ABI error — e.g. a fresh client hitting a legacy daemon on the same socket — exited with code 1 and **zero output**. The redirect now happens only after the Attach/Spawn/channel handshake succeeds, and `main` preserves the original stderr FD so fatal errors, including mid-session disconnects, print `error: …` to the user's terminal after the TUI tears down. A unix-gated regression test (`connection_error_is_printed_to_stderr`) binds a fake wire-incompatible peer and asserts the client emits a diagnostic.
+- **Windows build of the path wire decoder:** `decode_path`'s Windows branch used `OsString::from_wide` without importing `OsString`, so the definitions crate did not compile for `x86_64-pc-windows-msvc`; imports are now scoped to their `cfg` blocks and the Windows cross-check passes.
+- **`term-session list` session line:** the redundant `session: session size: 114x56` phrasing is now just `shared size: 114x56`.
+
 ## [0.9.8-alpha] - 2026-08-04
 
 ### Fixed
