@@ -1,6 +1,6 @@
 use std::io;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use term_session::auto_spawn::connect_or_spawn_server;
 use term_session_client::run_session;
 use term_session_muxio_service_definitions::ChannelName;
@@ -22,34 +22,32 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon: bool,
 
-    /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
-    #[arg(long)]
-    gateway: Option<String>,
-
     /// Test-only: write a marker file with the platform's detachment proof
     /// once the daemon has bound, then exit.
     #[arg(long, hide = true)]
     daemon_selfcheck: Option<std::path::PathBuf>,
 
     /// Channel name (namespace/name); falls back to TERM_WM_CHANNEL env, then "default/main".
-    #[arg(short, long)]
+    /// Implicitly attaches when given without a subcommand.
+    #[arg(long)]
     channel: Option<String>,
 
     /// Command to run (and its arguments); if omitted, launches the default shell.
+    /// Anything after `--` is passed straight through as the spawned argv
+    /// (e.g. `--channel work -- git log --oneline`). Only used when the channel
+    /// has no live session; attaching to a running session ignores the command
+    /// and joins the existing process. Implicitly attaches when given without
+    /// a subcommand.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmd: Vec<String>,
+
+    /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
+    #[arg(long)]
+    gateway: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Attach to a channel (default when no subcommand given).
-    #[command(name = "attach")]
-    Attach {
-        #[arg(short, long)]
-        channel: Option<String>,
-        #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
-        cmd: Vec<String>,
-    },
     /// List channels and their sessions/clients.
     #[command(name = "ls", alias = "list")]
     List,
@@ -71,10 +69,24 @@ enum Command {
     },
     /// Stop the gateway daemon.
     #[command(name = "stop")]
-    Stop,
+    Stop {
+        /// Stop even if live sessions are running (otherwise the gateway
+        /// refuses while any session is active).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
-fn main() -> io::Result<()> {
+fn main() {
+    // Print errors as readable messages (Display), not Rust's Debug dump that
+    // `main() -> Result` emits by default (e.g. `Custom { kind: ..., ... }`).
+    if let Err(e) = run() {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> io::Result<()> {
     let cli = Cli::parse();
 
     // Gateway name resolution: explicit --gateway wins; else TERM_WM_GATEWAY
@@ -90,7 +102,6 @@ fn main() -> io::Result<()> {
     }
 
     match cli.command {
-        Some(Command::Attach { channel, cmd }) => attach(channel, &cmd),
         Some(Command::List) => list(),
         Some(Command::Kill {
             channel,
@@ -101,8 +112,22 @@ fn main() -> io::Result<()> {
             println!("Detached client {client_id} from channel {channel}");
             Ok(())
         }
-        Some(Command::Stop) => stop(),
-        None => attach(cli.channel, &cli.cmd),
+        Some(Command::Stop { force }) => stop(force),
+        None => {
+            if cli.channel.is_some() || !cli.cmd.is_empty() {
+                // A channel and/or command was given without a subcommand:
+                // implicit attach.
+                attach(cli.channel, &cli.cmd)
+            } else {
+                // No subcommand and nothing to attach: show help instead of
+                // auto-connecting (exit code 2, the clap missing-argument
+                // convention). `--daemon` is handled above. Long help so it
+                // matches `--help` exactly (version + long_about).
+                let mut stderr = io::stderr();
+                let _ = Cli::command().write_long_help(&mut stderr);
+                std::process::exit(2);
+            }
+        }
     }
 }
 
@@ -111,6 +136,8 @@ fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
     let channel = ChannelName::parse(&channel_str).map_err(|e| {
         io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
     })?;
+    // The argv comes straight from the outer shell (split exactly once);
+    // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
     run_session(&socket_name, &channel.to_string(), cmd)
 }
@@ -152,6 +179,11 @@ fn list() -> io::Result<()> {
         );
         for c in &ch.clients {
             println!("    - conn: {}  (pid {})", c.conn_id, c.pid);
+            println!("      user: {}", c.user);
+            println!("      version: {}", c.version);
+            if let Some(ip) = &c.ssh_ip {
+                println!("      ssh ip from: {}", ip);
+            }
             println!("      host: {}", c.hostname);
             println!("      size: {}x{}", c.cols, c.rows);
             println!(
@@ -169,8 +201,8 @@ fn kill(channel: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn stop() -> io::Result<()> {
-    term_session::stop_gateway()?;
-    println!("Gateway shutdown initiated");
+fn stop(force: bool) -> io::Result<()> {
+    term_session::stop_gateway(force)?;
+    println!("Gateway shutdown initiated.");
     Ok(())
 }

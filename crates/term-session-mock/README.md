@@ -6,7 +6,7 @@ Internal test tooling for the [term-wm](https://crates.io/crates/term-wm) worksp
 
 A **deterministic PTY-resident test fixture** — a small, real binary that the session daemon spawns inside a PTY so tests can drive a child process with full determinism. It replaces a real shell/command in tests, removing dependency on shell availability, shell startup timing, and platform-specific command behavior.
 
-It is **not** a "posix mocker". It runs on Linux, macOS, and Windows, and includes explicit Windows ConPTY console-mode handling (raw VT input, VT-processing toggling) so ANSI sequences pass through ConPTY intact.
+It runs on Linux, macOS, and Windows, and includes explicit Windows ConPTY console-mode handling (raw VT input, VT-processing toggling) so ANSI sequences pass through ConPTY intact.
 
 Every subcommand performs **real** OS behavior — real process spawning, real exit codes, real sleeping, real PIDs, real liveness probing. Nothing is hardcoded to fabricate a passing assertion; the only fixed output is the `osc52` payload, which is the exact byte sequence the OSC 52 encoder is expected to emit.
 

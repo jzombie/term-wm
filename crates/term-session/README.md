@@ -11,13 +11,21 @@ Its clients render in **alternate-screen mode** (a full-screen TUI): the attache
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
 
 ```sh
-cargo run --release --bin term-session -- attach                          # attach to default/main, auto-spawning the gateway
-cargo run --release --bin term-session -- attach --channel work -- vim    # attach to (or spawn) the "work" channel
-cargo run --release --bin term-session -- list                            # list channels, sessions, and connected sockets
-cargo run --release --bin term-session -- kill-client work 4              # detach client conn 4 from the "work" channel
-cargo run --release --bin term-session -- kill work                       # kill the "work" channel's session + sockets
-cargo run --release --bin term-session -- stop                            # stop the gateway daemon
+cargo run --release --bin term-session -- --channel work -- vim -l           # attach to (or spawn) the "work" channel, running vim -l
+cargo run --release --bin term-session -- --channel work                    # attach to (or spawn) the "work" channel (default shell)
+cargo run --release --bin term-session -- -- git log --oneline              # attach to the default channel, running git log --oneline
+cargo run --release --bin term-session -- list                              # list channels, sessions, and connected sockets
+cargo run --release --bin term-session -- kill-client work 4                # detach client conn 4 from the "work" channel
+cargo run --release --bin term-session -- kill work                         # kill the "work" channel's session + sockets
+cargo run --release --bin term-session -- stop                              # stop the gateway daemon
+cargo run --release --bin term-session -- stop --force                      # stop even while live sessions are running
 ```
+
+Running `term-session` with **no subcommand and no arguments** prints the help menu and exits (code 2) — it never auto-connects on its own. Giving a channel (`--channel <name>`) and/or a command attaches implicitly: the channel and command are the session to join or spawn, and the gateway daemon is auto-started if none is running.
+
+The command is passed as trailing arguments after `--` (the POSIX end-of-options delimiter), exactly like `sudo --` or `cargo run --`: anything after `--` is handed to the spawned process as its `argv` without extra shell parsing, so flags and spaces need no quoting. Anything before `--` is `term-session`'s own option; a token before `--` that matches a subcommand name (e.g. `list`, `kill`, `stop`) is always the subcommand — use `--` to run a program with that name instead.
+
+**A command is honored only when the channel has no live session** (or its session has exited) — it then becomes the command the channel spawns/respawns. Attaching to a channel with a **running** session ignores the command entirely: you join the existing process, sharing its live viewport with every other attached client (like `tmux`/`screen`).
 
 Multiple terminals can attach to the same channel to share one session.
 
@@ -27,7 +35,8 @@ Multiple terminals can attach to the same channel to share one session.
 
 * **One process, many channels:** a single daemon supervises all PTY sessions; no per-channel server process.
 * **Server-assigned identity:** a client's `conn_id` is assigned by the gateway at connect time; channel binding is server-side and authoritative — a client can only reach the channel it attached to.
-* **Admin CLI:** `list` dumps every channel's session status (PTY cols×rows, exited state) and each connected socket (`conn_id`, hostname, connect time, physical terminal size). `kill` terminates a channel's session/process tree; `kill-client <channel> <CLIENT_ID>` detaches a single socket by its `conn_id` (from `list`). `stop` performs an orderly daemon shutdown.
+* **Admin CLI:** `list` dumps every channel's session status (PTY cols×rows, exited state) and each connected socket (`conn_id`, hostname, OS user, client binary version, connect time, physical terminal size). Channels and their clients are listed in **creation order (newest last)**. `kill` terminates a channel's session/process tree; `kill-client <channel> <CLIENT_ID>` detaches a single socket by its `conn_id` (from `list`). `stop` performs an orderly daemon shutdown — it **refuses while any live session is running** unless `--force` is given.
+  - The OS user and binary version are reported by each client at `Attach`. The **remote SSH IP** (`ssh ip from:` in the per-client output) is the client's peer address, read from the `SSH_CLIENT` / `SSH_CONNECTION` environment variables that `sshd` sets — it is omitted for local (non-SSH) attaches.
 * **Muxio IPC:** PTY state and RPCs travel over the Muxio IPC framework with Bitcode serialization over OS-native transports (Linux abstract sockets, macOS `/tmp`, Windows named pipes). The gateway socket name is deterministic (`term-wm/<user>/gateway`) and can be overridden at runtime via `TERM_WM_GATEWAY`.
 * **Shared Mechanics:** Reuses a large part of `term-wm`'s internals — the PTY engine (`term-wm-pty-engine`: spawning, scrollback tracking, `vt100` parsing), the input event types (`term-wm-events`), and the crossterm input adapter (`term-wm-crossterm-adapter`). `term-session` does **not** produce the window manager: there is no layout engine, no tiling, and no window chrome — only the persistence and multiplexing layer.
 
@@ -47,7 +56,7 @@ Always stop the running daemon using the **currently installed** binary before r
 ```sh
 term-session stop       # 1. Stop the running v_old daemon
 cargo install --path .  # 2. Install the v_new binary on PATH
-term-session attach     # 3. Auto-spawn the v_new daemon
+term-session --channel work   # 3. Auto-spawn the v_new daemon and attach
 ```
 
 ### Recovery if Binary is Replaced First
@@ -68,7 +77,7 @@ To deploy a persistent, tiling terminal workspace, run `term-wm` as a child proc
 
 ## Session Nesting
 
-Invoking `term-session attach` inside a shell that is already running within an active `term-session` client (session inception) is discouraged due to operational tradeoffs:
+Invoking a `term-session` client (e.g. `term-session --channel work`) inside a shell that is already running within an active `term-session` client (session inception) is discouraged due to operational tradeoffs:
 
 - **TUI Buffer Conflicts:** Both the inner and outer clients manipulate terminal raw mode and the alternate screen buffer (`smcup`/`rmcup`). An unhandled exit or panic in the nested client can leave the outer viewport in a corrupted terminal state, requiring a manual reset or clear.
 - **Daemon Scope Ambiguity:** Unless overridden via `TERM_WM_GATEWAY`, both the outer session and inner nested client communicate with the same gateway daemon. Running `term-session stop` from inside a nested session will shut down the gateway hosting both the inner and outer sessions.
@@ -76,7 +85,7 @@ Invoking `term-session attach` inside a shell that is already running within an 
 
 ## Scrolling and Text Selection
 
-The standalone `term-session attach` client runs the terminal in **alternate-screen mode** (`smcup`), the standard full-screen TUI convention. On most terminal emulators the alternate screen carries **no native scrollback**, so the host terminal's built-in scroll wheel/scrollbar does not capture the session's output. This is deliberate: a full-screen TUI owns its viewport and must not be conflated with the terminal's main-screen history, so `term-session` does **not** implement scrollback for its remote clients — `term-session attach` renders only the current viewport of the shared PTY.
+The standalone `term-session` client (e.g. `term-session --channel work`) runs the terminal in **alternate-screen mode** (`smcup`), the standard full-screen TUI convention. On most terminal emulators the alternate screen carries **no native scrollback**, so the host terminal's built-in scroll wheel/scrollbar does not capture the session's output. This is deliberate: a full-screen TUI owns its viewport and must not be conflated with the terminal's main-screen history, so `term-session` does **not** implement scrollback for its remote clients — the client renders only the current viewport of the shared PTY.
 
 Scrollback is the host integration's responsibility. `term-session` is designed to work alongside [term-wm](https://crates.io/crates/term-wm), which provides its own scrollback handling for its windows. If you run `term-wm` inside a `term-session` session (the recommended integration above), scrolling is handled by the window manager rather than the session layer. Standalone `term-session` clients that need in-terminal scrollback are not supported.
 

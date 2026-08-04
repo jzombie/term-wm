@@ -10,15 +10,25 @@ use muxio_rpc_service::{prebuffered::RpcMethodPrebuffered, rpc_method_id};
 pub const RPC_ERROR_UNATTACHED: &str =
     "gateway: connection is not attached to a channel; call Attach first";
 pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
+pub const RPC_ERROR_LIVE_SESSIONS: &str =
+    "gateway: live session(s) running; use `term-session stop --force` to stop anyway";
 
 // ── Attach ──────────────────────────────────────────────────────────
 
-#[derive(Encode, Decode)]
-struct AttachRequest {
+/// Client-provided identity reported at `Attach` so `list` can show who each
+/// socket belongs to and where it came from.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct AttachRequest {
     pub channel: String,
     pub hostname: String,
     /// The client process's OS PID, so `list` can show which PID is attached.
     pub pid: u64,
+    /// OS user running the client process (e.g. `jzombie`).
+    pub user: String,
+    /// Client binary version (`CARGO_PKG_VERSION`).
+    pub version: String,
+    /// Remote peer IP for SSH attaches; `None` for local attaches.
+    pub ssh_ip: Option<String>,
 }
 
 #[derive(Encode, Decode)]
@@ -31,22 +41,16 @@ pub struct Attach;
 impl RpcMethodPrebuffered for Attach {
     const METHOD_ID: u64 = rpc_method_id!("session.attach");
 
-    // TODO: Use type aliases to simplify this
-    type Input = (String, String, u64);
+    type Input = AttachRequest;
     type Output = usize;
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&AttachRequest {
-            channel: input.0,
-            hostname: input.1,
-            pid: input.2,
-        }))
+        Ok(bitcode::encode(&input))
     }
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
-        let r = bitcode::decode::<AttachRequest>(bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok((r.channel, r.hostname, r.pid))
+        bitcode::decode::<AttachRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
@@ -292,6 +296,12 @@ pub struct ClientInfo {
     pub connected_at_unix: u64,
     pub cols: u16,
     pub rows: u16,
+    /// OS user running the client process (reported at Attach).
+    pub user: String,
+    /// Client binary version (reported at Attach).
+    pub version: String,
+    /// Remote peer IP for SSH attaches; `None` for local attaches.
+    pub ssh_ip: Option<String>,
 }
 
 /// Public wire info for one channel on the gateway.
@@ -429,20 +439,27 @@ impl RpcMethodPrebuffered for KillClient {
 
 // ── ShutdownGateway ──────────────────────────────────────────────────
 
+#[derive(Encode, Decode)]
+struct ShutdownGatewayRequest {
+    pub force: bool,
+}
+
 pub struct ShutdownGateway;
 
 impl RpcMethodPrebuffered for ShutdownGateway {
     const METHOD_ID: u64 = rpc_method_id!("session.shutdown_gateway");
 
-    type Input = ();
+    type Input = bool;
     type Output = ();
 
-    fn encode_request(_input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(Vec::new())
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&ShutdownGatewayRequest { force: input }))
     }
 
-    fn decode_request(_bytes: &[u8]) -> Result<Self::Input, io::Error> {
-        Ok(())
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<ShutdownGatewayRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(r.force)
     }
 
     fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {

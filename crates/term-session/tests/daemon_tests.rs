@@ -13,7 +13,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
-use term_session_muxio_service_definitions::{Attach, ListChannels, ShutdownGateway, Spawn};
+use term_session_muxio_service_definitions::{
+    Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, probe_ipc_endpoint,
+};
 
 /// The compiled `term-session` binary under test.
 fn bin() -> PathBuf {
@@ -58,6 +60,28 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
     (child, marker)
 }
 
+/// Attach a client to a channel and return its server-assigned conn id,
+/// using the mock identity fields the other helpers expect.
+async fn attach_to(
+    client: &muxio_tokio_rpc_ipc_client::RpcIpcClient,
+    channel: &str,
+    hostname: &str,
+) -> usize {
+    Attach::call(
+        client,
+        AttachRequest {
+            channel: channel.to_string(),
+            hostname: hostname.to_string(),
+            pid: std::process::id() as u64,
+            user: "test-user".to_string(),
+            version: "test-version".to_string(),
+            ssh_ip: None,
+        },
+    )
+    .await
+    .expect("attach")
+}
+
 /// Poll until a client can connect to the gateway, or panic after a timeout.
 async fn wait_connectable(gateway: &str) -> Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient> {
     let start = Instant::now();
@@ -99,7 +123,7 @@ async fn daemon_detaches_and_reports_proof() {
 
     // Clean up.
     let client = wait_connectable(&gateway).await;
-    ShutdownGateway::call(&*client, ()).await.unwrap();
+    ShutdownGateway::call(&*client, true).await.unwrap();
     let _ = child.wait();
 }
 
@@ -110,16 +134,7 @@ async fn daemon_survives_all_clients_disconnecting() {
 
     let client = wait_connectable(&gateway).await;
     let channel = "test/daemon_survive";
-    Attach::call(
-        &*client,
-        (
-            channel.to_string(),
-            "t".to_string(),
-            std::process::id() as u64,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&client, channel, "t").await;
     Spawn::call(
         &*client,
         (
@@ -139,19 +154,10 @@ async fn daemon_survives_all_clients_disconnecting() {
     // After ALL clients disconnect, the daemon must still be reachable and a
     // fresh attach/spawn must succeed (session respawns / persists).
     let client2 = wait_connectable(&gateway).await;
-    Attach::call(
-        &*client2,
-        (
-            channel.to_string(),
-            "t".to_string(),
-            std::process::id() as u64,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&client2, channel, "t").await;
     Spawn::call(&*client2, (None, 80u16, 24u16)).await.unwrap();
 
-    ShutdownGateway::call(&*client2, ()).await.unwrap();
+    ShutdownGateway::call(&*client2, true).await.unwrap();
     let _ = child.wait();
 }
 
@@ -161,48 +167,31 @@ async fn daemon_survives_parent_death() {
     let channel = "test/daemon_parent_death";
     let mock = mock_bin().to_string_lossy().to_string();
 
-    // Spawn an `attach` subprocess that auto-spawns the daemon, running a
-    // LONG-LIVED session so its process survives the parent dying.
-    let mut attach = Command::new(bin())
+    // Spawn a client that auto-spawns the daemon, running a LONG-LIVED
+    // session so its process survives the parent dying.
+    let mut client = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .args([
-            "attach",
-            "--channel",
-            channel,
-            "--",
-            &mock,
-            "sleep",
-            "60000",
-        ])
+        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn attach");
+        .expect("spawn auto-attach client");
 
     // Give it time to auto-spawn the daemon and attach.
     tokio::time::sleep(Duration::from_millis(2000)).await;
-    let _ = attach.kill();
-    let _ = attach.wait();
+    let _ = client.kill();
+    let _ = client.wait();
 
     // The daemon it spawned must still be reachable and the session alive
     // (the `sleep` process is still running, so the daemon must not have
     // exited — sessions are torn down only when their process ends).
     let client = wait_connectable(&gateway).await;
-    Attach::call(
-        &*client,
-        (
-            channel.to_string(),
-            "t".to_string(),
-            std::process::id() as u64,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&client, channel, "t").await;
     let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
-    ShutdownGateway::call(&*client, ()).await.unwrap();
+    ShutdownGateway::call(&*client, true).await.unwrap();
     // Give the daemon time to run its teardown and exit.
     tokio::time::sleep(Duration::from_millis(1000)).await;
 }
@@ -250,7 +239,7 @@ async fn daemon_does_not_inherit_parent_handles() {
 
     // Clean up the daemon.
     let client = wait_connectable(&gateway).await;
-    ShutdownGateway::call(&*client, ()).await.unwrap();
+    ShutdownGateway::call(&*client, true).await.unwrap();
 }
 
 /// Create an inheritable named pipe whose read end we keep. Both ends are
@@ -414,26 +403,8 @@ async fn cli_kill_client_detaches_one_client() {
     // Two attached clients on the same channel.
     let c1 = wait_connectable(&gateway).await;
     let c2 = wait_connectable(&gateway).await;
-    Attach::call(
-        &*c1,
-        (
-            channel.to_string(),
-            "one".to_string(),
-            std::process::id() as u64,
-        ),
-    )
-    .await
-    .unwrap();
-    Attach::call(
-        &*c2,
-        (
-            channel.to_string(),
-            "two".to_string(),
-            std::process::id() as u64,
-        ),
-    )
-    .await
-    .unwrap();
+    attach_to(&c1, channel, "one").await;
+    attach_to(&c2, channel, "two").await;
     Spawn::call(
         &*c1,
         (
@@ -485,6 +456,232 @@ async fn cli_kill_client_detaches_one_client() {
         "one client should remain after kill-client"
     );
 
-    ShutdownGateway::call(&*c1, ()).await.unwrap();
+    ShutdownGateway::call(&*c1, true).await.unwrap();
+    let _ = child.wait();
+}
+
+#[test]
+fn bare_term_session_shows_help_and_does_not_connect() {
+    let gateway = unique_gateway("bare");
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .output()
+        .expect("run bare term-session");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "bare run must exit 2 (help, not auto-connect), got: {:?}",
+        out.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--channel"),
+        "help should mention --channel, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("list"),
+        "help should list list, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("stop"),
+        "help should list stop, got: {stderr}"
+    );
+    // A bare run must NOT have auto-spawned a daemon on the gateway.
+    let gw = ChannelName::parse(&gateway).expect("gateway name");
+    assert!(
+        !probe_ipc_endpoint(&gw),
+        "bare run must not auto-spawn a daemon"
+    );
+}
+
+#[tokio::test]
+async fn top_level_channel_auto_attaches() {
+    let gateway = unique_gateway("autoattach");
+    let channel = "test/autoattach";
+    let mock = mock_bin().to_string_lossy().to_string();
+    // `term-session --channel <ch> -- <mock> sleep 60000` (no subcommand):
+    // giving a channel must still auto-attach and auto-spawn the daemon.
+    let mut client = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn auto-attach client");
+
+    // The auto-spawned daemon becomes reachable and hosts a live session.
+    let rpc = wait_connectable(&gateway).await;
+    let start = Instant::now();
+    loop {
+        let resp = ListChannels::call(&*rpc, ()).await.unwrap();
+        let live = resp
+            .channels
+            .iter()
+            .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited));
+        if live {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "session never appeared on the auto-attached channel"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Cleanup: kill the client process; the daemon (and its live session)
+    // survives, so stop it explicitly with force.
+    let _ = client.kill();
+    let _ = client.wait();
+    ShutdownGateway::call(&*rpc, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn dash_dash_disambiguates_command_from_subcommand() {
+    let gateway = unique_gateway("disambig");
+    let gw = ChannelName::parse(&gateway).expect("gateway name");
+
+    // `term-session list` (no `--`) parses `list` as the admin SUBCOMMAND: it
+    // connects to a gateway and never auto-spawns one.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("list")
+        .output()
+        .expect("run list");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("No gateway"),
+        "`list` must parse as the admin subcommand, got: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !probe_ipc_endpoint(&gw),
+        "admin subcommand must not auto-spawn"
+    );
+
+    // `term-session -- list` (after `--`) parses `list` as a COMMAND to run:
+    // the implicit attach path auto-spawns a gateway.
+    let mut client = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--", "list"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("run -- list");
+
+    // The auto-spawned gateway becomes reachable (the `list` command itself
+    // does not exist, so the session spawn fails — but the daemon persists).
+    let rpc = wait_connectable(&gateway).await;
+    ShutdownGateway::call(&*rpc, true).await.unwrap();
+    let _ = client.kill();
+    let _ = client.wait();
+}
+
+#[tokio::test]
+async fn cli_list_renders_client_identity() {
+    let gateway = unique_gateway("list_identity");
+    let channel = "test/list_identity";
+    let (mut daemon, _marker) = spawn_daemon(&gateway, false);
+
+    // A client that stays connected, with explicit identity fields.
+    let client = wait_connectable(&gateway).await;
+    Attach::call(
+        &*client,
+        AttachRequest {
+            channel: channel.to_string(),
+            hostname: "render-host".to_string(),
+            pid: 4242,
+            user: "bob".to_string(),
+            version: "v7".to_string(),
+            ssh_ip: Some("203.0.113.9".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
+
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("list")
+        .output()
+        .expect("run list");
+    assert!(
+        out.status.success(),
+        "list failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("user: bob"),
+        "list must render the client user, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("version: v7"),
+        "list must render the client version, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("ssh ip from: 203.0.113.9"),
+        "list must render the remote ssh ip, got: {stdout}"
+    );
+
+    ShutdownGateway::call(&*client, true).await.unwrap();
+    let _ = daemon.wait();
+}
+
+#[tokio::test]
+async fn cli_stop_requires_force_when_live_sessions() {
+    let gateway = unique_gateway("stop_force");
+    let channel = "test/stop_force";
+    let (mut child, _marker) = spawn_daemon(&gateway, false);
+
+    let client = wait_connectable(&gateway).await;
+    attach_to(&client, channel, "cli").await;
+    Spawn::call(
+        &*client,
+        (
+            Some(vec![
+                mock_bin().to_string_lossy().to_string(),
+                "sleep".into(),
+                "60000".into(),
+            ]),
+            80u16,
+            24u16,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // `stop` without --force: refused, non-zero exit, daemon keeps running.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("stop")
+        .output()
+        .expect("run stop");
+    assert!(
+        !out.status.success(),
+        "stop must refuse while a live session runs"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("live session"),
+        "refusal message should mention live sessions, got: {stderr}"
+    );
+
+    // Gateway still reachable after the refusal.
+    ListChannels::call(&*client, ())
+        .await
+        .expect("gateway alive");
+
+    // `stop --force` succeeds and the daemon process exits on its own.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["stop", "--force"])
+        .output()
+        .expect("run stop --force");
+    assert!(
+        out.status.success(),
+        "stop --force failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let _ = child.wait();
 }

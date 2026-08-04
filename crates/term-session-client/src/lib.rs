@@ -20,8 +20,8 @@ use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
-    Attach, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    Spawn,
+    Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
 };
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
@@ -213,6 +213,80 @@ fn is_coalescable_mouse(
     }
 }
 
+/// OS user running the client process, reported at `Attach` so `list` can show
+/// who each socket belongs to. On Unix the passwd entry is authoritative, with
+/// `$USER` as a fallback; on Windows `%USERNAME%` is used, with `GetUserNameW`
+/// as a fallback for contexts where the env var is unset.
+fn client_user() -> String {
+    #[cfg(unix)]
+    {
+        unsafe {
+            let pw = libc::getpwuid(libc::getuid());
+            if !pw.is_null() {
+                let name = std::ffi::CStr::from_ptr((*pw).pw_name);
+                if let Ok(s) = name.to_str()
+                    && !s.is_empty()
+                {
+                    return s.to_string();
+                }
+            }
+        }
+        std::env::var("USER").unwrap_or_default()
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(u) = std::env::var("USERNAME")
+            && !u.is_empty()
+        {
+            return u;
+        }
+        windows_username().unwrap_or_default()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        String::new()
+    }
+}
+
+/// Windows fallback: resolve the account via `GetUserNameW` when `%USERNAME%`
+/// is not set (e.g. service or non-interactive contexts).
+#[cfg(windows)]
+fn windows_username() -> Option<String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
+    let mut buf = [0u16; 256];
+    let mut len = buf.len() as u32;
+    let ok = unsafe { GetUserNameW(buf.as_mut_ptr(), &mut len) };
+    if ok == 0 {
+        return None;
+    }
+    let s = std::ffi::OsString::from_wide(&buf[..len as usize])
+        .to_string_lossy()
+        .into_owned();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Client binary version (`CARGO_PKG_VERSION`), reported at `Attach` so `list`
+/// can surface mixed-version clients against the same daemon.
+fn client_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Remote peer IP for SSH attaches: `sshd` sets `SSH_CLIENT` (client ip/port
+/// server-port) or `SSH_CONNECTION` (client ip/port server ip/port); the first
+/// whitespace token is the peer address. Returns `None` for local attaches.
+fn client_ssh_ip() -> Option<String> {
+    for var in ["SSH_CLIENT", "SSH_CONNECTION"] {
+        if let Ok(v) = std::env::var(var) {
+            let ip = v.split_whitespace().next()?;
+            if !ip.is_empty() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Connect to a term-session gateway and run the TUI viewer for `channel`.
 ///
 /// This function is synchronous. It creates a background tokio runtime for
@@ -307,7 +381,14 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         // conn_id); report our OS PID so `list` can show which client is which.
         let conn_id = Attach::call(
             &*client,
-            (channel.to_string(), hostname, std::process::id() as u64),
+            AttachRequest {
+                channel: channel.to_string(),
+                hostname,
+                pid: std::process::id() as u64,
+                user: client_user(),
+                version: client_version(),
+                ssh_ip: client_ssh_ip(),
+            },
         )
         .await
         .map_err(|e| abi_fault(&e))?;
@@ -814,6 +895,104 @@ mod tests {
             bytes
                 .windows(b"\x1b[?2004h".len())
                 .any(|w| w == b"\x1b[?2004h")
+        );
+    }
+
+    // ── client identity helpers ─────────────────────────────────────
+    //
+    // These mutate `SSH_CLIENT`/`SSH_CONNECTION`, which is process-global;
+    // a static mutex serializes them against other tests (and each other).
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn client_ssh_ip_from_ssh_client() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var("SSH_CLIENT", "192.168.1.50 54321 22");
+            std::env::remove_var("SSH_CONNECTION");
+        }
+        assert_eq!(client_ssh_ip().as_deref(), Some("192.168.1.50"));
+        unsafe {
+            std::env::remove_var("SSH_CLIENT");
+        }
+    }
+
+    #[test]
+    fn client_ssh_ip_from_ssh_connection_fallback() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var("SSH_CLIENT");
+            std::env::set_var("SSH_CONNECTION", "10.0.0.7 48000 10.0.0.1 22");
+        }
+        assert_eq!(client_ssh_ip().as_deref(), Some("10.0.0.7"));
+        unsafe {
+            std::env::remove_var("SSH_CONNECTION");
+        }
+    }
+
+    #[test]
+    fn client_ssh_ip_ssh_client_wins_over_connection() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var("SSH_CLIENT", "1.2.3.4 1000 22");
+            std::env::set_var("SSH_CONNECTION", "9.9.9.9 2000 1.1.1.1 22");
+        }
+        assert_eq!(client_ssh_ip().as_deref(), Some("1.2.3.4"));
+        unsafe {
+            std::env::remove_var("SSH_CLIENT");
+            std::env::remove_var("SSH_CONNECTION");
+        }
+    }
+
+    #[test]
+    fn client_ssh_ip_none_when_local() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var("SSH_CLIENT");
+            std::env::remove_var("SSH_CONNECTION");
+        }
+        assert_eq!(client_ssh_ip(), None);
+    }
+
+    #[test]
+    fn client_version_matches_package() {
+        assert_eq!(client_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn client_user_non_empty() {
+        assert!(!client_user().is_empty(), "client user must resolve");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn client_user_prefers_username_env_when_set() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var("USERNAME", "win-test-user");
+        }
+        assert_eq!(client_user(), "win-test-user");
+        unsafe {
+            std::env::remove_var("USERNAME");
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn client_user_falls_back_to_getusername_when_env_absent() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var("USERNAME");
+        }
+        // `USERNAME` is normally always set on Windows; with it removed, the
+        // `GetUserNameW` fallback must still resolve the real account.
+        assert!(
+            !client_user().is_empty(),
+            "GetUserNameW fallback must resolve a user"
         );
     }
 

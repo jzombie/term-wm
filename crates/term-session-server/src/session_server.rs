@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use muxio_core::rpc::rpc_internals::RpcStreamEvent;
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
@@ -12,9 +12,9 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_SHUTTING_DOWN,
-    RPC_ERROR_UNATTACHED, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    SessionInfo, ShutdownGateway, Spawn, WriteInput,
+    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_LIVE_SESSIONS,
+    RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -72,6 +72,12 @@ struct ConnEntry {
     connected_at_unix: u64,
     /// Client process OS PID (reported at Attach).
     pid: u64,
+    /// OS user running the client process (reported at Attach).
+    user: String,
+    /// Client binary version (reported at Attach).
+    version: String,
+    /// Remote peer IP for SSH attaches; `None` for local (reported at Attach).
+    ssh_ip: Option<String>,
 }
 
 #[derive(Clone)]
@@ -80,6 +86,9 @@ struct ClientEntry {
     hostname: String,
     connected_at_unix: u64,
     pid: u64,
+    user: String,
+    version: String,
+    ssh_ip: Option<String>,
     cols: u16,
     rows: u16,
 }
@@ -98,6 +107,11 @@ struct ChannelState {
     notify: Arc<Notify>,
     /// Unix seconds when the channel was first created on the gateway.
     created_at_unix: u64,
+    /// Monotonic creation sequence (across the whole gateway process). Sort key
+    /// for `ListChannels`: creation order, newest last. `created_at_unix` is
+    /// only second-resolution wall clock and cannot disambiguate same-second
+    /// creations, so this monotonic counter is authoritative.
+    created_seq: u64,
     /// Command template used to respawn the session after it exits.
     cmd: Vec<String>,
     input_tx: mpsc::Sender<Vec<u8>>,
@@ -118,6 +132,8 @@ struct ServerState {
     conns: RwLock<HashMap<usize, ConnEntry>>,
     channels: RwLock<HashMap<ChannelName, Arc<Mutex<ChannelState>>>>,
     is_shutting_down: AtomicBool,
+    /// Monotonic source of `ChannelState::created_seq` (creation order).
+    next_channel_seq: AtomicU64,
 }
 
 type SharedState = Arc<ServerState>;
@@ -140,13 +156,19 @@ fn now_unix() -> u64 {
 }
 
 impl ChannelState {
-    fn new(cmd: Vec<String>, input_tx: mpsc::Sender<Vec<u8>>, notify: Arc<Notify>) -> Self {
+    fn new(
+        cmd: Vec<String>,
+        input_tx: mpsc::Sender<Vec<u8>>,
+        notify: Arc<Notify>,
+        created_seq: u64,
+    ) -> Self {
         Self {
             session: None,
             clients: HashMap::new(),
             subscribers: Vec::new(),
             notify,
             created_at_unix: now_unix(),
+            created_seq,
             cmd,
             input_tx,
             kill_pending: false,
@@ -266,7 +288,9 @@ impl ChannelState {
             exit_code: s.exit_code,
             title: s.title.clone().unwrap_or_default(),
         });
-        let clients = self
+        // Sort by `conn_id`, which muxio assigns monotonically at connection
+        // accept — ascending order = connection order, newest client last.
+        let mut clients: Vec<ClientInfo> = self
             .clients
             .iter()
             .map(|(conn_id, c)| ClientInfo {
@@ -276,8 +300,12 @@ impl ChannelState {
                 connected_at_unix: c.connected_at_unix,
                 cols: c.cols,
                 rows: c.rows,
+                user: c.user.clone(),
+                version: c.version.clone(),
+                ssh_ip: c.ssh_ip.clone(),
             })
             .collect();
+        clients.sort_by_key(|c| c.conn_id);
         ChannelInfo {
             name: name.to_string(),
             created_at_unix: self.created_at_unix,
@@ -338,7 +366,13 @@ async fn get_or_create_channel(
     }
     let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(INPUT_CHANNEL_CAPACITY);
     let notify = Arc::new(Notify::new());
-    let channel = Arc::new(Mutex::new(ChannelState::new(Vec::new(), input_tx, notify)));
+    let created_seq = state.next_channel_seq.fetch_add(1, Ordering::Relaxed);
+    let channel = Arc::new(Mutex::new(ChannelState::new(
+        Vec::new(),
+        input_tx,
+        notify,
+        created_seq,
+    )));
     let ch = Arc::clone(&channel);
     tokio::spawn(async move {
         let mut input_rx = input_rx;
@@ -534,6 +568,7 @@ pub async fn run_gateway(
         conns: RwLock::new(HashMap::new()),
         channels: RwLock::new(HashMap::new()),
         is_shutting_down: AtomicBool::new(false),
+        next_channel_seq: AtomicU64::new(0),
     });
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -549,8 +584,8 @@ pub async fn run_gateway(
                 if state.is_shutting_down.load(Ordering::SeqCst) {
                     return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-                let (channel_str, hostname, pid) = Attach::decode_request(&payload)?;
-                let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
+                let req = Attach::decode_request(&payload)?;
+                let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
                 let _channel = get_or_create_channel(&state, &name).await;
                 let conn_id = ctx.conn_id;
                 let mut conns = state.conns.write().await;
@@ -563,11 +598,17 @@ pub async fn run_gateway(
                     hostname: String::new(),
                     connected_at_unix: now_unix(),
                     pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
                 });
                 entry.state = ConnState::Attached(name);
-                entry.hostname = hostname;
+                entry.hostname = req.hostname;
                 entry.connected_at_unix = now_unix();
-                entry.pid = pid;
+                entry.pid = req.pid;
+                entry.user = req.user;
+                entry.version = req.version;
+                entry.ssh_ip = req.ssh_ip;
                 Attach::encode_response(conn_id).map_err(boxed_io)
             }
         })
@@ -589,31 +630,36 @@ pub async fn run_gateway(
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
                 let ch = get_or_create_channel(&state, &channel).await;
-                // Fetch the connection's caller handle, hostname, and connect
-                // time before locking the channel (never hold two locks).
+                // Fetch the connection's entry (caller handle, hostname,
+                // identity) before locking the channel (never hold two locks).
                 let conn_meta = {
                     let conns = state.conns.read().await;
-                    conns.get(&ctx.conn_id).map(|c| {
-                        (
-                            c.handle.clone(),
-                            c.hostname.clone(),
-                            c.connected_at_unix,
-                            c.pid,
-                        )
-                    })
+                    conns.get(&ctx.conn_id).cloned()
                 };
                 let mut guard = ch.lock().await;
                 let entry = guard
                     .clients
                     .entry(ctx.conn_id)
                     .or_insert_with(|| ClientEntry {
-                        caller: conn_meta.as_ref().map(|(h, _, _, _)| h.clone()),
+                        caller: conn_meta.as_ref().map(|c| c.handle.clone()),
                         hostname: conn_meta
                             .as_ref()
-                            .map(|(_, n, _, _)| n.clone())
+                            .map(|c| c.hostname.clone())
                             .unwrap_or_default(),
-                        connected_at_unix: conn_meta.as_ref().map(|(_, _, t, _)| *t).unwrap_or(0),
-                        pid: conn_meta.as_ref().map(|(_, _, _, p)| *p).unwrap_or(0),
+                        connected_at_unix: conn_meta
+                            .as_ref()
+                            .map(|c| c.connected_at_unix)
+                            .unwrap_or(0),
+                        pid: conn_meta.as_ref().map(|c| c.pid).unwrap_or(0),
+                        user: conn_meta
+                            .as_ref()
+                            .map(|c| c.user.clone())
+                            .unwrap_or_default(),
+                        version: conn_meta
+                            .as_ref()
+                            .map(|c| c.version.clone())
+                            .unwrap_or_default(),
+                        ssh_ip: conn_meta.as_ref().and_then(|c| c.ssh_ip.clone()),
                         cols,
                         rows,
                     });
@@ -863,17 +909,21 @@ pub async fn run_gateway(
             async move {
                 let channels = {
                     let chans = state.channels.read().await;
-                    let mut v: Vec<(ChannelName, Arc<Mutex<ChannelState>>)> =
-                        chans.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                    drop(chans);
-                    v.sort_by_key(|a| a.0.to_string());
-                    v
+                    chans
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect::<Vec<_>>()
                 };
-                let mut out = Vec::with_capacity(channels.len());
+                // Creation order, newest last (monotonic `created_seq`, not
+                // second-resolution wall clock). The seq is read under the same
+                // per-channel lock used to build `ChannelInfo` below.
+                let mut out: Vec<(u64, ChannelInfo)> = Vec::with_capacity(channels.len());
                 for (name, ch) in channels {
                     let guard = ch.lock().await;
-                    out.push(guard.to_info(&name));
+                    out.push((guard.created_seq, guard.to_info(&name)));
                 }
+                out.sort_by_key(|(seq, _)| *seq);
+                let out: Vec<ChannelInfo> = out.into_iter().map(|(_, info)| info).collect();
                 ListChannels::encode_response(ListChannelsResponse {
                     gateway_pid: std::process::id() as u64,
                     socket,
@@ -997,10 +1047,33 @@ pub async fn run_gateway(
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     let shutdown_tx = Arc::new(Mutex::new(Some(shutdown_tx)));
     endpoint
-        .register_prebuffered(ShutdownGateway::METHOD_ID, move |_payload, _ctx| {
+        .register_prebuffered(ShutdownGateway::METHOD_ID, move |payload, _ctx| {
             let state = Arc::clone(&st);
             let shutdown_tx = Arc::clone(&shutdown_tx);
             async move {
+                // Refuse an accidental shutdown while live sessions are running
+                // unless the caller explicitly forced it. Checked BEFORE the
+                // `is_shutting_down` seal so a refused stop leaves the gateway
+                // fully operational (no half-sealed state, no orphaned teardown).
+                let force = ShutdownGateway::decode_request(&payload).map_err(boxed_io)?;
+                if !force {
+                    let live = {
+                        let chans = state.channels.read().await;
+                        let mut n = 0usize;
+                        for ch in chans.values() {
+                            let guard = ch.lock().await;
+                            if guard.session.as_ref().is_some_and(|s| !s.exited) {
+                                n += 1;
+                            }
+                        }
+                        n
+                    };
+                    if live > 0 {
+                        return Err(rpc_err(&format!(
+                            "{RPC_ERROR_LIVE_SESSIONS} ({live} live session(s))"
+                        )));
+                    }
+                }
                 // Atomic seal: reject all further RPCs before teardown starts.
                 state.is_shutting_down.store(true, Ordering::SeqCst);
                 // Snapshot the channels, then release the map lock.
@@ -1061,6 +1134,9 @@ pub async fn run_gateway(
                         hostname: String::new(),
                         connected_at_unix: now_unix(),
                         pid: 0,
+                        user: String::new(),
+                        version: String::new(),
+                        ssh_ip: None,
                     });
                 }
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {
