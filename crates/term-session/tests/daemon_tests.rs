@@ -860,9 +860,7 @@ async fn cli_stop_requires_force_when_live_sessions() {
 #[cfg(unix)]
 #[test]
 fn connection_error_is_printed_to_stderr() {
-    use interprocess::local_socket::{
-        GenericNamespaced, ListenerOptions, ToNsName, prelude::*,
-    };
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName, prelude::*};
     use std::io::Write;
 
     let gateway = unique_gateway("silent-exit");
