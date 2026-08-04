@@ -201,6 +201,10 @@ fn main() {
             let file = args
                 .get(2)
                 .expect("pwd requires an absolute output file path");
+            // Lossy conversion (U+FFFD substitution) keeps the report directly
+            // comparable to the test harness's own `to_string_lossy`
+            // canonicalization; raw bytes would need OsStrExt and aren't worth
+            // it for a test probe.
             let cwd = std::env::current_dir()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| "<unavailable>".to_string());
