@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
 use term_session_muxio_service_definitions::{
-    Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, probe_ipc_endpoint,
+    Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, SpawnRequest,
+    SpawnResponse, probe_ipc_endpoint,
 };
 
 /// The compiled `term-session` binary under test.
@@ -151,16 +152,16 @@ async fn daemon_survives_all_clients_disconnecting() {
     attach_to(&client, channel, "t").await;
     Spawn::call(
         &*client,
-        (
-            Some(vec![
+        SpawnRequest {
+            cmd: Some(vec![
                 mock_bin().to_string_lossy().to_string(),
                 "sleep".into(),
                 "60000".into(),
             ]),
-            80u16,
-            24u16,
-            None,
-        ),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
     )
     .await
     .unwrap();
@@ -170,9 +171,17 @@ async fn daemon_survives_all_clients_disconnecting() {
     // fresh attach/spawn must succeed (session respawns / persists).
     let client2 = wait_connectable(&gateway).await;
     attach_to(&client2, channel, "t").await;
-    Spawn::call(&*client2, (None, 80u16, 24u16, None))
-        .await
-        .unwrap();
+    Spawn::call(
+        &*client2,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
 
     ShutdownGateway::call(&*client2, true).await.unwrap();
     let _ = child.wait();
@@ -205,9 +214,21 @@ async fn daemon_survives_parent_death() {
     // exited — sessions are torn down only when their process ends).
     let client = wait_connectable(&gateway).await;
     attach_to(&client, channel, "t").await;
-    let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16, None))
-        .await
-        .unwrap();
+    let SpawnResponse {
+        id,
+        cols: _,
+        rows: _,
+    } = Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
     ShutdownGateway::call(&*client, true).await.unwrap();
@@ -244,16 +265,16 @@ async fn session_starts_in_client_cwd() {
     // writes the child's actual cwd to `report` (an absolute path) and exits.
     Spawn::call(
         &*client,
-        (
-            Some(vec![
+        SpawnRequest {
+            cmd: Some(vec![
                 mock_bin().to_string_lossy().to_string(),
                 "pwd".into(),
                 report.to_string_lossy().to_string(),
             ]),
-            80u16,
-            24u16,
-            Some(client_dir.path().to_string_lossy().to_string()),
-        ),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: Some(client_dir.path().to_string_lossy().to_string()),
+        },
     )
     .await
     .unwrap();
@@ -499,20 +520,30 @@ async fn cli_kill_client_detaches_one_client() {
     attach_to(&c2, channel, "two").await;
     Spawn::call(
         &*c1,
-        (
-            Some(vec![
+        SpawnRequest {
+            cmd: Some(vec![
                 mock_bin().to_string_lossy().to_string(),
                 "sleep".into(),
                 "60000".into(),
             ]),
-            80u16,
-            24u16,
-            None,
-        ),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
     )
     .await
     .unwrap();
-    Spawn::call(&*c2, (None, 80u16, 24u16, None)).await.unwrap();
+    Spawn::call(
+        &*c2,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
 
     // Read the conn ids from `list` (as an operator would).
     let resp = ListChannels::call(&*c1, ()).await.unwrap();
@@ -722,9 +753,17 @@ async fn cli_list_renders_client_identity() {
     )
     .await
     .unwrap();
-    Spawn::call(&*client, (None, 80u16, 24u16, None))
-        .await
-        .unwrap();
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
 
     let out = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
@@ -764,16 +803,16 @@ async fn cli_stop_requires_force_when_live_sessions() {
     attach_to(&client, channel, "cli").await;
     Spawn::call(
         &*client,
-        (
-            Some(vec![
+        SpawnRequest {
+            cmd: Some(vec![
                 mock_bin().to_string_lossy().to_string(),
                 "sleep".into(),
                 "60000".into(),
             ]),
-            80u16,
-            24u16,
-            None,
-        ),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
     )
     .await
     .unwrap();

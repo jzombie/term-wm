@@ -66,8 +66,9 @@ impl RpcMethodPrebuffered for Attach {
 
 // ── Spawn ────────────────────────────────────────────────────────────
 
-#[derive(Encode, Decode)]
-struct SpawnRequest {
+/// Request for `Spawn`: join/respawn the session on a channel.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SpawnRequest {
     pub cmd: Option<Vec<String>>,
     pub cols: u16,
     pub rows: u16,
@@ -77,8 +78,9 @@ struct SpawnRequest {
     pub cwd: Option<String>,
 }
 
-#[derive(Encode, Decode)]
-struct SpawnResponse {
+/// Response for `Spawn`: the (possibly reused) session id and its geometry.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SpawnResponse {
     pub id: u64,
     pub cols: u16,
     pub rows: u16,
@@ -89,36 +91,25 @@ pub struct Spawn;
 impl RpcMethodPrebuffered for Spawn {
     const METHOD_ID: u64 = rpc_method_id!("session.spawn");
 
-    type Input = (Option<Vec<String>>, u16, u16, Option<String>);
-    type Output = (u64, u16, u16);
+    type Input = SpawnRequest;
+    type Output = SpawnResponse;
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&SpawnRequest {
-            cmd: input.0,
-            cols: input.1,
-            rows: input.2,
-            cwd: input.3,
-        }))
+        Ok(bitcode::encode(&input))
     }
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
-        let r = bitcode::decode::<SpawnRequest>(bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok((r.cmd, r.cols, r.rows, r.cwd))
+        bitcode::decode::<SpawnRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&SpawnResponse {
-            id: output.0,
-            cols: output.1,
-            rows: output.2,
-        }))
+        Ok(bitcode::encode(&output))
     }
 
     fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
-        let r = bitcode::decode::<SpawnResponse>(bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok((r.id, r.cols, r.rows))
+        bitcode::decode::<SpawnResponse>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 }
 

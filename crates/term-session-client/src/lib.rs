@@ -21,7 +21,7 @@ use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCal
 use portable_pty::PtySize;
 use term_session_muxio_service_definitions::{
     Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse,
 };
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
@@ -413,10 +413,22 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         let launch_cwd = std::env::current_dir()
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
-        let (_session_id, actual_cols, actual_rows) =
-            Spawn::call(&*client, (cmd, term_cols, term_rows, launch_cwd))
-                .await
-                .map_err(|e| abi_fault(&e))?;
+        let SpawnResponse {
+            id: _session_id,
+            cols: actual_cols,
+            rows: actual_rows,
+            ..
+        } = Spawn::call(
+            &*client,
+            SpawnRequest {
+                cmd,
+                cols: term_cols,
+                rows: term_rows,
+                cwd: launch_cwd,
+            },
+        )
+        .await
+        .map_err(|e| abi_fault(&e))?;
         let _ = conn_id;
         Ok::<(u16, u16), io::Error>((actual_cols, actual_rows))
     })?;
