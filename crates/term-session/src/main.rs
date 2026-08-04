@@ -29,23 +29,20 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon_selfcheck: Option<std::path::PathBuf>,
 
-    /// Channel name (namespace/name); falls back to TERM_WM_CHANNEL env, then "default/main".
-    /// Implicitly attaches when given without a subcommand.
+    /// Channel name [default: default/main or $TERM_WM_CHANNEL]
     #[arg(long)]
     channel: Option<String>,
 
-    /// Command to run (and its arguments); if omitted, launches the default shell.
-    /// Anything after `--` is passed straight through as the spawned argv
-    /// (e.g. `--channel work -- git log --oneline`). Only used when the channel
-    /// has no live session; attaching to a running session ignores the command
-    /// and joins the existing process. Implicitly attaches when given without
-    /// a subcommand. The command must be interactive or long-running (a shell,
-    /// editor, or long-lived process): a short command like `ls` exits
-    /// immediately and ends the session.
+    /// Command and arguments to spawn (defaults to shell).
+    ///
+    /// Anything after `--` is passed verbatim. Only used when starting a new
+    /// session; attaching to an active channel joins the existing process.
+    /// Must be interactive or long-running (e.g. shell, `vim`, `htop`); quick
+    /// commands like `ls` exit immediately.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true)]
     cmd: Vec<String>,
 
-    /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
+    /// Gateway name override [or $TERM_WM_GATEWAY]
     #[arg(long)]
     gateway: Option<String>,
 }
@@ -55,7 +52,7 @@ enum Command {
     /// List channels and their sessions/clients.
     #[command(name = "ls", alias = "list")]
     List,
-    /// Kill a channel's session and detach all its sockets (default).
+    /// Kill a channel's session and detach all sockets.
     Kill {
         /// Channel name to kill.
         channel: String,
@@ -63,7 +60,7 @@ enum Command {
         #[arg(long)]
         kill_session: bool,
     },
-    /// Detach a single client by its conn id (from `term-session list`).
+    /// Detach a single client by conn ID.
     #[command(name = "kill-client")]
     KillClient {
         /// Channel name.

@@ -1,6 +1,6 @@
 [package]
 name = "term-session"
-description = "Generic terminal session reproducer: run a PTY in a detached server and attach any number of terminals, locally or over SSH."
+description = "Run terminal sessions in a detached daemon and attach locally or over SSH. Works on macOS, Linux, and Windows."
 keywords = ["terminal", "pty", "session", "multiplexer"]
 categories = ["command-line-utilities", "emulators", "network-programming", "os"]
 authors.workspace = true

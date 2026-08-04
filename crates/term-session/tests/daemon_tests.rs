@@ -479,8 +479,8 @@ fn bare_term_session_shows_help_and_does_not_connect() {
         "help should mention --channel, got: {stderr}"
     );
     assert!(
-        stderr.contains("list"),
-        "help should list list, got: {stderr}"
+        stderr.contains("ls"),
+        "help should list the ls subcommand, got: {stderr}"
     );
     assert!(
         stderr.contains("stop"),
