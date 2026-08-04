@@ -236,21 +236,21 @@ mod tests {
         let client_dir = tempfile::tempdir().expect("client tempdir");
         let expected = std::fs::canonicalize(client_dir.path()).expect("canonicalize client dir");
         let reported = spawn_pwd_report(Some(&path_wire::encode_path(client_dir.path())));
-        let reported = std::fs::canonicalize(&reported.decode()).expect("canonicalize reported");
+        let reported = std::fs::canonicalize(reported.decode()).expect("canonicalize reported");
         assert_eq!(reported, expected);
     }
 
     #[test]
     fn spawn_falls_back_to_process_cwd_when_cwd_none() {
         let reported = spawn_pwd_report(None);
-        let reported = std::fs::canonicalize(&reported.decode()).expect("canonicalize reported");
+        let reported = std::fs::canonicalize(reported.decode()).expect("canonicalize reported");
         assert_eq!(reported, canonical_process_cwd());
     }
 
     #[test]
     fn spawn_falls_back_to_process_cwd_when_cwd_empty() {
         let reported = spawn_pwd_report(Some(&PathWire::default()));
-        let reported = std::fs::canonicalize(&reported.decode()).expect("canonicalize reported");
+        let reported = std::fs::canonicalize(reported.decode()).expect("canonicalize reported");
         assert_eq!(reported, canonical_process_cwd());
     }
 
