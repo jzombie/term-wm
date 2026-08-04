@@ -620,6 +620,27 @@ impl<Id: Copy + Eq + Ord> LayoutNode<Id> {
         }
     }
 
+    /// Reweight every `Split` to its children's descendant leaf counts, so all
+    /// leaves occupy an equal share of the parent area regardless of tree depth
+    /// (a leaf in a shallow branch gets the same area as a leaf in a deep one).
+    /// Returns this subtree's leaf count.
+    pub fn reweight_by_leaf_count(&mut self) -> u16 {
+        match self {
+            LayoutNode::Leaf(_) | LayoutNode::Void(_) => 1,
+            LayoutNode::Split {
+                children, weights, ..
+            } => {
+                let counts: Vec<u16> = children
+                    .iter_mut()
+                    .map(|c| c.reweight_by_leaf_count())
+                    .collect();
+                let total = counts.iter().fold(0u16, |acc, &x| acc.saturating_add(x));
+                *weights = counts;
+                total
+            }
+        }
+    }
+
     pub fn replace_void_by_id(&mut self, void_id: usize, new_leaf: LayoutNode<Id>) -> bool {
         match self {
             LayoutNode::Void(id) if *id == void_id => {
@@ -1634,6 +1655,101 @@ mod tests {
         node.normalize_weights();
         if let LayoutNode::Split { weights, .. } = &node {
             assert!(weights.iter().all(|w| *w == 1u16));
+        } else {
+            panic!("expected split");
+        }
+    }
+
+    /// Assert every leaf region in a tree occupies near-equal area (within a
+    /// few percent; integer rounding and split gaps cause small deviations, but
+    /// a real imbalance such as ½ vs ¼ must fail).
+    fn assert_equal_leaf_areas(node: &LayoutNode<usize>, area: LayoutRect) {
+        let rects = node.layout_rects(area);
+        assert!(!rects.is_empty(), "expected at least one leaf");
+        let areas: Vec<u32> = rects
+            .iter()
+            .map(|(_, r)| (r.width as u32) * (r.height as u32))
+            .collect();
+        let min_a = *areas.iter().min().unwrap();
+        let max_a = *areas.iter().max().unwrap();
+        assert!(
+            (max_a as u64) * 100 <= (min_a as u64) * 115,
+            "leaves must be near equal-area, got {areas:?}"
+        );
+    }
+
+    #[test]
+    fn reweight_by_leaf_count_equalizes_depth_weighted_tree() {
+        // ½ + ¼ + ¼ tree: [leaf(1) | Split[leaf(2), leaf(3)]] all weights [1,1].
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::Split {
+                    direction: Direction::Horizontal,
+                    children: vec![LayoutNode::leaf(2), LayoutNode::leaf(3)],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                },
+            ],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        node.reweight_by_leaf_count();
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 90,
+            height: 30,
+        };
+        assert_equal_leaf_areas(&node, area);
+    }
+
+    #[test]
+    fn reweight_by_leaf_count_four_leaves_all_equal() {
+        // ½ + ¼ + ⅛ + ⅛ tree; after reweight every leaf must be ¼.
+        let mut node = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![
+                LayoutNode::leaf(1),
+                LayoutNode::Split {
+                    direction: Direction::Horizontal,
+                    children: vec![
+                        LayoutNode::leaf(2),
+                        LayoutNode::Split {
+                            direction: Direction::Horizontal,
+                            children: vec![LayoutNode::leaf(3), LayoutNode::leaf(4)],
+                            weights: vec![1u16, 1u16],
+                            resizable: true,
+                        },
+                    ],
+                    weights: vec![1u16, 1u16],
+                    resizable: true,
+                },
+            ],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        node.reweight_by_leaf_count();
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 40,
+        };
+        assert_equal_leaf_areas(&node, area);
+    }
+
+    #[test]
+    fn reweight_by_leaf_count_populates_empty_weights() {
+        // `LayoutNode::split` initializes weights empty; reweight must fill them.
+        let mut node = LayoutNode::split(
+            Direction::Horizontal,
+            vec![LayoutNode::leaf(1), LayoutNode::leaf(2)],
+        );
+        node.reweight_by_leaf_count();
+        if let LayoutNode::Split { weights, .. } = &node {
+            assert_eq!(weights, &vec![1u16, 1u16]);
         } else {
             panic!("expected split");
         }
