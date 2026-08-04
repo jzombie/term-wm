@@ -390,6 +390,29 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.bottom_claimed = bottom_rect;
         let prev_managed = self.managed_area;
         self.managed_area = managed_area;
+        // First real frame: the true viewport is now known. If no tiling layout
+        // was built yet (startup windows were tiled lazily, not at 0x0), build
+        // the tree now from the mapped, non-floating windows in creation order
+        // so orientation matches the actual aspect ratio.
+        if self.managed_layout.is_none()
+            && self.managed_area.width > 0
+            && self.managed_area.height > 0
+        {
+            let mut tiled: Vec<WindowKey> = self
+                .windows
+                .iter()
+                .filter(|(_, w)| w.state() == WindowState::Mapped && !w.is_floating())
+                .map(|(k, _)| k)
+                .collect();
+            tiled.sort_by_key(|k| self.windows.get(*k).map_or(0, Window::creation_order));
+            if let Some(first) = tiled.first().copied() {
+                let mut layout = TilingLayout::new(LayoutNode::leaf(first));
+                for key in tiled.iter().skip(1) {
+                    layout.insert_window_balanced(*key, self.managed_area);
+                }
+                self.managed_layout = Some(layout);
+            }
+        }
         if prev_managed.width > 0 && prev_managed.height > 0 {
             let prev_full = FloatRectSpec::Absolute(crate::window::FloatRect {
                 x: prev_managed.x,
@@ -906,13 +929,74 @@ mod tests {
     use std::sync::Arc;
 
     fn make_wm() -> WindowManager<NoopComponent> {
-        WindowManager::<NoopComponent>::with_config(
+        let mut wm = WindowManager::<NoopComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
-        )
+        );
+        wm.managed_area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm
+    }
+
+    #[test]
+    fn startup_two_windows_stack_vertically_on_tall_area() {
+        // Unseeded WM: managed_area is 0x0 until the first frame registers it.
+        let mut config = WmConfig::standalone();
+        config.chrome_enabled = false;
+        let mut wm = WindowManager::<NoopComponent>::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+
+        let k0 = wm.create_window(NoopComponent);
+        let k1 = wm.create_window(NoopComponent);
+        wm.transition_window(k0, WindowState::Mapped);
+        wm.transition_window(k1, WindowState::Mapped);
+
+        // Startup tiling must be deferred while the viewport is unmeasured,
+        // otherwise the tree is baked against the 80x24 fallback (horizontal).
+        assert!(wm.managed_layout.is_none());
+        assert!(wm.tile_window(k0));
+        assert!(
+            wm.managed_layout.is_none(),
+            "layout must stay deferred while managed_area is 0x0"
+        );
+        assert!(wm.tile_window(k1));
+        assert!(wm.managed_layout.is_none());
+
+        // First real frame: tall, narrow viewport (35x100).
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 35,
+            height: 100,
+        });
+
+        assert!(wm.managed_layout.is_some(), "layout built on first frame");
+        assert!(wm.layout_contains(k0));
+        assert!(wm.layout_contains(k1));
+
+        let r0 = wm.region(k0);
+        let r1 = wm.region(k1);
+        assert_eq!(r0.x, 0, "left window starts at column 0");
+        assert_eq!(r1.x, 0, "right window starts at column 0");
+        assert_eq!(r0.width, 35, "left window spans full width");
+        assert_eq!(r1.width, 35, "right window spans full width");
+        assert!(
+            r0.y < r1.y,
+            "windows must stack vertically on a tall viewport"
+        );
     }
 
     #[test]
@@ -1260,13 +1344,20 @@ mod window_mode_tests {
     use std::sync::Arc;
 
     fn make_wm() -> WindowManager<NoopComponent> {
-        WindowManager::<NoopComponent>::with_config(
+        let mut wm = WindowManager::<NoopComponent>::with_config(
             WmConfig::standalone(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
-        )
+        );
+        wm.managed_area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm
     }
 
     fn window(key_idx: usize) -> Window {
