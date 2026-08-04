@@ -1,6 +1,6 @@
 [package]
 name = "term-session"
-description = "Run terminal sessions in a detached daemon and attach locally or over SSH. Works on macOS, Linux, and Windows."
+description = "Run and share terminal sessions in a detached daemon and attach locally or over SSH."
 keywords = ["terminal", "pty", "session", "multiplexer"]
 categories = ["command-line-utilities", "emulators", "network-programming", "os"]
 authors.workspace = true
@@ -29,6 +29,8 @@ tracing-subscriber = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+interprocess = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
+tempfile = { workspace = true }
 term-session-mock = { workspace = true }
 tokio = { workspace = true }

@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
 use term_session_muxio_service_definitions::{
-    Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, probe_ipc_endpoint,
+    Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, SpawnRequest,
+    SpawnResponse, path_wire, probe_ipc_endpoint,
 };
 
 /// The compiled `term-session` binary under test.
@@ -58,6 +59,20 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
         .stderr(Stdio::null());
     let child = cmd.spawn().expect("spawn daemon");
     (child, marker)
+}
+
+/// Spawn the daemon with an explicit current directory (distinct from the
+/// test harness's cwd), so cwd-propagation tests can detect whether a session
+/// inherits the daemon's startup directory or the client's launch directory.
+fn spawn_daemon_in(gateway: &str, cwd: &std::path::Path) -> Child {
+    let mut cmd = Command::new(bin());
+    cmd.env("TERM_WM_GATEWAY", gateway)
+        .arg("--daemon")
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().expect("spawn daemon")
 }
 
 /// Attach a client to a channel and return its server-assigned conn id,
@@ -137,15 +152,16 @@ async fn daemon_survives_all_clients_disconnecting() {
     attach_to(&client, channel, "t").await;
     Spawn::call(
         &*client,
-        (
-            Some(vec![
+        SpawnRequest {
+            cmd: Some(vec![
                 mock_bin().to_string_lossy().to_string(),
                 "sleep".into(),
                 "60000".into(),
             ]),
-            80u16,
-            24u16,
-        ),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
     )
     .await
     .unwrap();
@@ -155,7 +171,17 @@ async fn daemon_survives_all_clients_disconnecting() {
     // fresh attach/spawn must succeed (session respawns / persists).
     let client2 = wait_connectable(&gateway).await;
     attach_to(&client2, channel, "t").await;
-    Spawn::call(&*client2, (None, 80u16, 24u16)).await.unwrap();
+    Spawn::call(
+        &*client2,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
 
     ShutdownGateway::call(&*client2, true).await.unwrap();
     let _ = child.wait();
@@ -188,12 +214,102 @@ async fn daemon_survives_parent_death() {
     // exited — sessions are torn down only when their process ends).
     let client = wait_connectable(&gateway).await;
     attach_to(&client, channel, "t").await;
-    let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
+    let SpawnResponse {
+        id,
+        cols: _,
+        rows: _,
+    } = Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
     ShutdownGateway::call(&*client, true).await.unwrap();
     // Give the daemon time to run its teardown and exit.
     tokio::time::sleep(Duration::from_millis(1000)).await;
+}
+
+#[tokio::test]
+async fn session_starts_in_client_cwd() {
+    // A fresh gateway per run: `unique_gateway`'s counter resets per process,
+    // so a daemon left over from a failed run on the same name would hold the
+    // socket and this test would attach to the wrong (stale) gateway. Deriving
+    // the name from the current time guarantees no collision with leftovers.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let gateway = format!("term-wm/dtest-client_cwd-{nonce}");
+    let channel = "test/client_cwd";
+
+    // Distinct directories: the daemon's startup cwd vs the client's launch
+    // cwd. The session must start in the latter, not the daemon's. TempDirs
+    // auto-cleanup on drop (after the daemon has been shut down).
+    let daemon_dir = tempfile::tempdir().expect("daemon tempdir");
+    let client_dir = tempfile::tempdir().expect("client tempdir");
+    let report_dir = tempfile::tempdir().expect("report tempdir");
+    let report = report_dir.path().join("pwd.txt");
+
+    let mut child = spawn_daemon_in(&gateway, daemon_dir.path());
+    let client = wait_connectable(&gateway).await;
+    attach_to(&client, channel, "cwd").await;
+
+    // Spawn `mock pwd <report>` with the client's launch directory. The mock
+    // writes the child's actual cwd to `report` (an absolute path) and exits.
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: Some(vec![
+                mock_bin().to_string_lossy().to_string(),
+                "pwd".into(),
+                report.to_string_lossy().to_string(),
+            ]),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: Some(path_wire::encode_path(client_dir.path())),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Poll for the report: the mock writes it right before exiting. The mock
+    // reports its cwd as raw wire bytes (lossless), so read them byte-for-byte.
+    let start = Instant::now();
+    let got = loop {
+        if let Ok(content) = std::fs::read(&report) {
+            break content;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "mock pwd never wrote the report"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    // The child's `current_dir()` is the OS-canonical path (on macOS `/var`
+    // resolves to `/private/var`; on Windows it may be the 8.3 short form and
+    // differ from `canonicalize`'s long form + `\\?\` prefix), so canonicalize
+    // both sides before comparing.
+    let got_path = path_wire::decode_path(&path_wire::PathWire::from(got));
+    let got = std::fs::canonicalize(&got_path)
+        .unwrap_or_else(|e| panic!("failed to canonicalize reported cwd {got_path:?}: {e}"));
+    let expected = std::fs::canonicalize(client_dir.path()).unwrap();
+    assert_eq!(
+        got,
+        expected,
+        "session must start in the client's launch directory, not the daemon's \
+         startup directory ({:?})",
+        daemon_dir.path()
+    );
+
+    ShutdownGateway::call(&*client, true).await.unwrap();
+    let _ = child.wait();
 }
 
 /// The daemon must never inherit the parent's open handles. Regression guard
@@ -407,19 +523,30 @@ async fn cli_kill_client_detaches_one_client() {
     attach_to(&c2, channel, "two").await;
     Spawn::call(
         &*c1,
-        (
-            Some(vec![
+        SpawnRequest {
+            cmd: Some(vec![
                 mock_bin().to_string_lossy().to_string(),
                 "sleep".into(),
                 "60000".into(),
             ]),
-            80u16,
-            24u16,
-        ),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
     )
     .await
     .unwrap();
-    Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
+    Spawn::call(
+        &*c2,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
 
     // Read the conn ids from `list` (as an operator would).
     let resp = ListChannels::call(&*c1, ()).await.unwrap();
@@ -629,7 +756,17 @@ async fn cli_list_renders_client_identity() {
     )
     .await
     .unwrap();
-    Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: None,
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
 
     let out = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
@@ -669,15 +806,16 @@ async fn cli_stop_requires_force_when_live_sessions() {
     attach_to(&client, channel, "cli").await;
     Spawn::call(
         &*client,
-        (
-            Some(vec![
+        SpawnRequest {
+            cmd: Some(vec![
                 mock_bin().to_string_lossy().to_string(),
                 "sleep".into(),
                 "60000".into(),
             ]),
-            80u16,
-            24u16,
-        ),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
     )
     .await
     .unwrap();
@@ -715,4 +853,53 @@ async fn cli_stop_requires_force_when_live_sessions() {
         String::from_utf8_lossy(&out.stderr)
     );
     let _ = child.wait();
+}
+
+/// Regression: a connection/handshake failure must surface on the client's
+/// stderr instead of being silently swallowed by the stderr→tracing redirect
+/// (see `redirect_fd_to_tracing` in `term-session-client`). The gateway is
+/// "occupied" by a socket that accepts and immediately feeds garbage + closes
+/// each connection (no muxio handshake), so Attach fails deterministically
+/// without auto-spawning a new daemon (probe succeeds because something is
+/// bound). Unix-only: the redirect is a unix `dup2` mechanism.
+#[cfg(unix)]
+#[test]
+fn connection_error_is_printed_to_stderr() {
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName, prelude::*};
+    use std::io::Write;
+
+    let gateway = unique_gateway("silent-exit");
+    let name = gateway
+        .as_str()
+        .to_ns_name::<GenericNamespaced>()
+        .expect("gateway ns name");
+    let listener = ListenerOptions::new()
+        .name(name)
+        .try_overwrite(true)
+        .create_sync()
+        .expect("bind dummy gateway");
+    let acceptor = std::thread::spawn(move || {
+        while let Ok(mut stream) = listener.accept() {
+            // Garbage + close: muxio decode fails rather than silently EOF.
+            let _ = stream.write_all(b"not-a-muxio-frame");
+        }
+    });
+
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--channel", "test/silent-exit"])
+        .output()
+        .expect("run client");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.trim().is_empty(),
+        "client must emit a diagnostic on a failed connection (silent-exit regression), got empty stderr"
+    );
+    assert!(
+        !out.status.success(),
+        "client must exit non-zero, got status: {:?}",
+        out.status.code()
+    );
+    drop(acceptor);
 }

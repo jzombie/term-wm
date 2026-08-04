@@ -14,7 +14,8 @@ use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
     ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_LIVE_SESSIONS,
     RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn, WriteInput,
+    SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
+    WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -624,7 +625,12 @@ pub async fn run_gateway(
                 if state.is_shutting_down.load(Ordering::SeqCst) {
                     return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-                let (cmd, cols, rows) = Spawn::decode_request(&payload)?;
+                let SpawnRequest {
+                    cmd,
+                    cols,
+                    rows,
+                    cwd,
+                } = Spawn::decode_request(&payload)?;
                 let channel = bound_channel(state.as_ref(), ctx.conn_id).await;
                 let Some(channel) = channel else {
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
@@ -680,7 +686,8 @@ pub async fn run_gateway(
                         let g = ch.lock().await;
                         g.notify_clients(&targets, ncols, nrows);
                     }
-                    return Spawn::encode_response((id, cols, rows)).map_err(boxed_io);
+                    return Spawn::encode_response(SpawnResponse { id, cols, rows })
+                        .map_err(boxed_io);
                 }
 
                 // Respawn: new non-empty cmd overwrites the stored template;
@@ -695,8 +702,19 @@ pub async fn run_gateway(
                 } else {
                     None
                 };
+                // Spawn in the client's launch directory when provided (the
+                // caller expects to land where they ran `term-session`), else
+                // fall back to the daemon's cwd for legacy/empty payloads.
+                let effective_cwd = cwd.filter(|c| !c.is_empty());
                 let id = SESSION_ID;
-                let session = Session::spawn(id, effective_cmd, cols, rows, Some(&channel))?;
+                let session = Session::spawn(
+                    id,
+                    effective_cmd,
+                    cols,
+                    rows,
+                    Some(&channel),
+                    effective_cwd.as_ref(),
+                )?;
                 guard.set_session(session);
                 guard.recalculate_pty_size();
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
@@ -708,7 +726,12 @@ pub async fn run_gateway(
                     let g = ch.lock().await;
                     g.notify_clients(&targets, ncols, nrows);
                 }
-                Spawn::encode_response((sid, scol, srow)).map_err(boxed_io)
+                Spawn::encode_response(SpawnResponse {
+                    id: sid,
+                    cols: scol,
+                    rows: srow,
+                })
+                .map_err(boxed_io)
             }
         })
         .await
