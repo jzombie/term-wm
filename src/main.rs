@@ -29,34 +29,49 @@ const PTY_SCROLLBACK_LEN: usize = 2000;
     long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
 )]
 struct Cli {
-    /// Number of windows to open.
+    /// Total number of windows to open (default 2; min 1).
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
-    /// Command to run (the whole argv after `--`) in the first window;
-    /// remaining `--count` windows are default shells.
-    #[arg(value_name = "CMD", num_args = 0..)]
+
+    /// Command to run in a window; repeatable, one window per `--run`.
+    #[arg(short = 'r', long = "run", value_name = "CMD", action = clap::ArgAction::Append)]
+    run_cmds: Vec<String>,
+
+    /// One command for a window (the whole argv after `--`); it follows any
+    /// `--run` windows. Remaining `--count` windows are default shells.
+    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmds: Vec<String>,
+}
+
+/// Combine repeatable `--run` commands with the single trailing `--` command
+/// (joined into one command line). `--run` windows come first.
+fn build_commands(run_cmds: Vec<String>, positional: Vec<String>) -> Vec<String> {
+    let mut commands = run_cmds;
+    if !positional.is_empty() {
+        commands.push(positional.join(" "));
+    }
+    commands
+}
+
+/// Total number of windows: explicit commands take precedence over a smaller
+/// `-n`; without commands, default to 2 (min 1).
+fn total_windows(count: Option<usize>, commands: &[String]) -> usize {
+    if commands.is_empty() {
+        count.unwrap_or(2).max(1)
+    } else {
+        commands.len().max(count.unwrap_or(0))
+    }
 }
 
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    // Determine total number of windows to open by default.
-    //
-    // Behavior:
-    // - If no commands provided: open `--count` shells (default 2 if not given).
-    // - If a command is provided (the whole argv after `--`): it runs in the
-    //   FIRST window; any remaining `--count` windows are default shells.
-    //   Without `--count`, a single window runs the command.
-    let total = if cli.cmds.is_empty() {
-        cli.count.unwrap_or(2).max(1)
-    } else {
-        cli.count.map(|c| c.max(1)).unwrap_or(1)
-    };
+    let commands = build_commands(cli.run_cmds, cli.cmds);
+    let total = total_windows(cli.count, &commands);
 
     let mut event_source = UnifiedEventSource::new()?;
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
-    let mut app = App::new_with(cli.cmds, total, pty_wakeup_tx)?;
+    let mut app = App::new_with(commands, total, pty_wakeup_tx)?;
 
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
@@ -118,24 +133,19 @@ impl App {
         // Initialize debug log and system panel windows.
         app.inner.init_system_windows();
 
-        // The whole argv after `--` is ONE command (e.g. `-- ls -la`); run it
-        // in the first window, and open default shells in any remaining windows.
-        if !commands.is_empty() {
-            let command_line = commands.join(" ");
+        // One window per command (shell + the command as input), then default
+        // shells to fill `num_windows`. `commands` is owned and consumed here.
+        let mut used = 0;
+        for cmd in commands {
             let cb = default_shell_command();
-            if let Err(e) = app.spawn_terminal_with_command(cb, Some(command_line)) {
+            if let Err(e) = app.spawn_terminal_with_command(cb, Some(cmd)) {
                 tracing::error!("Window spawn error: {}", e);
             }
-            for _ in 1..num_windows {
-                if let Err(e) = app.wm_new_window() {
-                    tracing::error!("Window spawn error: {}", e);
-                }
-            }
-        } else {
-            for _ in 0..num_windows {
-                if let Err(e) = app.wm_new_window() {
-                    tracing::error!("Window spawn error: {}", e);
-                }
+            used += 1;
+        }
+        for _ in used..num_windows {
+            if let Err(e) = app.wm_new_window() {
+                tracing::error!("Window spawn error: {}", e);
             }
         }
 
@@ -226,5 +236,65 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn render(&mut self, backend: &mut dyn term_wm_render::RenderBackend) {
         self.inner.render_app(backend);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_commands_appends_joined_positional_after_run() {
+        let commands = build_commands(
+            vec!["vim -l".into(), "htop".into()],
+            vec!["git".into(), "log".into(), "--oneline".into()],
+        );
+        assert_eq!(commands, vec!["vim -l", "htop", "git log --oneline"]);
+    }
+
+    #[test]
+    fn build_commands_positional_only_is_single_command() {
+        let commands = build_commands(vec![], vec!["ls".into(), "-la".into()]);
+        assert_eq!(commands, vec!["ls -la"]);
+    }
+
+    #[test]
+    fn build_commands_run_only() {
+        let commands = build_commands(vec!["top".into()], vec![]);
+        assert_eq!(commands, vec!["top"]);
+    }
+
+    #[test]
+    fn build_commands_none() {
+        assert!(build_commands(vec![], vec![]).is_empty());
+    }
+
+    #[test]
+    fn total_windows_defaults_to_two_without_commands() {
+        assert_eq!(total_windows(None, &[]), 2);
+    }
+
+    #[test]
+    fn total_windows_count_without_commands() {
+        assert_eq!(total_windows(Some(4), &[]), 4);
+    }
+
+    #[test]
+    fn total_windows_zero_count_without_commands_clamps_to_one() {
+        assert_eq!(total_windows(Some(0), &[]), 1);
+    }
+
+    #[test]
+    fn total_windows_commands_take_precedence_over_smaller_count() {
+        let cmds = vec!["a".into(), "b".into()];
+        assert_eq!(total_windows(Some(1), &cmds), 2);
+        // `-n 0` with commands still opens one window per command.
+        assert_eq!(total_windows(Some(0), &cmds), 2);
+    }
+
+    #[test]
+    fn total_windows_count_expands_beyond_commands() {
+        let cmds = vec!["a".into()];
+        assert_eq!(total_windows(Some(4), &cmds), 4);
     }
 }
