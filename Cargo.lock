@@ -3032,6 +3032,7 @@ version = "0.9.8-alpha"
 dependencies = [
  "clap",
  "hostname",
+ "interprocess",
  "libc",
  "muxio-tokio-rpc-ipc-client",
  "tempfile",

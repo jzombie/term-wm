@@ -79,9 +79,36 @@ enum Command {
 }
 
 fn main() {
+    // Preserve the real stderr before `run_session` may `dup2` it into the
+    // tracing pipe (see `redirect_fd_to_tracing`): a fatal error returned
+    // after the terminal UI has started must still be visible to the user, so
+    // report it through this preserved handle instead of the (possibly
+    // redirected) fd 2. Best-effort: if `dup` fails, fall back to `eprintln!`.
+    #[cfg(unix)]
+    let orig_stderr: Option<std::fs::File> = {
+        use std::os::unix::io::FromRawFd;
+        let fd = unsafe { libc::dup(libc::STDERR_FILENO) };
+        if fd >= 0 {
+            Some(unsafe { std::fs::File::from_raw_fd(fd) })
+        } else {
+            None
+        }
+    };
+
     // Print errors as readable messages (Display), not Rust's Debug dump that
     // `main() -> Result` emits by default (e.g. `Custom { kind: ..., ... }`).
     if let Err(e) = run() {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            match orig_stderr {
+                Some(mut f) => {
+                    let _ = writeln!(f, "error: {e}");
+                }
+                None => eprintln!("error: {e}"),
+            }
+        }
+        #[cfg(not(unix))]
         eprintln!("error: {e}");
         std::process::exit(1);
     }

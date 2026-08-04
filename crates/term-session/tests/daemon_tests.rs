@@ -849,3 +849,54 @@ async fn cli_stop_requires_force_when_live_sessions() {
     );
     let _ = child.wait();
 }
+
+/// Regression: a connection/handshake failure must surface on the client's
+/// stderr instead of being silently swallowed by the stderr→tracing redirect
+/// (see `redirect_fd_to_tracing` in `term-session-client`). The gateway is
+/// "occupied" by a socket that accepts and immediately feeds garbage + closes
+/// each connection (no muxio handshake), so Attach fails deterministically
+/// without auto-spawning a new daemon (probe succeeds because something is
+/// bound). Unix-only: the redirect is a unix `dup2` mechanism.
+#[cfg(unix)]
+#[test]
+fn connection_error_is_printed_to_stderr() {
+    use interprocess::local_socket::{
+        GenericNamespaced, ListenerOptions, ToNsName, prelude::*,
+    };
+    use std::io::Write;
+
+    let gateway = unique_gateway("silent-exit");
+    let name = gateway
+        .as_str()
+        .to_ns_name::<GenericNamespaced>()
+        .expect("gateway ns name");
+    let listener = ListenerOptions::new()
+        .name(name)
+        .try_overwrite(true)
+        .create_sync()
+        .expect("bind dummy gateway");
+    let acceptor = std::thread::spawn(move || {
+        while let Ok(mut stream) = listener.accept() {
+            // Garbage + close: muxio decode fails rather than silently EOF.
+            let _ = stream.write_all(b"not-a-muxio-frame");
+        }
+    });
+
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--channel", "test/silent-exit"])
+        .output()
+        .expect("run client");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.trim().is_empty(),
+        "client must emit a diagnostic on a failed connection (silent-exit regression), got empty stderr"
+    );
+    assert!(
+        !out.status.success(),
+        "client must exit non-zero, got status: {:?}",
+        out.status.code()
+    );
+    drop(acceptor);
+}
