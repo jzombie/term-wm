@@ -123,7 +123,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_cwd, Session};
+    use super::{Session, resolve_cwd};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
@@ -148,7 +148,10 @@ mod tests {
 
     #[test]
     fn resolve_cwd_falls_back_to_process_dir_when_empty() {
-        assert_eq!(resolve_cwd(Some(&PathWire::default())), std::env::current_dir().ok());
+        assert_eq!(
+            resolve_cwd(Some(&PathWire::default())),
+            std::env::current_dir().ok()
+        );
     }
 
     /// Try to create a directory whose name contains bytes that are not valid

@@ -161,7 +161,7 @@ pub fn decode_path(pw: &PathWire) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_path, encode_path, PathWire};
+    use super::{PathWire, decode_path, encode_path};
     use std::path::{Path, PathBuf};
 
     #[test]
