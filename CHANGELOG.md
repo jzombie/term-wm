@@ -18,8 +18,6 @@ The format is based on Keep a Changelog and this project adheres to
 
 - **`term-session` commands must be interactive or long-running:** the README and CLI help now state that the spawned command must be interactive or long-running (a shell, editor, or long-lived process) — a short command like `ls` exits immediately and ends the session.
 
-[NOT YET POPULATED]
-
 ## [0.9.7-alpha] - 2026-08-03
 
 ### Added
