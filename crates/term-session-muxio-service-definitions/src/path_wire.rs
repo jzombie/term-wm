@@ -144,7 +144,7 @@ pub fn decode_path(pw: &PathWire) -> PathBuf {
         use std::os::windows::ffi::OsStringExt;
         let bytes = &pw.0;
         debug_assert!(
-            bytes.len() % 2 == 0,
+            bytes.len().is_multiple_of(2),
             "windows cwd bytes must be u16 little-endian pairs"
         );
         let units = bytes
