@@ -1,12 +1,24 @@
 //! Lossless conversion between OS paths and the raw bytes carried on the
 //! muxio wire.
 //!
-//! The client and daemon always run on the same host (local IPC), so a
-//! platform-native encoding is safe: Unix sends the raw `OsStr` bytes and
-//! Windows sends UTF-16 code units packed as little-endian `u16` pairs. Both
-//! representations are byte-for-byte reversible — including non-UTF-8 paths on
-//! Unix and unpaired-surrogate (WTF-16) paths on Windows — which is what makes
-//! the session's launch directory round-trip losslessly.
+//! `PathWire` is **strictly intended for same-host local IPC**: the client and
+//! daemon run on the same machine. Do not use it for any other transport.
+//! Because the endpoints share a host, a platform-native encoding is safe: Unix
+//! sends the raw `OsStr` bytes and Windows sends UTF-16 code units packed as
+//! little-endian `u16` pairs. Both representations are byte-for-byte reversible
+//! — including non-UTF-8 paths on Unix and unpaired-surrogate (WTF-16) paths on
+//! Windows — which is what makes the session's launch directory round-trip
+//! losslessly.
+//!
+//! The bytes are therefore **not portable across platforms**. `PathWire` is a
+//! raw byte array with no platform tag, so decoding a payload on a different OS
+//! than the one that encoded it yields a silently garbled path rather than a
+//! structured error; a Unix path is also syntactically invalid as a Windows
+//! cwd and vice versa. Payloads must only ever travel between same-host
+//! processes. SSH remote sessions are unaffected: the daemon runs on the remote
+//! host, so the client's bytes are decoded in that same remote OS's native
+//! context. A canonical multi-platform encoding (e.g. WTF-8) was deliberately
+//! deferred in favor of zero-overhead native buffers for same-host local IPC.
 
 use std::path::{Path, PathBuf};
 
@@ -14,10 +26,15 @@ use bitcode::{Decode, Encode};
 
 /// A byte buffer carrying a path's lossless wire encoding.
 ///
-/// The encoding is platform-native (safe because the client and daemon always
-/// run on the same host): Unix stores the raw `OsStr` bytes; Windows stores
-/// UTF-16 code units packed as little-endian `u16` pairs. Both are byte-for-byte
-/// reversible, so even non-UTF-8 / WTF-16 paths round-trip intact.
+/// Strictly intended for same-host local IPC (client and daemon on the same
+/// machine); the platform-native encoding is therefore safe: Unix stores the
+/// raw `OsStr` bytes; Windows stores UTF-16 code units packed as little-endian
+/// `u16` pairs. Both are byte-for-byte reversible, so even non-UTF-8 / WTF-16
+/// paths round-trip intact.
+///
+/// The bytes are **not portable across platforms**: decoding a `PathWire` on a
+/// different OS than the one that encoded it yields a corrupt path (see module
+/// docs).
 ///
 /// Distinct from a raw `Vec<u8>` (e.g. PTY input/output), so a path payload
 /// cannot be accidentally substituted for, or mixed with, arbitrary buffers.

@@ -77,8 +77,9 @@ pub struct SpawnRequest {
     /// The client process's working directory at the time it launched, so a
     /// newly spawned session starts there rather than in the daemon's cwd.
     /// Encoded losslessly via [`crate::path_wire::encode_path`], so non-UTF-8
-    /// paths survive the wire byte-for-byte. `None`/empty falls back to the
-    /// daemon's cwd.
+    /// paths survive the wire byte-for-byte. The bytes are decoded in the
+    /// daemon's host OS context (same host), so the payload is only valid on
+    /// the host that produced it. `None`/empty falls back to the daemon's cwd.
     pub cwd: Option<PathWire>,
 }
 
