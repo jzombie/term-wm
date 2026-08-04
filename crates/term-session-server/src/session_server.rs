@@ -713,7 +713,7 @@ pub async fn run_gateway(
                     cols,
                     rows,
                     Some(&channel),
-                    effective_cwd.as_deref(),
+                    effective_cwd.as_ref(),
                 )?;
                 guard.set_session(session);
                 guard.recalculate_pty_size();

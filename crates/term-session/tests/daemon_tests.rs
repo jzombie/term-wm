@@ -296,7 +296,7 @@ async fn session_starts_in_client_cwd() {
     // resolves to `/private/var`), so canonicalize the expected dir.
     let expected = std::fs::canonicalize(client_dir.path()).unwrap();
     assert_eq!(
-        path_wire::decode_path(&got),
+        path_wire::decode_path(&path_wire::PathWire::from(got)),
         expected,
         "session must start in the client's launch directory, not the daemon's \
          startup directory ({:?})",

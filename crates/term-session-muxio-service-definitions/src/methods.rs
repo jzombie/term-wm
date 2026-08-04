@@ -3,6 +3,8 @@ use std::io;
 use bitcode::{Decode, Encode};
 use muxio_rpc_service::{prebuffered::RpcMethodPrebuffered, rpc_method_id};
 
+use crate::path_wire::PathWire;
+
 // ── Error message constants ─────────────────────────────────────────
 // muxio's wire error only has Fail/System/NotFound codes, so structured
 // gateway errors are signalled with well-known message strings that both
@@ -77,7 +79,7 @@ pub struct SpawnRequest {
     /// Encoded losslessly via [`crate::path_wire::encode_path`], so non-UTF-8
     /// paths survive the wire byte-for-byte. `None`/empty falls back to the
     /// daemon's cwd.
-    pub cwd: Option<Vec<u8>>,
+    pub cwd: Option<PathWire>,
 }
 
 /// Response for `Spawn`: the (possibly reused) session id and its geometry.

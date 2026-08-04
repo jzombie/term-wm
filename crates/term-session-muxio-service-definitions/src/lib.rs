@@ -10,4 +10,5 @@ pub use methods::{
     SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
     WriteInput,
 };
+pub use path_wire::PathWire;
 pub use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;

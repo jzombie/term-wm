@@ -1,6 +1,7 @@
 use portable_pty::{CommandBuilder, PtySize};
 use term_session_muxio_service_definitions::path_wire;
 use term_session_muxio_service_definitions::ChannelName;
+use term_session_muxio_service_definitions::PathWire;
 use term_wm_pty_engine::{Pty, PtyResult, PtyStatus};
 
 pub struct Session {
@@ -25,7 +26,7 @@ fn default_shell_command() -> CommandBuilder {
 /// Prefers the caller's launch directory (losslessly decoded wire bytes);
 /// falls back to this process's cwd (the daemon's) for legacy clients that
 /// send `None` or an empty payload.
-fn resolve_cwd(cwd: Option<&[u8]>) -> Option<std::path::PathBuf> {
+fn resolve_cwd(cwd: Option<&PathWire>) -> Option<std::path::PathBuf> {
     match cwd {
         Some(c) if !c.is_empty() => Some(path_wire::decode_path(c)),
         _ => std::env::current_dir().ok(),
@@ -39,7 +40,7 @@ impl Session {
         cols: u16,
         rows: u16,
         channel: Option<&ChannelName>,
-        cwd: Option<&[u8]>,
+        cwd: Option<&PathWire>,
     ) -> PtyResult<Self> {
         let size = PtySize {
             rows,
@@ -128,6 +129,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use term_session_muxio_service_definitions::path_wire;
+    use term_session_muxio_service_definitions::path_wire::PathWire;
 
     const TEST_COLS: u16 = 80;
     const TEST_ROWS: u16 = 24;
@@ -147,7 +149,7 @@ mod tests {
 
     #[test]
     fn resolve_cwd_falls_back_to_process_dir_when_empty() {
-        assert_eq!(resolve_cwd(Some(&[])), std::env::current_dir().ok());
+        assert_eq!(resolve_cwd(Some(&PathWire::default())), std::env::current_dir().ok());
     }
 
     /// Try to create a directory whose name contains bytes that are not valid
@@ -196,8 +198,8 @@ mod tests {
     }
 
     /// Spawn a session running `mock pwd <report>` with the given wire-encoded
-    /// cwd and return the raw bytes the child reports.
-    fn spawn_pwd_report(cwd: Option<&[u8]>) -> Vec<u8> {
+    /// cwd and return the wire bytes the child reports.
+    fn spawn_pwd_report(cwd: Option<&PathWire>) -> PathWire {
         let dir = tempfile::tempdir().expect("report tempdir");
         let report = dir.path().join("pwd.txt");
         let mock = term_session_mock::get_mock_bin();
@@ -208,7 +210,7 @@ mod tests {
         ];
         let _session =
             Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, cwd).expect("spawn session");
-        read_report(&report)
+        PathWire::from(read_report(&report))
     }
 
     fn canonical_process_cwd() -> PathBuf {
@@ -232,7 +234,7 @@ mod tests {
 
     #[test]
     fn spawn_falls_back_to_process_cwd_when_cwd_empty() {
-        let reported = spawn_pwd_report(Some(&[]));
+        let reported = spawn_pwd_report(Some(&PathWire::default()));
         assert_eq!(path_wire::decode_path(&reported), canonical_process_cwd());
     }
 
