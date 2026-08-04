@@ -578,6 +578,57 @@ async fn dash_dash_disambiguates_command_from_subcommand() {
 }
 
 #[tokio::test]
+async fn cli_list_renders_client_identity() {
+    let gateway = unique_gateway("list_identity");
+    let channel = "test/list_identity";
+    let (mut daemon, _marker) = spawn_daemon(&gateway, false);
+
+    // A client that stays connected, with explicit identity fields.
+    let client = wait_connectable(&gateway).await;
+    Attach::call(
+        &*client,
+        AttachRequest {
+            channel: channel.to_string(),
+            hostname: "render-host".to_string(),
+            pid: 4242,
+            user: "bob".to_string(),
+            version: "v7".to_string(),
+            ssh_ip: Some("203.0.113.9".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
+
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("list")
+        .output()
+        .expect("run list");
+    assert!(
+        out.status.success(),
+        "list failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("user: bob"),
+        "list must render the client user, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("version: v7"),
+        "list must render the client version, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("ssh ip from: 203.0.113.9"),
+        "list must render the remote ssh ip, got: {stdout}"
+    );
+
+    ShutdownGateway::call(&*client, true).await.unwrap();
+    let _ = daemon.wait();
+}
+
+#[tokio::test]
 async fn cli_stop_requires_force_when_live_sessions() {
     let gateway = unique_gateway("stop_force");
     let channel = "test/stop_force";

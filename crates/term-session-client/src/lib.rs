@@ -215,7 +215,8 @@ fn is_coalescable_mouse(
 
 /// OS user running the client process, reported at `Attach` so `list` can show
 /// who each socket belongs to. On Unix the passwd entry is authoritative, with
-/// `$USER` as a fallback; on Windows `%USERNAME%` is used.
+/// `$USER` as a fallback; on Windows `%USERNAME%` is used, with `GetUserNameW`
+/// as a fallback for contexts where the env var is unset.
 fn client_user() -> String {
     #[cfg(unix)]
     {
@@ -234,12 +235,35 @@ fn client_user() -> String {
     }
     #[cfg(windows)]
     {
-        std::env::var("USERNAME").unwrap_or_default()
+        if let Ok(u) = std::env::var("USERNAME")
+            && !u.is_empty()
+        {
+            return u;
+        }
+        windows_username().unwrap_or_default()
     }
     #[cfg(not(any(unix, windows)))]
     {
         String::new()
     }
+}
+
+/// Windows fallback: resolve the account via `GetUserNameW` when `%USERNAME%`
+/// is not set (e.g. service or non-interactive contexts).
+#[cfg(windows)]
+fn windows_username() -> Option<String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
+    let mut buf = [0u16; 256];
+    let mut len = buf.len() as u32;
+    let ok = unsafe { GetUserNameW(buf.as_mut_ptr(), &mut len) };
+    if ok == 0 {
+        return None;
+    }
+    let s = std::ffi::OsString::from_wide(&buf[..len as usize])
+        .to_string_lossy()
+        .into_owned();
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Client binary version (`CARGO_PKG_VERSION`), reported at `Attach` so `list`
@@ -942,6 +966,34 @@ mod tests {
     #[test]
     fn client_user_non_empty() {
         assert!(!client_user().is_empty(), "client user must resolve");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn client_user_prefers_username_env_when_set() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var("USERNAME", "win-test-user");
+        }
+        assert_eq!(client_user(), "win-test-user");
+        unsafe {
+            std::env::remove_var("USERNAME");
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn client_user_falls_back_to_getusername_when_env_absent() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var("USERNAME");
+        }
+        // `USERNAME` is normally always set on Windows; with it removed, the
+        // `GetUserNameW` fallback must still resolve the real account.
+        assert!(
+            !client_user().is_empty(),
+            "GetUserNameW fallback must resolve a user"
+        );
     }
 
     /// Constructs a TerminalGuard with a test writer and verifies that
