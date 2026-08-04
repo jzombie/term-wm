@@ -4,8 +4,8 @@ use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use term_session_muxio_service_definitions::{
-    CloseSession, KillChannel, KillClient, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn,
+    Attach, AttachRequest, CloseSession, KillChannel, KillClient, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, ShutdownGateway, Spawn,
 };
 
 mod common;
@@ -963,6 +963,55 @@ async fn spawn_idempotent_on_live_session() {
 
 #[tokio::test]
 #[serial]
+async fn spawn_cmd_ignored_on_live_session() {
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/cmd_ignored")).await;
+    Spawn::call(
+        &*client,
+        (
+            Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // A second client joins the live session with a DIFFERENT cmd (`exit 0`).
+    // If honored, the session would terminate immediately; instead it must be
+    // ignored and the original `sleep` process kept running.
+    let c2 = connect_client_with_retry(guard.socket()).await;
+    attach_client(&c2, &test_channel("test/cmd_ignored")).await;
+    let (id2, _, _) = Spawn::call(
+        &*c2,
+        (
+            Some(vec![mock, "exit".into(), "0".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Give a would-be `exit` time to take effect: the session must still be
+    // live, proving the command was ignored and the original process survived.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let resp = list_channels(&client).await;
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == "test/cmd_ignored")
+        .expect("channel listed");
+    assert!(
+        ch.session.as_ref().is_some_and(|s| !s.exited),
+        "session must stay alive when a different cmd is supplied"
+    );
+    assert_eq!(id2, 1, "reused session id");
+    guard.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
 async fn session_multi_client_pty_constrained_to_smallest() {
     let mock = get_mock_bin();
     let guard = spawn_gateway().await;
@@ -1088,5 +1137,166 @@ async fn shutdown_gateway_stops_daemon() {
     // assert the ShutdownGateway call returned cleanly (the RPC response was
     // flushed before the daemon exited).
     // Give the daemon a moment to actually terminate.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn list_channels_orders_channels_and_clients_by_creation() {
+    let mock = get_mock_bin();
+    let guard = spawn_gateway().await;
+    let socket = guard.socket().to_string();
+
+    // Channel A is created before B; channel order must be [A, B], newest last.
+    let ca = connect_client_with_retry(&socket).await;
+    let cb = connect_client_with_retry(&socket).await;
+    attach_client(&ca, &test_channel("test/order_a")).await;
+    attach_client(&cb, &test_channel("test/order_b")).await;
+    Spawn::call(
+        &*ca,
+        (
+            Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .unwrap();
+    Spawn::call(
+        &*cb,
+        (
+            Some(vec![mock, "sleep".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // A second client attaches to channel A AFTER B was created. Its conn_id
+    // is higher, so it must sort after A's first client. (A client only shows
+    // up in `list` once it has Spawned, so spawn it too.)
+    let ca2 = connect_client_with_retry(&socket).await;
+    attach_client(&ca2, &test_channel("test/order_a")).await;
+    Spawn::call(&*ca2, (None, TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
+
+    let resp = list_channels(&ca).await;
+    let names: Vec<&str> = resp.channels.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["test/order_a", "test/order_b"],
+        "channels must be in creation order, newest last: {names:?}"
+    );
+
+    let ch_a = resp
+        .channels
+        .iter()
+        .find(|c| c.name == "test/order_a")
+        .expect("channel a listed");
+    assert_eq!(ch_a.clients.len(), 2, "two clients on channel a");
+    assert!(
+        ch_a.clients[0].conn_id < ch_a.clients[1].conn_id,
+        "clients must be in connection order, newest last"
+    );
+
+    guard.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn list_channels_reports_client_identity() {
+    let guard = spawn_gateway().await;
+    let channel = test_channel("test/client_identity");
+    let client = connect_client_with_retry(guard.socket()).await;
+    Attach::call(
+        &*client,
+        AttachRequest {
+            channel: channel.to_string(),
+            hostname: "host-a".to_string(),
+            pid: 1234,
+            user: "alice".to_string(),
+            version: "9.9.9".to_string(),
+            ssh_ip: Some("192.168.1.50".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
+        .await
+        .unwrap();
+
+    let resp = list_channels(&client).await;
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == "test/client_identity")
+        .expect("channel listed");
+    assert_eq!(ch.clients.len(), 1);
+    let c = &ch.clients[0];
+    assert_eq!(
+        c.user, "alice",
+        "user reported at Attach must surface in list"
+    );
+    assert_eq!(
+        c.version, "9.9.9",
+        "version reported at Attach must surface in list"
+    );
+    assert_eq!(
+        c.ssh_ip.as_deref(),
+        Some("192.168.1.50"),
+        "ssh_ip reported at Attach must surface in list"
+    );
+    guard.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn shutdown_refuses_without_force_when_live_sessions() {
+    let mock = get_mock_bin();
+    let guard = spawn_gateway().await;
+    let client = connect_client_with_retry(guard.socket()).await;
+    attach_client(&client, &test_channel("test/force")).await;
+    Spawn::call(
+        &*client,
+        (
+            Some(vec![mock, "sleep".into(), "60000".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Without force: refused, and the gateway must stay fully operational.
+    let err = ShutdownGateway::call(&*client, false)
+        .await
+        .expect_err("stop without force while a live session runs must fail");
+    assert!(
+        err.to_string().contains("live session"),
+        "refusal message should mention live sessions, got: {err}"
+    );
+
+    // Still reachable after the refusal.
+    let resp = list_channels(&client).await;
+    assert_eq!(
+        resp.channels.len(),
+        1,
+        "gateway still serving after refusal"
+    );
+
+    // With force: clean shutdown.
+    ShutdownGateway::call(&*client, true).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn shutdown_without_force_succeeds_when_no_live_sessions() {
+    let guard = spawn_gateway().await;
+    let client = connect_client_with_retry(guard.socket()).await;
+    // No sessions were ever spawned: stop must succeed without --force.
+    ShutdownGateway::call(&*client, false).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 }

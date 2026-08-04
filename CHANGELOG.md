@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.6-alpha] - 2026-08-03
+
+### Added
+
+- **`term-session` CLI hardening — bare run shows help:** running `term-session` with no subcommand and no arguments prints the help menu and exits (code 2) instead of auto-connecting; the redundant `attach` subcommand was removed. A channel (`--channel <name>`) and/or a command still attach implicitly and auto-start the gateway.
+- **Idiomatic command passing via `--`:** the command is now trailing positional args after the POSIX end-of-options delimiter (like `sudo --` / `cargo run --`), so `term-session --channel work -- git log --oneline` passes flags through untouched, and a token before `--` that matches a subcommand name is always the subcommand. The argv comes straight from the outer shell (no re-parsing). `--channel` is long-only — the ambiguous `-c` short flag was removed.
+- **`stop --force` (server-enforced):** `ShutdownGateway` now carries a `force` flag; the gateway **refuses to shut down while any live session is running** unless `--force` is given (`RPC_ERROR_LIVE_SESSIONS`), and a refused stop leaves the daemon fully operational.
+- **Client identity in `list`:** each connected socket now reports its OS user, client binary version, and (for SSH attaches) the remote peer IP (`ssh ip from:` — read from the `SSH_CLIENT` / `SSH_CONNECTION` env vars `sshd` sets, omitted for local attaches).
+- **Creation-order listing:** `list` now returns channels and their clients in **creation order (newest last)** via a monotonic per-channel sequence and connection-ordered conn ids.
+- **Readable CLI errors:** errors print as plain `error: …` messages instead of Rust's `Debug` dump (previously `Custom { kind: …, … }`).
+
+### Changed
+
+- `Attach` RPC input is now the structured `AttachRequest` (channel, hostname, pid, user, version, ssh_ip) rather than a bare tuple; `ClientInfo` gains the identity fields. Windows user resolution falls back to `GetUserNameW` when `%USERNAME%` is unset.
+- Docs: `term-session` README updated for the bare-run help, `--` command passing, `stop --force`, creation-order listing, and per-client identity.
+
 ## [0.9.5-alpha] - 2026-08-03
 
 ### Added
