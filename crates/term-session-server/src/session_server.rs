@@ -624,7 +624,7 @@ pub async fn run_gateway(
                 if state.is_shutting_down.load(Ordering::SeqCst) {
                     return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-                let (cmd, cols, rows) = Spawn::decode_request(&payload)?;
+                let (cmd, cols, rows, cwd) = Spawn::decode_request(&payload)?;
                 let channel = bound_channel(state.as_ref(), ctx.conn_id).await;
                 let Some(channel) = channel else {
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
@@ -695,8 +695,19 @@ pub async fn run_gateway(
                 } else {
                     None
                 };
+                // Spawn in the client's launch directory when provided (the
+                // caller expects to land where they ran `term-session`), else
+                // fall back to the daemon's cwd for legacy/empty payloads.
+                let effective_cwd = cwd.filter(|c| !c.is_empty());
                 let id = SESSION_ID;
-                let session = Session::spawn(id, effective_cmd, cols, rows, Some(&channel))?;
+                let session = Session::spawn(
+                    id,
+                    effective_cmd,
+                    cols,
+                    rows,
+                    Some(&channel),
+                    effective_cwd.as_deref(),
+                )?;
                 guard.set_session(session);
                 guard.recalculate_pty_size();
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();

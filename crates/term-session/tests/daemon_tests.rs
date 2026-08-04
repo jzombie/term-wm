@@ -60,6 +60,20 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
     (child, marker)
 }
 
+/// Spawn the daemon with an explicit current directory (distinct from the
+/// test harness's cwd), so cwd-propagation tests can detect whether a session
+/// inherits the daemon's startup directory or the client's launch directory.
+fn spawn_daemon_in(gateway: &str, cwd: &std::path::Path) -> Child {
+    let mut cmd = Command::new(bin());
+    cmd.env("TERM_WM_GATEWAY", gateway)
+        .arg("--daemon")
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().expect("spawn daemon")
+}
+
 /// Attach a client to a channel and return its server-assigned conn id,
 /// using the mock identity fields the other helpers expect.
 async fn attach_to(
@@ -145,6 +159,7 @@ async fn daemon_survives_all_clients_disconnecting() {
             ]),
             80u16,
             24u16,
+            None,
         ),
     )
     .await
@@ -155,7 +170,9 @@ async fn daemon_survives_all_clients_disconnecting() {
     // fresh attach/spawn must succeed (session respawns / persists).
     let client2 = wait_connectable(&gateway).await;
     attach_to(&client2, channel, "t").await;
-    Spawn::call(&*client2, (None, 80u16, 24u16)).await.unwrap();
+    Spawn::call(&*client2, (None, 80u16, 24u16, None))
+        .await
+        .unwrap();
 
     ShutdownGateway::call(&*client2, true).await.unwrap();
     let _ = child.wait();
@@ -188,12 +205,87 @@ async fn daemon_survives_parent_death() {
     // exited — sessions are torn down only when their process ends).
     let client = wait_connectable(&gateway).await;
     attach_to(&client, channel, "t").await;
-    let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
+    let (id, _, _) = Spawn::call(&*client, (None, 80u16, 24u16, None))
+        .await
+        .unwrap();
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
     ShutdownGateway::call(&*client, true).await.unwrap();
     // Give the daemon time to run its teardown and exit.
     tokio::time::sleep(Duration::from_millis(1000)).await;
+}
+
+#[tokio::test]
+async fn session_starts_in_client_cwd() {
+    // A fresh gateway per run: `unique_gateway`'s counter resets per process,
+    // so a daemon left over from a failed run on the same name would hold the
+    // socket and this test would attach to the wrong (stale) gateway. Deriving
+    // the name from the current time guarantees no collision with leftovers.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let gateway = format!("term-wm/dtest-client_cwd-{nonce}");
+    let channel = "test/client_cwd";
+
+    // Distinct directories: the daemon's startup cwd vs the client's launch
+    // cwd. The session must start in the latter, not the daemon's. TempDirs
+    // auto-cleanup on drop (after the daemon has been shut down).
+    let daemon_dir = tempfile::tempdir().expect("daemon tempdir");
+    let client_dir = tempfile::tempdir().expect("client tempdir");
+    let report_dir = tempfile::tempdir().expect("report tempdir");
+    let report = report_dir.path().join("pwd.txt");
+
+    let mut child = spawn_daemon_in(&gateway, daemon_dir.path());
+    let client = wait_connectable(&gateway).await;
+    attach_to(&client, channel, "cwd").await;
+
+    // Spawn `mock pwd <report>` with the client's launch directory. The mock
+    // writes the child's actual cwd to `report` (an absolute path) and exits.
+    Spawn::call(
+        &*client,
+        (
+            Some(vec![
+                mock_bin().to_string_lossy().to_string(),
+                "pwd".into(),
+                report.to_string_lossy().to_string(),
+            ]),
+            80u16,
+            24u16,
+            Some(client_dir.path().to_string_lossy().to_string()),
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Poll for the report: the mock writes it right before exiting.
+    let start = Instant::now();
+    let got = loop {
+        if let Ok(content) = std::fs::read_to_string(&report) {
+            break content;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "mock pwd never wrote the report"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    // The child's `current_dir()` is the OS-canonical path (on macOS `/var`
+    // resolves to `/private/var`), so canonicalize the expected dir.
+    let expected = std::fs::canonicalize(client_dir.path())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        got,
+        expected,
+        "session must start in the client's launch directory, not the daemon's \
+         startup directory ({:?})",
+        daemon_dir.path()
+    );
+
+    ShutdownGateway::call(&*client, true).await.unwrap();
+    let _ = child.wait();
 }
 
 /// The daemon must never inherit the parent's open handles. Regression guard
@@ -415,11 +507,12 @@ async fn cli_kill_client_detaches_one_client() {
             ]),
             80u16,
             24u16,
+            None,
         ),
     )
     .await
     .unwrap();
-    Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
+    Spawn::call(&*c2, (None, 80u16, 24u16, None)).await.unwrap();
 
     // Read the conn ids from `list` (as an operator would).
     let resp = ListChannels::call(&*c1, ()).await.unwrap();
@@ -629,7 +722,9 @@ async fn cli_list_renders_client_identity() {
     )
     .await
     .unwrap();
-    Spawn::call(&*client, (None, 80u16, 24u16)).await.unwrap();
+    Spawn::call(&*client, (None, 80u16, 24u16, None))
+        .await
+        .unwrap();
 
     let out = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
@@ -677,6 +772,7 @@ async fn cli_stop_requires_force_when_live_sessions() {
             ]),
             80u16,
             24u16,
+            None,
         ),
     )
     .await

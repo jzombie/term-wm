@@ -71,6 +71,10 @@ struct SpawnRequest {
     pub cmd: Option<Vec<String>>,
     pub cols: u16,
     pub rows: u16,
+    /// The client process's working directory at the time it launched, so a
+    /// newly spawned session starts there rather than in the daemon's cwd.
+    /// `None`/empty falls back to the daemon's cwd.
+    pub cwd: Option<String>,
 }
 
 #[derive(Encode, Decode)]
@@ -85,7 +89,7 @@ pub struct Spawn;
 impl RpcMethodPrebuffered for Spawn {
     const METHOD_ID: u64 = rpc_method_id!("session.spawn");
 
-    type Input = (Option<Vec<String>>, u16, u16);
+    type Input = (Option<Vec<String>>, u16, u16, Option<String>);
     type Output = (u64, u16, u16);
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
@@ -93,13 +97,14 @@ impl RpcMethodPrebuffered for Spawn {
             cmd: input.0,
             cols: input.1,
             rows: input.2,
+            cwd: input.3,
         }))
     }
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
         let r = bitcode::decode::<SpawnRequest>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok((r.cmd, r.cols, r.rows))
+        Ok((r.cmd, r.cols, r.rows, r.cwd))
     }
 
     fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {

@@ -17,11 +17,7 @@ fn default_shell_command() -> CommandBuilder {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
     #[cfg(windows)]
     let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
-    let mut cmd = CommandBuilder::new(shell);
-    if let Ok(cwd) = std::env::current_dir() {
-        cmd.cwd(cwd);
-    }
-    cmd
+    CommandBuilder::new(shell)
 }
 
 impl Session {
@@ -31,6 +27,7 @@ impl Session {
         cols: u16,
         rows: u16,
         channel: Option<&ChannelName>,
+        cwd: Option<&str>,
     ) -> PtyResult<Self> {
         let size = PtySize {
             rows,
@@ -38,25 +35,28 @@ impl Session {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let pty = if let Some(cmd_parts) = &cmd {
-            let mut builder = CommandBuilder::new(&cmd_parts[0]);
-            for arg in &cmd_parts[1..] {
-                builder.arg(arg);
-            }
-            if let Some(ch) = channel {
-                builder.env("TERM_WM_CHANNEL", ch.to_string());
-            }
-            if let Ok(cwd) = std::env::current_dir() {
-                builder.cwd(cwd);
-            }
-            Pty::spawn(builder, size)?
-        } else {
-            let mut builder = default_shell_command();
-            if let Some(ch) = channel {
-                builder.env("TERM_WM_CHANNEL", ch.to_string());
-            }
-            Pty::spawn(builder, size)?
+        // Prefer the caller's launch directory; fall back to this process's
+        // cwd (the daemon's) for legacy clients that send no cwd.
+        let resolved_cwd = match cwd {
+            Some(c) if !c.is_empty() => Some(std::path::PathBuf::from(c)),
+            _ => std::env::current_dir().ok(),
         };
+        let mut builder = if let Some(cmd_parts) = &cmd {
+            let mut b = CommandBuilder::new(&cmd_parts[0]);
+            for arg in &cmd_parts[1..] {
+                b.arg(arg);
+            }
+            b
+        } else {
+            default_shell_command()
+        };
+        if let Some(ch) = channel {
+            builder.env("TERM_WM_CHANNEL", ch.to_string());
+        }
+        if let Some(c) = resolved_cwd {
+            builder.cwd(c);
+        }
+        let pty = Pty::spawn(builder, size)?;
         Ok(Self {
             id,
             pty,

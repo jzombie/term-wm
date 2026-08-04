@@ -407,8 +407,14 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         } else {
             Some(cmd.to_vec())
         };
+        // The launch directory is captured here so a newly spawned session
+        // starts in the caller's cwd, not the daemon's. `None` (current_dir
+        // failing) lets the server fall back to the daemon's cwd.
+        let launch_cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned());
         let (_session_id, actual_cols, actual_rows) =
-            Spawn::call(&*client, (cmd, term_cols, term_rows))
+            Spawn::call(&*client, (cmd, term_cols, term_rows, launch_cwd))
                 .await
                 .map_err(|e| abi_fault(&e))?;
         let _ = conn_id;

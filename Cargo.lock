@@ -3034,6 +3034,7 @@ dependencies = [
  "hostname",
  "libc",
  "muxio-tokio-rpc-ipc-client",
+ "tempfile",
  "term-session-client",
  "term-session-mock",
  "term-session-muxio-service-definitions",

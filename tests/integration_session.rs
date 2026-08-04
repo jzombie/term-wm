@@ -22,7 +22,7 @@ async fn session_spawn_returns_id() {
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/spawn_returns_id")).await;
     let (id, _, _) = Spawn::call(
         &*client,
-        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS, None),
     )
     .await
     .unwrap();
@@ -36,7 +36,7 @@ async fn session_input_output_roundtrip() {
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/input_output")).await;
     Spawn::call(
         &*client,
-        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS, None),
     )
     .await
     .unwrap();
@@ -67,7 +67,7 @@ async fn session_mouse_bytes_forwarded() {
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/mouse_forward")).await;
     Spawn::call(
         &*client,
-        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS, None),
     )
     .await
     .unwrap();
@@ -114,7 +114,12 @@ async fn session_mouse_bytes_forwarded() {
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/mouse_forward")).await;
     Spawn::call(
         &*client,
-        (Some(vec![mock, "capture".into()]), TEST_COLS, TEST_ROWS),
+        (
+            Some(vec![mock, "capture".into()]),
+            TEST_COLS,
+            TEST_ROWS,
+            None,
+        ),
     )
     .await
     .unwrap();
@@ -150,7 +155,7 @@ async fn session_osc52_in_output() {
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_output")).await;
     Spawn::call(
         &*client,
-        (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS),
+        (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS, None),
     )
     .await
     .unwrap();
@@ -179,7 +184,7 @@ async fn session_osc52_via_osc52extractor() {
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_extractor")).await;
     Spawn::call(
         &*client,
-        (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS),
+        (Some(vec![mock, "osc52".into()]), TEST_COLS, TEST_ROWS, None),
     )
     .await
     .unwrap();
@@ -234,7 +239,7 @@ async fn session_resize() {
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/resize")).await;
     Spawn::call(
         &*client,
-        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS, None),
     )
     .await
     .unwrap();
@@ -254,6 +259,7 @@ async fn session_list_channels() {
             Some(vec![mock, "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -283,6 +289,7 @@ async fn session_close_session() {
             Some(vec![mock, "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -324,6 +331,7 @@ async fn session_child_exit() {
             Some(vec![mock, "exit".into(), "0".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -362,6 +370,7 @@ async fn session_child_exit_before_subscribe() {
             Some(vec![mock, "exit".into(), "0".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -408,6 +417,7 @@ async fn session_reconnect() {
             Some(vec![mock.clone(), "echo".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -462,6 +472,7 @@ async fn term_bench_runs_to_completion() {
             ]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -517,13 +528,17 @@ async fn two_channels_run_concurrently_with_isolated_io() {
             Some(vec![mock.clone(), "echo".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
     .unwrap();
-    Spawn::call(&*b, (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS))
-        .await
-        .unwrap();
+    Spawn::call(
+        &*b,
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS, None),
+    )
+    .await
+    .unwrap();
 
     let (_, mut reader_b) = b.open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0).await.unwrap();
     let (writer_b, _) = b.open_channel(STREAM_INPUT_METHOD_ID, 0).await.unwrap();
@@ -561,11 +576,12 @@ async fn list_channels_reports_clients_and_geometry() {
             Some(vec![mock, "sleep".into(), "60000".into()]),
             120u16,
             40u16,
+            None,
         ),
     )
     .await
     .unwrap();
-    Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
+    Spawn::call(&*c2, (None, 80u16, 24u16, None)).await.unwrap();
 
     let resp = list_channels(&c1).await;
     let channels = &resp.channels;
@@ -606,6 +622,7 @@ async fn spawn_session_with_grandchild(client: &Arc<RpcIpcClient>, mock: &str) -
             Some(vec![mock.to_string(), "spawn_child".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -720,13 +737,17 @@ async fn kill_channel_kills_only_that_channel() {
             Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
     .unwrap();
-    Spawn::call(&*b, (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS))
-        .await
-        .unwrap();
+    Spawn::call(
+        &*b,
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS, None),
+    )
+    .await
+    .unwrap();
 
     let (_, mut reader_b) = b.open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0).await.unwrap();
 
@@ -765,6 +786,7 @@ async fn kill_channel_respawns_with_stored_cmd() {
             Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -777,7 +799,7 @@ async fn kill_channel_respawns_with_stored_cmd() {
     // Re-attach (a fresh conn) and respawn — the stored cmd template is used.
     let c2 = connect_client_with_retry(guard.socket()).await;
     attach_client(&c2, &channel).await;
-    let (id, _, _) = Spawn::call(&*c2, (None, TEST_COLS, TEST_ROWS))
+    let (id, _, _) = Spawn::call(&*c2, (None, TEST_COLS, TEST_ROWS, None))
         .await
         .unwrap();
     assert_eq!(id, 1);
@@ -804,11 +826,11 @@ async fn kill_client_detaches_one_socket_only() {
     attach_client(&c2, &channel).await;
     Spawn::call(
         &*c1,
-        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS),
+        (Some(vec![mock, "echo".into()]), TEST_COLS, TEST_ROWS, None),
     )
     .await
     .unwrap();
-    Spawn::call(&*c2, (None, TEST_COLS, TEST_ROWS))
+    Spawn::call(&*c2, (None, TEST_COLS, TEST_ROWS, None))
         .await
         .unwrap();
 
@@ -866,7 +888,7 @@ async fn kill_client_rejects_nonexistent_conn() {
     let channel = test_channel("test/kill_missing");
     let client = connect_client_with_retry(guard.socket()).await;
     attach_client(&client, &channel).await;
-    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
+    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS, None))
         .await
         .unwrap();
 
@@ -892,10 +914,10 @@ async fn kill_client_rejects_wrong_channel() {
     let b = connect_client_with_retry(guard.socket()).await;
     let conn_a = attach_client(&a, &channel_a).await;
     attach_client(&b, &channel_b).await;
-    Spawn::call(&*a, (None, TEST_COLS, TEST_ROWS))
+    Spawn::call(&*a, (None, TEST_COLS, TEST_ROWS, None))
         .await
         .unwrap();
-    Spawn::call(&*b, (None, TEST_COLS, TEST_ROWS))
+    Spawn::call(&*b, (None, TEST_COLS, TEST_ROWS, None))
         .await
         .unwrap();
 
@@ -928,7 +950,7 @@ async fn kill_client_rejects_wrong_channel() {
 async fn unattached_client_rejected() {
     let guard = spawn_gateway().await;
     let client = connect_client_with_retry(guard.socket()).await;
-    let result = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS)).await;
+    let result = Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS, None)).await;
     assert!(result.is_err(), "unattached Spawn must be rejected");
     guard.shutdown().await;
 }
@@ -944,6 +966,7 @@ async fn spawn_idempotent_on_live_session() {
             Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
             120u16,
             40u16,
+            None,
         ),
     )
     .await
@@ -951,7 +974,12 @@ async fn spawn_idempotent_on_live_session() {
     // Second Spawn with a DIFFERENT cmd must reuse the live session.
     let (id2, cols, rows) = Spawn::call(
         &*client,
-        (Some(vec![mock, "exit".into(), "0".into()]), 80u16, 24u16),
+        (
+            Some(vec![mock, "exit".into(), "0".into()]),
+            80u16,
+            24u16,
+            None,
+        ),
     )
     .await
     .unwrap();
@@ -972,6 +1000,7 @@ async fn spawn_cmd_ignored_on_live_session() {
             Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -988,6 +1017,7 @@ async fn spawn_cmd_ignored_on_live_session() {
             Some(vec![mock, "exit".into(), "0".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -1030,12 +1060,15 @@ async fn session_multi_client_pty_constrained_to_smallest() {
             Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
             120u16,
             40u16,
+            None,
         ),
     )
     .await
     .unwrap();
-    let (_pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
-    let (_pid3, _, _) = Spawn::call(&*c3, (None, 100u16, 30u16)).await.unwrap();
+    let (_pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16, None)).await.unwrap();
+    let (_pid3, _, _) = Spawn::call(&*c3, (None, 100u16, 30u16, None))
+        .await
+        .unwrap();
 
     // All clients should see 80x24 (c2 is smallest)
     let start = std::time::Instant::now();
@@ -1073,12 +1106,15 @@ async fn session_multi_client_disconnect_expands_pty() {
             Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
             120u16,
             40u16,
+            None,
         ),
     )
     .await
     .unwrap();
-    let (_pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16)).await.unwrap();
-    let (_pid3, _, _) = Spawn::call(&*c3, (None, 100u16, 30u16)).await.unwrap();
+    let (_pid2, _, _) = Spawn::call(&*c2, (None, 80u16, 24u16, None)).await.unwrap();
+    let (_pid3, _, _) = Spawn::call(&*c3, (None, 100u16, 30u16, None))
+        .await
+        .unwrap();
 
     // Drop c2 (smallest) → PTY expands to 100x30 (c3's size)
     drop(c2);
@@ -1125,6 +1161,7 @@ async fn shutdown_gateway_stops_daemon() {
             Some(vec![mock, "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -1158,6 +1195,7 @@ async fn list_channels_orders_channels_and_clients_by_creation() {
             Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -1168,6 +1206,7 @@ async fn list_channels_orders_channels_and_clients_by_creation() {
             Some(vec![mock, "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
@@ -1178,7 +1217,7 @@ async fn list_channels_orders_channels_and_clients_by_creation() {
     // up in `list` once it has Spawned, so spawn it too.)
     let ca2 = connect_client_with_retry(&socket).await;
     attach_client(&ca2, &test_channel("test/order_a")).await;
-    Spawn::call(&*ca2, (None, TEST_COLS, TEST_ROWS))
+    Spawn::call(&*ca2, (None, TEST_COLS, TEST_ROWS, None))
         .await
         .unwrap();
 
@@ -1223,7 +1262,7 @@ async fn list_channels_reports_client_identity() {
     )
     .await
     .unwrap();
-    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS))
+    Spawn::call(&*client, (None, TEST_COLS, TEST_ROWS, None))
         .await
         .unwrap();
 
@@ -1264,6 +1303,7 @@ async fn shutdown_refuses_without_force_when_live_sessions() {
             Some(vec![mock, "sleep".into(), "60000".into()]),
             TEST_COLS,
             TEST_ROWS,
+            None,
         ),
     )
     .await
