@@ -27,6 +27,8 @@ The command is passed as trailing arguments after `--` (the POSIX end-of-options
 
 **A command is honored only when the channel has no live session** (or its session has exited) — it then becomes the command the channel spawns/respawns. Attaching to a channel with a **running** session ignores the command entirely: you join the existing process, sharing its live viewport with every other attached client (like `tmux`/`screen`).
 
+**The command must be interactive or long-running** (a shell, an editor like `vim`, or any long-lived process). A short-lived command such as `ls` finishes in milliseconds and exits immediately, ending the session — nothing to attach to. If you want to inspect output from a quick command, run it inside an interactive shell instead (e.g. `term-session --channel work -- sh -c 'ls && exec $SHELL'`).
+
 Multiple terminals can attach to the same channel to share one session.
 
 ## Architecture

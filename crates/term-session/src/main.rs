@@ -12,7 +12,9 @@ use term_session_muxio_service_definitions::ChannelName;
     name = env!("CARGO_PKG_NAME"),
     version = env!("CARGO_PKG_VERSION"),
     about = env!("CARGO_PKG_DESCRIPTION"),
-    long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
+    long_about = concat!(
+        env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION"),
+    ),
 )]
 struct Cli {
     #[command(subcommand)]
@@ -37,7 +39,9 @@ struct Cli {
     /// (e.g. `--channel work -- git log --oneline`). Only used when the channel
     /// has no live session; attaching to a running session ignores the command
     /// and joins the existing process. Implicitly attaches when given without
-    /// a subcommand.
+    /// a subcommand. The command must be interactive or long-running (a shell,
+    /// editor, or long-lived process): a short command like `ls` exits
+    /// immediately and ends the session.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true)]
     cmd: Vec<String>,
 

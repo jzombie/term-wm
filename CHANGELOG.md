@@ -10,6 +10,10 @@ The format is based on Keep a Changelog and this project adheres to
 
 - **`term-session` rejects unknown flags instead of auto-attaching:** a leading-hyphen token that is not a real flag (e.g. `term-session --list`, a typo for the `list` subcommand) previously slipped into the trailing command and silently opened the default channel session. The trailing command no longer accepts hyphen values before `--`, so clap now rejects unknown flags with `unexpected argument ...` and exits (code 2) without spawning a gateway. Commands passed after `--` (or trailing args after the first command word) still pass hyphen flags through untouched.
 
+### Docs
+
+- **`term-session` commands must be interactive or long-running:** the README and CLI help (`--help` / bare-run help) now state that the spawned command must keep running (a shell, editor, or long-lived process) — a short command like `ls` exits immediately and ends the session.
+
 [NOT YET POPULATED]
 
 ## [0.9.7-alpha] - 2026-08-03
