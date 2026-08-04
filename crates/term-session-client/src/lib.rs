@@ -145,6 +145,12 @@ const RENDER_BUF_CELL_MULTIPLIER: usize = 3;
 const MIN_TERM_COLS: u16 = 2;
 const MIN_TERM_ROWS: u16 = 2;
 
+/// Heuristic seed geometry when the terminal size cannot be queried (headless
+/// CI, redirected/`/dev/null` stdio). Overridden by the real attached geometry
+/// at render time; the server clamps to the smallest size across clients.
+const FALLBACK_TERM_COLS: u16 = 80;
+const FALLBACK_TERM_ROWS: u16 = 24;
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -368,9 +374,12 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     // Terminal geometry comes from the real terminal (no cols/rows are threaded
     // through the API). The vt100 parser computes `rows - 1` at construction, so
     // clamp a degenerate 0x0 report up to a non-zero grid rather than panicking.
-    let (term_cols, term_rows) = {
-        let (c, r) = crossterm::terminal::size()?;
-        (c.max(MIN_TERM_COLS), r.max(MIN_TERM_ROWS))
+    // On Unix with redirected stdio (e.g. `>/dev/null` under CI or tests) the
+    // TIOCGWINSZ ioctl fails and `COLUMNS`/`LINES` are unset, so `size()` errors
+    // — fall back to a seed rather than aborting before Attach/Spawn.
+    let (term_cols, term_rows) = match crossterm::terminal::size() {
+        Ok((c, r)) => (c.max(MIN_TERM_COLS), r.max(MIN_TERM_ROWS)),
+        Err(_) => (FALLBACK_TERM_COLS, FALLBACK_TERM_ROWS),
     };
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().into_owned())
