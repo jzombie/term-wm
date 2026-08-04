@@ -293,10 +293,15 @@ async fn session_starts_in_client_cwd() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     // The child's `current_dir()` is the OS-canonical path (on macOS `/var`
-    // resolves to `/private/var`), so canonicalize the expected dir.
+    // resolves to `/private/var`; on Windows it may be the 8.3 short form and
+    // differ from `canonicalize`'s long form + `\\?\` prefix), so canonicalize
+    // both sides before comparing.
+    let got_path = path_wire::decode_path(&path_wire::PathWire::from(got));
+    let got = std::fs::canonicalize(&got_path)
+        .unwrap_or_else(|e| panic!("failed to canonicalize reported cwd {got_path:?}: {e}"));
     let expected = std::fs::canonicalize(client_dir.path()).unwrap();
     assert_eq!(
-        path_wire::decode_path(&path_wire::PathWire::from(got)),
+        got,
         expected,
         "session must start in the client's launch directory, not the daemon's \
          startup directory ({:?})",

@@ -854,6 +854,29 @@ async fn kill_channel_respawns_with_stored_cmd() {
     // Re-attach (a fresh conn) and respawn — the stored cmd template is used.
     let c2 = connect_client_with_retry(guard.socket()).await;
     attach_client(&c2, &channel).await;
+
+    // Wait for the kill to fully land before respawning: the killed session
+    // lingers until the output-polling task observes its death, and a Spawn
+    // during that window would "reuse" the dying session instead of respawning —
+    // leaving the channel with no session right after respawn (CI-timing flake).
+    let start = std::time::Instant::now();
+    loop {
+        let channels = list_channels(&c2).await;
+        let ch = channels
+            .channels
+            .iter()
+            .find(|c| c.name == "test/kill_respawn");
+        let gone = ch.map(|c| c.session.is_none()).unwrap_or(true);
+        if gone {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "killed session never cleared from channel"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
     let SpawnResponse {
         id,
         cols: _,
