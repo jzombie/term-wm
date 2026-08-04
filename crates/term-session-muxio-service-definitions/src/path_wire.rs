@@ -22,8 +22,12 @@ use bitcode::{Decode, Encode};
 ///
 /// Distinct from a raw `Vec<u8>` (e.g. PTY input/output), so a path payload
 /// cannot be accidentally substituted for, or mixed with, arbitrary buffers.
-/// Dereferences to `[u8]` for reading; construct via [`encode_path`] or
-/// `PathWire(bytes)`.
+/// Dereferences to `[u8]` for reading.
+///
+/// Construct via [`PathWire::encode`] or the `From<&Path>` / `From<PathBuf>` /
+/// `From<&str>` / `From<String>` conversions to encode an OS path, or via
+/// `From<Vec<u8>>` / `PathWire(bytes)` to wrap already-encoded wire bytes.
+/// Reconstruct the path with [`PathWire::decode`] (or the `to_path_buf` alias).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
 pub struct PathWire(pub Vec<u8>);
 
@@ -44,6 +48,47 @@ impl AsRef<[u8]> for PathWire {
 impl From<Vec<u8>> for PathWire {
     fn from(bytes: Vec<u8>) -> Self {
         PathWire(bytes)
+    }
+}
+
+impl PathWire {
+    /// Encode a platform-native OS path into lossless wire bytes.
+    pub fn encode<P: AsRef<Path>>(path: P) -> Self {
+        encode_path(path)
+    }
+
+    /// Decode the wire bytes back into a platform-native `PathBuf`.
+    pub fn decode(&self) -> PathBuf {
+        decode_path(self)
+    }
+
+    /// Convenience alias following Rust `Path::to_path_buf` naming.
+    pub fn to_path_buf(&self) -> PathBuf {
+        self.decode()
+    }
+}
+
+impl From<&Path> for PathWire {
+    fn from(path: &Path) -> Self {
+        encode_path(path)
+    }
+}
+
+impl From<PathBuf> for PathWire {
+    fn from(path: PathBuf) -> Self {
+        encode_path(&path)
+    }
+}
+
+impl From<&str> for PathWire {
+    fn from(s: &str) -> Self {
+        encode_path(Path::new(s))
+    }
+}
+
+impl From<String> for PathWire {
+    fn from(s: String) -> Self {
+        encode_path(Path::new(&s))
     }
 }
 
@@ -99,7 +144,7 @@ pub fn decode_path(pw: &PathWire) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{decode_path, encode_path, PathWire};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn round_trips_plain_unicode_path() {
@@ -140,5 +185,63 @@ mod tests {
     #[test]
     fn default_is_empty_sentinel() {
         assert!(PathWire::default().is_empty());
+    }
+
+    #[test]
+    fn inherent_encode_matches_encode_path() {
+        let path = std::env::temp_dir().join("inherent-encode");
+        assert_eq!(PathWire::encode(&path), encode_path(&path));
+    }
+
+    #[test]
+    fn inherent_decode_round_trips() {
+        let path = std::env::temp_dir().join("inherent-decode");
+        assert_eq!(PathWire::encode(&path).decode(), path);
+    }
+
+    #[test]
+    fn to_path_buf_alias() {
+        let path = std::env::temp_dir().join("to-path-buf");
+        let pw = PathWire::encode(&path);
+        assert_eq!(pw.to_path_buf(), pw.decode());
+        assert_eq!(pw.to_path_buf(), path);
+    }
+
+    #[test]
+    fn option_map_decode_combinator() {
+        let path = std::env::temp_dir().join("option-map-decode");
+        let pw = PathWire::encode(&path);
+        let opt: Option<&PathWire> = Some(&pw);
+        assert_eq!(opt.map(PathWire::decode), Some(path));
+        let none: Option<&PathWire> = None;
+        assert_eq!(none.map(PathWire::decode), None);
+    }
+
+    #[test]
+    fn from_path_family_encodes_like_encode_path() {
+        let path = std::env::temp_dir().join("from-path-family");
+        let encoded = encode_path(&path);
+        assert_eq!(PathWire::from(path.clone()), encoded);
+        assert_eq!(PathWire::from(path.as_path()), encoded);
+        let s = path.to_string_lossy().into_owned();
+        assert_eq!(PathWire::from(s.as_str()), encoded);
+        assert_eq!(PathWire::from(s), encoded);
+    }
+
+    #[test]
+    fn from_str_treats_string_as_path() {
+        let pw = PathWire::from("/tmp/from-str");
+        assert_eq!(pw, encode_path(Path::new("/tmp/from-str")));
+        assert_eq!(pw.decode(), PathBuf::from("/tmp/from-str"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_pathbuf_round_trips_non_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::OsStr::from_bytes(b"cwd-\xff\xfe-non-utf8");
+        let dir = PathBuf::from(name);
+        let pw = PathWire::from(dir.clone());
+        assert_eq!(decode_path(&pw), dir);
     }
 }

@@ -1,5 +1,4 @@
 use portable_pty::{CommandBuilder, PtySize};
-use term_session_muxio_service_definitions::path_wire;
 use term_session_muxio_service_definitions::ChannelName;
 use term_session_muxio_service_definitions::PathWire;
 use term_wm_pty_engine::{Pty, PtyResult, PtyStatus};
@@ -28,7 +27,7 @@ fn default_shell_command() -> CommandBuilder {
 /// send `None` or an empty payload.
 fn resolve_cwd(cwd: Option<&PathWire>) -> Option<std::path::PathBuf> {
     match cwd {
-        Some(c) if !c.is_empty() => Some(path_wire::decode_path(c)),
+        Some(c) if !c.is_empty() => Some(c.decode()),
         _ => std::env::current_dir().ok(),
     }
 }
