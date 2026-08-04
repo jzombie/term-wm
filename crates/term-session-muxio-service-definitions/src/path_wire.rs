@@ -8,7 +8,6 @@
 //! Unix and unpaired-surrogate (WTF-16) paths on Windows — which is what makes
 //! the session's launch directory round-trip losslessly.
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use bitcode::{Decode, Encode};
@@ -118,11 +117,13 @@ pub fn encode_path<P: AsRef<Path>>(path: P) -> PathWire {
 pub fn decode_path(pw: &PathWire) -> PathBuf {
     #[cfg(unix)]
     {
+        use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
         PathBuf::from(OsStr::from_bytes(&pw.0))
     }
     #[cfg(windows)]
     {
+        use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt;
         let bytes = &pw.0;
         debug_assert!(
