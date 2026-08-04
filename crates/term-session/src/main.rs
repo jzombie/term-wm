@@ -38,7 +38,7 @@ struct Cli {
     /// has no live session; attaching to a running session ignores the command
     /// and joins the existing process. Implicitly attaches when given without
     /// a subcommand.
-    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true)]
     cmd: Vec<String>,
 
     /// Override the gateway channel name (env TERM_WM_GATEWAY also works).
