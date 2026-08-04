@@ -122,6 +122,21 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
     }
 
     pub fn insert_window_balanced(&mut self, insert: Id, area: Rect) {
+        // Startup inserts can run before the first render pass, when
+        // `managed_area` is still `Rect { 0, 0, 0, 0 }`; a degenerate area would
+        // force every split to `InsertPosition::Bottom` (a vertical strip stack).
+        // Fall back to a standard terminal size so the tree is a real 2D grid.
+        let area = if area.width == 0 || area.height == 0 {
+            Rect {
+                x: 0,
+                y: 0,
+                width: crate::constants::DEFAULT_FLOAT_WIDTH,
+                height: crate::constants::DEFAULT_FLOAT_HEIGHT,
+            }
+        } else {
+            area
+        };
+
         // 1. Unified topological fallback — fill voids before splitting
         if self.consume_first_void(insert, area) {
             self.root.reweight_by_leaf_count();
@@ -142,17 +157,22 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             .copied()
             .unwrap();
 
-        let pos = if largest_rect.width / 2 < crate::constants::MIN_TILE_WIDTH {
-            InsertPosition::Bottom
-        } else if largest_rect.height / 2 < crate::constants::MIN_TILE_HEIGHT {
-            InsertPosition::Right
-        } else {
-            let visual_h = (largest_rect.height as u32) * crate::constants::CELL_ASPECT_RATIO;
-            let visual_w = largest_rect.width as u32;
-            if visual_w >= visual_h {
-                InsertPosition::Right
-            } else {
-                InsertPosition::Bottom
+        // Split direction: only one axis fits → that axis; both fit (or neither)
+        // → decide by visual aspect ratio. Checking each axis independently avoids
+        // the old `width/2` first bias that forced vertical stacking on small areas.
+        let can_split_h = largest_rect.width / 2 >= crate::constants::MIN_TILE_WIDTH;
+        let can_split_v = largest_rect.height / 2 >= crate::constants::MIN_TILE_HEIGHT;
+        let pos = match (can_split_h, can_split_v) {
+            (true, false) => InsertPosition::Right,
+            (false, true) => InsertPosition::Bottom,
+            _ => {
+                let visual_h = (largest_rect.height as u32) * crate::constants::CELL_ASPECT_RATIO;
+                let visual_w = largest_rect.width as u32;
+                if visual_w >= visual_h {
+                    InsertPosition::Right
+                } else {
+                    InsertPosition::Bottom
+                }
             }
         };
 
@@ -384,6 +404,32 @@ mod tests {
         layout.remove_window(1);
         assert_eq!(layout.regions(area).len(), 3);
         assert_equal_tiled_areas(&layout, area);
+    }
+
+    #[test]
+    fn insert_four_windows_uninitialized_area_forms_balanced_2d_grid() {
+        // Startup inserts happen before the first render pass when the managed
+        // area is still 0x0; they must still form a balanced 2D grid, not a
+        // vertical strip stack (the SEV-1 degenerate-area failure).
+        let uninitialized = Rect { x: 0, y: 0, width: 0, height: 0 };
+        let viewport = Rect { x: 0, y: 0, width: 80, height: 24 };
+
+        let mut layout = TilingLayout::new_void();
+        for id in 1..=4 {
+            layout.insert_window_balanced(id, uninitialized);
+        }
+
+        let regions = layout.regions(viewport);
+        assert_eq!(regions.len(), 4);
+        // Equal-area rebalance, and horizontally partitioned (not a full-width
+        // vertical strip stack where every window has the same x).
+        assert_equal_tiled_areas(&layout, viewport);
+        let x_coords: std::collections::BTreeSet<_> =
+            regions.iter().map(|(_, r)| r.x).collect();
+        assert!(
+            x_coords.len() > 1,
+            "must have horizontal division, not vertical strips"
+        );
     }
 
     #[test]
