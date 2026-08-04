@@ -32,7 +32,8 @@ struct Cli {
     /// Number of windows to open.
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
-    /// Command(s) to run.
+    /// Command to run (the whole argv after `--`) in the first window;
+    /// remaining `--count` windows are default shells.
     #[arg(value_name = "CMD", num_args = 0..)]
     cmds: Vec<String>,
 }
@@ -44,15 +45,13 @@ fn main() -> io::Result<()> {
     //
     // Behavior:
     // - If no commands provided: open `--count` shells (default 2 if not given).
-    // - If commands provided: if `--count` given use it, otherwise default to
-    //   the number of commands.
+    // - If a command is provided (the whole argv after `--`): it runs in the
+    //   FIRST window; any remaining `--count` windows are default shells.
+    //   Without `--count`, a single window runs the command.
     let total = if cli.cmds.is_empty() {
         cli.count.unwrap_or(2).max(1)
     } else {
-        // default to number of commands when count not given
-        cli.count
-            .map(|c| c.max(1))
-            .unwrap_or_else(|| cli.cmds.len().max(1))
+        cli.count.map(|c| c.max(1)).unwrap_or(1)
     };
 
     let mut event_source = UnifiedEventSource::new()?;
@@ -119,19 +118,16 @@ impl App {
         // Initialize debug log and system panel windows.
         app.inner.init_system_windows();
 
-        // If commands provided, open one per command; otherwise open `num_windows`
-        // shells using the default shell.
+        // The whole argv after `--` is ONE command (e.g. `-- ls -la`); run it
+        // in the first window, and open default shells in any remaining windows.
         if !commands.is_empty() {
-            let mut it = commands.into_iter();
-            for _ in 0..num_windows {
-                if let Some(cmd) = it.next() {
-                    // Spawn an interactive shell and send the command as input so
-                    // that when the command exits the shell remains.
-                    let cb = default_shell_command();
-                    if let Err(e) = app.spawn_terminal_with_command(cb, Some(cmd)) {
-                        tracing::error!("Window spawn error: {}", e);
-                    }
-                } else if let Err(e) = app.wm_new_window() {
+            let command_line = commands.join(" ");
+            let cb = default_shell_command();
+            if let Err(e) = app.spawn_terminal_with_command(cb, Some(command_line)) {
+                tracing::error!("Window spawn error: {}", e);
+            }
+            for _ in 1..num_windows {
+                if let Err(e) = app.wm_new_window() {
                     tracing::error!("Window spawn error: {}", e);
                 }
             }
