@@ -135,6 +135,12 @@ struct ServerState {
     is_shutting_down: AtomicBool,
     /// Monotonic source of `ChannelState::created_seq` (creation order).
     next_channel_seq: AtomicU64,
+    /// Per-connection ordered input forwarders. The synchronous `StreamInput`
+    /// handler forwards each chunk into this queue in wire order (the handler
+    /// is invoked sequentially per stream by muxio); a single consumer task
+    /// per connection drains it FIFO into the channel's `input_tx`, so bursty
+    /// input (e.g. IME voice typing) is never reordered by racing tasks.
+    input_forwarders: std::sync::Mutex<HashMap<usize, mpsc::Sender<Vec<u8>>>>,
 }
 
 type SharedState = Arc<ServerState>;
@@ -333,6 +339,35 @@ async fn resolve_channel(
 ) -> Option<Arc<Mutex<ChannelState>>> {
     let channels = state.channels.read().await;
     channels.get(name).cloned()
+}
+
+/// Drain one connection's ordered input queue, forwarding each chunk to the
+/// bound channel's `input_tx` in exact arrival order. Exits when the forwarder
+/// sender is dropped (connection End/Error) or the channel's input receiver
+/// closes. Exactly one of these tasks exists per connection, so chunk ordering
+/// is preserved end-to-end even under input bursts.
+async fn drain_input_forwarder(
+    state: SharedState,
+    conn_id: usize,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+) {
+    while let Some(bytes) = rx.recv().await {
+        let Some(channel) = bound_channel(state.as_ref(), conn_id).await else {
+            continue;
+        };
+        let Some(ch) = resolve_channel(state.as_ref(), &channel).await else {
+            continue;
+        };
+        let tx = {
+            let guard = ch.lock().await;
+            guard.input_tx.clone()
+        };
+        // Backpressure: `input_tx` is bounded (INPUT_CHANNEL_CAPACITY); a full
+        // buffer parks this consumer instead of silently dropping the chunk.
+        if tx.send(bytes).await.is_err() {
+            break;
+        }
+    }
 }
 
 /// Create (or fetch, re-verifying under the write lock) a channel.
@@ -570,6 +605,7 @@ pub async fn run_gateway(
         channels: RwLock::new(HashMap::new()),
         is_shutting_down: AtomicBool::new(false),
         next_channel_seq: AtomicU64::new(0),
+        input_forwarders: std::sync::Mutex::new(HashMap::new()),
     });
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -847,28 +883,49 @@ pub async fn run_gateway(
     let st = Arc::clone(&state);
     endpoint
         .register_stream_handler(STREAM_INPUT_METHOD_ID, move |event, _responder, ctx| {
-            if let RpcStreamEvent::PayloadChunk { bytes, .. } = event {
-                let state = Arc::clone(&st);
-                let conn_id = ctx.conn_id;
-                tokio::spawn(async move {
-                    let channel = bound_channel(state.as_ref(), conn_id).await;
-                    let Some(channel) = channel else {
-                        return;
+            let state = Arc::clone(&st);
+            let conn_id = ctx.conn_id;
+            match event {
+                RpcStreamEvent::PayloadChunk { bytes, .. } => {
+                    // Forward the chunk into the connection's ordered queue
+                    // synchronously — the handler is invoked sequentially in
+                    // wire order per stream, so `try_send` here preserves chunk
+                    // ordering. A single consumer task per connection drains
+                    // FIFO into the channel's `input_tx`, so bursty input
+                    // (e.g. IME voice typing) is never reordered by racing
+                    // spawned tasks.
+                    let forwarder = {
+                        let mut fwd = state
+                            .input_forwarders
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        if let Some(tx) = fwd.get(&conn_id) {
+                            tx.clone()
+                        } else {
+                            let (tx, rx) = mpsc::channel(INPUT_CHANNEL_CAPACITY);
+                            fwd.insert(conn_id, tx.clone());
+                            let fwd_state = Arc::clone(&state);
+                            tokio::spawn(async move {
+                                drain_input_forwarder(fwd_state, conn_id, rx).await;
+                            });
+                            tx
+                        }
                     };
-                    let ch = resolve_channel(state.as_ref(), &channel).await;
-                    let Some(ch) = ch else {
-                        return;
-                    };
-                    let tx = {
-                        let guard = ch.lock().await;
-                        guard.input_tx.clone()
-                    };
-                    if let Err(e) = tx.try_send(bytes) {
+                    if let Err(e) = forwarder.try_send(bytes) {
                         tracing::warn!(error = %e, "gateway input buffer full; dropping input chunk");
                     }
-                });
+                }
+                RpcStreamEvent::End { .. } | RpcStreamEvent::Error { .. } => {
+                    // Close the forwarder: dropping the sender makes the
+                    // consumer task's `recv()` return `None` so it exits after
+                    // draining. The channel's `input_tx` persists, so the
+                    // session survives the client disconnect.
+                    if let Ok(mut fwd) = state.input_forwarders.lock() {
+                        fwd.remove(&conn_id);
+                    }
+                }
+                _ => {}
             }
-            // Intentionally ignore End/Error — the channel stays alive.
         })
         .await
         .map_err(|e| format!("register stream handler STREAM_INPUT: {e:?}"))?;

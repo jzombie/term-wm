@@ -1,4 +1,4 @@
-# term-resize-indicator
+# term-size-box
 
 [![made-with-rust][rust-logo]][rust-src-page]
 
@@ -15,13 +15,13 @@ resize propagation through nested terminal sessions.
 From the workspace root:
 
 ```bash
-cargo build -p term-resize-indicator --release
+cargo build -p term-size-box --release
 ```
 
 ## Usage
 
 ```bash
-cargo run -p term-resize-indicator
+cargo run -p term-size-box
 ```
 
 The overlay fills the screen with a dark background, draws a measured border, and
@@ -32,7 +32,7 @@ Press `q`, `Esc`, or `Ctrl-C` to exit.
 
 ## License
 
-`term-resize-indicator` is primarily distributed under the terms of both the MIT
+`term-size-box` is primarily distributed under the terms of both the MIT
 license and the Apache License (Version 2.0).
 
 See [LICENSE-APACHE](../../LICENSE-APACHE) and [LICENSE-MIT](../../LICENSE-MIT) for details.

@@ -119,6 +119,13 @@ pub fn decorate_link_style(mut style: Style, theme: &term_wm_core::theme::Theme)
     style.fg(color_to_ratatui(theme.link_color))
 }
 
+/// The term-wm menu icon: the "≡" brand symbol followed by the app name, as
+/// rendered by the top panel's menu button and the FAB. Shared so the branding
+/// stays identical in both places.
+pub fn menu_icon(app_name: &str) -> String {
+    format!("\u{2261} {app_name}")
+}
+
 pub fn downcast_ratatui(
     backend: &mut dyn term_wm_render::RenderBackend,
 ) -> &mut term_wm_console::RatatuiBackend {

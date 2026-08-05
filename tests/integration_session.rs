@@ -75,6 +75,104 @@ async fn session_input_output_roundtrip() {
     guard.shutdown().await;
 }
 
+/// Regression test for the input-reordering bug observed with IME voice typing
+/// over SSH (termux + Google voice typing): a burst of many stream input
+/// chunks must reach the PTY in the exact order they were sent.
+///
+/// The original server `StreamInput` handler spawned an independent tokio task
+/// per chunk, and those tasks raced on the async routing locks — so under a
+/// burst, later chunks could be written to the PTY before earlier ones. The
+/// fix forwards chunks synchronously into a per-connection ordered queue
+/// drained FIFO by a single task.
+///
+/// `echo` echoes stdin back verbatim, so the PTY output must reproduce the
+/// sent byte sequence exactly. Each marker is a distinct printable string so
+/// any reordering is observable in the echoed stream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_stream_input_preserves_order_under_burst() {
+    const BURST_COUNT: usize = 64;
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/input_burst_order")).await;
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: Some(vec![mock, "echo".into()]),
+            cols: TEST_COLS,
+            rows: TEST_ROWS,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+    let (writer, _) = client
+        .open_channel(STREAM_INPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
+    // Build a deterministic ordered sequence of distinct markers.
+    let mut markers = Vec::new();
+    for i in 0..BURST_COUNT {
+        let marker = format!("m{i:03}\n").into_bytes();
+        markers.push(marker);
+    }
+
+    // Fire the whole burst back-to-back WITHOUT awaiting between sends, so
+    // many chunks are in flight concurrently at the gateway (reproduces the
+    // voice-typing burst).
+    for marker in &markers {
+        writer.send(marker.clone()).unwrap();
+    }
+
+    // Read the echoed output. The PTY echoes input AND `echo` mirrors it, and
+    // line discipline mangles newlines (`\n` -> `\r\n`), so each marker's bytes
+    // appear (at least) twice and in mangled form. The robust signal is the
+    // ORDER in which markers first appear: it must equal the sent order.
+    let output = wait_for_output(
+        &mut reader,
+        &markers.last().unwrap()[..4],
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_markers_in_first_appearance_order(&output, &markers);
+
+    guard.shutdown().await;
+}
+
+/// Assert that the distinct markers appear in `output` in the same order they
+/// were sent, using first-appearance order. Echo duplication/mangling makes a
+/// plain contiguous or subsequence match unreliable, but the first occurrence
+/// of each distinct marker faithfully reflects write order.
+fn assert_markers_in_first_appearance_order(output: &[u8], markers: &[Vec<u8>]) {
+    let needles: Vec<&[u8]> = markers.iter().map(|m| &m[..m.len() - 1]).collect();
+    let mut found = Vec::new();
+    let mut i = 0usize;
+    while i < output.len() {
+        for (idx, needle) in needles.iter().enumerate() {
+            if i + needle.len() <= output.len() && &output[i..i + needle.len()] == *needle {
+                if !found.contains(&idx) {
+                    found.push(idx);
+                }
+                break;
+            }
+        }
+        i += 1;
+    }
+    let expected_order: Vec<usize> = (0..needles.len()).collect();
+    assert_eq!(
+        found,
+        expected_order,
+        "input burst was reordered: expected markers in order {:?}, got first-appearance order {:?}; output: {:?}",
+        expected_order,
+        found,
+        String::from_utf8_lossy(output)
+    );
+}
+
 #[cfg(not(windows))]
 #[tokio::test]
 async fn session_mouse_bytes_forwarded() {
