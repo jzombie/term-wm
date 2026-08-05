@@ -149,8 +149,7 @@ mod tests {
     /// Context carrying the real app name so the FAB renders the shared
     /// `≡ term-wm` menu icon (9 cells wide).
     fn app_ctx() -> ComponentContext {
-        ComponentContext::default()
-            .with_app_context(Arc::new(AppContext::new("term-wm", "test")))
+        ComponentContext::default().with_app_context(Arc::new(AppContext::new("term-wm", "test")))
     }
 
     #[test]
@@ -210,10 +209,7 @@ mod tests {
         assert_eq!(fab.fab_rect().x, 71);
         assert_eq!(fab.fab_rect().y, 23);
         // The label itself should be drawn into the buffer.
-        let cell = backend
-            .buffer
-            .cell((71, 23))
-            .expect("label start cell");
+        let cell = backend.buffer.cell((71, 23)).expect("label start cell");
         assert_eq!(cell.symbol(), "≡");
         // Hitbox should be registered
         assert!(!reg.is_empty());
