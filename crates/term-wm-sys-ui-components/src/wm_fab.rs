@@ -1,4 +1,4 @@
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use term_wm_layout_engine::LayoutRect;
 
 use term_wm_core::{
@@ -78,8 +78,9 @@ impl Component<TermWmAction> for WmFabComponent {
         // not a SlotMap window, so on_mount is never called.
         registry.register_active(self.hitbox_id, self.fab_rect);
 
-        // Render the shared menu icon (same branding as the top panel) into
-        // the buffer.
+        // Render the shared menu icon with the same style as the top panel's
+        // closed menu button (no background, no hardcoded colors — the theme
+        // drives panel styling).
         let ratatui_backend = downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
 
@@ -93,10 +94,7 @@ impl Component<TermWmAction> for WmFabComponent {
             return;
         }
 
-        let style = Style::default()
-            .fg(Color::White)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD);
+        let style = Style::default();
         safe_set_string(buffer, bounds, bounds.x, bounds.y, &label, style);
     }
 
@@ -211,6 +209,16 @@ mod tests {
         // The label itself should be drawn into the buffer.
         let cell = backend.buffer.cell((71, 23)).expect("label start cell");
         assert_eq!(cell.symbol(), "≡");
+        // Style matches the top panel's closed menu button: no hardcoded
+        // background/foreground, no bold (the theme drives panel styling).
+        assert_ne!(cell.style().bg, Some(ratatui::style::Color::DarkGray));
+        assert_ne!(cell.style().fg, Some(ratatui::style::Color::White));
+        assert!(
+            !cell
+                .style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        );
         // Hitbox should be registered
         assert!(!reg.is_empty());
         let result = reg.hit_test(term_wm_layout_engine::MousePosition {
