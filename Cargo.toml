@@ -22,12 +22,12 @@ development = ["term-bench", "term-session-client"]
 [workspace]
 members = [
     "crates/term-bench",
-    "crates/term-size-box",
     "crates/term-session",
     "crates/term-session-client",
     "crates/term-session-mock",
     "crates/term-session-muxio-service-definitions",
     "crates/term-session-server",
+    "crates/term-size-box",
     "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-crossterm-adapter",
