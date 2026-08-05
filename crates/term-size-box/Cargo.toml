@@ -1,5 +1,5 @@
 [package]
-name = "term-resize-indicator"
+name = "term-size-box"
 description = "Draws a box with centered dimensions in terminal applications."
 keywords = ["terminal", "tui", "ui"]
 categories = ["gui", "command-line-interface"]

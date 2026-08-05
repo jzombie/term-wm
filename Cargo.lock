@@ -3019,14 +3019,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "term-resize-indicator"
-version = "0.9.9-alpha"
-dependencies = [
- "crossterm",
- "ratatui",
-]
-
-[[package]]
 name = "term-session"
 version = "0.9.9-alpha"
 dependencies = [
@@ -3110,6 +3102,14 @@ dependencies = [
  "tracing",
  "vt100",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "term-size-box"
+version = "0.9.9-alpha"
+dependencies = [
+ "crossterm",
+ "ratatui",
 ]
 
 [[package]]

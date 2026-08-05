@@ -22,7 +22,7 @@ development = ["term-bench", "term-session-client"]
 [workspace]
 members = [
     "crates/term-bench",
-    "crates/term-resize-indicator",
+    "crates/term-size-box",
     "crates/term-session",
     "crates/term-session-client",
     "crates/term-session-mock",
