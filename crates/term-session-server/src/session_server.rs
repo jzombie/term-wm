@@ -539,15 +539,19 @@ async fn get_or_create_channel(
     channel
 }
 
-/// Remove a connection from the routing table and prune it from its bound
-/// channel's client/subscriber maps (authoritative teardown on disconnect).
-async fn evict_conn(state: &ServerState, conn_id: usize) {
-    // Drop the connection's input forwarder so an abrupt disconnect that never
-    // sent an explicit End/Error frame cannot leak the drain task, and a
-    // re-attached connection cannot route to a stale channel's `input_tx`.
+/// Drop a connection's input forwarder. Called on disconnect (evict_conn) and
+/// on Attach re-bind so an abrupt drop or a channel re-attach cannot leak the
+/// drain task or route `cached_tx` to a stale channel's `input_tx`.
+fn purge_input_forwarder(state: &ServerState, conn_id: usize) {
     if let Ok(mut fwd) = state.input_forwarders.lock() {
         fwd.remove(&conn_id);
     }
+}
+
+/// Remove a connection from the routing table and prune it from its bound
+/// channel's client/subscriber maps (authoritative teardown on disconnect).
+async fn evict_conn(state: &ServerState, conn_id: usize) {
+    purge_input_forwarder(state, conn_id);
     let channel = {
         let mut conns = state.conns.write().await;
         let entry = conns.remove(&conn_id);
@@ -657,9 +661,7 @@ pub async fn run_gateway(
                 // Purge any existing input forwarder for this connection so a
                 // re-attach to a different channel invalidates `cached_tx` and
                 // forces fresh target resolution.
-                if let Ok(mut fwd) = state.input_forwarders.lock() {
-                    fwd.remove(&conn_id);
-                }
+                purge_input_forwarder(&state, conn_id);
                 let mut conns = state.conns.write().await;
                 // The `ClientConnected` event is processed by a separate async
                 // loop, so it may not have inserted the entry yet when this
@@ -1280,4 +1282,114 @@ pub async fn run_gateway(
     };
 
     Ok(exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muxio_core::rpc::RpcDispatcher;
+    use muxio_tokio_rpc_ipc_server::RpcIpcConnectionContext;
+
+    /// Build a ServerState where `conn_id = 1` is attached to `test/coalesce`,
+    /// whose ChannelState carries the given `input_tx` (observed via the paired
+    /// receiver in the test).
+    fn state_with_input(input_tx: mpsc::Sender<Vec<u8>>) -> SharedState {
+        let name = ChannelName::parse("test/coalesce").expect("parse channel");
+        let channel = Arc::new(Mutex::new(ChannelState::new(
+            Vec::new(),
+            input_tx,
+            Arc::new(Notify::new()),
+            1,
+        )));
+        let mut channels = HashMap::new();
+        channels.insert(name.clone(), channel);
+        let (write_tx, _write_rx) = mpsc::unbounded_channel();
+        let conn = ConnEntry {
+            handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                write_tx,
+                conn_id: 1,
+                is_connected: Arc::new(AtomicBool::new(true)),
+                dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+            })),
+            state: ConnState::Attached(name),
+            hostname: String::new(),
+            connected_at_unix: 0,
+            pid: 0,
+            user: String::new(),
+            version: String::new(),
+            ssh_ip: None,
+        };
+        let mut conns = HashMap::new();
+        conns.insert(1, conn);
+        Arc::new(ServerState {
+            conns: RwLock::new(conns),
+            channels: RwLock::new(channels),
+            is_shutting_down: AtomicBool::new(false),
+            next_channel_seq: AtomicU64::new(0),
+            input_forwarders: std::sync::Mutex::new(HashMap::new()),
+        })
+    }
+
+    #[tokio::test]
+    async fn drain_input_forwarder_coalesces_queued_chunks() {
+        let (input_tx, mut input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+
+        // Pre-fill the forwarder channel so coalescing is deterministic.
+        let (fwd_tx, fwd_rx) = mpsc::channel(128);
+        fwd_tx.send(b"chunk1".to_vec()).await.unwrap();
+        fwd_tx.send(b"chunk2".to_vec()).await.unwrap();
+        fwd_tx.send(b"chunk3".to_vec()).await.unwrap();
+        drop(fwd_tx); // so the worker task exits after draining
+
+        tokio::spawn(drain_input_forwarder(state, 1, fwd_rx));
+
+        // The production worker must coalesce all three into one send.
+        let received = input_rx.recv().await.expect("coalesced input");
+        assert_eq!(received, b"chunk1chunk2chunk3");
+    }
+
+    #[tokio::test]
+    async fn drain_input_forwarder_forwards_isolated_chunk_unchanged() {
+        let (input_tx, mut input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+
+        let (fwd_tx, fwd_rx) = mpsc::channel(128);
+        fwd_tx.send(b"only".to_vec()).await.unwrap();
+        drop(fwd_tx);
+
+        tokio::spawn(drain_input_forwarder(state, 1, fwd_rx));
+
+        let received = input_rx.recv().await.expect("forwarded input");
+        assert_eq!(received, b"only");
+    }
+
+    #[tokio::test]
+    async fn evict_conn_purges_input_forwarder() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let (fwd_tx, _fwd_rx) = mpsc::channel(128);
+        state.input_forwarders.lock().unwrap().insert(1, fwd_tx);
+
+        evict_conn(&state, 1).await;
+
+        assert!(!state.input_forwarders.lock().unwrap().contains_key(&1));
+    }
+
+    #[test]
+    fn reattach_purges_existing_forwarder() {
+        // Exercises the SAME production `purge_input_forwarder` that both
+        // `evict_conn` and the `Attach::METHOD_ID` handler call — not an
+        // inlined `fwd.remove`. A socket re-attach to a different channel
+        // must drop the old forwarder so `cached_tx` cannot route input to the
+        // previous channel's `input_tx`.
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let (fwd_tx, _fwd_rx) = mpsc::channel(128);
+        state.input_forwarders.lock().unwrap().insert(1, fwd_tx);
+
+        purge_input_forwarder(&state, 1);
+
+        assert!(!state.input_forwarders.lock().unwrap().contains_key(&1));
+    }
 }
