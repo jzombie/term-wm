@@ -21,6 +21,23 @@ The gateway (`run_gateway`) supervises every channel in one process:
 - reaps idle channels (zero clients + exited session) to bound memory, with tombstone double-checked locking so concurrent attaches never split a channel;
 - `KillChannel` / `KillClient` authoritatively evict connections and cancel their tasks; `ShutdownGateway` seals the gateway and tears down every session's process tree before exiting.
 
+## Transport model (prebuffered vs. streaming)
+
+The gateway's IPC surface deliberately splits control and data planes so that the hot path never accumulates:
+
+- **Prebuffered request/response RPCs** — control-plane only: `Attach`, `Spawn`, `ResizePty`, `CloseSession`, `WriteInput`, `ListChannels`, `KillChannel`, `KillClient`, `ShutdownGateway`. These are small, bounded payloads where the whole request is buffered, dispatched, and replied to as one unit.
+- **Streaming handlers** — the data plane: `STREAM_INPUT` and `SUBSCRIBE_OUTPUT`. The client opens these as channels (`open_channel(..., 0)` with `prebuffer_response: false`) and each `PayloadChunk` is forwarded immediately; PTY output is **not** prebuffered.
+
+### Output is streamed, not prebuffered
+
+PTY output is delivered chunk-by-chunk in real time: the PTY reader thread wakes the per-channel polling task on every edge, the task drains the pending buffer and calls `respond.respond(raw, false)` per chunk, and the responder writes each chunk straight to the transport with an immediate per-chunk `flush()`. There is no accumulation at the gateway, the encoder, or the client — the client reads chunks one at a time from the subscription stream and feeds them to the screen parser in order.
+
+The only transient buffering is the one-time subscribe handshake: `StreamResponder` holds chunks in an internal buffer until the encoder is wired up (`set_writer`), then flushes them all. After that, all output is real-time.
+
+### Input ordering is preserved
+
+`STREAM_INPUT` chunks are forwarded into a per-connection ordered queue and drained FIFO by a single task per connection, so bursty input (e.g. IME voice typing over SSH) reaches the PTY in the exact order it was sent. See the `session_stream_input_preserves_order_under_burst` integration test.
+
 ## Platform notes
 
 * **macOS & Linux:** The gateway detaches into its own session via `setsid()`, so it survives terminal closure and client disconnects. Killing a session terminates its entire process group (SIGTERM → SIGKILL escalation), so background jobs are not orphaned.
