@@ -221,6 +221,48 @@ async fn session_mouse_bytes_forwarded() {
     guard.shutdown().await;
 }
 
+/// A rapid drag burst (100 SGR mouse packets) must survive the coalescing
+/// forwarder intact: the final event must reach the PTY and be echoed back.
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_mouse_drag_burst_throughput() {
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/mouse_burst")).await;
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: Some(vec![mock, "echo".into()]),
+            cols: TEST_COLS,
+            rows: TEST_ROWS,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+    let (writer, _) = client
+        .open_channel(STREAM_INPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
+    for i in 0..100 {
+        let mouse_event = format!("\x1b[<32;{i};10M\n").into_bytes();
+        writer.send(mouse_event).unwrap();
+    }
+
+    let output = wait_for_output(&mut reader, b"32;99;10M", Duration::from_secs(3)).await;
+    assert!(
+        output.windows(9).any(|w| w == b"32;99;10M"),
+        "Expected final mouse event in output stream"
+    );
+
+    guard.shutdown().await;
+}
+
 /// On Windows, ConPTY intercepts escape sequences written to the PTY master's
 /// stdin pipe before they reach the child process. The `capture` subcommand
 /// verifies the PTY input→output pipeline using a `MOUSE_OK:` sentinel marker

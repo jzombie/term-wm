@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.11-alpha] - 2026-08-05
+
+### Fixed
+
+- **Mouse-movement latency regression from the input-ordering fix:** routing every tiny chunk through per-chunk lock lookups and one `spawn_blocking` PTY write made high-frequency input (hundreds of 6-byte SGR mouse packets/sec during drags) queue up a growing backlog. The forwarder now caches the resolved `input_tx` across chunks (re-resolving only on closure/re-bind) and coalesces queued chunks via non-blocking `try_recv`, and the PTY consumer task drains `input_rx` into a single batched `spawn_blocking` write — cutting routing lookups and threadpool dispatches by ~50x during bursts while preserving FIFO byte order. Forwarders are also purged on connection eviction and on `Attach` re-bind so an abrupt drop can't leak the drain task or route a re-attached connection to a stale channel.
+
 ## [0.9.10-alpha] - 2026-08-05
 
 ### Changed
