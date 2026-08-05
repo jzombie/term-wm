@@ -132,7 +132,12 @@ async fn session_stream_input_preserves_order_under_burst() {
     // line discipline mangles newlines (`\n` -> `\r\n`), so each marker's bytes
     // appear (at least) twice and in mangled form. The robust signal is the
     // ORDER in which markers first appear: it must equal the sent order.
-    let output = wait_for_output(&mut reader, &markers.last().unwrap()[..4], Duration::from_secs(5)).await;
+    let output = wait_for_output(
+        &mut reader,
+        &markers.last().unwrap()[..4],
+        Duration::from_secs(5),
+    )
+    .await;
     assert_markers_in_first_appearance_order(&output, &markers);
 
     guard.shutdown().await;
@@ -159,9 +164,12 @@ fn assert_markers_in_first_appearance_order(output: &[u8], markers: &[Vec<u8>]) 
     }
     let expected_order: Vec<usize> = (0..needles.len()).collect();
     assert_eq!(
-        found, expected_order,
+        found,
+        expected_order,
         "input burst was reordered: expected markers in order {:?}, got first-appearance order {:?}; output: {:?}",
-        expected_order, found, String::from_utf8_lossy(output)
+        expected_order,
+        found,
+        String::from_utf8_lossy(output)
     );
 }
 
