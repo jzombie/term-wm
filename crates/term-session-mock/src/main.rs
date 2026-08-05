@@ -69,6 +69,38 @@ mod win_console {
     }
 }
 
+/// Disable kernel PTY line-discipline echo on stdin so input writes do not
+/// duplicate into the master read buffer or interleave with stdout.
+///
+/// Without this, running a stdin-echoing mock (`echo`, `spawn_child`) inside a
+/// canonical-mode PTY produces two concurrent output streams on the master: the
+/// kernel's echo of the input AND the mock's own stdout echo. Under slow or
+/// coverage-instrumented timing they interleave mid-marker, fragmenting byte
+/// sequences (e.g. `m057` split across the two streams) and making
+/// burst-ordering assertions timing-dependent.
+fn disable_stdin_echo() {
+    #[cfg(unix)]
+    unsafe {
+        let mut termios: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(libc::STDIN_FILENO, &mut termios) == 0 {
+            termios.c_lflag &= !(libc::ECHO | libc::ECHOE | libc::ECHOK | libc::ECHONL);
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &termios);
+        }
+    }
+
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Console::{
+            ENABLE_ECHO_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE, SetConsoleMode,
+        };
+        let handle = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode: u32 = 0;
+        if GetConsoleMode(handle, &mut mode) != 0 {
+            let _ = SetConsoleMode(handle, mode & !ENABLE_ECHO_INPUT);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -82,6 +114,7 @@ fn main() {
         "echo" => {
             #[cfg(windows)]
             win_console::enable_raw_vt();
+            disable_stdin_echo();
 
             let mut buffer = [0u8; 4096];
             let mut stdin = io::stdin();
@@ -142,6 +175,7 @@ fn main() {
         "spawn_child" => {
             #[cfg(windows)]
             win_console::enable_raw_vt();
+            disable_stdin_echo();
 
             let ms: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(60000);
             // Spawn a grandchild process that outlives this one unless the
