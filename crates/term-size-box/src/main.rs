@@ -1,4 +1,4 @@
-use term_resize_indicator::run;
+use term_size_box::run;
 
 fn main() {
     run().expect("resize indicator failed");

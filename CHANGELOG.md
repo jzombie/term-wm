@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.10-alpha] - 2026-08-05
+
+### Changed
+
+- **`term-resize-indicator` renamed to `term-size-box`:** the internal debug tool is now a single, descriptive `term-size-box` crate (directory, package name, binary, README, and workspace member list updated) — no functional changes.
+
+### Fixed
+
+- **Streamed session input is no longer reordered under bursts:** the gateway's `StreamInput` handler spawned an independent tokio task per incoming chunk, and those tasks raced on the async routing locks — so when many chunks arrived in rapid succession (e.g. IME voice typing over termux/SSH), later chunks could reach the PTY before earlier ones and characters appeared scrambled. Input now flows through a per-connection ordered queue drained FIFO by a single task, preserving exact wire order even under bursts, and a full input buffer applies backpressure instead of silently dropping the chunk. A multi-threaded integration test (`session_stream_input_preserves_order_under_burst`) sends a 64-marker burst through the `echo` mock and asserts first-appearance order matches send order.
+
 ## [0.9.9-alpha] - 2026-08-04
 
 ### Added
