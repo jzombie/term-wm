@@ -258,6 +258,7 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
         .semantic_registry
         .get(&term_wm_core::window::ComponentTag::FloatingActionButton)
         .copied();
+    let fab_ctx = wm.component_context(true).with_screen_area(area);
     if wm.is_monocle_cramped()
         && !wm.command_menu_visible()
         && let Some(fab) =
@@ -265,8 +266,7 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
         && let Some(layer_id) = fab_layer_id
     {
         let mut local_hb = HitboxRegistry::with_owner(ComponentOwner::Layer(layer_id));
-        let ctx = term_wm_core::components::ComponentContext::new(true).with_screen_area(area);
-        fab.render(backend, area, &ctx, &mut local_hb);
+        fab.render(backend, area, &fab_ctx, &mut local_hb);
         wm.hitbox_registry_mut().merge(local_hb);
     }
 
