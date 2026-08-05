@@ -16,7 +16,7 @@ use term_wm_core::{
     window::WindowKey,
 };
 use term_wm_ui_components::helpers::{
-    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
+    color_to_ratatui, layout_rect_to_clipped_rect, menu_icon, safe_set_string,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -182,8 +182,8 @@ impl WmTopPanelComponent {
         let mut x = area.x;
         let y = area.y;
         let max_x = area.x.saturating_add(i32::from(area.width));
-        let menu_icon = format!("\u{2261} {}", self.app_name);
-        let menu_width = menu_icon.chars().count() as u16;
+        let menu_label = menu_icon(&self.app_name);
+        let menu_width = menu_label.chars().count() as u16;
         if x.saturating_add(i32::from(menu_width)) <= max_x {
             let menu_style = if menu_open {
                 Style::default()
@@ -197,7 +197,7 @@ impl WmTopPanelComponent {
                 bounds,
                 x as u16,
                 y as u16,
-                menu_icon.as_str(),
+                menu_label.as_str(),
                 menu_style,
             );
             self.menu_rect = Some(LayoutRect {

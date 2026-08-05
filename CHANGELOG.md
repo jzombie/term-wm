@@ -8,6 +8,7 @@ The format is based on Keep a Changelog and this project adheres to
 
 ### Changed
 
+- **Floating Action Button matches the top panel branding:** the bottom-right FAB now renders the same `≡ term-wm` menu icon as the top panel (shared via a new `menu_icon(app_name)` helper in `term-wm-ui-components` instead of a duplicated inline string), and its style is now `Style::default()` like the top panel's closed menu button — the previous hardcoded `DarkGray` background / white bold text (which bypassed the theme) is gone. The FAB also receives its context from the window manager (`wm.component_context(...)`) so the app name is actually present, instead of a hand-built empty context that rendered only the truncated `≡` symbol.
 - **`term-resize-indicator` renamed to `term-size-box`:** the internal debug tool is now a single, descriptive `term-size-box` crate (directory, package name, binary, README, and workspace member list updated) — no functional changes.
 
 ### Fixed
