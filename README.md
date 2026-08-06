@@ -2,7 +2,7 @@
 
 [![macOS][macos-badge]][ci] [![Linux][linux-badge]][ci] [![Windows][windows-badge]][ci]
 <br>
-[![Made with Rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![CodeQL][codeql-badge]][codeql-page] [![Coverage][coveralls-badge]][coveralls-page]
+[![Made with Rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![Coverage][coveralls-badge]][coveralls-page] [![CodeQL][codeql-badge]][codeql-page]
 
 **term-wm** is a modular, high-performance window manager and multiplexer that operates entirely within your terminal emulator. 
 
@@ -145,6 +145,6 @@ See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for deta
 [apache-2.0-license-page]: ./LICENSE-APACHE
 [apache-2.0-license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square
 [codeql-page]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql
-[codeql-badge]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql/badge.svg
+[codeql-badge]: https://img.shields.io/github/actions/workflow/status/jzombie/term-wm/github-code-scanning/codeql?style=flat-square
 [coveralls-page]: https://coveralls.io/github/jzombie/term-wm?branch=main
 [coveralls-badge]: https://img.shields.io/coveralls/github/jzombie/term-wm?style=flat-square
