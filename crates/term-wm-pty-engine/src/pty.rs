@@ -2026,7 +2026,7 @@ mod tests {
         }
 
         // Count every written character across the whole scrollback + screen.
-        let mut count_chars = |parser: &mut vt100::Parser| -> std::collections::BTreeMap<char, usize> {
+        let count_chars = |parser: &mut vt100::Parser| -> std::collections::BTreeMap<char, usize> {
             let (rows, cols) = parser.screen().size();
             parser.screen_mut().set_scrollback(usize::MAX);
             let sb = parser.screen().scrollback();
