@@ -1,13 +1,8 @@
 # term-wm
 
-[![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white)](#)
-[![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black)](#)
-[![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white)](#)
+[![macOS][macos-badge]][ci] [![Linux][linux-badge]][ci] [![Windows][windows-badge]][ci]
 <br>
-[![Made with Rust](https://img.shields.io/badge/Made%20with-Rust-orange?style=flat-square)](#)
-[![crates.io](https://img.shields.io/crates/v/term-wm.svg?style=flat-square)](#)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](#)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](#)
+[![Made with Rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![Coverage][coveralls-badge]][coveralls-page] [![CodeQL][codeql-badge]][codeql-page]
 
 **term-wm** is a modular, high-performance window manager and multiplexer that operates entirely within your terminal emulator. 
 
@@ -136,3 +131,20 @@ However, the developer-facing library API is currently unsolidified and subject 
 `term-wm` is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0).
 
 See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for details.
+
+[ci]: https://github.com/jzombie/term-wm/actions
+[macos-badge]: https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white
+[linux-badge]: https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black
+[windows-badge]: https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white
+[rust-src-page]: https://www.rust-lang.org/
+[rust-logo]: https://img.shields.io/badge/Made%20with-Rust-orange?style=flat-square
+[crates-page]: https://crates.io/crates/term-wm
+[crates-badge]: https://img.shields.io/crates/v/term-wm.svg?style=flat-square
+[mit-license-page]: ./LICENSE-MIT
+[mit-license-badge]: https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square
+[apache-2.0-license-page]: ./LICENSE-APACHE
+[apache-2.0-license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square
+[codeql-page]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql
+[codeql-badge]: https://img.shields.io/github/actions/workflow/status/jzombie/term-wm/github-code-scanning/codeql?style=flat-square
+[coveralls-page]: https://coveralls.io/github/jzombie/term-wm?branch=main
+[coveralls-badge]: https://img.shields.io/coveralls/github/jzombie/term-wm?style=flat-square
