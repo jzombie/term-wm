@@ -67,10 +67,11 @@ Clone with submodules included:
 git clone --recursive https://github.com/jzombie/term-wm
 ```
 
-If you already cloned without `--recursive`, initialize them:
+If you already cloned without `--recursive`, initialize them (including any nested
+submodules):
 
 ```sh
-git submodule update --init
+git submodule update --init --recursive
 ```
 
 To have git automatically sync the submodules to the commits recorded by the parent repo
