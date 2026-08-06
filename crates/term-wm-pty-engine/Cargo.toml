@@ -18,7 +18,7 @@ portable-pty = { workspace = true }
 term-wm-events = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-vt100 = { workspace = true }
+term-wm-vt100 = { workspace = true }
 vte = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

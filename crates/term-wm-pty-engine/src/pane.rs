@@ -33,8 +33,8 @@ pub trait Pane {
         None
     }
     /// Access the shared parser for zero-copy rendering.
-    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
-        Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0)))
+    fn shared_parser(&mut self) -> Arc<Mutex<term_wm_vt100::Parser>> {
+        Arc::new(Mutex::new(term_wm_vt100::Parser::new(24, 80, 0)))
     }
     /// Reset the dirty flag. Returns true if dirty was set.
     fn take_dirty(&self) -> bool {
@@ -143,7 +143,7 @@ impl Pane for crate::Pty {
         self.tracker.is_application_cursor_keys_active()
     }
 
-    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
+    fn shared_parser(&mut self) -> Arc<Mutex<term_wm_vt100::Parser>> {
         self.shared_parser.clone()
     }
 

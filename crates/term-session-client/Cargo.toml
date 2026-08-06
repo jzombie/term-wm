@@ -32,7 +32,7 @@ term-wm-pty-engine = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 unicode-width.workspace = true
-vt100 = { workspace = true }
+term-wm-vt100 = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

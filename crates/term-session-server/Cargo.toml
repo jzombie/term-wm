@@ -22,7 +22,7 @@ term-session-muxio-service-definitions = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-vt100 = { workspace = true }
+term-wm-vt100 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
