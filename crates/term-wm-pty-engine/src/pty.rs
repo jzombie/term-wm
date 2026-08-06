@@ -838,9 +838,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
 
                 // Process bytes directly into the shared parser.
                 {
-                    let mut shared = shared_parser
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner());
+                    let mut shared = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
                     shared.process(&buf[..n]);
                 }
 
@@ -886,9 +884,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     let (lock, cvar) = &*dirty_cond;
                     let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
                     while dirty.load(Ordering::Acquire) {
-                        guard = cvar
-                            .wait(guard)
-                            .unwrap_or_else(|err| err.into_inner());
+                        guard = cvar.wait(guard).unwrap_or_else(|err| err.into_inner());
                     }
                     bytes_since_render = 0;
                 }
