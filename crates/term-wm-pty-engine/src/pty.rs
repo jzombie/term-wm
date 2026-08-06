@@ -129,6 +129,41 @@ pub struct PtyParts {
     pub reader_handle: Option<JoinHandle<()>>,
 }
 
+/// Constant env values applied to every spawned PTY child so ncurses and
+/// modern CLI tools render correctly when the session runs across SSH /
+/// container hops (see `sanitize_child_environment`).
+const CHILD_TERM: &str = "screen-256color";
+const CHILD_COLORTERM: &str = "truecolor";
+
+/// Apply the multiplexer-safe environment to a spawned PTY child.
+///
+/// - Forces `TERM=screen-256color`. Plain `xterm-256color` causes ncurses to
+///   use advanced layout shortcuts (like Background Color Erase) that break
+///   inside multiplexer grid math.
+/// - Opts into `COLORTERM=truecolor` for modern CLI tools (Neovim, bat, delta,
+///   lsd) that look for COLORTERM to bypass the 256-color limit of the
+///   screen-256color terminfo. ncurses ignores COLORTERM entirely — it keys
+///   off the terminfo database for `$TERM` — so this is purely for those
+///   direct-ANSI tools.
+/// - Strips the invalid `LC_CTYPE=UTF-8` injected by macOS/OrbStack SSH hops.
+///   "UTF-8" is a character encoding, not a valid POSIX locale name, which
+///   causes `setlocale()` to fail and ncurses to crash or corrupt layout.
+///   Removing it lets the child fall back to its own native locale default.
+fn sanitize_child_environment(command: &mut CommandBuilder) {
+    sanitize_child_environment_with_lc_ctype(command, std::env::var("LC_CTYPE").ok().as_deref());
+}
+
+/// Core of [`sanitize_child_environment`], parameterized over the incoming
+/// `LC_CTYPE` value so the stripping logic is deterministically unit-testable
+/// without mutating the process-global environment.
+fn sanitize_child_environment_with_lc_ctype(command: &mut CommandBuilder, lc_ctype: Option<&str>) {
+    command.env("TERM", CHILD_TERM);
+    command.env("COLORTERM", CHILD_COLORTERM);
+    if lc_ctype == Some("UTF-8") {
+        command.env_remove("LC_CTYPE");
+    }
+}
+
 impl Pty {
     pub fn spawn(command: CommandBuilder, size: PtySize) -> PtyResult<Self> {
         Self::spawn_with_scrollback(command, size, 0)
@@ -139,24 +174,7 @@ impl Pty {
         size: PtySize,
         scrollback_len: usize,
     ) -> PtyResult<Self> {
-        // Force a multiplexer-safe terminfo. Plain xterm-256color causes
-        // ncurses to use advanced layout shortcuts (like Background Color
-        // Erase) that break inside multiplexer grid math.
-        command.env("TERM", "screen-256color");
-        // Opt into 24-bit RGB truecolor for modern CLI tools (Neovim, bat,
-        // delta, lsd) that look for COLORTERM to bypass the 256-color limit of
-        // the screen-256color terminfo. ncurses ignores COLORTERM entirely —
-        // it keys off the terminfo database for $TERM — so this is purely for
-        // those direct-ANSI tools.
-        command.env("COLORTERM", "truecolor");
-        // Strip the invalid `LC_CTYPE=UTF-8` injected by macOS/OrbStack SSH
-        // hops. "UTF-8" is a character encoding, not a valid POSIX locale
-        // name, which causes setlocale() to fail and ncurses to crash or break
-        // layout rendering. Removing it lets the child fall back to its own
-        // native locale default.
-        if std::env::var("LC_CTYPE").as_deref() == Ok("UTF-8") {
-            command.env_remove("LC_CTYPE");
-        }
+        sanitize_child_environment(&mut command);
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(size)
@@ -2083,5 +2101,114 @@ mod tests {
             "content preserved without any SU shift"
         );
         assert_eq!(parser.screen().size(), (24, 80));
+    }
+
+    // ── Environment sanitization ─────────────────────────────────────
+
+    fn fresh_cmd() -> CommandBuilder {
+        CommandBuilder::new("true")
+    }
+
+    #[test]
+    fn sanitize_sets_multiplexer_safe_term() {
+        let mut cmd = fresh_cmd();
+        sanitize_child_environment_with_lc_ctype(&mut cmd, None);
+        assert_eq!(
+            cmd.get_env("TERM").and_then(|v| v.to_str()),
+            Some("screen-256color")
+        );
+    }
+
+    #[test]
+    fn sanitize_sets_truecolor() {
+        let mut cmd = fresh_cmd();
+        sanitize_child_environment_with_lc_ctype(&mut cmd, None);
+        assert_eq!(
+            cmd.get_env("COLORTERM").and_then(|v| v.to_str()),
+            Some("truecolor")
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_invalid_lc_ctype_utf8() {
+        let mut cmd = fresh_cmd();
+        // Simulate the invalid `LC_CTYPE=UTF-8` macOS/OrbStack SSH hop injects.
+        cmd.env("LC_CTYPE", "UTF-8");
+        sanitize_child_environment_with_lc_ctype(&mut cmd, Some("UTF-8"));
+        assert!(
+            cmd.get_env("LC_CTYPE").is_none(),
+            "invalid LC_CTYPE=UTF-8 must be stripped"
+        );
+    }
+
+    #[test]
+    fn sanitize_keeps_valid_lc_ctype() {
+        let mut cmd = fresh_cmd();
+        cmd.env("LC_CTYPE", "en_US.UTF-8");
+        sanitize_child_environment_with_lc_ctype(&mut cmd, Some("en_US.UTF-8"));
+        assert_eq!(
+            cmd.get_env("LC_CTYPE").and_then(|v| v.to_str()),
+            Some("en_US.UTF-8"),
+            "valid locale must be preserved"
+        );
+    }
+
+    /// End-to-end: the child spawned via the real `Pty` launcher must see the
+    /// sanitized environment. We write a child that prints its `TERM`,
+    /// `COLORTERM`, and `LC_CTYPE` (or its absence) and assert on the output.
+    #[test]
+    #[cfg(unix)]
+    fn spawned_child_receives_sanitized_environment() {
+        // `sh` is POSIX-standard; on Windows this test is skipped.
+        let script = indoc::indoc! {r#"
+            TERM_VAL="${TERM:-<unset>}"
+            COLORTERM_VAL="${COLORTERM:-<unset>}"
+            LC_CTYPE_VAL="${LC_CTYPE:-<unset>}"
+            printf 'TERM=%s\nCOLORTERM=%s\nLC_CTYPE=%s\n' \
+              "$TERM_VAL" "$COLORTERM_VAL" "$LC_CTYPE_VAL"
+        "#};
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg(script);
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 0).expect("spawn");
+
+        let mut accumulated = Vec::new();
+        let start = std::time::Instant::now();
+        loop {
+            pty.screen();
+            accumulated.extend_from_slice(&pty.drain_pending());
+            let out = String::from_utf8_lossy(&accumulated);
+            if out.contains("LC_CTYPE=") {
+                break;
+            }
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "child never printed sanitized env; got {out}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if let Some(child) = pty.child.as_mut() {
+            let _ = child.kill();
+        }
+
+        let out = String::from_utf8_lossy(&accumulated);
+        assert!(
+            out.contains("TERM=screen-256color"),
+            "expected TERM=screen-256color, got {out}"
+        );
+        assert!(
+            out.contains("COLORTERM=truecolor"),
+            "expected COLORTERM=truecolor, got {out}"
+        );
+        assert!(
+            !out.contains("LC_CTYPE=UTF-8"),
+            "invalid LC_CTYPE=UTF-8 must not reach the child, got {out}"
+        );
     }
 }

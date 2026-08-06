@@ -3220,6 +3220,7 @@ dependencies = [
  "arboard",
  "base64 0.23.0",
  "ctrlc",
+ "indoc",
  "libc",
  "portable-pty",
  "term-session-mock",
