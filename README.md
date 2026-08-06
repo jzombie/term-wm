@@ -26,7 +26,7 @@ Designed for Linux, macOS, and Windows, `term-wm` brings the spatial organizatio
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
 
 ```sh
-git clone https://github.com/jzombie/term-wm
+git clone --recursive https://github.com/jzombie/term-wm
 cd term-wm
 cargo run --release
 ```
@@ -48,6 +48,42 @@ Options (`term-wm -h`):
 - `-h, --help`, `-V, --version`
 
 New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
+
+### Vendored Dependencies (git submodules)
+
+`term-wm` vendors a small number of third-party crates as **git submodules** under
+[`vendor/`](./vendor) so they can carry term-wm-specific patches that aren't upstream yet.
+They are wired into the build via a `[patch.crates-io]` entry in the workspace
+[`Cargo.toml`](./Cargo.toml) and are listed as workspace members so their tests run in CI.
+
+Currently vendored:
+
+* [`vendor/vt100`](./vendor/vt100) — a fork of `doy/vt100-rust` that adds grid reflow on
+  resize (the upstream crate truncates soft-wrapped lines instead of re-wrapping them).
+
+Clone with submodules included:
+
+```sh
+git clone --recursive https://github.com/jzombie/term-wm
+```
+
+If you already cloned without `--recursive`, initialize them:
+
+```sh
+git submodule update --init
+```
+
+To have git automatically sync the submodules to the commits recorded by the parent repo
+whenever you `git checkout`, `git pull`, or `git switch`:
+
+```sh
+git config --global submodule.recurse true
+```
+
+> **Note:** the vendored submodules are **read-mostly** build inputs. They track a fork
+> (not the upstream repo), and the parent repo records a pinned commit via the gitlink.
+> When a vendored crate needs a change, update it inside `vendor/<crate>` and record the
+> new commit in the parent repo.
 
 ### Keybindings Quick Reference
 
