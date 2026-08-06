@@ -132,14 +132,27 @@ pub struct PtyParts {
 /// Constant env values applied to every spawned PTY child so ncurses and
 /// modern CLI tools render correctly when the session runs across SSH /
 /// container hops (see `sanitize_child_environment`).
+///
+/// macOS ships a defective `screen-256color` terminfo lacking the `bce`
+/// (Background Color Erase) capability, which makes ncurses apps (pico, nano)
+/// reset attributes before line erases and drop background colors.
+/// `xterm-256color` has `bce` and is safe on macOS now that the invalid
+/// `LC_CTYPE=UTF-8` is stripped (the grid-math crashes previously associated
+/// with it were caused by `setlocale` failing on that locale, not the terminfo
+/// entry). Other platforms keep `screen-256color` — their terminfo has `bce`.
+#[cfg(target_os = "macos")]
+const CHILD_TERM: &str = "xterm-256color";
+#[cfg(not(target_os = "macos"))]
 const CHILD_TERM: &str = "screen-256color";
 const CHILD_COLORTERM: &str = "truecolor";
 
 /// Apply the multiplexer-safe environment to a spawned PTY child.
 ///
-/// - Forces `TERM=screen-256color`. Plain `xterm-256color` causes ncurses to
-///   use advanced layout shortcuts (like Background Color Erase) that break
-///   inside multiplexer grid math.
+/// - Forces `TERM` to a terminfo entry with `bce` (Background Color Erase):
+///   `xterm-256color` on macOS (where Apple's `screen-256color` terminfo is
+///   broken and missing `bce`), `screen-256color` elsewhere. Without `bce`,
+///   ncurses apps reset attributes before line erases, which erases the
+///   background in the emulated screen.
 /// - Opts into `COLORTERM=truecolor` for modern CLI tools (Neovim, bat, delta,
 ///   lsd) that look for COLORTERM to bypass the 256-color limit of the
 ///   screen-256color terminfo. ncurses ignores COLORTERM entirely — it keys
@@ -471,8 +484,14 @@ impl Pty {
 
     pub fn screen_lines(&mut self) -> Vec<String> {
         self.screen(); // sync dirty state
-        let parser = self.shared_parser.lock().unwrap();
-        let screen = parser.screen();
+        // Clone the screen out of the lock and drop the guard before any
+        // string formatting, so the reader thread can keep ingesting bytes.
+        let screen = self
+            .shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .screen()
+            .clone();
         let contents = screen.contents();
         let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
         if lines.len() < self.size.rows as usize {
@@ -611,8 +630,15 @@ impl Pty {
     /// with a formatted snapshot of the current parser state.
     pub fn generate_snapshot(&mut self) -> Vec<u8> {
         self.screen();
-        let parser = self.shared_parser.lock().unwrap();
-        parser.screen().state_formatted()
+        // Clone the screen out of the lock and drop the guard before the
+        // O(rows x cols) escape-code formatting, so the reader thread can keep
+        // ingesting bytes while the snapshot is built.
+        self.shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .screen()
+            .clone()
+            .state_formatted()
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -747,13 +773,12 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 if let Some(text) = osc52.finish() {
                     clipboard.set(&text);
                     if let Some(ref capture) = osc52_text {
-                        *capture.lock().unwrap() = Some(text);
+                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
                     }
                 }
                 // Send wakeup for final screen, then exited.
-                if let Ok(guard) = status_cb.lock()
-                    && let Some(ref cb) = *guard
-                {
+                let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                if let Some(ref cb) = *guard {
                     cb(crate::PtyStatus::Wakeup);
                     if !exited_emitted.swap(true, Ordering::AcqRel) {
                         cb(crate::PtyStatus::Exited);
@@ -769,18 +794,16 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 if buf[..n].windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
                     dsr_requested.store(true, Ordering::Relaxed);
                 }
-                if let Ok(mut last) = last_bytes.lock() {
-                    last.clear();
-                    last.extend_from_slice(&buf[..n]);
-                }
-                if let Ok(mut p) = pending.lock() {
-                    p.extend_from_slice(&buf[..n]);
-                    // Cap pending to prevent unbounded growth when no
-                    // consumer calls drain_pending() (local terminal mode).
-                    const PENDING_CAP: usize = 1024 * 1024; // 1 MB
-                    if p.len() > PENDING_CAP {
-                        p.clear();
-                    }
+                let mut last = last_bytes.lock().unwrap_or_else(|err| err.into_inner());
+                last.clear();
+                last.extend_from_slice(&buf[..n]);
+                let mut p = pending.lock().unwrap_or_else(|err| err.into_inner());
+                p.extend_from_slice(&buf[..n]);
+                // Cap pending to prevent unbounded growth when no
+                // consumer calls drain_pending() (local terminal mode).
+                const PENDING_CAP: usize = 1024 * 1024; // 1 MB
+                if p.len() > PENDING_CAP {
+                    p.clear();
                 }
 
                 // Process bytes through the application state tracker
@@ -794,9 +817,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                         prev_routing,
                         new_routing
                     );
-                    if let Ok(guard) = status_cb.lock()
-                        && let Some(ref cb) = *guard
-                    {
+                    let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                    if let Some(ref cb) = *guard {
                         cb(crate::PtyStatus::DirectInputChanged(new_routing));
                     } else {
                         tracing::error!("[STAGE 1] status_cb is NONE when transition occurred!");
@@ -805,13 +827,14 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
 
                 // Process bytes directly into the shared parser.
                 {
-                    let mut shared = shared_parser.lock().unwrap();
+                    let mut shared = shared_parser
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner());
                     shared.process(&buf[..n]);
                 }
 
-                if let Some(title) = extract_osc_title(&buf[..n])
-                    && let Ok(mut guard) = pending_title.lock()
-                {
+                if let Some(title) = extract_osc_title(&buf[..n]) {
+                    let mut guard = pending_title.lock().unwrap_or_else(|err| err.into_inner());
                     *guard = Some(title);
                 }
                 // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
@@ -820,7 +843,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
                     clipboard.set(&text);
                     if let Some(ref capture) = osc52_text {
-                        *capture.lock().unwrap() = Some(text);
+                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
                     }
                 }
 
@@ -836,9 +859,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // Prevents flooding the IPC channel with thousands of redundant
                 // PtyWakeup messages per second at unthrottled ingestion speeds.
                 if !dirty.swap(true, Ordering::AcqRel) {
-                    if let Ok(guard) = status_cb.lock()
-                        && let Some(ref cb) = *guard
-                    {
+                    let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                    if let Some(ref cb) = *guard {
                         cb(crate::PtyStatus::Wakeup);
                     }
                     // Reset budget because a new render cycle has begun
@@ -851,9 +873,11 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // reader thread from consuming 100% CPU on infinite streams.
                 if bytes_since_render >= IO_BURST_BUDGET {
                     let (lock, cvar) = &*dirty_cond;
-                    let mut guard = lock.lock().unwrap();
+                    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
                     while dirty.load(Ordering::Acquire) {
-                        guard = cvar.wait(guard).unwrap();
+                        guard = cvar
+                            .wait(guard)
+                            .unwrap_or_else(|err| err.into_inner());
                     }
                     bytes_since_render = 0;
                 }
@@ -864,8 +888,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // This is intentional mechanical backpressure.
             }
             Err(_) => {
-                if let Ok(guard) = status_cb.lock()
-                    && let Some(ref cb) = *guard
+                let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                if let Some(ref cb) = *guard
                     && !exited_emitted.swap(true, Ordering::AcqRel)
                 {
                     cb(crate::PtyStatus::Exited);
@@ -2166,7 +2190,7 @@ mod tests {
         sanitize_child_environment_with_lc_ctype(&mut cmd, None);
         assert_eq!(
             cmd.get_env("TERM").and_then(|v| v.to_str()),
-            Some("screen-256color")
+            Some(expected_child_term())
         );
     }
 
@@ -2250,8 +2274,9 @@ mod tests {
 
         let out = String::from_utf8_lossy(&accumulated);
         assert!(
-            out.contains("TERM=screen-256color"),
-            "expected TERM=screen-256color, got {out}"
+            out.contains(&format!("TERM={}", expected_child_term())),
+            "expected TERM={}, got {out}",
+            expected_child_term()
         );
         assert!(
             out.contains("COLORTERM=truecolor"),
@@ -2261,5 +2286,11 @@ mod tests {
             !out.contains("LC_CTYPE=UTF-8"),
             "invalid LC_CTYPE=UTF-8 must not reach the child, got {out}"
         );
+    }
+
+    /// Mirrors the platform-specific `CHILD_TERM` so tests assert the value the
+    /// sanitizer actually applies on this platform.
+    fn expected_child_term() -> &'static str {
+        CHILD_TERM
     }
 }
