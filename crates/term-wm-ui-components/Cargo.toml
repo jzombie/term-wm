@@ -26,7 +26,7 @@ term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-vt100 = { workspace = true }
+term-wm-vt100 = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]

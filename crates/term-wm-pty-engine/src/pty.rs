@@ -86,7 +86,7 @@ pub struct Pty {
     /// Parsed screen shared between the reader thread and the main thread.
     /// The reader parses bytes into this parser in-place. The main thread
     /// locks it to read cells directly — zero clones.
-    pub(crate) shared_parser: Arc<Mutex<vt100::Parser>>,
+    pub(crate) shared_parser: Arc<Mutex<term_wm_vt100::Parser>>,
     /// Set by the reader thread when new content has been parsed.
     pub(crate) dirty: Arc<AtomicBool>,
     /// Condvar for I/O burst budget: reader waits here when budget exceeded
@@ -252,7 +252,7 @@ impl Pty {
 
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
-        let initial_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
+        let initial_parser = term_wm_vt100::Parser::new(size.rows, size.cols, scrollback_len);
         let tracker = std::sync::Arc::new(crate::PtyStateTracker::new(size.rows));
         let reader_tracker = std::sync::Arc::clone(&tracker);
         let shared_parser = Arc::new(Mutex::new(initial_parser));
@@ -725,7 +725,7 @@ struct ParserReadLoopArgs {
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
-    shared_parser: Arc<Mutex<vt100::Parser>>,
+    shared_parser: Arc<Mutex<term_wm_vt100::Parser>>,
     dirty: Arc<AtomicBool>,
     dirty_cond: Arc<(std::sync::Mutex<()>, Condvar)>,
     pending_title: Arc<Mutex<Option<String>>>,
@@ -1164,7 +1164,7 @@ mod tests {
             bytes_received: Arc::new(AtomicUsize::new(0)),
             last_bytes: Arc::new(Mutex::new(Vec::new())),
             dsr_requested: Arc::new(AtomicBool::new(false)),
-            shared_parser: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0))),
+            shared_parser: Arc::new(Mutex::new(term_wm_vt100::Parser::new(24, 80, 0))),
             dirty: Arc::new(AtomicBool::new(false)),
             dirty_cond: Arc::new((Mutex::new(()), Condvar::new())),
             pending_title: Arc::new(Mutex::new(None)),
@@ -1601,7 +1601,7 @@ mod tests {
         pty.screen();
 
         // Simulate reader thread publishing a new screen via shared parser.
-        let mut new_parser = vt100::Parser::new(24, 80, 100);
+        let mut new_parser = term_wm_vt100::Parser::new(24, 80, 100);
         new_parser.process(b"hello world");
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1644,7 +1644,7 @@ mod tests {
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Publish a new screen via shared parser.
-        let mut new_parser = vt100::Parser::new(24, 80, 100);
+        let mut new_parser = term_wm_vt100::Parser::new(24, 80, 100);
         new_parser.process(b"content");
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1694,7 +1694,7 @@ mod tests {
         for i in 0..30 {
             writeln!(lines, "line {}", i).unwrap();
         }
-        let mut parser = vt100::Parser::new(24, 80, 100);
+        let mut parser = term_wm_vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1742,7 +1742,7 @@ mod tests {
         );
 
         // New shared parser data replaces the mutation (expected).
-        let mut parser2 = vt100::Parser::new(24, 80, 100);
+        let mut parser2 = term_wm_vt100::Parser::new(24, 80, 100);
         parser2.process(b"fresh output");
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1784,7 +1784,7 @@ mod tests {
         for i in 0..30 {
             writeln!(lines, "line {}", i).unwrap();
         }
-        let mut parser = vt100::Parser::new(24, 80, 100);
+        let mut parser = term_wm_vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -2020,12 +2020,12 @@ mod tests {
         }
 
         // ── OLD: create parser at 30 cols, replay all history ──
-        let mut old = vt100::Parser::new(24, 30, 100);
+        let mut old = term_wm_vt100::Parser::new(24, 30, 100);
         old.process(&history);
         let old_text = old.screen().contents();
 
         // ── NEW: process at 80 cols, then set_size to 30 ──
-        let mut new = vt100::Parser::new(24, 80, 100);
+        let mut new = term_wm_vt100::Parser::new(24, 80, 100);
         new.process(&history);
         new.screen_mut().set_size(24, 30);
         let new_text = new.screen().contents();
@@ -2050,14 +2050,14 @@ mod tests {
         // Reflow must preserve previously-buffered scrollback content when the
         // terminal width shrinks (the non-alt-screen resize case), instead of
         // truncating the wrapped rows of a long line.
-        let mut parser = vt100::Parser::new(24, 80, 2000);
+        let mut parser = term_wm_vt100::Parser::new(24, 80, 2000);
         let long_line = "x".repeat(200);
         for i in 0..40 {
             parser.process(format!("line {i}: {}\r\n", long_line).as_bytes());
         }
 
         // Count every written character across the whole scrollback + screen.
-        let count_chars = |parser: &mut vt100::Parser| -> std::collections::BTreeMap<char, usize> {
+        let count_chars = |parser: &mut term_wm_vt100::Parser| -> std::collections::BTreeMap<char, usize> {
             let (rows, cols) = parser.screen().size();
             parser.screen_mut().set_scrollback(usize::MAX);
             let sb = parser.screen().scrollback();
@@ -2141,7 +2141,7 @@ mod tests {
 
     #[test]
     fn cursor_bounded_shrink_preserves_bottom_when_cursor_at_bottom() {
-        let mut parser = vt100::Parser::new(30, 80, 200);
+        let mut parser = term_wm_vt100::Parser::new(30, 80, 200);
         for i in 0..30 {
             parser.process(format!("line {}\r\n", i).as_bytes());
         }
@@ -2165,7 +2165,7 @@ mod tests {
 
     #[test]
     fn cursor_bounded_shrink_skips_when_cursor_above_new_height() {
-        let mut parser = vt100::Parser::new(30, 80, 200);
+        let mut parser = term_wm_vt100::Parser::new(30, 80, 200);
         for i in 0..10 {
             parser.process(format!("line {}\r\n", i).as_bytes());
         }

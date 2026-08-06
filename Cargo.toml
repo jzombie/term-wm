@@ -38,12 +38,8 @@ members = [
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
     "crates/term-wm-ui-facade",
-    "vendor/vt100",
 ]
 resolver = "2"
-
-[patch.crates-io]
-vt100 = { path = "vendor/vt100" }
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
@@ -112,7 +108,7 @@ tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 unicode-width = "0.2.2"
-vt100 = "0.16.2"
+term-wm-vt100 = "0.16.2-patch1"
 vte = "0.15.0"
 webbrowser = "1.2.1"
 windows-sys = { version = "0.59", features = [
