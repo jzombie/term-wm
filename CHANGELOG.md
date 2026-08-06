@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.13-alpha] - 2026-08-06
+
+### Added
+
+- **Terminal line reflow on resize:** resizing a terminal window now re-wraps soft-wrapped lines (scrollback + visible) to the new column width instead of truncating them, so previously-buffered output is preserved when the window shrinks or grows. Wide/CJK characters are never split across rows and keep their SGR attributes; explicitly written trailing spaces and background-only regions are preserved. **Accepted limitation:** on a width shrink, a shell prompt that re-wraps may briefly show duplicated/stale prompt rows, because a shell's SIGWINCH redraw (`\r ESC[J`) erases only downward from the cursor and cannot reach the re-wrapped rows above it. This is a protocol limitation of shell-driven redraw (present in other reflowing terminals), not an emulator bug, and no data is lost.
+
+### Changed
+
+- **Replaced `vt100` with `term-wm-vt100` crates.io fork (0.16.2-patch1):** the reflow-patched fork is now used as a plain registry dependency in place of the upstream `vt100` crate.
+
+### Fixed
+
+- **ncurses apps (pico, nano) losing background colors on macOS:** the child `TERM` is now `xterm-256color` on macOS — whose shipped `screen-256color` terminfo lacks the `bce` (Background Color Erase) capability, causing ncurses to reset attributes before line erases and drop backgrounds — and `screen-256color` elsewhere (where that terminfo has `bce`).
+- **PTY reader-thread panic on poisoned mutexes:** `parser_read_loop` now recovers poisoned locks (`shared_parser`, `pending`, `last_bytes`, `status_cb`, `pending_title`, `dirty_cond`) via `into_inner()` instead of `.unwrap()`ing and crashing the I/O pipeline when a consumer panics while holding a lock.
+- **`generate_snapshot` / `screen_lines` lock contention:** the shared-parser `MutexGuard` is released immediately after cloning the `Screen`, so full-frame escape-code formatting no longer starves the reader thread during high-throughput output.
+
 ## [0.9.12-alpha] - 2026-08-05
 
 ### Fixed
