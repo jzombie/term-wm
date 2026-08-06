@@ -370,6 +370,17 @@ impl Pty {
     }
 
     pub fn resize(&mut self, size: PtySize) -> PtyResult<()> {
+        // NOTE (accepted limitation): resizing triggers universal grid reflow
+        // (vt100 `set_size`), which preserves all scrollback data. On a width
+        // shrink, a shell prompt that re-wraps into multiple rows may briefly
+        // show duplicated/stale prompt rows on the host, because the shell's
+        // SIGWINCH redraw (`\r ESC[J`) only erases downward from the cursor and
+        // cannot reach the re-wrapped rows above it. This is a protocol
+        // limitation of shell-driven redraw (present in other reflowing
+        // terminals) and is intentionally not worked around in the emulator:
+        // any emulator/compositor-side correction would destroy buffered data
+        // or corrupt cursor coordinates. No data is ever lost.
+        //
         // WORKAROUND: vt100 0.16.2 Grid::col_wrap (grid.rs:683) panics with a
         // subtraction overflow at cols=1; rows=1 causes similar issues. Clamp
         // the minimum so the PTY emulator doesn't crash when the terminal is
