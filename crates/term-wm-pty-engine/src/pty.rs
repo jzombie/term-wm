@@ -135,10 +135,28 @@ impl Pty {
     }
 
     pub fn spawn_with_scrollback(
-        command: CommandBuilder,
+        mut command: CommandBuilder,
         size: PtySize,
         scrollback_len: usize,
     ) -> PtyResult<Self> {
+        // Force a multiplexer-safe terminfo. Plain xterm-256color causes
+        // ncurses to use advanced layout shortcuts (like Background Color
+        // Erase) that break inside multiplexer grid math.
+        command.env("TERM", "screen-256color");
+        // Opt into 24-bit RGB truecolor for modern CLI tools (Neovim, bat,
+        // delta, lsd) that look for COLORTERM to bypass the 256-color limit of
+        // the screen-256color terminfo. ncurses ignores COLORTERM entirely —
+        // it keys off the terminfo database for $TERM — so this is purely for
+        // those direct-ANSI tools.
+        command.env("COLORTERM", "truecolor");
+        // Strip the invalid `LC_CTYPE=UTF-8` injected by macOS/OrbStack SSH
+        // hops. "UTF-8" is a character encoding, not a valid POSIX locale
+        // name, which causes setlocale() to fail and ncurses to crash or break
+        // layout rendering. Removing it lets the child fall back to its own
+        // native locale default.
+        if std::env::var("LC_CTYPE").as_deref() == Ok("UTF-8") {
+            command.env_remove("LC_CTYPE");
+        }
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(size)
