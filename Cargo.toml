@@ -38,8 +38,12 @@ members = [
     "crates/term-wm-sys-ui-components",
     "crates/term-wm-ui-components",
     "crates/term-wm-ui-facade",
+    "vendor/vt100",
 ]
 resolver = "2"
+
+[patch.crates-io]
+vt100 = { path = "vendor/vt100" }
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]

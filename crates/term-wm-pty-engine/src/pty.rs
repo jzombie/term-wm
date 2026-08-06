@@ -2010,7 +2010,58 @@ mod tests {
         assert_eq!(
             new_text.lines().count(),
             5,
-            "set_size must preserve 5 separate rows"
+            "set_size must preserve all 5 logical lines (via reflow)"
+        );
+    }
+
+    #[test]
+    fn reflow_preserves_scrollback_content_on_width_shrink() {
+        // Reflow must preserve previously-buffered scrollback content when the
+        // terminal width shrinks (the non-alt-screen resize case), instead of
+        // truncating the wrapped rows of a long line.
+        let mut parser = vt100::Parser::new(24, 80, 2000);
+        let long_line = "x".repeat(200);
+        for i in 0..40 {
+            parser.process(format!("line {i}: {}\r\n", long_line).as_bytes());
+        }
+
+        // Count every written character across the whole scrollback + screen.
+        let mut count_chars = |parser: &mut vt100::Parser| -> std::collections::BTreeMap<char, usize> {
+            let (rows, cols) = parser.screen().size();
+            parser.screen_mut().set_scrollback(usize::MAX);
+            let sb = parser.screen().scrollback();
+            let mut map = std::collections::BTreeMap::new();
+            for i in 0..sb {
+                parser.screen_mut().set_scrollback(sb - i);
+                for c in 0..cols {
+                    if let Some(cell) = parser.screen().cell(0, c) {
+                        for ch in cell.contents().chars() {
+                            *map.entry(ch).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            parser.screen_mut().set_scrollback(0);
+            for r in 0..rows {
+                for c in 0..cols {
+                    if let Some(cell) = parser.screen().cell(r, c) {
+                        for ch in cell.contents().chars() {
+                            *map.entry(ch).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            parser.screen_mut().set_scrollback(0);
+            map
+        };
+
+        let before = count_chars(&mut parser);
+        parser.screen_mut().set_size(24, 40);
+        let after = count_chars(&mut parser);
+
+        assert_eq!(
+            before, after,
+            "width shrink must not lose scrollback content"
         );
     }
 
