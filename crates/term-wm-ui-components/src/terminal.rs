@@ -1024,7 +1024,10 @@ impl SelectionHost for RenderDragHost<'_> {
 }
 
 #[allow(dead_code)]
-fn resolve_colors(cell: &term_wm_vt100::Cell, screen: &term_wm_vt100::Screen) -> (Option<TColor>, Option<TColor>) {
+fn resolve_colors(
+    cell: &term_wm_vt100::Cell,
+    screen: &term_wm_vt100::Screen,
+) -> (Option<TColor>, Option<TColor>) {
     let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
     let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
     if cell.bold() {
@@ -1058,7 +1061,10 @@ fn vt_color_to_ratatui(color: term_wm_vt100::Color) -> Option<TColor> {
     }
 }
 
-fn resolve_color(color: term_wm_vt100::Color, screen_default: term_wm_vt100::Color) -> Option<TColor> {
+fn resolve_color(
+    color: term_wm_vt100::Color,
+    screen_default: term_wm_vt100::Color,
+) -> Option<TColor> {
     match color {
         term_wm_vt100::Color::Default => match screen_default {
             // Default to Reset (No Color) which ratatui treats as "Inherit" or "Transparent" usually.
@@ -1098,7 +1104,9 @@ struct TestPane {
 impl TestPane {
     fn new(max_sb: usize) -> Self {
         Self {
-            parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(24, 80, max_sb))),
+            parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(
+                24, 80, max_sb,
+            ))),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -1111,7 +1119,9 @@ impl TestPane {
     fn with_kill_tracker(max_sb: usize) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let kill_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pane = Self {
-            parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(24, 80, max_sb))),
+            parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(
+                24, 80, max_sb,
+            ))),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,

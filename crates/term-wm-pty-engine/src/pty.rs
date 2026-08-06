@@ -2057,34 +2057,35 @@ mod tests {
         }
 
         // Count every written character across the whole scrollback + screen.
-        let count_chars = |parser: &mut term_wm_vt100::Parser| -> std::collections::BTreeMap<char, usize> {
-            let (rows, cols) = parser.screen().size();
-            parser.screen_mut().set_scrollback(usize::MAX);
-            let sb = parser.screen().scrollback();
-            let mut map = std::collections::BTreeMap::new();
-            for i in 0..sb {
-                parser.screen_mut().set_scrollback(sb - i);
-                for c in 0..cols {
-                    if let Some(cell) = parser.screen().cell(0, c) {
-                        for ch in cell.contents().chars() {
-                            *map.entry(ch).or_insert(0) += 1;
+        let count_chars =
+            |parser: &mut term_wm_vt100::Parser| -> std::collections::BTreeMap<char, usize> {
+                let (rows, cols) = parser.screen().size();
+                parser.screen_mut().set_scrollback(usize::MAX);
+                let sb = parser.screen().scrollback();
+                let mut map = std::collections::BTreeMap::new();
+                for i in 0..sb {
+                    parser.screen_mut().set_scrollback(sb - i);
+                    for c in 0..cols {
+                        if let Some(cell) = parser.screen().cell(0, c) {
+                            for ch in cell.contents().chars() {
+                                *map.entry(ch).or_insert(0) += 1;
+                            }
                         }
                     }
                 }
-            }
-            parser.screen_mut().set_scrollback(0);
-            for r in 0..rows {
-                for c in 0..cols {
-                    if let Some(cell) = parser.screen().cell(r, c) {
-                        for ch in cell.contents().chars() {
-                            *map.entry(ch).or_insert(0) += 1;
+                parser.screen_mut().set_scrollback(0);
+                for r in 0..rows {
+                    for c in 0..cols {
+                        if let Some(cell) = parser.screen().cell(r, c) {
+                            for ch in cell.contents().chars() {
+                                *map.entry(ch).or_insert(0) += 1;
+                            }
                         }
                     }
                 }
-            }
-            parser.screen_mut().set_scrollback(0);
-            map
-        };
+                parser.screen_mut().set_scrollback(0);
+                map
+            };
 
         let before = count_chars(&mut parser);
         parser.screen_mut().set_size(24, 40);
