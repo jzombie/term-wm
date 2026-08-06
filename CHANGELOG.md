@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.12-alpha] - 2026-08-05
+
+### Fixed
+
+- **Resolved UI corruption in ncurses apps (pico, htop) across SSH/container hops:** Applications broke when running through port-forwarded sessions into containers due to macOS/OrbStack injecting `LC_CTYPE=UTF-8`. Because UTF-8 is a character encoding rather than a valid POSIX locale string, `setlocale()` failed on the child process, causing ncurses to fall back incorrectly and corrupt screen geometry. Stripping invalid `LC_CTYPE` values allows the process to fall back to the container's native locale. Additionally, spawned PTY children now set `TERM=screen-256color` and `COLORTERM=truecolor` to ensure standard multiplexer compatibility and 24-bit color support for modern CLI tools.
+
 ## [0.9.11-alpha] - 2026-08-05
 
 ### Fixed
