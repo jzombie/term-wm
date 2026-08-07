@@ -203,6 +203,50 @@ impl ScrollHandle {
             inner.pending_offset_x = Some(clamped);
         }
     }
+
+    /// Keep the content row `selected_row` within the viewport, but ONLY when the
+    /// selection index or the viewport size changed since the last call. This
+    /// preserves manual (mouse) scrolls while still re-following after a terminal
+    /// resize (viewport_rows shrank and the selection fell out of view).
+    ///
+    /// Contract: `selected_row` is the row of the selected item in the SAME
+    /// content coordinate space as `offset_y` / `content_height`. Callers map
+    /// their own convention (e.g. ListComponent passes `selected + 1` because its
+    /// content height includes its self-drawn top border; CommandPalette passes
+    /// the 0-indexed display row). `viewport_rows` is the number of item rows
+    /// actually visible in that same space.
+    ///
+    /// IMPORTANT (ordering): the upper clamp uses the authoritative physical
+    /// `inner.max_offset_y()` (= content_height - inner.height). Pre-render callers
+    /// (CommandPaletteComponent, which runs this before its child
+    /// `list_scroll.render()` updates `inner.height`) MUST sync `scroll.height` to
+    /// the current physical viewport first so `max_offset_y()` evaluates correctly.
+    pub fn ensure_selection_visible(
+        &self,
+        selected_row: usize,
+        viewport_rows: usize,
+        last_selected: &mut usize,
+        last_viewport_rows: &mut usize,
+    ) {
+        if selected_row == *last_selected && viewport_rows == *last_viewport_rows {
+            return;
+        }
+        *last_selected = selected_row;
+        *last_viewport_rows = viewport_rows;
+        let mut inner = self.scroll.borrow_mut();
+        let current = inner.offset_y;
+        let new_offset = if selected_row < current {
+            selected_row
+        } else if selected_row >= current.saturating_add(viewport_rows) {
+            selected_row.saturating_sub(viewport_rows).saturating_add(1)
+        } else {
+            return; // already visible
+        };
+        let max = inner.max_offset_y();
+        let clamped = new_offset.min(max);
+        inner.offset_y = clamped;
+        inner.pending_offset_y = Some(clamped);
+    }
 }
 
 impl ComponentContext {
@@ -230,7 +274,7 @@ impl ComponentContext {
             hover_pos: None,
             keybindings: None,
             config: DEFAULT_CONFIG
-                .get_or_init(|| Arc::new(WmConfig::standalone()))
+                .get_or_init(|| Arc::new(WmConfig::default()))
                 .clone(),
             screen_area: None,
             active_hitbox: None,

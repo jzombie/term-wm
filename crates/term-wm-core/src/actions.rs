@@ -131,6 +131,34 @@ pub enum TermWmAction {
     /// Send the OpenCommandPalette key combo bytes to the focused window
     /// (payload-free for palette-layer keybinding).
     SendSuperKeyToFocusedWindow,
+
+    // --- Generic spatial / viewport actions (app-agnostic) ---
+    // Valid for any canvas, image, or plotting component. Applications bind
+    // keys to these via `WmConfig.keybindings`; the focused component's
+    // `update()` interprets them.
+
+    /// Zoom into the focused canvas/plot.
+    ZoomIn,
+    /// Zoom out of the focused canvas/plot.
+    ZoomOut,
+    /// Reset the zoom level of the focused canvas/plot.
+    ResetZoom,
+    /// Pan the focused canvas/plot left.
+    PanLeft,
+    /// Pan the focused canvas/plot right.
+    PanRight,
+    /// Pan the focused canvas/plot up.
+    PanUp,
+    /// Pan the focused canvas/plot down.
+    PanDown,
+    /// Cycle the focused component's view mode (e.g. summary <-> focused).
+    CycleViewMode,
+
+    // --- Application extensibility hatch ---
+    // Lets host applications map keys to their own application-state triggers
+    // without modifying the framework enum. The numeric code is
+    // application-defined; components interpret it in `update()`.
+    Custom(u16),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -197,7 +225,8 @@ impl TermWmAction {
             | TermWmAction::LinkClicked(_)
             | TermWmAction::ProcessExited
             | TermWmAction::ProfileChange(_)
-            | TermWmAction::RequestKeyboardFocus(_) => Category::System,
+            | TermWmAction::RequestKeyboardFocus(_)
+            | TermWmAction::Custom(_) => Category::System,
             TermWmAction::Callback(_)
             | TermWmAction::CycleNextWindow
             | TermWmAction::CyclePrevWindow
@@ -254,7 +283,15 @@ impl TermWmAction {
             | TermWmAction::MouseToBytes(_)
             | TermWmAction::ScrollView(_)
             | TermWmAction::ScrollToTop
-            | TermWmAction::ScrollToBottom => Category::Scrolling,
+            | TermWmAction::ScrollToBottom
+            | TermWmAction::ZoomIn
+            | TermWmAction::ZoomOut
+            | TermWmAction::ResetZoom
+            | TermWmAction::PanLeft
+            | TermWmAction::PanRight
+            | TermWmAction::PanUp
+            | TermWmAction::PanDown
+            | TermWmAction::CycleViewMode => Category::Scrolling,
 
             TermWmAction::ToggleSelection
             | TermWmAction::PasteClipboard
@@ -349,6 +386,15 @@ impl fmt::Display for TermWmAction {
             TermWmAction::Callback(_) => "Callback",
             TermWmAction::SendSuperKeyToWindow(_) => "Send SUPER key to window",
             TermWmAction::SendSuperKeyToFocusedWindow => "Send SUPER key to focused window",
+            TermWmAction::ZoomIn => "Zoom in",
+            TermWmAction::ZoomOut => "Zoom out",
+            TermWmAction::ResetZoom => "Reset zoom",
+            TermWmAction::PanLeft => "Pan left",
+            TermWmAction::PanRight => "Pan right",
+            TermWmAction::PanUp => "Pan up",
+            TermWmAction::PanDown => "Pan down",
+            TermWmAction::CycleViewMode => "Cycle view",
+            TermWmAction::Custom(_) => "Custom action",
         };
         write!(f, "{}", s)
     }

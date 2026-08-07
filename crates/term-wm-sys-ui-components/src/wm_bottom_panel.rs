@@ -686,4 +686,65 @@ mod tests {
         assert!(rendered.contains("2.0.0"));
         assert!(rendered.contains("my-host"));
     }
+
+    #[test]
+    fn render_overlays_does_not_clobber_command_palette_hints_in_monocle() {
+        use std::sync::Arc;
+
+        use term_wm_core::app_context::AppContext;
+        use term_wm_core::components::NoopComponent;
+        use term_wm_core::components::NoopOverlay;
+        use term_wm_core::config::AppBuilder;
+        use term_wm_core::window::ComponentTag;
+        use term_wm_console::draw_plan_renderer::render_overlays;
+
+        let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
+        let mut wm = AppBuilder::<WmBottomPanelComponent>::new()
+            .app_ctx(Arc::clone(&app_ctx))
+            .bottom_panel(WmBottomPanelComponent::new("test", "0.1.0", Some("test-host")))
+            .build::<NoopComponent, NoopOverlay>()
+            .expect("test build");
+
+        // Enter cramped monocle (default Auto + narrow viewport) and open the
+        // command palette, which sets input_mode = CommandPalette.
+        wm.update_monocle_mode(40);
+        assert!(wm.is_monocle_cramped(), "test must run in cramped monocle");
+        wm.open_command_palette_overlay(NoopOverlay);
+        assert!(wm.command_menu_visible());
+
+        let area = term_wm_core::Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 24,
+        };
+        wm.register_managed_layout(area);
+
+        let ratatui_area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 24,
+        };
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        render_overlays(&mut backend, &mut wm);
+
+        // The render pass must NOT have replaced the layout-phase (filtered)
+        // hints. With the palette open, Global actions like OpenCommandPalette
+        // must be absent and CommandPalette-layer actions present.
+        let hints = wm
+            .get_semantic_component(ComponentTag::BottomPanel)
+            .map(|p| p.keybinding_hints().to_vec())
+            .expect("bottom panel present");
+        let actions: Vec<_> = hints.iter().map(|(a, _)| a.clone()).collect();
+        assert!(
+            !actions.contains(&TermWmAction::OpenCommandPalette),
+            "render_overlays must not clobber palette-filtered hints, got {actions:?}"
+        );
+        assert!(
+            actions.contains(&TermWmAction::FocusNext),
+            "palette-filtered hints must include a CommandPalette-layer action, got {actions:?}"
+        );
+    }
 }

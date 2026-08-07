@@ -42,23 +42,26 @@ use crate::unified_event_source::UnifiedEvent;
 ///
 /// # Choosing a constructor
 ///
-/// | You want…                                          | Use                              |
-/// |----------------------------------------------------|----------------------------------|
-/// | Only built-in components, no annotation needed     | `TermWmApp::new(ctx)`            |
-/// | Built-in + your own component type (e.g., `MyComp`)| `TermWmApp::<MyComp>::new_custom(ctx)` |
+/// | You want…                                            | Use                              |
+/// |------------------------------------------------------|----------------------------------|
+/// | Standalone app with full system chrome (panels, menu)| `TermWmApp::<C>::new_custom(ctx)` |
+/// | Full control over an already-built `WindowManager`   | `TermWmApp::from_wm(wm, tx)`      |
 ///
-/// The `new()` / `bare()` / `embedded()` convenience methods exist only
-/// on `TermWmApp<NoopComponent>` so Rust can infer `C` without turbofish.
-/// When `C` is your own type you must call `new_custom()` / `bare_custom()`
-/// / `embedded_custom()` instead — they are defined on the generic block
-/// and work for any `C: Component<TermWmAction>`.
+/// `new_custom()` is defined on the generic block and works for any
+/// `C: Component<TermWmAction>`. Because `C` does not appear in its
+/// arguments, callers must provide a type annotation or turbofish —
+/// e.g. `TermWmApp::<NoopComponent>::new_custom(ctx)` when only built-in
+/// components are used. `from_wm()` builds the app around a pre-configured
+/// `WindowManager`; the bundled `term-wm` binary uses this path.
 ///
-/// # Example (built-in only)
+/// # Example (built-in components only)
 /// ```ignore
 /// use term_wm::prelude::*;
+/// use term_wm::components::NoopComponent;
 ///
 /// fn main() -> io::Result<()> {
-///     let mut app = TermWmApp::new(AppContext::new("myapp", "1.0"));
+///     let mut app =
+///         TermWmApp::<NoopComponent>::new_custom(AppContext::new("myapp", "1.0"));
 ///     let key = app.open_window(AppRootComponent::Core(core_component));
 ///     app.run()
 /// }
@@ -98,10 +101,19 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// Create a new standalone app with all system chrome (panels, menu).
     ///
     /// This is the generic constructor — works for any `C: Component<TermWmAction>`.
-    /// When `C = NoopComponent` you can use `TermWmApp::new(ctx)` instead
-    /// (it forwards here) to avoid a type annotation.
+    /// Provide a type annotation or turbofish for `C` (e.g.
+    /// `TermWmApp::<NoopComponent>::new_custom(ctx)` for built-ins only).
     #[cfg(feature = "sys-ui")]
     pub fn new_custom(app_ctx: AppContext) -> Self {
+        Self::new_with_config(app_ctx, WmConfig::default())
+    }
+
+    /// Create a standalone app with system chrome and a custom `WmConfig`
+    /// (e.g. custom keybindings). The chrome wiring (top/bottom panel, FAB,
+    /// notification area, supported menu actions) is identical to
+    /// [`Self::new_custom`]; only the configuration differs.
+    #[cfg(feature = "sys-ui")]
+    pub fn new_with_config(app_ctx: AppContext, config: WmConfig) -> Self {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
         let hostname = app_ctx.hostname.clone();
@@ -111,7 +123,8 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             WmTopPanelComponent,
         };
 
-        let wm = AppBuilder::<LayerComponent>::bare()
+        let wm = AppBuilder::<LayerComponent>::new()
+            .config(config)
             .app_ctx(Arc::new(app_ctx))
             .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
                 &app_name,
@@ -135,34 +148,6 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         wm.set_notification_component(LayerComponent::NotificationArea(
             WmNotificationAreaComponent::new(),
         ));
-        let (tx, _) = bounded(256);
-        Self::from_wm(wm, tx)
-    }
-
-    /// Create a bare standalone app without system chrome.
-    ///
-    /// Generic constructor — use `TermWmApp::bare(ctx)` instead when
-    /// `C = NoopComponent` to avoid a type annotation.
-    pub fn bare_custom(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::<LayerComponent>::bare()
-            .app_ctx(Arc::new(app_ctx))
-            .build()
-            .expect("bare standalone build");
-        let (tx, _) = bounded(256);
-        Self::from_wm(wm, tx)
-    }
-
-    /// Create an embedded app without command menu, suitable for
-    /// embedding in an existing Ratatui application.
-    ///
-    /// Generic constructor — use `TermWmApp::embedded(ctx)` instead when
-    /// `C = NoopComponent` to avoid a type annotation.
-    pub fn embedded_custom(app_ctx: AppContext) -> Self {
-        let wm = AppBuilder::<LayerComponent>::bare()
-            .config(WmConfig::minimal())
-            .app_ctx(Arc::new(app_ctx))
-            .build()
-            .expect("embedded build");
         let (tx, _) = bounded(256);
         Self::from_wm(wm, tx)
     }
@@ -391,33 +376,6 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             &mut self.engine,
             &mut self.draw_renderer,
         );
-    }
-}
-
-/// Facade constructors for `C = NoopComponent` — enables type inference
-/// for `TermWmApp::new(ctx)` without annotations.
-impl TermWmApp<NoopComponent> {
-    /// Create a new standalone app with all system chrome (panels, menu).
-    #[cfg(feature = "sys-ui")]
-    pub fn new(app_ctx: AppContext) -> Self {
-        Self::new_custom(app_ctx)
-    }
-
-    /// Create a bare standalone app without system chrome.
-    #[cfg(not(feature = "sys-ui"))]
-    pub fn new(app_ctx: AppContext) -> Self {
-        Self::bare(app_ctx)
-    }
-
-    /// Create a bare standalone app without system chrome.
-    pub fn bare(app_ctx: AppContext) -> Self {
-        Self::bare_custom(app_ctx)
-    }
-
-    /// Create an embedded app without command menu, suitable for
-    /// embedding in an existing Ratatui application.
-    pub fn embedded(app_ctx: AppContext) -> Self {
-        Self::embedded_custom(app_ctx)
     }
 }
 

@@ -51,7 +51,7 @@ fn setup_wm_with_palette(
     palette_bounds: Option<LayoutRect>,
 ) -> WindowManager<NoopComponent, NoopWmComponent, TestOverlay> {
     let mut wm = WindowManager::<NoopComponent, NoopWmComponent, TestOverlay>::with_config(
-        WmConfig::standalone(),
+        WmConfig::default(),
         Arc::new(AppContext::new("test", "0.0.0")),
         None,
         LayerManager::new(),

@@ -82,7 +82,7 @@ proptest = "1.11.0"
 pulldown-cmark = "0.13.0"
 ratatui = "0.30.0"
 resvg = "0.48.1"
-serial_test = "3.5.0"
+serial_test = "4.0.1"
 shell-words = "1.1.1"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
@@ -111,7 +111,7 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 unicode-width = "0.2.2"
 vte = "0.15.0"
 webbrowser = "1.2.1"
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Networking_WinSock",
     "Win32_Security",

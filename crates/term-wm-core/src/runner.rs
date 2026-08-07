@@ -933,7 +933,7 @@ mod tests {
         assert!(auto_layout_for_windows(&empty).is_none());
 
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -959,7 +959,7 @@ mod tests {
         }
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -993,7 +993,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1056,7 +1056,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1120,7 +1120,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1175,7 +1175,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1314,7 +1314,7 @@ mod tests {
 
     fn make_keys(n: usize) -> Vec<WindowKey> {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1371,7 +1371,7 @@ mod tests {
     #[test]
     fn auto_layout_two_windows_creates_split() {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1393,7 +1393,7 @@ mod tests {
     #[test]
     fn auto_layout_three_windows_all_present() {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1412,7 +1412,7 @@ mod tests {
     #[test]
     fn auto_layout_multiple_windows_uses_all() {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1492,7 +1492,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1521,7 +1521,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1551,7 +1551,7 @@ mod tests {
             }
         }
         let wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1574,7 +1574,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1604,7 +1604,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1637,7 +1637,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1680,7 +1680,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1708,7 +1708,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1739,7 +1739,7 @@ mod tests {
             }
         }
         let wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1773,7 +1773,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1812,7 +1812,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),

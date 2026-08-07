@@ -15,6 +15,8 @@ pub struct ListComponent {
     items: Vec<String>,
     selected: usize,
     title: String,
+    last_selected: usize,
+    last_viewport_rows: usize,
 }
 
 impl Component<TermWmAction> for ListComponent {
@@ -51,9 +53,16 @@ impl Component<TermWmAction> for ListComponent {
         // reach the last item while the list is rendered inside the border.
         if let Some(handle) = ctx.scroll_handle() {
             handle.set_content_size(max_width + 2, total_height + 2);
-            // Ensure selection is visible within our logic
-            // Map item index `selected` to virtual coordinate `selected + 1` (skip top border).
-            handle.ensure_vertical_visible(self.selected + 1, self.selected + 2);
+            // Keep the selected item visible while preserving manual scroll.
+            // `selected + 1`: item index -> content row, because content_height
+            // includes the self-drawn top border (see the skip_n mapping below).
+            let viewport_rows = inner.height as usize; // block.inner rows actually visible
+            handle.ensure_selection_visible(
+                self.selected + 1,
+                viewport_rows,
+                &mut self.last_selected,
+                &mut self.last_viewport_rows,
+            );
         }
 
         let vp = ctx.viewport();
@@ -150,12 +159,16 @@ impl ListComponent {
             items: Vec::new(),
             selected: 0,
             title: title.into(),
+            last_selected: 0,
+            last_viewport_rows: 0,
         }
     }
 
     pub fn set_items(&mut self, items: Vec<String>) {
         self.items = items;
         self.selected = 0;
+        self.last_selected = 0;
+        self.last_viewport_rows = 0;
     }
 
     pub fn add_item(&mut self, item: String) {
@@ -191,8 +204,11 @@ impl ListComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::rc::Rc;
     use term_wm_core::actions::EventResult;
+    use term_wm_core::component_context::{ScrollBounds, ScrollHandle};
     use term_wm_core::components::Component;
     use term_wm_core::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
 
@@ -272,6 +288,157 @@ mod tests {
         assert_eq!(list.selected(), 1);
         list.set_items(vec!["x".into()]);
         assert_eq!(list.selected(), 0);
+    }
+
+    fn scroll_ctx() -> (ComponentContext, ScrollHandle) {
+        let handle = ScrollHandle {
+            scroll: Rc::new(RefCell::new(ScrollBounds::default())),
+        };
+        let info = handle.info();
+        let ctx = ComponentContext::new(true).with_viewport(info, Some(handle.clone()));
+        (ctx, handle)
+    }
+
+    fn render_list_with_scroll(
+        list: &mut ListComponent,
+        area: LayoutRect,
+        ctx: &ComponentContext,
+    ) {
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::prelude::Rect {
+                x: area.x as u16,
+                y: area.y as u16,
+                width: area.width,
+                height: area.height,
+            },
+        );
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        list.render(&mut backend, area, ctx, &mut registry);
+    }
+
+    #[test]
+    fn scroll_follow_starts_at_offset_zero() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..20).map(|i| format!("{}", i)).collect());
+        let (ctx, handle) = scroll_ctx();
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        assert_eq!(handle.scroll.borrow().offset_y, 0);
+    }
+
+    #[test]
+    fn scroll_follow_advances_when_selection_moves_past_viewport() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..20).map(|i| format!("{}", i)).collect());
+        let (ctx, handle) = scroll_ctx();
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+
+        // Move selection below the visible area: viewport_rows = 8 (10 - 2 borders).
+        for _ in 0..12 {
+            dispatch(&mut list, &key_event(KeyCode::Down), &ctx);
+        }
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        assert!(
+            handle.scroll.borrow().offset_y > 0,
+            "offset should advance to keep selection visible"
+        );
+        // Selected row (selected + 1) must be within [offset, offset + viewport_rows).
+        let offset = handle.scroll.borrow().offset_y;
+        let selected_row = list.selected() + 1;
+        assert!(
+            selected_row >= offset && selected_row < offset + 8,
+            "selected row {} must be visible in [{}..{})",
+            selected_row,
+            offset,
+            offset + 8
+        );
+    }
+
+    #[test]
+    fn scroll_follow_goes_back_when_selection_moves_up() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..20).map(|i| format!("{}", i)).collect());
+        let (ctx, handle) = scroll_ctx();
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+
+        for _ in 0..18 {
+            dispatch(&mut list, &key_event(KeyCode::Down), &ctx);
+        }
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        assert!(handle.scroll.borrow().offset_y > 0);
+
+        for _ in 0..18 {
+            dispatch(&mut list, &key_event(KeyCode::Up), &ctx);
+        }
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        // Item 0 is at content row 1 (row 0 is the self-drawn top border), so the
+        // scroll-back target is offset 0 or 1.
+        assert!(
+            handle.scroll.borrow().offset_y <= 1,
+            "offset should reset to top when selection moves to top (got {})",
+            handle.scroll.borrow().offset_y
+        );
+    }
+
+    #[test]
+    fn scroll_follow_does_not_override_manual_scroll() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..20).map(|i| format!("{}", i)).collect());
+        let (ctx, handle) = scroll_ctx();
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+
+        // Manual scroll away (mouse), selection unchanged.
+        handle.scroll.borrow_mut().offset_y = 6;
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        assert_eq!(
+            handle.scroll.borrow().offset_y, 6,
+            "manual scroll should be preserved when selection unchanged"
+        );
+    }
+
+    #[test]
+    fn scroll_follow_reengages_after_manual_scroll_when_selection_changes() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..20).map(|i| format!("{}", i)).collect());
+        let (ctx, handle) = scroll_ctx();
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+
+        handle.scroll.borrow_mut().offset_y = 6;
+        dispatch(&mut list, &key_event(KeyCode::Down), &ctx);
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        let offset = handle.scroll.borrow().offset_y;
+        assert!(
+            offset > 0,
+            "auto-scroll should engage again after selection changes"
+        );
+    }
+
+    #[test]
+    fn scroll_follow_reruns_on_viewport_shrink() {
+        let mut list = ListComponent::new("t");
+        list.set_items((0..20).map(|i| format!("{}", i)).collect());
+        let (ctx, handle) = scroll_ctx();
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+
+        for _ in 0..15 {
+            dispatch(&mut list, &key_event(KeyCode::Down), &ctx);
+        }
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+
+        // Shrink the viewport: same selection, smaller viewport_rows -> re-follow.
+        let before = handle.scroll.borrow().offset_y;
+        render_list_with_scroll(&mut list, LayoutRect { x: 0, y: 0, width: 40, height: 4 }, &ctx);
+        let after = handle.scroll.borrow().offset_y;
+        assert!(
+            after >= before,
+            "offset should not move backward on viewport shrink with selection unchanged"
+        );
     }
 
     #[test]

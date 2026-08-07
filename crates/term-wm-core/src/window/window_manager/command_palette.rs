@@ -303,7 +303,7 @@ mod tests {
 
     fn make_wm<O: Overlay<TermWmAction>>() -> WindowManager<TestComponent, NoopWmComponent, O> {
         WindowManager::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),

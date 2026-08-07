@@ -273,50 +273,44 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         // Height is determined by the component's consume_area; no-op here
     }
 
+    /// Compute the keybinding hints to display in the bottom panel for the
+    /// current input mode.
+    ///
+    /// Honors `hint_visibility` (non-`Always` → empty) and
+    /// `wm_command_menu_enabled`. When the command menu is enabled, hints are
+    /// filtered to the active `ActionLayer` (CommandPalette / Help / Global)
+    /// derived from `input_mode`, so opening the Command Palette shows only
+    /// palette-layer shortcuts.
+    pub fn bottom_panel_hints(&self) -> Vec<(TermWmAction, Vec<String>)> {
+        match self.hint_visibility {
+            crate::wm_config::HintVisibility::Always => {
+                if self.config.wm_command_menu_enabled {
+                    let layer = match self.input_mode {
+                        crate::actions::WmInputMode::CommandPalette => {
+                            ActionLayer::CommandPalette
+                        }
+                        crate::actions::WmInputMode::Help => ActionLayer::Help,
+                        _ => ActionLayer::Global,
+                    };
+                    self.keybindings()
+                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, layer)
+                } else {
+                    self.keybindings().bottom_hints(crate::constants::MAX_BOTTOM_HINTS)
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn register_managed_layout(&mut self, area: Rect) {
         self.last_frame_area = area;
         // Show CommandPalette-filtered hints when the command palette is open,
         // Global-only hints when closed.
-        match self.hint_visibility {
-            crate::wm_config::HintVisibility::Always => {
-                let layer = match self.input_mode {
-                    crate::actions::WmInputMode::CommandPalette => ActionLayer::CommandPalette,
-                    crate::actions::WmInputMode::Help => ActionLayer::Help,
-                    _ => ActionLayer::Global,
-                };
-                if self.config.wm_command_menu_enabled {
-                    let hints = self
-                        .keybindings()
-                        .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, layer);
-                    if let Some(p) = self
-                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
-                    {
-                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
-                            hints,
-                        ));
-                    }
-                } else {
-                    let hints = self
-                        .keybindings()
-                        .bottom_hints(crate::constants::MAX_BOTTOM_HINTS);
-                    if let Some(p) = self
-                        .get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
-                    {
-                        p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
-                            hints,
-                        ));
-                    }
-                }
-            }
-            _ => {
-                if let Some(p) =
-                    self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
-                {
-                    p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
-                        Vec::new(),
-                    ));
-                }
-            }
+        let hints = self.bottom_panel_hints();
+        if let Some(p) =
+            self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
+        {
+            p.process_action(&crate::components::ComponentAction::SetKeybindingHints(hints));
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).
@@ -930,7 +924,7 @@ mod tests {
 
     fn make_wm() -> WindowManager<NoopComponent> {
         let mut wm = WindowManager::<NoopComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -945,11 +939,66 @@ mod tests {
         wm
     }
 
+    fn actions_in_hints(hints: &[(TermWmAction, Vec<String>)]) -> Vec<TermWmAction> {
+        hints.iter().map(|(action, _)| action.clone()).collect()
+    }
+
+    #[test]
+    fn bottom_panel_hints_global_by_default() {
+        let wm = make_wm();
+        let hints = wm.bottom_panel_hints();
+        let actions = actions_in_hints(&hints);
+        assert!(
+            actions.contains(&TermWmAction::OpenCommandPalette),
+            "default (passthrough) mode should include the Global OpenCommandPalette action, got {actions:?}"
+        );
+        assert!(!hints.is_empty());
+    }
+
+    #[test]
+    fn bottom_panel_hints_command_palette_layer_when_palette_open() {
+        let mut wm = make_wm();
+        wm.open_command_palette_overlay(crate::components::NoopOverlay);
+        assert_eq!(wm.input_mode, crate::actions::WmInputMode::CommandPalette);
+        let hints = wm.bottom_panel_hints();
+        let actions = actions_in_hints(&hints);
+        assert!(
+            !actions.contains(&TermWmAction::OpenCommandPalette),
+            "palette mode should exclude the Global OpenCommandPalette action, got {actions:?}"
+        );
+        assert!(
+            actions.contains(&TermWmAction::FocusNext),
+            "palette mode should include a CommandPalette-layer action, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn bottom_panel_hints_empty_when_hint_visibility_not_always() {
+        let mut wm = make_wm();
+        wm.set_hint_visibility(crate::wm_config::HintVisibility::OnDemand);
+        assert!(wm.bottom_panel_hints().is_empty());
+    }
+
+    #[test]
+    fn bottom_panel_hints_unfiltered_when_command_menu_disabled() {
+        let mut wm = make_wm();
+        wm.config.wm_command_menu_enabled = false;
+        wm.open_command_palette_overlay(crate::components::NoopOverlay);
+        let hints = wm.bottom_panel_hints();
+        let actions = actions_in_hints(&hints);
+        assert!(
+            actions.contains(&TermWmAction::OpenCommandPalette),
+            "with the command menu disabled, hints should be unfiltered (include Global actions), got {actions:?}"
+        );
+    }
+
     #[test]
     fn startup_two_windows_stack_vertically_on_tall_area() {
         // Unseeded WM: managed_area is 0x0 until the first frame registers it.
-        let mut config = WmConfig::standalone();
-        config.chrome_enabled = false;
+        let config = WmConfig {
+            chrome_enabled: false,
+            ..Default::default()
+        };
         let mut wm = WindowManager::<NoopComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -1004,8 +1053,10 @@ mod tests {
         // Regression: on a wide 120x24 viewport, the third window lands in a
         // half-screen column (60x24). It must stack there rather than split
         // side-by-side into narrow full-height strips.
-        let mut config = WmConfig::standalone();
-        config.chrome_enabled = false;
+        let config = WmConfig {
+            chrome_enabled: false,
+            ..Default::default()
+        };
         let mut wm = WindowManager::<NoopComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -1390,7 +1441,7 @@ mod window_mode_tests {
 
     fn make_wm() -> WindowManager<NoopComponent> {
         let mut wm = WindowManager::<NoopComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),

@@ -106,7 +106,7 @@ impl App {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
 
-        let wm = AppBuilder::<LayerComponent>::bare()
+        let wm = AppBuilder::<LayerComponent>::new()
             .app_ctx(Arc::clone(&app_ctx))
             .top_panel(LayerComponent::TopPanel(
                 term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
