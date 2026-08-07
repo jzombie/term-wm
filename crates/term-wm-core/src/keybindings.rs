@@ -113,16 +113,6 @@ impl KeyBindings {
         Self::default()
     }
 
-    /// Minimal defaults: excludes Windows and Menu category actions.
-    pub fn minimal() -> Self {
-        let mut kb = Self::default();
-        kb.map.retain(|action, _| {
-            let cat = action.category();
-            cat != Category::Windows && cat != Category::Menu
-        });
-        kb
-    }
-
     pub fn new() -> Self {
         Self {
             map: BTreeMap::new(),

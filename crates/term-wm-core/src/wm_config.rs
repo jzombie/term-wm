@@ -59,8 +59,8 @@ pub fn validate_keybindings(kb: &KeyBindings) -> KeyBindings {
 
 /// Configuration for a `WindowManager`.
 ///
-/// Each feature flag is independently toggleable. Preset constructors
-/// (`standalone`, `minimal`) provide sensible defaults for common use cases.
+/// Each feature flag is independently toggleable. The `standalone` preset
+/// provides sensible defaults for the common standalone use case.
 ///
 /// Fields marked "initial" set the starting value for a runtime-toggleable
 /// feature — changes made at runtime apply immediately.
@@ -137,30 +137,6 @@ impl WmConfig {
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::from_millis(500),
             drag_snap_timeout: Some(Duration::from_millis(2000)),
-            theme: NOIR,
-        }
-    }
-
-    /// Minimal preset: no chrome, no floating windows, no command menu.
-    /// Bottom keybinding hints are rendered by the panel in inactive mode.
-    pub fn minimal() -> Self {
-        Self {
-            chrome_enabled: false,
-            floating_windows_enabled: false,
-            panels_enabled: false,
-            wm_command_menu_enabled: false,
-            super_passthrough_window: super_passthrough_window_default(),
-            floating_resize_offscreen: false,
-            shadow_enabled: false,
-            clipboard_enabled: true,
-            window_selection_enabled: true,
-            mouse_capture_enabled: true,
-            keyboard_focus_enabled: true,
-            mouse_focus_click_enabled: true,
-            keybindings: validate_keybindings(&KeyBindings::minimal()),
-            hint_visibility: HintVisibility::Always,
-            menu_outline_timeout: Duration::ZERO,
-            drag_snap_timeout: None,
             theme: NOIR,
         }
     }

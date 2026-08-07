@@ -144,7 +144,7 @@ fn render_panic_shows_in_debug_log() {
     );
     term_wm_sys_ui_components::install_panic_hook();
 
-    let mut wm = AppBuilder::<NoopWmComponent>::bare()
+    let mut wm = AppBuilder::<NoopWmComponent>::new()
         .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
         .build::<NoopComponent, NoopOverlay>()
         .expect("test build");
@@ -235,9 +235,9 @@ impl EventSource for WakeupDriver {
     }
 }
 
-/// Helper: build a bare WindowManager with one window.
-fn build_bare_wm() -> WindowManager<NoopComponent, NoopWmComponent, NoopOverlay> {
-    let mut wm = AppBuilder::<NoopWmComponent>::bare()
+/// Helper: build a plain WindowManager with one window.
+fn build_test_wm() -> WindowManager<NoopComponent, NoopWmComponent, NoopOverlay> {
+    let mut wm = AppBuilder::<NoopWmComponent>::new()
         .app_ctx(Arc::new(term_wm::app_context::AppContext::new(
             "test", "0.0.0",
         )))
@@ -255,7 +255,7 @@ fn build_bare_wm() -> WindowManager<NoopComponent, NoopWmComponent, NoopOverlay>
 #[test]
 fn background_dirty_bit_triggers_render_without_input() {
     let mut app = SparseApp {
-        wm: build_bare_wm(),
+        wm: build_test_wm(),
         draws: 0,
         window_key: None,
         should_quit: false,
@@ -335,7 +335,7 @@ fn frame_pacer_deterministic_timing() {
 #[test]
 fn skipped_frame_preserves_dirty_state() {
     let mut app = SparseApp {
-        wm: build_bare_wm(),
+        wm: build_test_wm(),
         draws: 0,
         window_key: None,
         should_quit: false,

@@ -1939,7 +1939,7 @@ mod tests {
             crate::scroll_view::ScrollViewComponent<TerminalComponent>,
             NoopWmComponent,
             NoopOverlay,
-        > = AppBuilder::<NoopWmComponent>::bare()
+        > = AppBuilder::<NoopWmComponent>::new()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
@@ -2043,7 +2043,7 @@ mod tests {
             crate::scroll_view::ScrollViewComponent<TerminalComponent>,
             NoopWmComponent,
             NoopOverlay,
-        > = AppBuilder::<NoopWmComponent>::bare()
+        > = AppBuilder::<NoopWmComponent>::new()
             .app_ctx(Arc::new(AppContext::new("test", "0.0.0")))
             .build()
             .expect("test build");
