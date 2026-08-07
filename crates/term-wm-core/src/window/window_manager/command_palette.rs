@@ -181,12 +181,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     disabled: false,
                 }));
 
-                // Close window
+                // Close window (disabled for non-closable windows)
                 items.push(MenuDisplayItem::Item(MenuItem {
                     label: format!("Close {}", title).into(),
                     icon: Some("X"),
                     action: crate::actions::TermWmAction::CloseWindow(focused),
-                    disabled: false,
+                    disabled: !self.window(focused).is_some_and(|w| w.closable()),
                 }));
 
                 // Maximize / Restore

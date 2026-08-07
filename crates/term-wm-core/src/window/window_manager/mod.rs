@@ -453,6 +453,21 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
+    /// Mark a window as closable (default) or not. Non-closable windows are
+    /// ignored by `close_window` (all close paths, including PTY-child exit),
+    /// their chrome ✕ button is hidden, and the palette "Close" entry is
+    /// disabled.
+    pub fn set_closable(&mut self, key: WindowKey, closable: bool) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.set_closable(closable);
+        }
+    }
+
+    /// Whether the window may be closed. Unknown keys return `false`.
+    pub fn is_closable(&self, key: WindowKey) -> bool {
+        self.window(key).is_some_and(|w| w.closable())
+    }
+
     /// Access the Reaper for async child-process teardown.
     pub fn reaper(&self) -> &Reaper {
         &self.reaper
@@ -2637,11 +2652,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             return Vec::new();
         }
         let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
-        let mut btns = vec![WmButton {
-            action: TermWmAction::CloseWindow(focused),
-            label: "Close Window",
-            symbol: "X",
-        }];
+        let mut btns = Vec::new();
+        if self.window(focused).is_some_and(|w| w.closable()) {
+            btns.push(WmButton {
+                action: TermWmAction::CloseWindow(focused),
+                label: "Close Window",
+                symbol: "X",
+            });
+        }
         if !self.is_monocle() {
             btns.push(WmButton {
                 action: TermWmAction::MaximizeWindow(focused),
@@ -5951,6 +5969,107 @@ mod tests {
             Some(WindowState::Unmapped),
             "state must be Unmapped after close with Unmap policy"
         );
+    }
+
+    #[test]
+    fn close_window_ignored_for_non_closable_window() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.set_closable(key, false);
+        wm.transition_window(key, WindowState::Mapped);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.close_window(key);
+        assert!(
+            wm.has_window(key),
+            "non-closable window must survive close_window"
+        );
+        assert_eq!(
+            wm.window_state(key),
+            Some(WindowState::Mapped),
+            "non-closable window must stay mapped"
+        );
+    }
+
+    #[test]
+    fn set_closable_toggles() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        assert!(wm.is_closable(key), "windows are closable by default");
+        wm.set_closable(key, false);
+        assert!(!wm.is_closable(key), "set_closable(false) marks non-closable");
+        wm.set_closable(key, true);
+        assert!(wm.is_closable(key), "set_closable(true) re-enables closing");
+    }
+
+    #[test]
+    fn window_management_buttons_hides_close_for_non_closable() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+
+        wm.set_closable(key, false);
+        let buttons = wm.window_management_buttons();
+        assert!(
+            !buttons
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == key)),
+            "non-closable window must not expose a Close button"
+        );
+    }
+
+    #[test]
+    fn wm_menu_items_disables_close_for_non_closable() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+        wm.set_window_title(key, "pinned");
+        wm.set_closable(key, false);
+
+        let items = wm.wm_menu_items();
+        let close_entry = items.iter().find_map(|entry| match entry {
+            MenuDisplayItem::Item(MenuItem { action, .. }) => match action {
+                TermWmAction::CloseWindow(k) if *k == key => Some(entry),
+                _ => None,
+            },
+            MenuDisplayItem::Separator => None,
+        });
+        let MenuDisplayItem::Item(MenuItem { disabled, .. }) = close_entry.expect("Close entry") else {
+            unreachable!("Close entry is an Item");
+        };
+        assert!(*disabled, "Close menu entry must be disabled for non-closable window");
     }
 
     // ── shade_window / unshade_window ─────────────────────────────────
