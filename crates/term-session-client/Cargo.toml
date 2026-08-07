@@ -29,10 +29,10 @@ term-session-muxio-service-definitions = { workspace = true }
 term-wm-crossterm-adapter = { workspace = true }
 term-wm-events = { workspace = true }
 term-wm-pty-engine = { workspace = true }
+term-wm-vt100 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 unicode-width.workspace = true
-term-wm-vt100 = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
