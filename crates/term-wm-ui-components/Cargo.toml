@@ -27,6 +27,7 @@ term-wm-render = { workspace = true }
 term-wm-vt100 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+unicode-width = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]

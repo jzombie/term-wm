@@ -3295,6 +3295,7 @@ dependencies = [
  "term-wm-vt100",
  "thiserror 2.0.19",
  "tracing",
+ "unicode-width",
  "webbrowser",
 ]
 
