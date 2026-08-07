@@ -62,6 +62,11 @@ impl fmt::Display for KeyCombo {
 
 use std::collections::BTreeMap;
 
+/// Maps [`TermWmAction`]s to the key combinations that trigger them.
+///
+/// [`KeyBindings::default`] ships the full built-in binding set. Use
+/// [`KeyBindings::new`] for an empty map that you populate via
+/// [`KeyBindings::add`].
 #[derive(Debug, Clone)]
 pub struct KeyBindings {
     map: BTreeMap<TermWmAction, Vec<KeyCombo>>,
@@ -108,11 +113,8 @@ impl Default for KeyBindings {
 }
 
 impl KeyBindings {
-    /// Full standalone defaults — same as `Default`.
-    pub fn standalone() -> Self {
-        Self::default()
-    }
-
+    /// Start with an empty binding map (no shortcuts bound). Populate it with
+    /// [`KeyBindings::add`].
     pub fn new() -> Self {
         Self {
             map: BTreeMap::new(),

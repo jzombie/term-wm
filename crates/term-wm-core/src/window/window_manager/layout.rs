@@ -930,7 +930,7 @@ mod tests {
 
     fn make_wm() -> WindowManager<NoopComponent> {
         let mut wm = WindowManager::<NoopComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -948,8 +948,10 @@ mod tests {
     #[test]
     fn startup_two_windows_stack_vertically_on_tall_area() {
         // Unseeded WM: managed_area is 0x0 until the first frame registers it.
-        let mut config = WmConfig::standalone();
-        config.chrome_enabled = false;
+        let config = WmConfig {
+            chrome_enabled: false,
+            ..Default::default()
+        };
         let mut wm = WindowManager::<NoopComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -1004,8 +1006,10 @@ mod tests {
         // Regression: on a wide 120x24 viewport, the third window lands in a
         // half-screen column (60x24). It must stack there rather than split
         // side-by-side into narrow full-height strips.
-        let mut config = WmConfig::standalone();
-        config.chrome_enabled = false;
+        let config = WmConfig {
+            chrome_enabled: false,
+            ..Default::default()
+        };
         let mut wm = WindowManager::<NoopComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -1390,7 +1394,7 @@ mod window_mode_tests {
 
     fn make_wm() -> WindowManager<NoopComponent> {
         let mut wm = WindowManager::<NoopComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),

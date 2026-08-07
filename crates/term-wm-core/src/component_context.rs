@@ -230,7 +230,7 @@ impl ComponentContext {
             hover_pos: None,
             keybindings: None,
             config: DEFAULT_CONFIG
-                .get_or_init(|| Arc::new(WmConfig::standalone()))
+                .get_or_init(|| Arc::new(WmConfig::default()))
                 .clone(),
             screen_area: None,
             active_hitbox: None,

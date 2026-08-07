@@ -59,8 +59,9 @@ pub fn validate_keybindings(kb: &KeyBindings) -> KeyBindings {
 
 /// Configuration for a `WindowManager`.
 ///
-/// Each feature flag is independently toggleable. The `standalone` preset
-/// provides sensible defaults for the common standalone use case.
+/// Each feature flag is independently toggleable. `WmConfig::default()` returns
+/// the full-featured configuration that `AppBuilder::new()` starts from: chrome,
+/// floating windows, panels, and the WM command menu are all enabled.
 ///
 /// Fields marked "initial" set the starting value for a runtime-toggleable
 /// feature — changes made at runtime apply immediately.
@@ -110,16 +111,10 @@ pub struct WmConfig {
 }
 
 impl Default for WmConfig {
+    /// Return the full-featured default configuration: chrome, floating
+    /// windows, panels, and the WM command menu are all enabled, along with
+    /// clipboard, selection, mouse capture, and keyboard/mouse focus.
     fn default() -> Self {
-        Self::standalone()
-    }
-}
-
-impl WmConfig {
-    /// Full standalone window manager preset.
-    ///
-    /// Chrome, floating windows, panel, and WM command menu are all enabled.
-    pub fn standalone() -> Self {
         Self {
             chrome_enabled: true,
             floating_windows_enabled: true,
@@ -133,14 +128,16 @@ impl WmConfig {
             mouse_capture_enabled: true,
             keyboard_focus_enabled: true,
             mouse_focus_click_enabled: true,
-            keybindings: validate_keybindings(&KeyBindings::standalone()),
+            keybindings: validate_keybindings(&KeyBindings::default()),
             hint_visibility: HintVisibility::Always,
             menu_outline_timeout: Duration::from_millis(500),
             drag_snap_timeout: Some(Duration::from_millis(2000)),
             theme: NOIR,
         }
     }
+}
 
+impl WmConfig {
     pub fn panel_active(&self) -> bool {
         self.panels_enabled
     }

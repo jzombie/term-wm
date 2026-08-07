@@ -28,9 +28,10 @@ impl std::error::Error for ConfigError {}
 
 /// Monomorphic builder for [`WindowManager`].
 ///
-/// Configure the compositor's internal features. Inject system UI via
-/// `.top_panel()` / `.bottom_panel()` / `.fab()` and `.supported_menu_actions()`,
-/// or build a blank canvas with no chrome.
+/// Start with [`AppBuilder::new`], inject system UI via `.top_panel()` /
+/// `.bottom_panel()` / `.fab()` and `.supported_menu_actions()`, then
+/// `.build()`. The builder begins from `WmConfig::default()`; tweak with
+/// `.config()`, `.theme()`, `.keybindings()`, and `.hint_visibility()`.
 pub struct AppBuilder<L: WmComponent> {
     config: WmConfig,
     app_ctx: Option<Arc<AppContext>>,
@@ -47,7 +48,9 @@ impl<L: WmComponent> Default for AppBuilder<L> {
 }
 
 impl<L: WmComponent> AppBuilder<L> {
-    /// Blank canvas — full standalone config, no chrome injected.
+    /// Blank canvas — starts from `WmConfig::default()` (the full-featured
+    /// standalone config) with no chrome injected. Use `.config()` to swap in a
+    /// different configuration.
     pub fn new() -> Self {
         Self {
             config: WmConfig::default(),
