@@ -13,7 +13,7 @@ use term_wm::app_context::AppContext;
 use term_wm::config::AppBuilder;
 use term_wm::io::{EventSource, RenderTarget};
 use term_wm::runner::{WindowManagerHost, run_event_loop};
-use term_wm::task_scheduler::TaskScheduler;
+use term_wm::task_scheduler::{AppTask, TaskScheduler};
 use term_wm::window::{WindowKey, WindowManager};
 use term_wm_core::components::{NoopComponent, NoopOverlay, NoopWmComponent};
 use term_wm_core::power_profile::PowerProfile;
@@ -167,6 +167,7 @@ fn render_panic_shows_in_debug_log() {
         &mut driver,
         &mut app,
         TaskScheduler::<SystemTask>::new(),
+        TaskScheduler::<AppTask<_>>::new(),
         |k| k,
         {
             move |_backend, app| {
@@ -268,6 +269,7 @@ fn background_dirty_bit_triggers_render_without_input() {
         &mut driver,
         &mut app,
         TaskScheduler::<SystemTask>::new(),
+        TaskScheduler::<AppTask<_>>::new(),
         |k| k,
         |_, app| {
             app.draws += 1;
@@ -350,6 +352,7 @@ fn skipped_frame_preserves_dirty_state() {
         &mut driver,
         &mut app,
         TaskScheduler::<SystemTask>::new(),
+        TaskScheduler::<AppTask<_>>::new(),
         |k| k,
         |_, app| {
             app.draws += 1;

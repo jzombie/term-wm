@@ -227,6 +227,44 @@ impl<T> TaskHandle<T> {
     }
 }
 
+/// Shared, single-threaded callback handle used by [`AppTask`]. A manual
+/// `Clone` shares the `Rc` without requiring `A: Clone`.
+type AppCallback<A> = Rc<RefCell<Box<dyn FnMut(&mut A)>>>;
+
+/// A callback-carrying app task payload. Clone shares the underlying
+/// callback (Rc), so a repeating task fires the same closure each interval.
+///
+/// Unlike a plain payload value, the app task carries the closure itself, so
+/// multiple distinct repeating tasks are naturally differentiated — each
+/// schedules its own callback and the runner invokes the matching one.
+pub struct AppTask<A> {
+    callback: AppCallback<A>,
+}
+
+// Manual Clone: derives the inner Rc only, WITHOUT injecting an `A: Clone`
+// bound. `#[derive(Clone)]` would require `A: Clone` (AppState is !Clone).
+impl<A> Clone for AppTask<A> {
+    fn clone(&self) -> Self {
+        Self {
+            callback: Rc::clone(&self.callback),
+        }
+    }
+}
+
+impl<A> AppTask<A> {
+    /// Wrap a callback that receives the application state.
+    pub fn new<F: FnMut(&mut A) + 'static>(f: F) -> Self {
+        Self {
+            callback: Rc::new(RefCell::new(Box::new(f))),
+        }
+    }
+
+    /// Invoke the callback with the current application state.
+    pub fn run(&self, app: &mut A) {
+        (self.callback.borrow_mut())(app);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
