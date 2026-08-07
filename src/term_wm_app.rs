@@ -18,6 +18,7 @@ use term_wm_core::events::{Event, KeyEvent};
 use term_wm_core::io::{EventSource, RenderTarget};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
+use term_wm_core::wm_config::WmConfig;
 
 use term_wm_pty_engine::{DirectInputTracker, Pty, PtyStatus};
 use term_wm_sys_ui_components::WmSystemPanelComponent;
@@ -104,6 +105,15 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// `TermWmApp::<NoopComponent>::new_custom(ctx)` for built-ins only).
     #[cfg(feature = "sys-ui")]
     pub fn new_custom(app_ctx: AppContext) -> Self {
+        Self::new_with_config(app_ctx, WmConfig::default())
+    }
+
+    /// Create a standalone app with system chrome and a custom `WmConfig`
+    /// (e.g. custom keybindings). The chrome wiring (top/bottom panel, FAB,
+    /// notification area, supported menu actions) is identical to
+    /// [`Self::new_custom`]; only the configuration differs.
+    #[cfg(feature = "sys-ui")]
+    pub fn new_with_config(app_ctx: AppContext, config: WmConfig) -> Self {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
         let hostname = app_ctx.hostname.clone();
@@ -114,6 +124,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         };
 
         let wm = AppBuilder::<LayerComponent>::new()
+            .config(config)
             .app_ctx(Arc::new(app_ctx))
             .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
                 &app_name,
