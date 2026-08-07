@@ -5,7 +5,7 @@ use std::sync::Arc;
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
 use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
-use vt100::MouseProtocolEncoding;
+use term_wm_vt100::MouseProtocolEncoding;
 
 use crate::helpers::{
     color_to_ratatui, decorate_link_style, layout_rect_to_clipped_rect, localize_coordinate,
@@ -730,12 +730,12 @@ impl TerminalComponent {
 /// RAII guard that saves and restores the vt100 scrollback position.
 /// Guarantees restoration even on panic or early return.
 struct ScrollbackGuard<'a> {
-    screen: &'a mut vt100::Screen,
+    screen: &'a mut term_wm_vt100::Screen,
     original_offset: usize,
 }
 
 impl<'a> ScrollbackGuard<'a> {
-    fn new(screen: &'a mut vt100::Screen) -> Self {
+    fn new(screen: &'a mut term_wm_vt100::Screen) -> Self {
         let original_offset = screen.scrollback();
         Self {
             screen,
@@ -1024,7 +1024,10 @@ impl SelectionHost for RenderDragHost<'_> {
 }
 
 #[allow(dead_code)]
-fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>, Option<TColor>) {
+fn resolve_colors(
+    cell: &term_wm_vt100::Cell,
+    screen: &term_wm_vt100::Screen,
+) -> (Option<TColor>, Option<TColor>) {
     let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
     let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
     if cell.bold() {
@@ -1036,9 +1039,9 @@ fn resolve_colors(cell: &vt100::Cell, screen: &vt100::Screen) -> (Option<TColor>
 /// Like `resolve_colors` but takes pre-computed default fg/bg colors
 /// to avoid redundant `screen.fgcolor()`/`bgcolor()` calls per cell.
 fn resolve_colors_with_defaults(
-    cell: &vt100::Cell,
-    default_fg: vt100::Color,
-    default_bg: vt100::Color,
+    cell: &term_wm_vt100::Cell,
+    default_fg: term_wm_vt100::Color,
+    default_bg: term_wm_vt100::Color,
 ) -> (Option<TColor>, Option<TColor>) {
     let mut fg = resolve_color(cell.fgcolor(), default_fg);
     let bg = resolve_color(cell.bgcolor(), default_bg);
@@ -1048,23 +1051,26 @@ fn resolve_colors_with_defaults(
     (fg, bg)
 }
 
-fn vt_color_to_ratatui(color: vt100::Color) -> Option<TColor> {
+fn vt_color_to_ratatui(color: term_wm_vt100::Color) -> Option<TColor> {
     #[allow(unused_imports)]
     use term_wm_core::term_color::map_rgb_to_color;
     match color {
-        vt100::Color::Default => None,
-        vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
-        vt100::Color::Rgb(r, g, b) => Some(crate::helpers::map_rgb_to_ratatui(r, g, b)),
+        term_wm_vt100::Color::Default => None,
+        term_wm_vt100::Color::Idx(idx) => Some(TColor::Indexed(idx)),
+        term_wm_vt100::Color::Rgb(r, g, b) => Some(crate::helpers::map_rgb_to_ratatui(r, g, b)),
     }
 }
 
-fn resolve_color(color: vt100::Color, screen_default: vt100::Color) -> Option<TColor> {
+fn resolve_color(
+    color: term_wm_vt100::Color,
+    screen_default: term_wm_vt100::Color,
+) -> Option<TColor> {
     match color {
-        vt100::Color::Default => match screen_default {
+        term_wm_vt100::Color::Default => match screen_default {
             // Default to Reset (No Color) which ratatui treats as "Inherit" or "Transparent" usually.
             // But since this is a Terminal component, we treat Default as Black/Opaque if undefined,
             // otherwise we risk bleeding through windows underneath.
-            vt100::Color::Default => None,
+            term_wm_vt100::Color::Default => None,
             other => vt_color_to_ratatui(other),
         },
         other => vt_color_to_ratatui(other),
@@ -1085,7 +1091,7 @@ fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
 /// byte sequence written to the child PTY (wrapped vs. raw).
 #[cfg(test)]
 struct TestPane {
-    parser: std::sync::Arc<std::sync::Mutex<vt100::Parser>>,
+    parser: std::sync::Arc<std::sync::Mutex<term_wm_vt100::Parser>>,
     current_scrollback: usize,
     max_sb: usize,
     alt_screen: bool,
@@ -1098,7 +1104,9 @@ struct TestPane {
 impl TestPane {
     fn new(max_sb: usize) -> Self {
         Self {
-            parser: std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(24, 80, max_sb))),
+            parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(
+                24, 80, max_sb,
+            ))),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -1111,7 +1119,9 @@ impl TestPane {
     fn with_kill_tracker(max_sb: usize) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let kill_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pane = Self {
-            parser: std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(24, 80, max_sb))),
+            parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(
+                24, 80, max_sb,
+            ))),
             current_scrollback: 0,
             max_sb,
             alt_screen: false,
@@ -1174,7 +1184,7 @@ impl Pane for TestPane {
         Ok(())
     }
 
-    fn shared_parser(&mut self) -> std::sync::Arc<std::sync::Mutex<vt100::Parser>> {
+    fn shared_parser(&mut self) -> std::sync::Arc<std::sync::Mutex<term_wm_vt100::Parser>> {
         self.parser.clone()
     }
 
@@ -1601,24 +1611,24 @@ mod tests {
 
     #[test]
     fn vt_color_and_resolve_color() {
-        assert_eq!(vt_color_to_ratatui(vt100::Color::Default), None);
+        assert_eq!(vt_color_to_ratatui(term_wm_vt100::Color::Default), None);
         assert_eq!(
-            vt_color_to_ratatui(vt100::Color::Idx(5)),
+            vt_color_to_ratatui(term_wm_vt100::Color::Idx(5)),
             Some(TColor::Indexed(5))
         );
         // RGB passthrough depends on COLORTERM truecolor support;
-        // on terminals without it, vt100::Color::Rgb maps to a nearest
+        // on terminals without it, term_wm_vt100::Color::Rgb maps to a nearest
         // indexed color. Assert the function produces *some* color.
-        assert!(vt_color_to_ratatui(vt100::Color::Rgb(1, 2, 3)).is_some());
+        assert!(vt_color_to_ratatui(term_wm_vt100::Color::Rgb(1, 2, 3)).is_some());
 
         // resolve_color: when both default -> None
         assert_eq!(
-            resolve_color(vt100::Color::Default, vt100::Color::Default),
+            resolve_color(term_wm_vt100::Color::Default, term_wm_vt100::Color::Default),
             None
         );
         // when screen default is idx, default maps to that
         assert_eq!(
-            resolve_color(vt100::Color::Default, vt100::Color::Idx(7)),
+            resolve_color(term_wm_vt100::Color::Default, term_wm_vt100::Color::Idx(7)),
             Some(TColor::Indexed(7))
         );
     }

@@ -28,7 +28,7 @@ use term_wm_pty_engine::Pane;
 use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
-use vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};
+use term_wm_vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};
 
 /// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
 ///
@@ -758,8 +758,8 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
 
 #[derive(Default, PartialEq, Clone, Copy)]
 struct CellStyle {
-    fg: vt100::Color,
-    bg: vt100::Color,
+    fg: term_wm_vt100::Color,
+    bg: term_wm_vt100::Color,
     bold: bool,
     dim: bool,
     italic: bool,
@@ -768,7 +768,7 @@ struct CellStyle {
 }
 
 impl CellStyle {
-    fn from_cell(cell: &vt100::Cell) -> Self {
+    fn from_cell(cell: &term_wm_vt100::Cell) -> Self {
         Self {
             fg: cell.fgcolor(),
             bg: cell.bgcolor(),
@@ -799,13 +799,13 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
         write!(out, "\x1b[7m")?;
     }
     match style.fg {
-        vt100::Color::Idx(i) => write!(out, "\x1b[38;5;{}m", i)?,
-        vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[38;2;{};{};{}m", r, g, b)?,
+        term_wm_vt100::Color::Idx(i) => write!(out, "\x1b[38;5;{}m", i)?,
+        term_wm_vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[38;2;{};{};{}m", r, g, b)?,
         _ => {}
     }
     match style.bg {
-        vt100::Color::Idx(i) => write!(out, "\x1b[48;5;{}m", i)?,
-        vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[48;2;{};{};{}m", r, g, b)?,
+        term_wm_vt100::Color::Idx(i) => write!(out, "\x1b[48;5;{}m", i)?,
+        term_wm_vt100::Color::Rgb(r, g, b) => write!(out, "\x1b[48;2;{};{};{}m", r, g, b)?,
         _ => {}
     }
     Ok(())
@@ -1069,13 +1069,13 @@ mod tests {
     /// identical screen state to a freshly allocated parser.
     #[test]
     fn test_prev_parser_resize_sync_matches_fresh_parser() {
-        let mut prev_parser = vt100::Parser::new(24, 80, 0);
+        let mut prev_parser = term_wm_vt100::Parser::new(24, 80, 0);
         prev_parser.process(b"initial screen content");
 
         // Simulate terminal window resize to 40x120
         let (new_rows, new_cols) = (40, 120);
         let new_formatted_content = {
-            let mut p = vt100::Parser::new(new_rows, new_cols, 0);
+            let mut p = term_wm_vt100::Parser::new(new_rows, new_cols, 0);
             p.process(b"resized screen content");
             p.screen().contents_formatted().to_vec()
         };
@@ -1086,7 +1086,7 @@ mod tests {
         prev_parser.process(&new_formatted_content);
 
         // Verify against a freshly created parser
-        let mut fresh_parser = vt100::Parser::new(new_rows, new_cols, 0);
+        let mut fresh_parser = term_wm_vt100::Parser::new(new_rows, new_cols, 0);
         fresh_parser.process(&new_formatted_content);
 
         assert_eq!(
@@ -1098,7 +1098,7 @@ mod tests {
 
     #[test]
     fn render_frame_outputs_correct_cup_and_sgr() {
-        let mut parser = vt100::Parser::new(4, 8, 0);
+        let mut parser = term_wm_vt100::Parser::new(4, 8, 0);
         parser.process(b"\x1b[31mhello\x1b[0m");
         let screen = parser.screen();
         let mut buf: Vec<u8> = Vec::new();

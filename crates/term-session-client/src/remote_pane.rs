@@ -15,7 +15,7 @@ pub struct RemotePane {
     pub id: u64,
     client: Option<std::sync::Arc<RpcIpcClient>>,
     rt: Handle,
-    parser: Arc<Mutex<vt100::Parser>>,
+    parser: Arc<Mutex<term_wm_vt100::Parser>>,
     exited: Cell<bool>,
     push_rx: Receiver<Vec<u8>>,
     input_writer: InputWriter,
@@ -35,7 +35,7 @@ impl RemotePane {
             id,
             client,
             rt,
-            parser: Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0))),
+            parser: Arc::new(Mutex::new(term_wm_vt100::Parser::new(rows, cols, 0))),
             exited: Cell::new(false),
             push_rx,
             input_writer,
@@ -113,7 +113,7 @@ impl Pane for RemotePane {
         (self.input_writer)(input)
     }
 
-    fn shared_parser(&mut self) -> Arc<Mutex<vt100::Parser>> {
+    fn shared_parser(&mut self) -> Arc<Mutex<term_wm_vt100::Parser>> {
         self.parser.clone()
     }
 

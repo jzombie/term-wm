@@ -86,7 +86,7 @@ pub struct Pty {
     /// Parsed screen shared between the reader thread and the main thread.
     /// The reader parses bytes into this parser in-place. The main thread
     /// locks it to read cells directly — zero clones.
-    pub(crate) shared_parser: Arc<Mutex<vt100::Parser>>,
+    pub(crate) shared_parser: Arc<Mutex<term_wm_vt100::Parser>>,
     /// Set by the reader thread when new content has been parsed.
     pub(crate) dirty: Arc<AtomicBool>,
     /// Condvar for I/O burst budget: reader waits here when budget exceeded
@@ -132,14 +132,27 @@ pub struct PtyParts {
 /// Constant env values applied to every spawned PTY child so ncurses and
 /// modern CLI tools render correctly when the session runs across SSH /
 /// container hops (see `sanitize_child_environment`).
+///
+/// macOS ships a defective `screen-256color` terminfo lacking the `bce`
+/// (Background Color Erase) capability, which makes ncurses apps (pico, nano)
+/// reset attributes before line erases and drop background colors.
+/// `xterm-256color` has `bce` and is safe on macOS now that the invalid
+/// `LC_CTYPE=UTF-8` is stripped (the grid-math crashes previously associated
+/// with it were caused by `setlocale` failing on that locale, not the terminfo
+/// entry). Other platforms keep `screen-256color` — their terminfo has `bce`.
+#[cfg(target_os = "macos")]
+const CHILD_TERM: &str = "xterm-256color";
+#[cfg(not(target_os = "macos"))]
 const CHILD_TERM: &str = "screen-256color";
 const CHILD_COLORTERM: &str = "truecolor";
 
 /// Apply the multiplexer-safe environment to a spawned PTY child.
 ///
-/// - Forces `TERM=screen-256color`. Plain `xterm-256color` causes ncurses to
-///   use advanced layout shortcuts (like Background Color Erase) that break
-///   inside multiplexer grid math.
+/// - Forces `TERM` to a terminfo entry with `bce` (Background Color Erase):
+///   `xterm-256color` on macOS (where Apple's `screen-256color` terminfo is
+///   broken and missing `bce`), `screen-256color` elsewhere. Without `bce`,
+///   ncurses apps reset attributes before line erases, which erases the
+///   background in the emulated screen.
 /// - Opts into `COLORTERM=truecolor` for modern CLI tools (Neovim, bat, delta,
 ///   lsd) that look for COLORTERM to bypass the 256-color limit of the
 ///   screen-256color terminfo. ncurses ignores COLORTERM entirely — it keys
@@ -239,7 +252,7 @@ impl Pty {
 
         let pending_title = Arc::new(Mutex::new(None));
         let foreground_title = Arc::new(Mutex::new(None));
-        let initial_parser = vt100::Parser::new(size.rows, size.cols, scrollback_len);
+        let initial_parser = term_wm_vt100::Parser::new(size.rows, size.cols, scrollback_len);
         let tracker = std::sync::Arc::new(crate::PtyStateTracker::new(size.rows));
         let reader_tracker = std::sync::Arc::clone(&tracker);
         let shared_parser = Arc::new(Mutex::new(initial_parser));
@@ -357,6 +370,17 @@ impl Pty {
     }
 
     pub fn resize(&mut self, size: PtySize) -> PtyResult<()> {
+        // NOTE (accepted limitation): resizing triggers universal grid reflow
+        // (vt100 `set_size`), which preserves all scrollback data. On a width
+        // shrink, a shell prompt that re-wraps into multiple rows may briefly
+        // show duplicated/stale prompt rows on the host, because the shell's
+        // SIGWINCH redraw (`\r ESC[J`) only erases downward from the cursor and
+        // cannot reach the re-wrapped rows above it. This is a protocol
+        // limitation of shell-driven redraw (present in other reflowing
+        // terminals) and is intentionally not worked around in the emulator:
+        // any emulator/compositor-side correction would destroy buffered data
+        // or corrupt cursor coordinates. No data is ever lost.
+        //
         // WORKAROUND: vt100 0.16.2 Grid::col_wrap (grid.rs:683) panics with a
         // subtraction overflow at cols=1; rows=1 causes similar issues. Clamp
         // the minimum so the PTY emulator doesn't crash when the terminal is
@@ -471,8 +495,14 @@ impl Pty {
 
     pub fn screen_lines(&mut self) -> Vec<String> {
         self.screen(); // sync dirty state
-        let parser = self.shared_parser.lock().unwrap();
-        let screen = parser.screen();
+        // Clone the screen out of the lock and drop the guard before any
+        // string formatting, so the reader thread can keep ingesting bytes.
+        let screen = self
+            .shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .screen()
+            .clone();
         let contents = screen.contents();
         let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
         if lines.len() < self.size.rows as usize {
@@ -611,8 +641,15 @@ impl Pty {
     /// with a formatted snapshot of the current parser state.
     pub fn generate_snapshot(&mut self) -> Vec<u8> {
         self.screen();
-        let parser = self.shared_parser.lock().unwrap();
-        parser.screen().state_formatted()
+        // Clone the screen out of the lock and drop the guard before the
+        // O(rows x cols) escape-code formatting, so the reader thread can keep
+        // ingesting bytes while the snapshot is built.
+        self.shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .screen()
+            .clone()
+            .state_formatted()
     }
 
     pub fn bytes_received(&self) -> usize {
@@ -688,7 +725,7 @@ struct ParserReadLoopArgs {
     bytes_received: Arc<AtomicUsize>,
     last_bytes: Arc<Mutex<Vec<u8>>>,
     dsr_requested: Arc<AtomicBool>,
-    shared_parser: Arc<Mutex<vt100::Parser>>,
+    shared_parser: Arc<Mutex<term_wm_vt100::Parser>>,
     dirty: Arc<AtomicBool>,
     dirty_cond: Arc<(std::sync::Mutex<()>, Condvar)>,
     pending_title: Arc<Mutex<Option<String>>>,
@@ -747,13 +784,12 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 if let Some(text) = osc52.finish() {
                     clipboard.set(&text);
                     if let Some(ref capture) = osc52_text {
-                        *capture.lock().unwrap() = Some(text);
+                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
                     }
                 }
                 // Send wakeup for final screen, then exited.
-                if let Ok(guard) = status_cb.lock()
-                    && let Some(ref cb) = *guard
-                {
+                let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                if let Some(ref cb) = *guard {
                     cb(crate::PtyStatus::Wakeup);
                     if !exited_emitted.swap(true, Ordering::AcqRel) {
                         cb(crate::PtyStatus::Exited);
@@ -769,18 +805,16 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 if buf[..n].windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
                     dsr_requested.store(true, Ordering::Relaxed);
                 }
-                if let Ok(mut last) = last_bytes.lock() {
-                    last.clear();
-                    last.extend_from_slice(&buf[..n]);
-                }
-                if let Ok(mut p) = pending.lock() {
-                    p.extend_from_slice(&buf[..n]);
-                    // Cap pending to prevent unbounded growth when no
-                    // consumer calls drain_pending() (local terminal mode).
-                    const PENDING_CAP: usize = 1024 * 1024; // 1 MB
-                    if p.len() > PENDING_CAP {
-                        p.clear();
-                    }
+                let mut last = last_bytes.lock().unwrap_or_else(|err| err.into_inner());
+                last.clear();
+                last.extend_from_slice(&buf[..n]);
+                let mut p = pending.lock().unwrap_or_else(|err| err.into_inner());
+                p.extend_from_slice(&buf[..n]);
+                // Cap pending to prevent unbounded growth when no
+                // consumer calls drain_pending() (local terminal mode).
+                const PENDING_CAP: usize = 1024 * 1024; // 1 MB
+                if p.len() > PENDING_CAP {
+                    p.clear();
                 }
 
                 // Process bytes through the application state tracker
@@ -794,9 +828,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                         prev_routing,
                         new_routing
                     );
-                    if let Ok(guard) = status_cb.lock()
-                        && let Some(ref cb) = *guard
-                    {
+                    let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                    if let Some(ref cb) = *guard {
                         cb(crate::PtyStatus::DirectInputChanged(new_routing));
                     } else {
                         tracing::error!("[STAGE 1] status_cb is NONE when transition occurred!");
@@ -805,13 +838,12 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
 
                 // Process bytes directly into the shared parser.
                 {
-                    let mut shared = shared_parser.lock().unwrap();
+                    let mut shared = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
                     shared.process(&buf[..n]);
                 }
 
-                if let Some(title) = extract_osc_title(&buf[..n])
-                    && let Ok(mut guard) = pending_title.lock()
-                {
+                if let Some(title) = extract_osc_title(&buf[..n]) {
+                    let mut guard = pending_title.lock().unwrap_or_else(|err| err.into_inner());
                     *guard = Some(title);
                 }
                 // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
@@ -820,7 +852,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
                     clipboard.set(&text);
                     if let Some(ref capture) = osc52_text {
-                        *capture.lock().unwrap() = Some(text);
+                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
                     }
                 }
 
@@ -836,9 +868,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // Prevents flooding the IPC channel with thousands of redundant
                 // PtyWakeup messages per second at unthrottled ingestion speeds.
                 if !dirty.swap(true, Ordering::AcqRel) {
-                    if let Ok(guard) = status_cb.lock()
-                        && let Some(ref cb) = *guard
-                    {
+                    let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                    if let Some(ref cb) = *guard {
                         cb(crate::PtyStatus::Wakeup);
                     }
                     // Reset budget because a new render cycle has begun
@@ -851,9 +882,9 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // reader thread from consuming 100% CPU on infinite streams.
                 if bytes_since_render >= IO_BURST_BUDGET {
                     let (lock, cvar) = &*dirty_cond;
-                    let mut guard = lock.lock().unwrap();
+                    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
                     while dirty.load(Ordering::Acquire) {
-                        guard = cvar.wait(guard).unwrap();
+                        guard = cvar.wait(guard).unwrap_or_else(|err| err.into_inner());
                     }
                     bytes_since_render = 0;
                 }
@@ -864,8 +895,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // This is intentional mechanical backpressure.
             }
             Err(_) => {
-                if let Ok(guard) = status_cb.lock()
-                    && let Some(ref cb) = *guard
+                let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                if let Some(ref cb) = *guard
                     && !exited_emitted.swap(true, Ordering::AcqRel)
                 {
                     cb(crate::PtyStatus::Exited);
@@ -1133,7 +1164,7 @@ mod tests {
             bytes_received: Arc::new(AtomicUsize::new(0)),
             last_bytes: Arc::new(Mutex::new(Vec::new())),
             dsr_requested: Arc::new(AtomicBool::new(false)),
-            shared_parser: Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0))),
+            shared_parser: Arc::new(Mutex::new(term_wm_vt100::Parser::new(24, 80, 0))),
             dirty: Arc::new(AtomicBool::new(false)),
             dirty_cond: Arc::new((Mutex::new(()), Condvar::new())),
             pending_title: Arc::new(Mutex::new(None)),
@@ -1570,7 +1601,7 @@ mod tests {
         pty.screen();
 
         // Simulate reader thread publishing a new screen via shared parser.
-        let mut new_parser = vt100::Parser::new(24, 80, 100);
+        let mut new_parser = term_wm_vt100::Parser::new(24, 80, 100);
         new_parser.process(b"hello world");
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1613,7 +1644,7 @@ mod tests {
         let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Publish a new screen via shared parser.
-        let mut new_parser = vt100::Parser::new(24, 80, 100);
+        let mut new_parser = term_wm_vt100::Parser::new(24, 80, 100);
         new_parser.process(b"content");
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1663,7 +1694,7 @@ mod tests {
         for i in 0..30 {
             writeln!(lines, "line {}", i).unwrap();
         }
-        let mut parser = vt100::Parser::new(24, 80, 100);
+        let mut parser = term_wm_vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1711,7 +1742,7 @@ mod tests {
         );
 
         // New shared parser data replaces the mutation (expected).
-        let mut parser2 = vt100::Parser::new(24, 80, 100);
+        let mut parser2 = term_wm_vt100::Parser::new(24, 80, 100);
         parser2.process(b"fresh output");
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1753,7 +1784,7 @@ mod tests {
         for i in 0..30 {
             writeln!(lines, "line {}", i).unwrap();
         }
-        let mut parser = vt100::Parser::new(24, 80, 100);
+        let mut parser = term_wm_vt100::Parser::new(24, 80, 100);
         parser.process(&lines);
         {
             let mut shared = pty.shared_parser.lock().unwrap();
@@ -1989,12 +2020,12 @@ mod tests {
         }
 
         // ── OLD: create parser at 30 cols, replay all history ──
-        let mut old = vt100::Parser::new(24, 30, 100);
+        let mut old = term_wm_vt100::Parser::new(24, 30, 100);
         old.process(&history);
         let old_text = old.screen().contents();
 
         // ── NEW: process at 80 cols, then set_size to 30 ──
-        let mut new = vt100::Parser::new(24, 80, 100);
+        let mut new = term_wm_vt100::Parser::new(24, 80, 100);
         new.process(&history);
         new.screen_mut().set_size(24, 30);
         let new_text = new.screen().contents();
@@ -2010,7 +2041,64 @@ mod tests {
         assert_eq!(
             new_text.lines().count(),
             5,
-            "set_size must preserve 5 separate rows"
+            "set_size must preserve all 5 logical lines (via reflow)"
+        );
+    }
+
+    #[test]
+    fn reflow_preserves_scrollback_content_on_width_shrink() {
+        // Reflow must preserve previously-buffered scrollback content when the
+        // terminal width shrinks (the non-alt-screen resize case), instead of
+        // truncating the wrapped rows of a long line.
+        //
+        // The reflow logic lives in the `term-wm-vt100` fork, whose own test
+        // suite (including `reflow_preserves_scrollback_content`) runs in that
+        // fork's repository, not here. This test is a local regression guard
+        // against a future version of the fork losing the behavior.
+        let mut parser = term_wm_vt100::Parser::new(24, 80, 2000);
+        let long_line = "x".repeat(200);
+        for i in 0..40 {
+            parser.process(format!("line {i}: {}\r\n", long_line).as_bytes());
+        }
+
+        // Count every written character across the whole scrollback + screen.
+        let count_chars =
+            |parser: &mut term_wm_vt100::Parser| -> std::collections::BTreeMap<char, usize> {
+                let (rows, cols) = parser.screen().size();
+                parser.screen_mut().set_scrollback(usize::MAX);
+                let sb = parser.screen().scrollback();
+                let mut map = std::collections::BTreeMap::new();
+                for i in 0..sb {
+                    parser.screen_mut().set_scrollback(sb - i);
+                    for c in 0..cols {
+                        if let Some(cell) = parser.screen().cell(0, c) {
+                            for ch in cell.contents().chars() {
+                                *map.entry(ch).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+                parser.screen_mut().set_scrollback(0);
+                for r in 0..rows {
+                    for c in 0..cols {
+                        if let Some(cell) = parser.screen().cell(r, c) {
+                            for ch in cell.contents().chars() {
+                                *map.entry(ch).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+                parser.screen_mut().set_scrollback(0);
+                map
+            };
+
+        let before = count_chars(&mut parser);
+        parser.screen_mut().set_size(24, 40);
+        let after = count_chars(&mut parser);
+
+        assert_eq!(
+            before, after,
+            "width shrink must not lose scrollback content"
         );
     }
 
@@ -2059,7 +2147,7 @@ mod tests {
 
     #[test]
     fn cursor_bounded_shrink_preserves_bottom_when_cursor_at_bottom() {
-        let mut parser = vt100::Parser::new(30, 80, 200);
+        let mut parser = term_wm_vt100::Parser::new(30, 80, 200);
         for i in 0..30 {
             parser.process(format!("line {}\r\n", i).as_bytes());
         }
@@ -2083,7 +2171,7 @@ mod tests {
 
     #[test]
     fn cursor_bounded_shrink_skips_when_cursor_above_new_height() {
-        let mut parser = vt100::Parser::new(30, 80, 200);
+        let mut parser = term_wm_vt100::Parser::new(30, 80, 200);
         for i in 0..10 {
             parser.process(format!("line {}\r\n", i).as_bytes());
         }
@@ -2115,7 +2203,7 @@ mod tests {
         sanitize_child_environment_with_lc_ctype(&mut cmd, None);
         assert_eq!(
             cmd.get_env("TERM").and_then(|v| v.to_str()),
-            Some("screen-256color")
+            Some(expected_child_term())
         );
     }
 
@@ -2199,8 +2287,9 @@ mod tests {
 
         let out = String::from_utf8_lossy(&accumulated);
         assert!(
-            out.contains("TERM=screen-256color"),
-            "expected TERM=screen-256color, got {out}"
+            out.contains(&format!("TERM={}", expected_child_term())),
+            "expected TERM={}, got {out}",
+            expected_child_term()
         );
         assert!(
             out.contains("COLORTERM=truecolor"),
@@ -2210,5 +2299,11 @@ mod tests {
             !out.contains("LC_CTYPE=UTF-8"),
             "invalid LC_CTYPE=UTF-8 must not reach the child, got {out}"
         );
+    }
+
+    /// Mirrors the platform-specific `CHILD_TERM` so tests assert the value the
+    /// sanitizer actually applies on this platform.
+    fn expected_child_term() -> &'static str {
+        CHILD_TERM
     }
 }

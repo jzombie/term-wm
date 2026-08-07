@@ -1,5 +1,5 @@
 use term_wm_events::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+use term_wm_vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 /// Convert a [`KeyEvent`] to the byte sequence to send to the PTY.
 /// Set `application_cursor_keys=true` when DECCKM (DECSET 1) is active,
