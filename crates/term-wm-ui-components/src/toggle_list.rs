@@ -22,6 +22,8 @@ pub struct ToggleListComponent {
     items: Vec<ToggleItem>,
     selected: usize,
     title: String,
+    last_selected: usize,
+    last_viewport_rows: usize,
 }
 
 impl Component<TermWmAction> for ToggleListComponent {
@@ -55,7 +57,15 @@ impl Component<TermWmAction> for ToggleListComponent {
         // Assuming single line items
         if let Some(handle) = ctx.scroll_handle() {
             handle.set_content_size(inner.width as usize, total_count + 2);
-            handle.ensure_vertical_visible(self.selected + 1, self.selected + 2);
+            // Keep the selected item visible while preserving manual scroll.
+            // `selected + 1`: item index -> content row (skip self-drawn top border).
+            let viewport_rows = inner.height as usize; // block.inner rows actually visible
+            handle.ensure_selection_visible(
+                self.selected + 1,
+                viewport_rows,
+                &mut self.last_selected,
+                &mut self.last_viewport_rows,
+            );
         }
 
         let vp = ctx.viewport();
@@ -146,6 +156,8 @@ impl ToggleListComponent {
             items: Vec::new(),
             selected: 0,
             title: title.into(),
+            last_selected: 0,
+            last_viewport_rows: 0,
         }
     }
 
@@ -154,6 +166,8 @@ impl ToggleListComponent {
         if self.selected >= self.items.len() {
             self.selected = self.items.len().saturating_sub(1);
         }
+        self.last_selected = 0;
+        self.last_viewport_rows = 0;
     }
 
     pub fn items(&self) -> &[ToggleItem] {
@@ -376,6 +390,118 @@ mod tests {
         assert_eq!(t.selected(), 4);
         t.set_items(make_items(2));
         assert_eq!(t.selected(), 1);
+    }
+
+    fn scroll_ctx() -> (ComponentContext, term_wm_core::component_context::ScrollHandle) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let handle = term_wm_core::component_context::ScrollHandle {
+            scroll: Rc::new(RefCell::new(
+                term_wm_core::component_context::ScrollBounds::default(),
+            )),
+        };
+        let info = handle.info();
+        let ctx = ComponentContext::new(true).with_viewport(info, Some(handle.clone()));
+        (ctx, handle)
+    }
+
+    fn render_toggle_with_scroll(t: &mut ToggleListComponent, area: LayoutRect, ctx: &ComponentContext) {
+        let buffer = ratatui::buffer::Buffer::empty(Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, Rect {
+                x: area.x as u16,
+                y: area.y as u16,
+                width: area.width,
+                height: area.height,
+            });
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        t.render(&mut backend, area, ctx, &mut registry);
+    }
+
+    #[test]
+    fn scroll_follow_starts_at_offset_zero() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        assert_eq!(handle.scroll.borrow().offset_y, 0);
+    }
+
+    #[test]
+    fn scroll_follow_advances_when_selection_moves_past_viewport() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        for _ in 0..12 {
+            t.move_selection(1);
+        }
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        let offset = handle.scroll.borrow().offset_y;
+        let selected_row = t.selected() + 1;
+        assert!(
+            selected_row >= offset && selected_row < offset + 8,
+            "selected row {} must be visible in [{}..{})",
+            selected_row,
+            offset,
+            offset + 8
+        );
+    }
+
+    #[test]
+    fn scroll_follow_goes_back_when_selection_moves_up() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        for _ in 0..18 {
+            t.move_selection(1);
+        }
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        assert!(handle.scroll.borrow().offset_y > 0);
+        for _ in 0..18 {
+            t.move_selection(-1);
+        }
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        // Item 0 is at content row 1 (row 0 is the self-drawn top border), so the
+        // scroll-back target is offset 0 or 1.
+        assert!(
+            handle.scroll.borrow().offset_y <= 1,
+            "offset should reset to top when selection moves to top (got {})",
+            handle.scroll.borrow().offset_y
+        );
+    }
+
+    #[test]
+    fn scroll_follow_does_not_override_manual_scroll() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        handle.scroll.borrow_mut().offset_y = 6;
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        assert_eq!(handle.scroll.borrow().offset_y, 6);
+    }
+
+    #[test]
+    fn scroll_follow_reruns_on_viewport_shrink() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        for _ in 0..15 {
+            t.move_selection(1);
+        }
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 10 }, &ctx);
+        let before = handle.scroll.borrow().offset_y;
+        render_toggle_with_scroll(&mut t, LayoutRect { x: 0, y: 0, width: 40, height: 4 }, &ctx);
+        let after = handle.scroll.borrow().offset_y;
+        assert!(after >= before, "offset should not move backward on shrink");
     }
 
     #[test]
