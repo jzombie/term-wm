@@ -3,60 +3,13 @@ use std::collections::VecDeque;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{List, ListItem};
 use term_wm_core::events::{Event, KeyModifiers, MouseButton};
-use unicode_width::UnicodeWidthChar;
 
-use crate::helpers::layout_rect_to_clipped_rect;
+use crate::helpers::{layout_rect_to_clipped_rect, slice_by_columns};
 use ratatui::widgets::Widget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-
-// TODO: Extract to common helper?
-/// Slice a string by visual columns, padding boundary-crossing wide chars with
-/// spaces so the output is exactly `width` columns wide and subsequent columns
-/// stay aligned.
-fn slice_by_columns(s: &str, start_col: usize, width: usize) -> String {
-    let mut out = String::new();
-    let mut current_col = 0usize;
-    let end_col = start_col.saturating_add(width);
-
-    for c in s.chars() {
-        let cw = c.width().unwrap_or(0);
-
-        if cw == 0 {
-            if current_col > start_col && current_col <= end_col {
-                out.push(c); // combining mark / zero-width: keep if inside
-            }
-            continue;
-        }
-
-        let next_col = current_col + cw;
-
-        if next_col <= start_col {
-            // Entirely before the viewport — skip.
-        } else if current_col < start_col {
-            // Crosses the left boundary — pad the visible remainder with spaces.
-            let visible = next_col - start_col;
-            let take = visible.min(width);
-            out.push_str(&" ".repeat(take));
-        } else if current_col < end_col {
-            if next_col <= end_col {
-                // Fully inside the viewport.
-                out.push(c);
-            } else {
-                // Crosses the right boundary — pad the visible fraction.
-                let visible = end_col - current_col;
-                out.push_str(&" ".repeat(visible));
-            }
-        } else {
-            // Entirely after the viewport.
-            break;
-        }
-        current_col = next_col;
-    }
-    out
-}
 
 pub struct ListComponent {
     items: Vec<String>,
@@ -779,7 +732,7 @@ mod tests {
         let mut list = ListComponent::new("t");
         list.set_items((0..20).map(|i| format!("{}", i)).collect());
         list.move_selection(5);
-        let (ctx, handle) = scroll_ctx();
+        let (ctx, _handle) = scroll_ctx();
         render_list_with_scroll(
             &mut list,
             LayoutRect {
