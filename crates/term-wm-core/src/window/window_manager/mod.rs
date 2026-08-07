@@ -6059,12 +6059,11 @@ mod tests {
         wm.set_closable(key, false);
 
         let items = wm.wm_menu_items();
-        let close_entry = items.iter().find_map(|entry| match entry {
-            MenuDisplayItem::Item(MenuItem { action, .. }) => match action {
-                TermWmAction::CloseWindow(k) if *k == key => Some(entry),
-                _ => None,
-            },
-            MenuDisplayItem::Separator => None,
+        let close_entry = items.iter().find(|entry| match entry {
+            MenuDisplayItem::Item(MenuItem { action, .. }) => {
+                matches!(action, TermWmAction::CloseWindow(k) if *k == key)
+            }
+            MenuDisplayItem::Separator => false,
         });
         let MenuDisplayItem::Item(MenuItem { disabled, .. }) = close_entry.expect("Close entry") else {
             unreachable!("Close entry is an Item");
