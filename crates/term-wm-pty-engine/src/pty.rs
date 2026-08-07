@@ -2050,6 +2050,11 @@ mod tests {
         // Reflow must preserve previously-buffered scrollback content when the
         // terminal width shrinks (the non-alt-screen resize case), instead of
         // truncating the wrapped rows of a long line.
+        //
+        // The reflow logic lives in the `term-wm-vt100` fork, whose own test
+        // suite (including `reflow_preserves_scrollback_content`) runs in that
+        // fork's repository, not here. This test is a local regression guard
+        // against a future version of the fork losing the behavior.
         let mut parser = term_wm_vt100::Parser::new(24, 80, 2000);
         let long_line = "x".repeat(200);
         for i in 0..40 {
