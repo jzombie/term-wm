@@ -115,7 +115,7 @@ fn input_loop(tx: Sender<Event>, shutdown: Arc<AtomicBool>) {
                     Err(_) => break,
                 }
             }
-            Ok(false) => {} // timeout elapsed — loop and check shutdown
+            Ok(false) => {}  // timeout elapsed — loop and check shutdown
             Err(_) => break, // TTY broken — kill the thread, avoid a CPU spinlock
         }
     }

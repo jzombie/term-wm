@@ -42,8 +42,7 @@ fn esc_trace_chunk(bytes: &[u8]) {
     if !*ESC_TRACE_ENABLED.get_or_init(|| std::env::var_os(ESC_TRACE_ENV).is_some()) {
         return;
     }
-    let path =
-        std::env::var(ESC_TRACE_ENV).unwrap_or_else(|_| "term_wm_esc_trace.log".to_string());
+    let path = std::env::var(ESC_TRACE_ENV).unwrap_or_else(|_| "term_wm_esc_trace.log".to_string());
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1287,7 +1286,9 @@ mod tests {
             "the 85th char must overwrite the margin cell, not wrap"
         );
         assert!(
-            (0..80).all(|col| screen.cell(1, col).is_none_or(|cell| cell.contents().is_empty())),
+            (0..80).all(|col| screen
+                .cell(1, col)
+                .is_none_or(|cell| cell.contents().is_empty())),
             "row 1 must remain empty (no wrap)"
         );
     }
@@ -1315,7 +1316,11 @@ mod tests {
             "e",
             "existing text must shift right, not be overwritten"
         );
-        assert_eq!(screen.cell(0, 5).unwrap().contents(), "o", "row tail preserved");
+        assert_eq!(
+            screen.cell(0, 5).unwrap().contents(),
+            "o",
+            "row tail preserved"
+        );
     }
 
     #[test]
