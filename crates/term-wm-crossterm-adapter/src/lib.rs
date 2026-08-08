@@ -139,6 +139,19 @@ pub fn try_translate_event(evt: crossterm::event::Event) -> Option<Event> {
     }
 }
 
+/// Enable or disable crossterm mouse capture by writing the corresponding
+/// escape sequence to stdout. This is the single canonical implementation —
+/// every event source (`ConsoleEventSource`, `BackgroundConsoleReader`, the
+/// root `UnifiedEventSource`) delegates here so crossterm knowledge stays
+/// contained in this crate.
+pub fn set_mouse_capture(enabled: bool) -> std::io::Result<()> {
+    if enabled {
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
+    } else {
+        crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +175,15 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         );
         assert!(try_translate_key_event(key).is_none());
+    }
+
+    #[test]
+    fn test_try_translate_event_drops_unknown_key() {
+        let key = make_key(
+            crossterm::event::KeyCode::CapsLock,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        assert!(try_translate_event(crossterm::event::Event::Key(key)).is_none());
     }
 
     #[test]

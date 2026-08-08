@@ -33,7 +33,7 @@ use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::{AppRootComponent, NoopComponent};
-use crate::unified_event_source::UnifiedEvent;
+use crate::unified_event_source::{UnifiedEvent, EVENT_CHANNEL_CAPACITY};
 
 /// Scrollback size for windows spawned by the default "New Terminal" action.
 const NEW_TERMINAL_SCROLLBACK: usize = 2000;
@@ -190,8 +190,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             WmNotificationAreaComponent::new(),
         ));
 
-        // TODO: Extract to constant; should it be the same as EVENT_CHANNEL_CAPACITY in unified_event_source.rs?
-        let (tx, _) = bounded(256);
+        let (tx, _) = bounded(EVENT_CHANNEL_CAPACITY);
 
         Self::from_wm(wm, tx)
     }

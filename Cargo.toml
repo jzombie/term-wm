@@ -137,7 +137,6 @@ sys-ui = ["dep:term-wm-sys-ui-components"]
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
-crossterm = { workspace = true, features = ["bracketed-paste"] }
 hostname = { workspace = true }
 libc = { workspace = true }
 line-ending = { workspace = true }
@@ -145,7 +144,6 @@ portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
-term-wm-crossterm-adapter = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }

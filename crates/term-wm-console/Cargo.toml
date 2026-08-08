@@ -11,6 +11,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+crossbeam-channel = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste"] }
 ratatui = { workspace = true }
 term-wm-core = { workspace = true }

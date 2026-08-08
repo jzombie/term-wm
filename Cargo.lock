@@ -3139,7 +3139,6 @@ version = "0.9.15-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
- "crossterm",
  "hostname",
  "indoc",
  "libc",
@@ -3158,7 +3157,6 @@ dependencies = [
  "term-session-server",
  "term-wm-console",
  "term-wm-core",
- "term-wm-crossterm-adapter",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
  "term-wm-render",
@@ -3176,6 +3174,7 @@ name = "term-wm-console"
 version = "0.9.15-alpha"
 dependencies = [
  "criterion",
+ "crossbeam-channel",
  "crossterm",
  "insta",
  "libc",
