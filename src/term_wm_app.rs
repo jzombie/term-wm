@@ -114,6 +114,23 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// [`Self::new_custom`]; only the configuration differs.
     #[cfg(feature = "sys-ui")]
     pub fn new_with_config(app_ctx: AppContext, config: WmConfig) -> Self {
+        Self::new_with_actions(app_ctx, config, vec![
+            TermWmAction::CloseMenu,
+            TermWmAction::ToggleMouseCapture,
+            TermWmAction::ToggleClipboardMode,
+            TermWmAction::ToggleWindowSelection,
+            TermWmAction::ExitUi,
+        ])
+    }
+
+    /// Standalone constructor with system chrome + explicit supported command
+    /// palette actions. `new_with_config` delegates here with its default list.
+    #[cfg(feature = "sys-ui")]
+    pub fn new_with_actions(
+        app_ctx: AppContext,
+        config: WmConfig,
+        actions: Vec<TermWmAction>,
+    ) -> Self {
         let app_name = app_ctx.app_name.clone();
         let app_version = app_ctx.app_version.clone();
         let hostname = app_ctx.hostname.clone();
@@ -135,13 +152,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
                 hostname.as_deref(),
             )))
             .fab(LayerComponent::Fab(WmFabComponent::new()))
-            .supported_menu_actions(vec![
-                TermWmAction::CloseMenu,
-                TermWmAction::ToggleMouseCapture,
-                TermWmAction::ToggleClipboardMode,
-                TermWmAction::ToggleWindowSelection,
-                TermWmAction::ExitUi,
-            ])
+            .supported_menu_actions(actions)
             .build()
             .expect("standalone build");
         let mut wm = wm;
