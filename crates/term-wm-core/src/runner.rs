@@ -92,6 +92,7 @@ fn dispatch_action<
         TermWmAction::Quit | TermWmAction::ExitUi => app.open_exit_confirm(),
         TermWmAction::Help | TermWmAction::OpenHelp => app.open_help_overlay(),
         TermWmAction::CloseWindow(k) => app.wm().close_window(k),
+        TermWmAction::ReorderWindow { key, index } => app.wm().reorder_window(key, index),
         TermWmAction::NewTerminal => drop(app.wm_new_terminal()),
         TermWmAction::MinimizeWindow(k) => app.wm().minimize_window(k),
         TermWmAction::MaximizeWindow(k) => app.wm().toggle_maximize(k),
@@ -1534,6 +1535,43 @@ mod tests {
         let mut queue = std::collections::VecDeque::new();
         dispatch_action(&mut app, k1, TermWmAction::FocusWindow(k2), &mut queue);
         assert_eq!(app.wm.focused_window(), k2);
+    }
+
+    #[test]
+    fn dispatch_reorder_window_calls_reorder_window() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(
+            &mut app,
+            k1,
+            TermWmAction::ReorderWindow { key: k2, index: 0 },
+            &mut queue,
+        );
+        assert_eq!(
+            app.wm.build_display_order(),
+            vec![k2, k1],
+            "ReorderWindow dispatch must move k2 to the front"
+        );
     }
 
     #[test]

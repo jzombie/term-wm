@@ -8,6 +8,8 @@ The format is based on Keep a Changelog and this project adheres to
 
 ### Added
 
+- **Drag-to-reorder the top-panel window list:** press and drag a window entry in the top status panel to rearrange the list (and the Command Palette's window order). It's a list-only reorder — the on-screen tiling arrangement is unchanged — and the focused entry auto-scrolls into view. While dragging, moving the pointer to the viewport edge edge-pans the strip so off-screen entries are reachable, and a drop bar shows the insertion point. The reorder persists for the session (new windows append at the end). A plain click still just focuses the window.
+- **Horizontal scroll + overflow handling for the top-panel window list:** when the window entries are too wide for the panel, the strip scrolls horizontally (shift/wheel scroll events) with ◀/▶ overflow indicators shown while entries remain off-screen; clicking an indicator nudges the scroll. Labels are column-sliced at both edges so wide/ CJK characters and the indicator columns never corrupt the layout.
 - **Monocle and tile/float toggles in the default Command Palette:** the default palette allow-list for standalone apps built with `TermWmApp::new_custom` / `new_with_config` now also includes `ToggleMonocle` and `ToggleTiling` (the "View" group), so switching between monocle and tiled/float window layouts is available out of the box instead of requiring a custom allow-list.
 
 ### Changed
