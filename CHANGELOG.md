@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.14-alpha] - 2026-08-07
+
+### Added
+
+- **Application extensibility — spatial & custom actions:** `TermWmAction` now ships a set of app-agnostic viewport actions (`ZoomIn`, `ZoomOut`, `ResetZoom`, `PanLeft`/`PanRight`/`PanUp`/`PanDown`, `CycleViewMode`) that any canvas, plot, or image component can bind keys to, plus a `Custom(u16)` action that lets host applications map keys to their own app-state triggers without modifying the framework enum. Applications bind them via `WmConfig.keybindings`, and the focused component interprets them in `update()`.
+- **Repeatable app task scheduling:** hosts can now schedule recurring work from the app itself. A new `AppTask` payload carries the closure, `TaskHandle::schedule_repeating` gained a "fire immediately" mode, cancelled tasks are purged eagerly, and the runner drains app tasks each cycle — keeping the event loop awake and capping the idle poll sleep so scheduled callbacks fire on time even under the power-saver profile.
+- **Configurable app construction:** two new standalone constructors, `TermWmApp::new_with_config(ctx, config)` and `TermWmApp::new_with_actions(ctx, config, actions)`, let host apps start from a custom `WmConfig` (e.g. custom keybindings) and/or an explicit command-palette action allow-list. A new `DEFAULT_SUPPORTED_MENU_ACTIONS` constant documents the default palette action set.
+- **Non-closable windows:** `wm.set_closable(key, false)` makes a window unclosable — its chrome ✕ button is hidden, the Command Palette's Close entry is disabled, and every close path (including PTY-child exit) is ignored.
+- **Smarter list scrolling:** a shared "keep selection visible" scroll-follow now applies to `ListComponent`, `ToggleListComponent`, and the Command Palette — the selected item stays in view without clobbering manual scrolls and re-engages after a viewport resize. A new `update_items()` on the list components replaces items in place while preserving the selection and any manual scroll, for live-refresh UIs.
+- **Horizontal scrolling for lists:** a new column-aware `slice_by_columns` helper slices horizontally-scrolled content by visual columns, padding boundary-crossing wide/CJK characters so rows stay column-aligned; the list components can now scroll sideways.
+
+### Changed
+
+- **Config surface simplified:** the confusing `TermWmApp::new/bare/embedded` convenience constructors and the `bare_custom`/`embedded_custom` variants are gone — only `new_custom`, `from_wm`, `new_with_config`, and `new_with_actions` remain. The `WmConfig::standalone()`/`minimal()` and `KeyBindings::standalone()`/`minimal()` presets were removed; `WmConfig::default()` is now the single full-featured configuration. `AppBuilder::bare()` is now `AppBuilder::new()`.
+- **Shared workspace dependencies:** every crate's dependencies now route through `[workspace.dependencies]` (single-source versioning) instead of being declared per-crate.
+- **Horizontal scrollbar thumb** now renders as a lower-half block (`▄`) grounded to the bottom edge of the row, keeping the track visible above it.
+- **Inner borders removed** from the list components, so each item row maps one-to-one to a content row.
+- **Bottom-panel keybinding hints** are now computed from a single shared source and no longer mutated during the render pass — the hints set during layout are exactly what's drawn.
+- **`examples/dual_image.rs`** resolves its default demo image against the crate root, so it loads regardless of the current working directory.
+
+### Fixed
+
+- **Monocle + Command Palette showed unfiltered keybindings:** with the Command Palette open in cramped monocle mode, the bottom panel re-pushed the *unfiltered* hint set during rendering, clobbering the layer-filtered hints set during layout (so Global actions like Ctrl+A appeared alongside palette actions). The render pass no longer mutates the panel, so palette-layer-filtered hints are shown consistently in every mode.
+- **`examples/dual_image.rs` could not find its default image** when launched from a directory other than the project root.
+
+### Dependencies
+
+- `resvg` 0.47.0 → 0.48.1
+- `serial_test` 3.5.0 → 4.0.1
+- `windows-sys` 0.59 → 0.61
+
+
 ## [0.9.13-alpha] - 2026-08-06
 
 ### Added
