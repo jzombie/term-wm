@@ -72,6 +72,12 @@ pub(crate) struct WindowStrip {
     pub(crate) display_order: Vec<WindowKey>,
     // The rect the strip last rendered into (event routing + containment).
     pub(crate) rect: LayoutRect,
+    // Auto-scroll guards: only re-follow the focused entry when the focused
+    // window, its logical bounds, or the viewport size changed, so manual
+    // scrolls (chevrons / wheel / edge-pan) persist.
+    pub(crate) last_auto_focus: Option<WindowKey>,
+    pub(crate) last_auto_viewport: i32,
+    pub(crate) last_focused_logical_bounds: Option<(i32, i32)>,
 }
 
 impl WindowStrip {
@@ -92,6 +98,9 @@ impl WindowStrip {
             window_hits: Vec::new(),
             display_order: Vec::new(),
             rect: LayoutRect::default(),
+            last_auto_focus: None,
+            last_auto_viewport: 0,
+            last_focused_logical_bounds: None,
         }
     }
 
@@ -182,8 +191,17 @@ impl WindowStrip {
         let max_scroll = content_width.saturating_sub(scroll_viewport_width).max(0) as u16;
 
         self.h_scroll = self.h_scroll.min(max_scroll);
-        // Auto-scroll the focused entry into view, UNLESS a drag is active.
+        // Auto-scroll the focused entry into view ONLY when the focused window,
+        // its logical bounds, or the viewport size changed — so manual scrolls
+        // (chevron clicks, wheel, edge-pan) persist instead of being snapped
+        // back every frame. The logical bounds detect structural mutations
+        // (spawn/close window, completed reorder) independently of h_scroll.
+        let focused_bounds = focused_range.map(|(x, w)| (x, i32::from(w)));
+        let auto_scroll = self.last_auto_focus != Some(focus_current)
+            || self.last_auto_viewport != scroll_viewport_width
+            || self.last_focused_logical_bounds != focused_bounds;
         if self.drag_source.is_none()
+            && auto_scroll
             && let Some((flx, fw)) = focused_range
         {
             let h = i32::from(self.h_scroll);
@@ -196,6 +214,9 @@ impl WindowStrip {
             }
             self.h_scroll = self.h_scroll.min(max_scroll);
         }
+        self.last_auto_focus = Some(focus_current);
+        self.last_auto_viewport = scroll_viewport_width;
+        self.last_focused_logical_bounds = focused_bounds;
 
         // Publish geometry for the drag handler (runs between frames).
         self.entries_start_x = entries_start_x;

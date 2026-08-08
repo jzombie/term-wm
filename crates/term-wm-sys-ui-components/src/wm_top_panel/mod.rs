@@ -36,6 +36,9 @@ use window_strip::WindowStrip;
 
 /// Single-column gap between the menu button and the center region.
 const MENU_GAP: u16 = 1;
+/// Horizontal gap (columns) between the center region's right edge (and its
+/// `▶` chevron) and the right-aligned tiling indicator.
+const TILING_GAP: u16 = 1;
 
 #[derive(Debug)]
 pub struct WmTopPanelComponent {
@@ -188,13 +191,17 @@ impl WmTopPanelComponent {
             self.menu.render(backend, menu_slot, self.menu_open, theme);
         }
 
-        // Center region: [menu + gap, max_x - tiling_width).
+        // Center region: [menu + gap, max_x - tiling_width - TILING_GAP).
         let tiling_width = self.tiling.label_width();
         let strip_start = area
             .x
             .saturating_add(i32::from(menu_width))
             .saturating_add(i32::from(MENU_GAP));
-        let strip_end = max_x.saturating_sub(i32::from(tiling_width));
+        let strip_end = if tiling_width > 0 {
+            max_x.saturating_sub(i32::from(tiling_width + TILING_GAP))
+        } else {
+            max_x
+        };
         let strip_width = strip_end.saturating_sub(strip_start).max(0);
         let strip_rect = LayoutRect {
             x: strip_start,
@@ -1115,11 +1122,11 @@ mod tests {
         render_panel(&mut p);
 
         let tiling = p.tiling.rect.expect("tiling label present");
-        // The strip's allocated rect ends BEFORE the tiling slot.
+        // The strip's allocated rect ends TILING_GAP before the tiling slot.
         let strip_end = p.strip.rect.x + i32::from(p.strip.rect.width);
         assert!(
-            strip_end <= tiling.x,
-            "strip rect must end before the tiling slot"
+            strip_end <= tiling.x - i32::from(TILING_GAP),
+            "strip rect must end at least TILING_GAP before the tiling slot"
         );
         // The right ▶ chevron (when shown) is inside the strip rect, left of
         // the tiling label.
@@ -1233,6 +1240,82 @@ mod tests {
             starts[0] as i32,
             p.strip.entries_start_x + 1,
             "ghost must track the cursor at the grabbed column (grab offset 0)"
+        );
+    }
+
+    #[test]
+    fn manual_scroll_persists_until_focus_changes() {
+        let keys = make_keys(8);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        p.focus_current = Some(keys[3]);
+        render_panel(&mut p); // first render auto-scrolls to keys[3]
+        let after_auto = p.strip.h_scroll;
+        assert!(after_auto > SCROLL_STEP, "auto-scroll should land mid-strip");
+
+        // A manual scroll (e.g. chevron click) with unchanged focus must persist —
+        // NOT be snapped back by per-frame auto-scroll.
+        let manual = after_auto.saturating_sub(SCROLL_STEP);
+        p.strip.h_scroll = manual;
+        render_panel(&mut p);
+        assert_eq!(
+            p.strip.h_scroll,
+            manual,
+            "manual scroll must persist while the focused window is unchanged"
+        );
+
+        // Changing focus re-engages auto-scroll to bring the new window into view.
+        p.focus_current = Some(keys[6]);
+        p.strip.h_scroll = 0;
+        render_panel(&mut p);
+        assert!(
+            p.strip.h_scroll > 0,
+            "auto-scroll re-engages when the focused window changes"
+        );
+    }
+
+    #[test]
+    fn reorder_moves_focused_off_screen_then_auto_scrolls_back() {
+        let keys = make_keys(8);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        p.focus_current = Some(keys[0]);
+        render_panel(&mut p); // auto-scroll: keys[0] at the left → h_scroll 0
+        assert_eq!(p.strip.h_scroll, 0);
+
+        // Manual scroll far right persists (focus + logical bounds unchanged).
+        p.strip.h_scroll = p.strip.max_scroll;
+        render_panel(&mut p);
+        assert_eq!(
+            p.strip.h_scroll,
+            p.strip.max_scroll,
+            "manual scroll persists with unchanged focus"
+        );
+
+        // A structural mutation (reorder) moves the FOCUSED window to the end:
+        // its logical bounds change, so auto-scroll must re-follow it into view
+        // even though the focused key is unchanged.
+        let mut new_order = keys[1..].to_vec();
+        new_order.push(keys[0]);
+        p.display_order = new_order;
+        p.strip.h_scroll = 0;
+        render_panel(&mut p);
+        assert_eq!(
+            p.strip.h_scroll,
+            p.strip.max_scroll,
+            "auto-scroll re-follows the focused window after a structural reorder"
         );
     }
 }
