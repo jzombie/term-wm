@@ -111,16 +111,28 @@ impl<T> TaskHandle<T> {
     ///
     /// The payload is cloned on each re-insertion.  The next deadline is
     /// computed as `original_deadline + interval` to prevent timer drift
-    /// under load.
-    pub fn schedule_repeating(&self, interval: Duration, payload: T) -> TaskId
+    /// under load.  When `fire_immediate` is true the first fire happens on
+    /// the next `drain_expired` (deadline = now); otherwise it waits one
+    /// interval.
+    pub fn schedule_repeating(
+        &self,
+        interval: Duration,
+        fire_immediate: bool,
+        payload: T,
+    ) -> TaskId
     where
         T: Clone,
     {
         let mut inner = self.inner.borrow_mut();
         let id = TaskId(inner.next_id);
         inner.next_id += 1;
+        let deadline = if fire_immediate {
+            Instant::now()
+        } else {
+            Instant::now() + interval
+        };
         inner.heap.push(HeapEntry {
-            deadline: Instant::now() + interval,
+            deadline,
             interval: Some(interval),
             payload,
             id,
@@ -327,7 +339,7 @@ mod tests {
     #[test]
     fn repeating_task_fires_multiple_times() {
         let handle = TaskScheduler::<&str>::new().handle();
-        handle.schedule_repeating(Duration::from_millis(10), "tick");
+        handle.schedule_repeating(Duration::from_millis(10), false, "tick");
         std::thread::sleep(Duration::from_millis(35));
         let expired = handle.drain_expired();
         // Should have fired ~3 times (10ms, 20ms, 30ms)
@@ -340,7 +352,7 @@ mod tests {
     #[test]
     fn cancel_repeating_stops_future_fires() {
         let handle = TaskScheduler::<&str>::new().handle();
-        let id = handle.schedule_repeating(Duration::from_millis(10), "tick");
+        let id = handle.schedule_repeating(Duration::from_millis(10), false, "tick");
 
         // Wait for the first interval
         std::thread::sleep(Duration::from_millis(15));
@@ -372,7 +384,7 @@ mod tests {
     #[test]
     fn anti_drift_uses_original_deadline() {
         let handle = TaskScheduler::<&str>::new().handle();
-        let id = handle.schedule_repeating(Duration::from_secs(60), "slow");
+        let id = handle.schedule_repeating(Duration::from_secs(60), false, "slow");
         // Access the inner heap directly and verify the deadline computation
         let inner = handle.inner.borrow();
         let entry = inner.heap.peek().unwrap();
