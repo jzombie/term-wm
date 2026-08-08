@@ -24,6 +24,9 @@ use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_clipped_re
 const ENTRY_PADDING: usize = 2;
 /// Horizontal scroll step (columns) for wheel / indicator / edge-pan scrolling.
 pub(crate) const SCROLL_STEP: u16 = 8;
+/// Horizontal gap (columns) between the entry viewport and each `◀`/`▶`
+/// chevron, so the indicators don't get buried by the window titles.
+pub(crate) const CHEVRON_GAP: u16 = 1;
 /// Per-entry label cap (columns) before ellipsis truncation, so extremely long
 /// titles don't blow up the measured content width.
 const MAX_ENTRY_LABEL: usize = 40;
@@ -31,6 +34,8 @@ const MAX_ENTRY_LABEL: usize = 40;
 const LEFT_INDICATOR: &str = "◀";
 /// Right overflow indicator glyph.
 const RIGHT_INDICATOR: &str = "▶";
+/// Drop-indicator glyph drawn at the insertion boundary during drag.
+const DROP_INDICATOR: &str = "▌";
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PanelWindowHit {
@@ -45,8 +50,15 @@ pub(crate) struct WindowStrip {
     pub(crate) h_scroll: u16,
     /// Entry being dragged, if a live drag is in progress.
     pub(crate) drag_source: Option<WindowKey>,
+    /// Last drag cursor column (physical/global); drives the gliding ghost.
+    pub(crate) drag_cursor_col: Option<i32>,
+    /// Offset from the pressed entry's left edge to the press column, so the
+    /// ghost tracks the pointer 1:1 (like grabbing a scroll thumb).
+    pub(crate) drag_grab_col: i32,
+    /// Insertion index for the drop bar / reorder target.
+    pub(crate) drop_index: Option<usize>,
     /// Whether the cursor moved (any `Drag` event) since the press. Gates the
-    /// "dragging" visual style so a plain click-to-focus doesn't flicker.
+    /// ghost so a plain click-to-focus doesn't show a drag.
     pub(crate) drag_moved: bool,
     // Geometry from the most recent render, reused by the drag handler.
     pub(crate) entries_start_x: i32,
@@ -67,6 +79,9 @@ impl WindowStrip {
         Self {
             h_scroll: 0,
             drag_source: None,
+            drag_cursor_col: None,
+            drag_grab_col: 0,
+            drop_index: None,
             drag_moved: false,
             entries_start_x: 0,
             scroll_viewport_width: 0,
@@ -88,6 +103,9 @@ impl WindowStrip {
 
     pub(crate) fn clear_drag_state(&mut self) {
         self.drag_source = None;
+        self.drag_cursor_col = None;
+        self.drag_grab_col = 0;
+        self.drop_index = None;
         self.drag_moved = false;
     }
 
@@ -144,18 +162,23 @@ impl WindowStrip {
         }
         let content_width = logical_x;
         let max_entries_width = i32::from(rect.width);
-        // Reserve indicator columns STATICALLY for the whole frame when any
-        // overflow exists, so the viewport size doesn't jitter with h_scroll.
+        // Reserve indicator + gap columns STATICALLY for the whole frame when
+        // any overflow exists, so the viewport size doesn't jitter with
+        // h_scroll and the chevrons have breathing room.
         let overflow = content_width > max_entries_width;
         let (left_indicator_width, right_indicator_width) =
             if overflow { (1u16, 1u16) } else { (0u16, 0u16) };
+        let chevron_gap = if overflow { i32::from(CHEVRON_GAP) * 2 } else { 0 };
         let scroll_viewport_width = if overflow {
-            max_entries_width
-                .saturating_sub(i32::from(left_indicator_width + right_indicator_width))
+            max_entries_width.saturating_sub(
+                i32::from(left_indicator_width + right_indicator_width) + chevron_gap,
+            )
         } else {
             max_entries_width
         };
-        let entries_start_x = rect.x + i32::from(left_indicator_width);
+        let entries_start_x = rect.x
+            + i32::from(left_indicator_width)
+            + if overflow { i32::from(CHEVRON_GAP) } else { 0 };
         let max_scroll = content_width.saturating_sub(scroll_viewport_width).max(0) as u16;
 
         self.h_scroll = self.h_scroll.min(max_scroll);
@@ -188,6 +211,11 @@ impl WindowStrip {
             .add_modifier(Modifier::BOLD);
 
         for (key, lx, width) in entry_geometry.iter().copied() {
+            // The dragged entry is drawn as a gliding ghost AFTER the loop so it
+            // floats above the static entries (highest Z-order).
+            if Some(key) == self.drag_source {
+                continue;
+            }
             let width = i32::from(width);
             let vp_x = lx.saturating_sub(h_scroll);
             let vp_end = vp_x.saturating_add(width);
@@ -211,13 +239,7 @@ impl WindowStrip {
             let draw_x = entries_start_x.saturating_add(visible_left);
 
             let focused = key == focus_current;
-            let dragging = self.drag_source == Some(key) && self.drag_moved;
-            let item_style = if dragging {
-                Style::default()
-                    .bg(color_to_ratatui(theme.menu_selected_bg))
-                    .fg(color_to_ratatui(theme.menu_selected_fg))
-                    .add_modifier(Modifier::REVERSED)
-            } else if focused {
+            let item_style = if focused {
                 Style::default()
                     .bg(color_to_ratatui(theme.menu_selected_bg))
                     .fg(color_to_ratatui(theme.menu_selected_fg))
@@ -242,6 +264,91 @@ impl WindowStrip {
                     height: 1,
                 },
             });
+        }
+
+        // ── Drag ghost: the grabbed title glides with the cursor (scroll-thumb
+        // behavior), keeping its normal style, clipped to the viewport and
+        // drawn last so it floats above the static entries. ──
+        if self.drag_moved
+            && let Some(drag_key) = self.drag_source
+            && let Some(cursor_col) = self.drag_cursor_col
+        {
+            let drag_width = self
+                .entry_geometry
+                .iter()
+                .find(|(k, ..)| *k == drag_key)
+                .map(|(_, _, w)| i32::from(*w))
+                .unwrap_or(0);
+            let vp_start = entries_start_x;
+            // Clamp never receives max < min (underflow-safe on narrow strips).
+            let max_thumb_x = (vp_start + scroll_viewport_width - drag_width).max(vp_start);
+            let thumb_x = (cursor_col - self.drag_grab_col).clamp(vp_start, max_thumb_x);
+
+            let gv_x = thumb_x.saturating_sub(vp_start);
+            let gv_end = gv_x.saturating_add(drag_width);
+            if gv_end > 0 && gv_x < scroll_viewport_width {
+                let slice_start = if gv_x < 0 { (-gv_x) as usize } else { 0 };
+                let gl = gv_x.max(0);
+                let gr = scroll_viewport_width.min(gv_end);
+                let visible_width = (gr.saturating_sub(gl)) as usize;
+                let label = labels
+                    .get(&drag_key)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{drag_key:?}"));
+                let label = truncate_with_ellipsis(&label, MAX_ENTRY_LABEL);
+                let chunk = format!(" {label} ");
+                let label_slice = slice_by_columns(&chunk, slice_start, visible_width);
+                let draw_x = vp_start.saturating_add(gl);
+                let focused = drag_key == focus_current;
+                let ghost_style = if focused {
+                    Style::default()
+                        .bg(color_to_ratatui(theme.menu_selected_bg))
+                        .fg(color_to_ratatui(theme.menu_selected_fg))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
+                };
+                safe_set_string(
+                    &mut ratatui_backend.buffer,
+                    bounds,
+                    draw_x as u16,
+                    y as u16,
+                    &label_slice,
+                    ghost_style,
+                );
+            }
+
+            // Drop indicator at the insertion boundary among the static others.
+            if let Some(drop_index) = self.drop_index {
+                let mut gap_logical = content_width.saturating_sub(drag_width);
+                let mut acc = 0i32;
+                let mut reduced = 0usize;
+                for (key, _, width) in entry_geometry.iter().copied() {
+                    if Some(key) == self.drag_source {
+                        continue;
+                    }
+                    if reduced == drop_index {
+                        gap_logical = acc;
+                        break;
+                    }
+                    acc = acc.saturating_add(i32::from(width));
+                    reduced += 1;
+                }
+                let vp_gap = gap_logical.saturating_sub(h_scroll);
+                if vp_gap >= 0 && vp_gap < scroll_viewport_width {
+                    let drop_style = Style::default()
+                        .fg(color_to_ratatui(theme.accent))
+                        .add_modifier(Modifier::BOLD);
+                    safe_set_string(
+                        &mut ratatui_backend.buffer,
+                        bounds,
+                        (entries_start_x.saturating_add(vp_gap)) as u16,
+                        y as u16,
+                        DROP_INDICATOR,
+                        drop_style,
+                    );
+                }
+            }
         }
 
         // Overflow indicators — strictly inside the strip rect (left/right edges).
@@ -294,23 +401,31 @@ impl WindowStrip {
             self.h_scroll = self.h_scroll.saturating_add(SCROLL_STEP).min(self.max_scroll);
             return EventResult::Consumed;
         }
-        if let Some(key) = self.hit_test_window(column, row) {
-            // Clicking an entry focuses it and arms a potential drag; the drag
-            // style and live reorder only kick in once the cursor actually
-            // moves (first Drag event).
-            self.drag_source = Some(key);
+        if let Some(hit) = self
+            .window_hits
+            .iter()
+            .find(|h| rect_contains(h.rect, column, row))
+        {
+            // Clicking an entry focuses it and arms a potential drag. The grab
+            // offset (press column - entry left edge) makes the ghost track the
+            // pointer 1:1, like grabbing a scroll thumb.
+            self.drag_source = Some(hit.id);
+            self.drag_grab_col = i32::from(column) - hit.rect.x;
+            self.drag_cursor_col = Some(i32::from(column));
             self.drag_moved = false;
-            return EventResult::Action(TermWmAction::FocusWindow(key));
+            self.drop_index = None;
+            return EventResult::Action(TermWmAction::FocusWindow(hit.id));
         }
         EventResult::Ignored
     }
 
-    /// Drag (mouse captured): live-reorder the dragged entry and edge-pan at
-    /// the strip's edges. Returns the reorder action when the target index
-    /// changes, so the entry visibly moves with the cursor.
+    /// Drag (mouse captured): edge-pan at the strip's edges and track the
+    /// cursor + drop target. The reorder itself is committed on `Release`; the
+    /// gliding ghost (rendered each frame) is the visual feedback.
     pub(crate) fn handle_drag(&mut self, column: u16) -> EventResult<TermWmAction> {
         self.drag_moved = true;
-        if let Some(source) = self.drag_source {
+        self.drag_cursor_col = Some(i32::from(column));
+        if self.drag_source.is_some() {
             // Edge-panning: indicators can't be clicked while the button is
             // held, so nudge the scroll when the cursor reaches a viewport edge.
             if i32::from(column) <= self.entries_start_x {
@@ -320,22 +435,32 @@ impl WindowStrip {
             }
             let virtual_col =
                 i32::from(column) - self.entries_start_x + i32::from(self.h_scroll);
-            let index = self.target_index(virtual_col);
-            let current = self.display_order.iter().position(|k| *k == source);
-            if current != Some(index) {
-                return EventResult::Action(TermWmAction::ReorderWindow {
-                    key: source,
-                    index,
-                });
-            }
+            self.drop_index = Some(self.target_index(virtual_col));
         }
         // Never Ignored while captured: a fall-through would leak the drag
         // coordinates into the terminal/PTY below the panel.
         EventResult::Consumed
     }
 
+    /// Release: commit the reorder once if the entry actually moved.
     pub(crate) fn handle_release(&mut self) -> EventResult<TermWmAction> {
-        self.clear_drag_state();
+        let source = self.drag_source.take();
+        let drop_index = self.drop_index.take();
+        let moved = std::mem::take(&mut self.drag_moved);
+        self.drag_cursor_col = None;
+        self.drag_grab_col = 0;
+        if moved
+            && let Some(key) = source
+        {
+            let source_index = self.display_order.iter().position(|k| *k == key);
+            let target_index = drop_index.unwrap_or(source_index.unwrap_or(0));
+            if source_index != Some(target_index) {
+                return EventResult::Action(TermWmAction::ReorderWindow {
+                    key,
+                    index: target_index,
+                });
+            }
+        }
         EventResult::Consumed
     }
 

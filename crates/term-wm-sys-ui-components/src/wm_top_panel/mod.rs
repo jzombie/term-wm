@@ -358,7 +358,7 @@ impl Default for WmTopPanelComponent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::window_strip::{PanelWindowHit, SCROLL_STEP};
+    use super::window_strip::{CHEVRON_GAP, PanelWindowHit, SCROLL_STEP};
     use ratatui::buffer::Buffer;
     use term_wm_core::components::{
         ComponentAction, ComponentQuery, ComponentResponse, WmComponent,
@@ -964,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn drag_live_reorders_to_front() {
+    fn drag_ghost_then_release_reorders_to_front() {
         let keys = make_keys(3);
         let area = LayoutRect {
             x: 0,
@@ -993,8 +993,8 @@ mod tests {
         );
         assert_eq!(p.strip.drag_source, Some(keys[2]));
 
-        // Drag to the far left edge -> LIVE reorder to index 0, emitted on the
-        // Drag itself (the item visibly moves with the cursor).
+        // Drag to the far left edge — the Drag itself is Consumed (the ghost is
+        // the feedback); the reorder is committed on Release.
         let drag_col = p.strip.entries_start_x as u16;
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -1003,12 +1003,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let res = p.handle_events(&drag, &ctx);
-        assert!(
-            matches!(res, EventResult::Action(TermWmAction::ReorderWindow { key, index }) if key == keys[2] && index == 0),
-            "drag must dispatch ReorderWindow live with index 0"
-        );
+        assert!(matches!(res, EventResult::Consumed), "drag consumed");
+        assert_eq!(p.strip.drop_index, Some(0));
 
-        // Release clears drag state and emits nothing further.
+        // Release commits the reorder to index 0.
         let release = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Release(MouseButton::Left),
             column: drag_col,
@@ -1016,7 +1014,10 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         let res = p.handle_events(&release, &ctx);
-        assert!(matches!(res, EventResult::Consumed), "release consumed");
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::ReorderWindow { key, index }) if key == keys[2] && index == 0),
+            "release must dispatch ReorderWindow with index 0"
+        );
         assert!(p.strip.drag_source.is_none(), "drag state cleared on release");
     }
 
@@ -1079,7 +1080,16 @@ mod tests {
             row: 0,
             modifiers: KeyModifiers::NONE,
         });
-        let res = p.handle_events(&drag, &ctx);
+        p.handle_events(&drag, &ctx);
+        // The reorder is committed on Release, with the index clamped to the
+        // end of the reduced list.
+        let release = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Left),
+            column: far_right,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        let res = p.handle_events(&release, &ctx);
         assert!(
             matches!(res, EventResult::Action(TermWmAction::ReorderWindow { key, index }) if key == keys[0] && index == keys.len() - 1),
             "dragging off the right edge clamps the reorder index to the end of the reduced list"
@@ -1124,6 +1134,105 @@ mod tests {
         assert!(
             p.strip.left_indicator_rect.is_some(),
             "left ◀ expected at mid-strip scroll"
+        );
+    }
+
+    #[test]
+    fn chevrons_have_gap_from_entries() {
+        let keys = make_keys(8);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        p.focus_current = Some(keys[3]);
+        render_panel(&mut p);
+
+        let left_chevron_x = p.strip.left_indicator_rect.expect("left ◀ shown").x;
+        let right_chevron_x = p.strip.right_indicator_rect.expect("right ▶ shown").x;
+        // The first entry starts one column (chevron) + CHEVRON_GAP right of the
+        // left chevron.
+        assert_eq!(
+            p.strip.entries_start_x,
+            left_chevron_x + 1 + i32::from(CHEVRON_GAP),
+            "entry viewport must start a chevron column + CHEVRON_GAP past the left chevron"
+        );
+        // No entry's visible right edge ever reaches the right chevron.
+        for hit in &p.strip.window_hits {
+            assert!(
+                hit.rect.x + i32::from(hit.rect.width) <= right_chevron_x,
+                "entry must not bury the right ▶ chevron"
+            );
+        }
+    }
+
+    #[test]
+    fn drag_ghost_renders_at_cursor_and_not_duplicated() {
+        let keys = make_keys(3);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        // Press the LAST entry at its left edge (grab offset 0).
+        let (_key, lx, _width) = p.strip.entry_geometry[2];
+        let press_col = (p.strip.entries_start_x + lx) as u16;
+        let ctx = ComponentContext::new(false);
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: press_col,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        p.handle_events(&press, &ctx);
+
+        // Drag to the left edge of the viewport.
+        let drag_col = p.strip.entries_start_x as u16;
+        let drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: drag_col,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        p.handle_events(&drag, &ctx);
+
+        // Render and inspect: the ghost "Window 2" appears EXACTLY ONCE (the
+        // dragged key is skipped in the static loop), at the cursor column
+        // (grab offset 0) — i.e. it glides like a thumb.
+        let mut backend = make_backend(80, 1);
+        p.render_contents(&mut backend, &NOIR);
+        let cells: Vec<char> = (0..80u16)
+            .map(|xx| {
+                backend
+                    .buffer
+                    .cell((xx, 0))
+                    .map(|c| c.symbol().chars().next().unwrap_or(' '))
+                    .unwrap_or(' ')
+            })
+            .collect();
+        let needle: Vec<char> = "Window 2".chars().collect();
+        let starts: Vec<usize> = (0..=cells.len().saturating_sub(needle.len()))
+            .filter(|&i| cells[i..i + needle.len()] == needle)
+            .collect();
+        assert_eq!(
+            starts.len(),
+            1,
+            "dragged title must render exactly once (ghost, not duplicated), starts={starts:?}"
+        );
+        // The ghost chunk is `" Window 2 "`, so "Window 2" starts one column
+        // after the leading pad space, which is entries_start_x (grab offset 0).
+        assert_eq!(
+            starts[0] as i32,
+            p.strip.entries_start_x + 1,
+            "ghost must track the cursor at the grabbed column (grab offset 0)"
         );
     }
 }
