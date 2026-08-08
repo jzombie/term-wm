@@ -1292,6 +1292,32 @@ mod tests {
         );
     }
 
+    /// Regression: pico inserts characters mid-line using IRM insert mode
+    /// (`CSI 4 h` ... char ... `CSI 4 l`). If the emulator ignores insert mode,
+    /// the char OVERWRITES the existing cell instead of shifting the row right
+    /// ("types over existing characters" on a wrapped line). Replay pico's
+    /// exact insert sequence through the production ingestion loop.
+    #[test]
+    fn parser_read_loop_insert_mode_inserts() {
+        let mut args = make_parser_test_args();
+        // "hello", move to col 2 (1-based) → (0,1) 0-based, enable IRM, insert 'X'.
+        let payload = b"hello\x1b[1;2H\x1b[4hX\x1b[4l".to_vec();
+        args.reader = Box::new(Cursor::new(payload));
+        let shared = Arc::clone(&args.shared_parser);
+
+        parser_read_loop(args);
+
+        let parser = shared.lock().unwrap();
+        let screen = parser.screen();
+        assert_eq!(screen.cell(0, 1).unwrap().contents(), "X", "inserted char");
+        assert_eq!(
+            screen.cell(0, 2).unwrap().contents(),
+            "e",
+            "existing text must shift right, not be overwritten"
+        );
+        assert_eq!(screen.cell(0, 5).unwrap().contents(), "o", "row tail preserved");
+    }
+
     #[test]
     fn parser_read_loop_status_callback_called_when_set() {
         let payload = b"data";
