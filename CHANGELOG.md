@@ -43,6 +43,7 @@ The format is based on Keep a Changelog and this project adheres to
 ### Fixed
 
 - **Monocle + Command Palette showed unfiltered keybindings:** with the Command Palette open in cramped monocle mode, the bottom panel re-pushed the *unfiltered* hint set during rendering, clobbering the layer-filtered hints set during layout (so Global actions like Ctrl+A appeared alongside palette actions). The render pass no longer mutates the panel, so palette-layer-filtered hints are shown consistently in every mode.
+- **Floating-window resize outline lighting up under panels/overlays:** hovering a floating window's resize edge while a panel or modal overlay (help, Command Palette, exit confirm) covered it still drew the resize outline around the window, because the outline's occlusion check only considered windows drawn above it. The outline now uses the same occlusion masking as the tiling drag handles — the top/bottom panel rows and the full area of any open overlay are treated as occluders — so an edge underneath a panel or behind an overlay no longer lights up (and still does once it's visible).
 - **`examples/dual_image.rs` could not find its default image** when launched from a directory other than the project root.
 
 ### Dependencies
