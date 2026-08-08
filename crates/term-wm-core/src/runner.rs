@@ -18,6 +18,7 @@ use crate::io::EventSource;
 use crate::io::FramePacer;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::{AppTask, TaskHandle, TaskScheduler};
+use crate::window::window_manager::OutsideClickResult;
 use crate::window::{WindowKey, WindowManager};
 use std::collections::VecDeque;
 
@@ -264,15 +265,6 @@ where
         EventResult::Consumed => true,
         EventResult::Ignored => false,
     }
-}
-
-/// Whether the command palette should STAY OPEN after an outside click that a
-/// chrome layer (e.g. the top panel) consumed WITHOUT producing an action — such
-/// as a top-panel `◀`/`▶` chevron scroll. Returns `true` (stay open) only when
-/// the click was handled and no action was queued; a genuine outside click
-/// (unhandled) or a real action (focus window, tiling toggle) closes it.
-fn palette_stays_open(handled: bool, produced_action: bool) -> bool {
-    handled && !produced_action
 }
 
 /// Low-level event loop. Drives rendering and input until the app quits.
@@ -563,15 +555,14 @@ where
                     {
                         let palette_key = app.wm().command_palette_key();
                         let mut actions = std::collections::VecDeque::new();
-                        let handled = app.wm().handle_outside_click(
+                        let result = app.wm().handle_outside_click_precise(
                             mouse_evt.column,
                             mouse_evt.row,
                             &evt,
                             &mut actions,
                             palette_key,
                         );
-                        let produced_action = !actions.is_empty();
-                        if !handled {
+                        if result == OutsideClickResult::Ignored {
                             // No panel/overlay/chrome hit — activate window under cursor
                             app.wm()
                                 .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
@@ -580,13 +571,13 @@ where
                         // so the OpenCommandPalette toggle behavior works correctly:
                         // action checks command_menu_visible() → true → closes palette.
                         drain_action_queue(app, &mut actions);
-                        // Close the palette UNLESS a chrome layer consumed the click
-                        // with no action (e.g. a top-panel chevron scroll) — that
-                        // keeps the palette open while the list scrolls. A produced
-                        // action (focus window, tiling toggle) closes it as before,
-                        // and the OpenCommandPalette action toggles it closed via its
-                        // own dispatch above (close_command_palette is idempotent).
-                        if !palette_stays_open(handled, produced_action) {
+                        // Close the palette UNLESS a layer consumed the click with no
+                        // action (e.g. a top-panel chevron scroll) — that keeps the
+                        // palette open while the list scrolls. A window focus or a
+                        // queued action closes it as before, and the OpenCommandPalette
+                        // action toggles it closed via its own dispatch above
+                        // (close_command_palette is idempotent).
+                        if !matches!(result, OutsideClickResult::LayerConsumed) {
                             app.wm().close_command_palette();
                         }
                         update_selection_snapshot(app);
@@ -972,22 +963,6 @@ mod tests {
     use crate::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
     use crate::window::test_component::TestComponent;
     use term_wm_layout_engine::LayoutRect;
-
-    #[test]
-    fn palette_stays_open_for_consumed_actionless_click() {
-        // A chrome layer consumed the click with NO action (e.g. a top-panel
-        // chevron scroll) → the palette must stay open.
-        assert!(palette_stays_open(true, false));
-    }
-
-    #[test]
-    fn palette_closes_for_unhandled_or_action_clicks() {
-        // Genuine outside click (nothing handled) → close.
-        assert!(!palette_stays_open(false, false));
-        // A real action was produced (focus window / tiling toggle) → close.
-        assert!(!palette_stays_open(true, true));
-        assert!(!palette_stays_open(false, true));
-    }
 
     #[test]
     fn auto_layout_empty_and_multiple() {

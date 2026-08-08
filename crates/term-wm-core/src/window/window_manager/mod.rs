@@ -2416,14 +2416,28 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     ///
     /// Returns `true` if any hitbox was handled. Panel/overlay actions are
     /// pushed to `actions` for the caller to dispatch.
-    pub fn handle_outside_click(
-        &mut self,
+    pub fn handle_outside_click(        &mut self,
         col: u16,
         row: u16,
         event: &Event,
         actions: &mut VecDeque<(WindowKey, TermWmAction)>,
         ignored_overlay: Option<OverlayKey>,
     ) -> bool {
+        self.handle_outside_click_precise(col, row, event, actions, ignored_overlay)
+            .is_handled()
+    }
+
+    /// Like [`Self::handle_outside_click`], but reports WHAT handled the click so
+    /// callers can distinguish a chrome-layer scroll (e.g. a top-panel chevron)
+    /// from a window focus / action dispatch.
+    pub fn handle_outside_click_precise(
+        &mut self,
+        col: u16,
+        row: u16,
+        event: &Event,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        ignored_overlay: Option<OverlayKey>,
+    ) -> OutsideClickResult {
         let position = MousePosition {
             column: col as i16,
             row: row as i16,
@@ -2442,9 +2456,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         match layer_comp.handle_events(event, &ctx) {
                             EventResult::Action(action) => {
                                 actions.push_back((self.focused_window(), action));
-                                return true;
+                                return OutsideClickResult::ActionQueued;
                             }
-                            EventResult::Consumed => return true,
+                            EventResult::Consumed => return OutsideClickResult::LayerConsumed,
                             EventResult::Ignored => {}
                         }
                     }
@@ -2455,9 +2469,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         match overlay.handle_events(event, &ctx) {
                             EventResult::Action(action) => {
                                 actions.push_back((self.focused_window(), action));
-                                return true;
+                                return OutsideClickResult::ActionQueued;
                             }
-                            EventResult::Consumed => return true,
+                            EventResult::Consumed => return OutsideClickResult::LayerConsumed,
                             EventResult::Ignored => {}
                         }
                     }
@@ -2473,18 +2487,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     };
                     if let Some(k) = win_key {
                         self.focus_app_window(k);
-                        return true;
+                        return OutsideClickResult::Focused;
                     }
                 }
                 ComponentOwner::Window(key) => {
                     self.focus_app_window(key);
-                    return true;
+                    return OutsideClickResult::Focused;
                 }
                 _ => {}
             }
         }
 
-        false
+        OutsideClickResult::Ignored
     }
 
     /// No-op: chrome hitbox registration is now handled by the console
@@ -2702,6 +2716,26 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             });
         }
         btns
+    }
+}
+
+/// Outcome of an outside click dispatched by [`WindowManager::handle_outside_click_precise`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideClickResult {
+    /// Nothing handled the click (a genuine outside click).
+    Ignored,
+    /// A layer/overlay (top/bottom panel, FAB) consumed the event with no action
+    /// (e.g. a top-panel chevron scroll) — a chrome interaction, not a context shift.
+    LayerConsumed,
+    /// A window body or its chrome was focused.
+    Focused,
+    /// A panel/overlay queued an action for dispatch.
+    ActionQueued,
+}
+
+impl OutsideClickResult {
+    pub fn is_handled(&self) -> bool {
+        !matches!(self, Self::Ignored)
     }
 }
 
@@ -7262,6 +7296,123 @@ mod tests {
         // NoopWmComponent.handle_events returns Ignored → Layer arm falls through
         // No other hitbox → returns false
         assert!(!wm.handle_outside_click(5, 0, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_precise_ignored_when_no_hit() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert_eq!(
+            wm.handle_outside_click_precise(5, 5, &event, &mut actions, None),
+            OutsideClickResult::Ignored
+        );
+    }
+
+    #[test]
+    fn handle_outside_click_precise_focused_on_window_hit() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert_eq!(
+            wm.handle_outside_click_precise(5, 5, &event, &mut actions, None),
+            OutsideClickResult::Focused
+        );
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_precise_layer_consumed() {
+        use crate::components::{Component, ComponentContext, EventResult, WmComponent};
+
+        #[derive(Debug)]
+        struct ConsumingWmComponent;
+        impl Component<TermWmAction> for ConsumingWmComponent {
+            fn handle_events(
+                &mut self,
+                _event: &crate::events::Event,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                // Simulates a top-panel chevron scroll: consumed, no action.
+                EventResult::Consumed
+            }
+            fn render(
+                &mut self,
+                _backend: &mut dyn term_wm_render::RenderBackend,
+                _area: LayoutRect,
+                _ctx: &ComponentContext,
+                _registry: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+        impl WmComponent for ConsumingWmComponent {}
+
+        let mut wm = WindowManager::<TestComponent, ConsumingWmComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let layer_id = wm.layer_manager.insert(
+            ConsumingWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 1,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert_eq!(
+            wm.handle_outside_click_precise(5, 0, &event, &mut actions, None),
+            OutsideClickResult::LayerConsumed,
+            "a layer consuming the click with no action must be LayerConsumed (e.g. chevron)"
+        );
     }
 
     #[test]
