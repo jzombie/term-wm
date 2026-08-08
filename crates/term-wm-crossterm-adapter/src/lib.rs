@@ -145,10 +145,20 @@ pub fn try_translate_event(evt: crossterm::event::Event) -> Option<Event> {
 /// root `UnifiedEventSource`) delegates here so crossterm knowledge stays
 /// contained in this crate.
 pub fn set_mouse_capture(enabled: bool) -> std::io::Result<()> {
+    set_mouse_capture_with(&mut std::io::stdout(), enabled)
+}
+
+/// Enable or disable crossterm mouse capture by writing the corresponding
+/// escape sequence to `writer`. The writer is injected so tests can capture
+/// the emitted bytes without touching a real terminal.
+pub fn set_mouse_capture_with<W: std::io::Write>(
+    writer: &mut W,
+    enabled: bool,
+) -> std::io::Result<()> {
     if enabled {
-        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
+        crossterm::execute!(writer, crossterm::event::EnableMouseCapture)
     } else {
-        crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
+        crossterm::execute!(writer, crossterm::event::DisableMouseCapture)
     }
 }
 
@@ -184,6 +194,27 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         );
         assert!(try_translate_event(crossterm::event::Event::Key(key)).is_none());
+    }
+
+    #[test]
+    fn test_set_mouse_capture_writes_sequences() {
+        let mut buf = Vec::new();
+        set_mouse_capture_with(&mut buf, true).unwrap();
+        assert!(
+            buf.windows(b"\x1b[?1000h".len())
+                .any(|w| w == b"\x1b[?1000h"),
+            "EnableMouseCapture must emit \\x1b[?1000h; got {:?}",
+            String::from_utf8_lossy(&buf)
+        );
+
+        buf.clear();
+        set_mouse_capture_with(&mut buf, false).unwrap();
+        assert!(
+            buf.windows(b"\x1b[?1000l".len())
+                .any(|w| w == b"\x1b[?1000l"),
+            "DisableMouseCapture must emit \\x1b[?1000l; got {:?}",
+            String::from_utf8_lossy(&buf)
+        );
     }
 
     #[test]

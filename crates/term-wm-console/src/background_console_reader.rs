@@ -104,9 +104,11 @@ fn input_loop(tx: Sender<Event>, shutdown: Arc<AtomicBool>) {
                 match crossterm::event::read() {
                     Ok(evt) => {
                         // NO normalization here — the consumer normalizes.
-                        if let Some(core_evt) = term_wm_crossterm_adapter::try_translate_event(evt)
-                            && tx.send(core_evt).is_err()
-                        {
+                        let Some(core_evt) = term_wm_crossterm_adapter::try_translate_event(evt)
+                        else {
+                            continue; // unrecognized key — drop the event
+                        };
+                        if tx.send(core_evt).is_err() {
                             break; // receiver dropped
                         }
                     }
