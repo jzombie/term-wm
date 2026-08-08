@@ -18,7 +18,9 @@ use term_wm_core::{
     window::WindowKey,
 };
 use term_wm_layout_engine::LayoutRect;
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string, slice_by_columns};
+use term_wm_ui_components::helpers::{
+    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string, slice_by_columns,
+};
 
 /// One space on each side of a window entry label (`" {label} "`).
 const ENTRY_PADDING: usize = 2;
@@ -177,7 +179,11 @@ impl WindowStrip {
         let overflow = content_width > max_entries_width;
         let (left_indicator_width, right_indicator_width) =
             if overflow { (1u16, 1u16) } else { (0u16, 0u16) };
-        let chevron_gap = if overflow { i32::from(CHEVRON_GAP) * 2 } else { 0 };
+        let chevron_gap = if overflow {
+            i32::from(CHEVRON_GAP) * 2
+        } else {
+            0
+        };
         let scroll_viewport_width = if overflow {
             max_entries_width.saturating_sub(
                 i32::from(left_indicator_width + right_indicator_width) + chevron_gap,
@@ -390,7 +396,9 @@ impl WindowStrip {
             });
         }
         if right_indicator_width == 1 && self.h_scroll < max_scroll {
-            let ix = rect.x.saturating_add(i32::from(rect.width.saturating_sub(1)));
+            let ix = rect
+                .x
+                .saturating_add(i32::from(rect.width.saturating_sub(1)));
             safe_set_string(
                 &mut ratatui_backend.buffer,
                 bounds,
@@ -419,7 +427,10 @@ impl WindowStrip {
         if let Some(rect) = self.right_indicator_rect
             && rect_contains(rect, column, row)
         {
-            self.h_scroll = self.h_scroll.saturating_add(SCROLL_STEP).min(self.max_scroll);
+            self.h_scroll = self
+                .h_scroll
+                .saturating_add(SCROLL_STEP)
+                .min(self.max_scroll);
             return EventResult::Consumed;
         }
         if let Some(hit) = self
@@ -452,10 +463,12 @@ impl WindowStrip {
             if i32::from(column) <= self.entries_start_x {
                 self.h_scroll = self.h_scroll.saturating_sub(SCROLL_STEP);
             } else if i32::from(column) >= self.entries_start_x + self.scroll_viewport_width {
-                self.h_scroll = self.h_scroll.saturating_add(SCROLL_STEP).min(self.max_scroll);
+                self.h_scroll = self
+                    .h_scroll
+                    .saturating_add(SCROLL_STEP)
+                    .min(self.max_scroll);
             }
-            let virtual_col =
-                i32::from(column) - self.entries_start_x + i32::from(self.h_scroll);
+            let virtual_col = i32::from(column) - self.entries_start_x + i32::from(self.h_scroll);
             self.drop_index = Some(self.target_index(virtual_col));
         }
         // Never Ignored while captured: a fall-through would leak the drag
@@ -470,9 +483,7 @@ impl WindowStrip {
         let moved = std::mem::take(&mut self.drag_moved);
         self.drag_cursor_col = None;
         self.drag_grab_col = 0;
-        if moved
-            && let Some(key) = source
-        {
+        if moved && let Some(key) = source {
             let source_index = self.display_order.iter().position(|k| *k == key);
             let target_index = drop_index.unwrap_or(source_index.unwrap_or(0));
             if source_index != Some(target_index) {
@@ -491,7 +502,10 @@ impl WindowStrip {
                 self.h_scroll = self.h_scroll.saturating_sub(SCROLL_STEP);
             }
             MouseEventKind::ScrollRight => {
-                self.h_scroll = self.h_scroll.saturating_add(SCROLL_STEP).min(self.max_scroll);
+                self.h_scroll = self
+                    .h_scroll
+                    .saturating_add(SCROLL_STEP)
+                    .min(self.max_scroll);
             }
             _ => {}
         }

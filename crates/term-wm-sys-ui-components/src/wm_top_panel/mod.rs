@@ -364,8 +364,8 @@ impl Default for WmTopPanelComponent {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::window_strip::{CHEVRON_GAP, PanelWindowHit, SCROLL_STEP};
+    use super::*;
     use ratatui::buffer::Buffer;
     use term_wm_core::components::{
         ComponentAction, ComponentQuery, ComponentResponse, WmComponent,
@@ -897,8 +897,7 @@ mod tests {
         render_panel(&mut p);
         assert!(p.strip.max_scroll > 0, "content must overflow the viewport");
         assert_eq!(
-            p.strip.h_scroll,
-            p.strip.max_scroll,
+            p.strip.h_scroll, p.strip.max_scroll,
             "h_scroll must clamp to max_scroll without underflow/panic"
         );
         assert!(
@@ -1025,7 +1024,10 @@ mod tests {
             matches!(res, EventResult::Action(TermWmAction::ReorderWindow { key, index }) if key == keys[2] && index == 0),
             "release must dispatch ReorderWindow with index 0"
         );
-        assert!(p.strip.drag_source.is_none(), "drag state cleared on release");
+        assert!(
+            p.strip.drag_source.is_none(),
+            "drag state cleared on release"
+        );
     }
 
     #[test]
@@ -1116,7 +1118,8 @@ mod tests {
         push_windows(&mut p, &keys, area);
         // Enable the right-aligned tiling indicator AND overflow, with a middle
         // focus so auto-scroll lands mid-strip (both chevrons visible).
-        p.tiling.set_indicator(Some(("⊞ Float", TermWmAction::ToggleTiling)));
+        p.tiling
+            .set_indicator(Some(("⊞ Float", TermWmAction::ToggleTiling)));
         p.focus_current = Some(keys[3]);
         p.strip.h_scroll = u16::MAX;
         render_panel(&mut p);
@@ -1257,7 +1260,10 @@ mod tests {
         p.focus_current = Some(keys[3]);
         render_panel(&mut p); // first render auto-scrolls to keys[3]
         let after_auto = p.strip.h_scroll;
-        assert!(after_auto > SCROLL_STEP, "auto-scroll should land mid-strip");
+        assert!(
+            after_auto > SCROLL_STEP,
+            "auto-scroll should land mid-strip"
+        );
 
         // A manual scroll (e.g. chevron click) with unchanged focus must persist —
         // NOT be snapped back by per-frame auto-scroll.
@@ -1265,8 +1271,7 @@ mod tests {
         p.strip.h_scroll = manual;
         render_panel(&mut p);
         assert_eq!(
-            p.strip.h_scroll,
-            manual,
+            p.strip.h_scroll, manual,
             "manual scroll must persist while the focused window is unchanged"
         );
 
@@ -1299,8 +1304,7 @@ mod tests {
         p.strip.h_scroll = p.strip.max_scroll;
         render_panel(&mut p);
         assert_eq!(
-            p.strip.h_scroll,
-            p.strip.max_scroll,
+            p.strip.h_scroll, p.strip.max_scroll,
             "manual scroll persists with unchanged focus"
         );
 
@@ -1313,8 +1317,7 @@ mod tests {
         p.strip.h_scroll = 0;
         render_panel(&mut p);
         assert_eq!(
-            p.strip.h_scroll,
-            p.strip.max_scroll,
+            p.strip.h_scroll, p.strip.max_scroll,
             "auto-scroll re-follows the focused window after a structural reorder"
         );
     }

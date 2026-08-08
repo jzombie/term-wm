@@ -92,7 +92,10 @@ pub enum TermWmAction {
     MaximizeWindow(WindowKey),
     /// Reorder the top-panel / command palette window list: move `key` to
     /// display position `index` (list order only; tiling geometry unchanged).
-    ReorderWindow { key: WindowKey, index: usize },
+    ReorderWindow {
+        key: WindowKey,
+        index: usize,
+    },
 
     ToggleMonocle,
     ToggleTiling,

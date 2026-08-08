@@ -6202,7 +6202,11 @@ mod tests {
         }
         let unknown = WindowKey::default();
         wm.reorder_window(unknown, 0);
-        assert_eq!(display_order_keys(&wm), vec![k0, k1], "unknown key is a no-op");
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k0, k1],
+            "unknown key is a no-op"
+        );
 
         wm.reorder_window(k1, 0);
         assert_eq!(display_order_keys(&wm), vec![k1, k0]);

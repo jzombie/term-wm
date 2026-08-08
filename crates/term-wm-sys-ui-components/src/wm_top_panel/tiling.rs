@@ -2,13 +2,11 @@
 
 use ratatui::style::{Modifier, Style};
 
-use term_wm_core::{
-    actions::TermWmAction,
-    layout::rect_contains,
-    theme::Theme,
-};
+use term_wm_core::{actions::TermWmAction, layout::rect_contains, theme::Theme};
 use term_wm_layout_engine::LayoutRect;
-use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string};
+use term_wm_ui_components::helpers::{
+    color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
+};
 
 /// Right-aligned tiling/float indicator applet. The parent reserves its width
 /// at the right edge so the window strip never under-draws it.
