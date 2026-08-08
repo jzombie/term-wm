@@ -188,7 +188,7 @@ impl WmHelpOverlayComponent {
 
             let focus_next = kb.combos_for(TermWmAction::FocusNext).join(" / ");
             let focus_prev = kb.combos_for(TermWmAction::FocusPrev).join(" / ");
-            let new_win = kb.combos_for(TermWmAction::NewWindow).join(" / ");
+            let new_term = kb.combos_for(TermWmAction::NewTerminal).join(" / ");
             let menu_nav = {
                 let a = kb.combos_for(TermWmAction::MenuUp).join(" / ");
                 let b = kb.combos_for(TermWmAction::MenuDown).join(" / ");
@@ -206,7 +206,7 @@ impl WmHelpOverlayComponent {
             s = s
                 .replace("%FOCUS_NEXT%", &focus_next)
                 .replace("%FOCUS_PREV%", &focus_prev)
-                .replace("%NEW_WINDOW%", &new_win)
+                .replace("%NEW_TERMINAL%", &new_term)
                 .replace("%MENU_NAV%", &menu_nav)
                 .replace("%MENU_SELECT%", &select)
                 .replace("%SUPER%", &super_key)

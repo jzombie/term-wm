@@ -6,6 +6,7 @@ use crossbeam_channel::Sender;
 
 use term_wm::app_context::AppContext;
 use term_wm::components::AppRootComponent;
+use term_wm::components::NoopComponent;
 use term_wm::config::AppBuilder;
 use term_wm::default_shell_command;
 use term_wm::io::RenderTarget;
@@ -153,7 +154,7 @@ impl App {
             used += 1;
         }
         for _ in used..num_windows {
-            if let Err(e) = app.wm_new_window() {
+            if let Err(e) = app.wm_new_terminal() {
                 tracing::error!("Window spawn error: {}", e);
             }
         }
@@ -222,15 +223,12 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
         self.inner.toggle_system_panel();
     }
 
-    fn wm_new_window(&mut self) -> io::Result<()> {
-        let count = self.inner.wm().window_count() + 1;
-        self.inner.spawn_terminal_window(
-            default_shell_command(),
-            PTY_SCROLLBACK_LEN,
-            None,
-            format!("Shell {}", count),
-        )?;
-        Ok(())
+    fn wm_new_terminal(&mut self) -> io::Result<()> {
+        <TermWmApp<NoopComponent> as term_wm::runner::WindowManagerHost<
+            AppRootComponent<NoopComponent>,
+            LayerComponent,
+            OverlayComponent,
+        >>::wm_new_terminal(&mut self.inner)
     }
 
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}

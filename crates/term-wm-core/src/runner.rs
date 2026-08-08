@@ -28,7 +28,7 @@ pub trait WindowManagerHost<
 >
 {
     fn wm(&mut self) -> &mut WindowManager<C, L, O>;
-    fn wm_new_window(&mut self) -> std::io::Result<()> {
+    fn wm_new_terminal(&mut self) -> std::io::Result<()> {
         Ok(())
     }
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
@@ -92,7 +92,7 @@ fn dispatch_action<
         TermWmAction::Quit | TermWmAction::ExitUi => app.open_exit_confirm(),
         TermWmAction::Help | TermWmAction::OpenHelp => app.open_help_overlay(),
         TermWmAction::CloseWindow(k) => app.wm().close_window(k),
-        TermWmAction::NewWindow => drop(app.wm_new_window()),
+        TermWmAction::NewTerminal => drop(app.wm_new_terminal()),
         TermWmAction::MinimizeWindow(k) => app.wm().minimize_window(k),
         TermWmAction::MaximizeWindow(k) => app.wm().toggle_maximize(k),
         TermWmAction::ToggleMonocle => app.wm().toggle_monocle(),
@@ -584,9 +584,9 @@ where
                     if let Some(action) = palette_handled {
                         let key = app.wm().focused_window();
                         let mut actions = std::collections::VecDeque::new();
-                        // NewWindow returns Result — propagate the error
-                        if matches!(action, TermWmAction::NewWindow) {
-                            app.wm_new_window()?;
+                        // NewTerminal returns Result — propagate the error
+                        if matches!(action, TermWmAction::NewTerminal) {
+                            app.wm_new_terminal()?;
                         } else {
                             actions.push_back((key, action));
                         }

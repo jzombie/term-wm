@@ -46,7 +46,7 @@ pub enum TermWmAction {
     OpenHelp,
     FocusNext,
     FocusPrev,
-    NewWindow,
+    NewTerminal,
     HintToggle,
     MenuUp,
     MenuDown,
@@ -233,7 +233,7 @@ impl TermWmAction {
             | TermWmAction::FocusPrev
             | TermWmAction::FocusWindow(_) => Category::Navigation,
 
-            TermWmAction::NewWindow
+            TermWmAction::NewTerminal
             | TermWmAction::HintToggle
             | TermWmAction::CloseMenu
             | TermWmAction::Help
@@ -309,7 +309,7 @@ impl TermWmAction {
             TermWmAction::FocusPrev => Some(65),
             TermWmAction::CycleNextWindow => Some(60),
             TermWmAction::CyclePrevWindow => Some(55),
-            TermWmAction::NewWindow => Some(50),
+            TermWmAction::NewTerminal => Some(50),
             TermWmAction::HintToggle => Some(40),
             TermWmAction::SendSuperKeyToFocusedWindow => Some(45),
 
@@ -329,7 +329,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::OpenHelp => "Open help",
             TermWmAction::FocusNext => "Focus next",
             TermWmAction::FocusPrev => "Focus previous",
-            TermWmAction::NewWindow => "New window",
+            TermWmAction::NewTerminal => "New Terminal",
             TermWmAction::HintToggle => "Toggle hints",
             TermWmAction::MenuUp => "Menu up",
             TermWmAction::MenuDown => "Menu down",

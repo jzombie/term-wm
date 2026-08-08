@@ -394,7 +394,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Second".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: false,
             },
             MenuItem {
@@ -435,7 +435,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Two".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: false,
             },
         ]);
@@ -463,13 +463,13 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "One".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: false,
             },
         ]);
         assert_eq!(menu.selected_action(), Some(&TermWmAction::Quit));
         menu.set_selected(1);
-        assert_eq!(menu.selected_action(), Some(&TermWmAction::NewWindow));
+        assert_eq!(menu.selected_action(), Some(&TermWmAction::NewTerminal));
     }
 
     #[test]
@@ -494,7 +494,7 @@ mod tests {
             MenuItem {
                 icon: Some("\u{2713}"),
                 label: "Item B".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: false,
             },
         ]);
@@ -533,7 +533,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Disabled".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: true,
             },
         ]);
@@ -555,7 +555,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Disabled".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: true,
             },
         ]);
@@ -577,7 +577,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Disabled".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: true,
             },
         ]);
@@ -601,7 +601,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Disabled".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: true,
             },
         ]);
@@ -635,7 +635,7 @@ mod tests {
             MenuItem {
                 icon: None,
                 label: "Disabled".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: true,
             },
         ]);

@@ -27,12 +27,34 @@ use term_wm_sys_ui_components::wm_debug_log::{WmDebugLogComponent, install_panic
 use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
 use term_wm_ui_components::TerminalComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
+use term_wm_ui_components::default_shell_command;
 use term_wm_ui_components::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::{AppRootComponent, NoopComponent};
 use crate::unified_event_source::UnifiedEvent;
+
+/// Scrollback size for windows spawned by the default "New Terminal" action.
+const NEW_TERMINAL_SCROLLBACK: usize = 2000;
+
+/// Command-palette allow-list installed by `new_custom` / `new_with_config`.
+///
+/// Deliberately a restricted subset of the full `DEFAULT_SUPPORTED_MENU_ACTIONS`
+/// (which additionally contains `NewTerminal`-adjacent entries like
+/// `ToggleDebugWindow` / `ToggleSystemPanel` / `Help`). Apps that want the full
+/// set — or a different one — use `new_with_actions`.
+const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
+    TermWmAction::CloseMenu,
+    TermWmAction::ToggleMouseCapture,
+    TermWmAction::ToggleClipboardMode,
+    TermWmAction::ToggleWindowSelection,
+    TermWmAction::ExitUi,
+    TermWmAction::ToggleMonocle,
+    TermWmAction::ToggleTiling,
+    TermWmAction::NewTerminal,
+];
+
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
@@ -58,8 +80,9 @@ use crate::unified_event_source::UnifiedEvent;
 /// `new_custom` and `new_with_config` install a fixed, restricted
 /// command-palette allow-list (`CloseMenu`, `ToggleMouseCapture`,
 /// `ToggleClipboardMode`, `ToggleWindowSelection`, `ExitUi`, `ToggleMonocle`,
-/// `ToggleTiling`). Use `new_with_actions` to opt into additional entries such
-/// as `ToggleDebugWindow` or `ToggleSystemPanel`, or to add/remove any action.
+/// `ToggleTiling`, `NewTerminal`). Use `new_with_actions` to opt into additional
+/// entries such as `ToggleDebugWindow` or `ToggleSystemPanel`, or to add/remove
+/// any action.
 ///
 /// `from_wm()` builds the app around a pre-configured `WindowManager`; the
 /// bundled `term-wm` binary uses this path.
@@ -105,6 +128,10 @@ where
     pty_wakeup_tx: Sender<UnifiedEvent>,
     /// Shared state for the key-monitor applet in the system panel.
     last_key: Rc<RefCell<Option<KeyEvent>>>,
+    /// Monotonic counter for "New Terminal" window titles. Never reused across
+    /// window close/reopen, so titles stay unique even when the window count
+    /// drops.
+    terminal_counter: usize,
 }
 
 impl<C: Component<TermWmAction>> TermWmApp<C> {
@@ -127,15 +154,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         Self::new_with_actions(
             app_ctx,
             config,
-            vec![
-                TermWmAction::CloseMenu,
-                TermWmAction::ToggleMouseCapture,
-                TermWmAction::ToggleClipboardMode,
-                TermWmAction::ToggleWindowSelection,
-                TermWmAction::ExitUi,
-                TermWmAction::ToggleMonocle,
-                TermWmAction::ToggleTiling,
-            ],
+            DEFAULT_STANDALONE_MENU_ACTIONS.to_vec(),
         )
     }
 
@@ -196,6 +215,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             draw_renderer: DrawPlanRenderer::new(),
             pty_wakeup_tx,
             last_key: Rc::new(RefCell::new(None)),
+            terminal_counter: 0,
         }
     }
 
@@ -416,6 +436,17 @@ impl<C: Component<TermWmAction>>
         &mut self.wm
     }
 
+    fn wm_new_terminal(&mut self) -> std::io::Result<()> {
+        self.terminal_counter += 1;
+        self.spawn_terminal_window(
+            default_shell_command(),
+            NEW_TERMINAL_SCROLLBACK,
+            None,
+            format!("Terminal {}", self.terminal_counter),
+        )?;
+        Ok(())
+    }
+
     fn quit_requested(&self) -> bool {
         self.should_quit
     }
@@ -535,6 +566,7 @@ mod tests {
                 TermWmAction::ExitUi,
                 TermWmAction::ToggleMonocle,
                 TermWmAction::ToggleTiling,
+                TermWmAction::NewTerminal,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );

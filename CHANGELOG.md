@@ -10,6 +10,10 @@ The format is based on Keep a Changelog and this project adheres to
 
 - **Monocle and tile/float toggles in the default Command Palette:** the default palette allow-list for standalone apps built with `TermWmApp::new_custom` / `new_with_config` now also includes `ToggleMonocle` and `ToggleTiling` (the "View" group), so switching between monocle and tiled/float window layouts is available out of the box instead of requiring a custom allow-list.
 
+### Changed
+
+- **"New Window" renamed to "New Terminal":** the action (now `NewTerminal`), its Command Palette label, keybinding-help text, and test naming all say "terminal" instead of "window". Standalone apps built with `TermWmApp::new_custom` / `new_with_config` now include "New Terminal" in the default Command Palette, and it actually spawns a new terminal window out of the box — apps can remove it via `new_with_actions`. The `term-wm` binary now routes interactive new-window creation through the shared facade (fixing a title-collision bug where closing a window could reuse a duplicate "Shell N" title), so interactive terminals are titled `Terminal 1`, `Terminal 2`, …; `--run`/command windows keep their `Shell` titles.
+
 ## [0.9.14-alpha] - 2026-08-07
 
 ### Added
