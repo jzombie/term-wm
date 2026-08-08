@@ -707,11 +707,7 @@ mod tests {
     /// thread handle) so the unified source's console wiring can be tested
     /// without a real terminal. Keep `console_tx` alive so the channel stays
     /// connected and the console-alive select path is exercised.
-    fn test_console() -> (
-        BackgroundConsoleReader,
-        Receiver<Event>,
-        Sender<Event>,
-    ) {
+    fn test_console() -> (BackgroundConsoleReader, Receiver<Event>, Sender<Event>) {
         let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
         let handle = std::thread::spawn(|| {});
         let src = BackgroundConsoleReader::from_receiver(

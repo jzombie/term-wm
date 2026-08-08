@@ -603,7 +603,12 @@ mod tests {
             width: 80,
             height: 1,
         };
-        p.render(&mut backend, area, &ctx(), &mut term_wm_core::hitbox_registry::HitboxRegistry::new());
+        p.render(
+            &mut backend,
+            area,
+            &ctx(),
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
         // No panic, no-op
     }
 
@@ -695,7 +700,9 @@ mod tests {
     fn process_action_set_hint_visibility_on_demand() {
         let mut p = WmTopPanelComponent::new("test");
         p.set_visible(false);
-        p.process_action(&ComponentAction::SetHintVisibility(HintVisibility::OnDemand));
+        p.process_action(&ComponentAction::SetHintVisibility(
+            HintVisibility::OnDemand,
+        ));
         assert!(!p.visible());
     }
 
@@ -835,7 +842,10 @@ mod tests {
     #[test]
     fn press_on_empty_panel_returns_ignored() {
         let mut p = WmTopPanelComponent::new("test");
-        let result = p.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 0, 0), &ctx());
+        let result = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), 0, 0),
+            &ctx(),
+        );
         assert!(result.is_ignored());
     }
 
@@ -856,7 +866,10 @@ mod tests {
         // menu/tab/chevron/tiling) must be CONSUMED so it never falls through to
         // a window behind the panel (which would close the Command Palette and
         // could click the window's close button).
-        let res = p.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 60, 0), &ctx());
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), 60, 0),
+            &ctx(),
+        );
         assert!(
             matches!(res, EventResult::Consumed),
             "panel-background press must be consumed, not Ignored"
@@ -878,7 +891,10 @@ mod tests {
 
         // First tab starts at menu width + MENU_GAP (no overflow).
         let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
-        let res = p.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), bar_start + 1, 0), &ctx());
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), bar_start + 1, 0),
+            &ctx(),
+        );
         assert!(
             matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[0]),
             "pressing a tab must map to FocusWindow"
@@ -901,10 +917,19 @@ mod tests {
         let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
         // Tab i spans [bar_start + 10*i, bar_start + 10*(i+1)) (label 8 + 2 pad).
         let tab2 = bar_start + 20;
-        let res = p.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), tab2 + 1, 0), &ctx());
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), tab2 + 1, 0),
+            &ctx(),
+        );
         assert!(matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[2]));
-        p.handle_events(&mouse(MouseEventKind::Drag(MouseButton::Left), bar_start, 0), &ctx());
-        let res = p.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), bar_start, 0), &ctx());
+        p.handle_events(
+            &mouse(MouseEventKind::Drag(MouseButton::Left), bar_start, 0),
+            &ctx(),
+        );
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), bar_start, 0),
+            &ctx(),
+        );
         assert!(
             matches!(res, EventResult::Action(TermWmAction::ReorderWindow { key, index }) if key == keys[2] && index == 0),
             "drag+release must map to ReorderWindow"

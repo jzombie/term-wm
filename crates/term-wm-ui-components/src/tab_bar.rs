@@ -214,8 +214,8 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Def
     }
 }
 
-impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Component<TabBarEvent<K>>
-    for TabBarComponent<K>
+impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static>
+    Component<TabBarEvent<K>> for TabBarComponent<K>
 {
     fn render(
         &mut self,
@@ -260,7 +260,11 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Com
         let overflow = content_width > max_entries_width;
         let (left_indicator_width, right_indicator_width) =
             if overflow { (1u16, 1u16) } else { (0u16, 0u16) };
-        let chevron_gap = if overflow { i32::from(CHEVRON_GAP) * 2 } else { 0 };
+        let chevron_gap = if overflow {
+            i32::from(CHEVRON_GAP) * 2
+        } else {
+            0
+        };
         let scroll_viewport_width = if overflow {
             max_entries_width.saturating_sub(
                 i32::from(left_indicator_width + right_indicator_width) + chevron_gap,
@@ -342,18 +346,16 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Com
             let draw_x = entries_start_x.saturating_add(visible_left);
 
             let focused = Some(key) == self.active_key;
-            let item_style = item
-                .style_override
-                .unwrap_or_else(|| {
-                    if focused {
-                        Style::default()
-                            .bg(color_to_ratatui(theme.menu_selected_bg))
-                            .fg(color_to_ratatui(theme.menu_selected_fg))
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
-                    }
-                });
+            let item_style = item.style_override.unwrap_or_else(|| {
+                if focused {
+                    Style::default()
+                        .bg(color_to_ratatui(theme.menu_selected_bg))
+                        .fg(color_to_ratatui(theme.menu_selected_fg))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
+                }
+            });
             safe_set_string(
                 &mut ratatui_backend.buffer,
                 bounds,
@@ -411,18 +413,16 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Com
                 let label_slice = slice_by_columns(&chunk, slice_start, visible_width);
                 let draw_x = vp_start.saturating_add(gl);
                 let focused = Some(state.source) == self.active_key;
-                let ghost_style = item
-                    .style_override
-                    .unwrap_or_else(|| {
-                        if focused {
-                            Style::default()
-                                .bg(color_to_ratatui(theme.menu_selected_bg))
-                                .fg(color_to_ratatui(theme.menu_selected_fg))
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
-                        }
-                    });
+                let ghost_style = item.style_override.unwrap_or_else(|| {
+                    if focused {
+                        Style::default()
+                            .bg(color_to_ratatui(theme.menu_selected_bg))
+                            .fg(color_to_ratatui(theme.menu_selected_fg))
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
+                    }
+                });
                 safe_set_string(
                     &mut ratatui_backend.buffer,
                     bounds,
@@ -483,7 +483,9 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Com
             });
         }
         if right_indicator_width == 1 && self.h_scroll < max_scroll {
-            let ix = rect.x.saturating_add(i32::from(rect.width.saturating_sub(1)));
+            let ix = rect
+                .x
+                .saturating_add(i32::from(rect.width.saturating_sub(1)));
             safe_set_string(
                 &mut ratatui_backend.buffer,
                 bounds,
@@ -535,7 +537,10 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Tab
         if let Some(rect) = self.right_indicator_rect
             && rect_contains(rect, column, row)
         {
-            self.h_scroll = self.h_scroll.saturating_add(SCROLL_STEP).min(self.max_scroll);
+            self.h_scroll = self
+                .h_scroll
+                .saturating_add(SCROLL_STEP)
+                .min(self.max_scroll);
             return EventResult::Consumed;
         }
         // Close glyph first — never arm a drag from the close button.
@@ -568,7 +573,10 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Tab
             if i32::from(column) <= self.entries_start_x {
                 self.h_scroll = self.h_scroll.saturating_sub(SCROLL_STEP);
             } else if i32::from(column) >= self.entries_start_x + self.scroll_viewport_width {
-                self.h_scroll = self.h_scroll.saturating_add(SCROLL_STEP).min(self.max_scroll);
+                self.h_scroll = self
+                    .h_scroll
+                    .saturating_add(SCROLL_STEP)
+                    .min(self.max_scroll);
             }
             let virtual_col = i32::from(column) - self.entries_start_x + i32::from(self.h_scroll);
             let drop_index = self.target_index(virtual_col);
@@ -604,7 +612,10 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Tab
                 self.h_scroll = self.h_scroll.saturating_sub(SCROLL_STEP);
             }
             MouseEventKind::ScrollRight => {
-                self.h_scroll = self.h_scroll.saturating_add(SCROLL_STEP).min(self.max_scroll);
+                self.h_scroll = self
+                    .h_scroll
+                    .saturating_add(SCROLL_STEP)
+                    .min(self.max_scroll);
             }
             _ => {}
         }
@@ -657,7 +668,12 @@ mod tests {
     }
 
     fn rect(x: i32, y: i32, width: u16, height: u16) -> LayoutRect {
-        LayoutRect { x, y, width, height }
+        LayoutRect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     #[test]
@@ -672,19 +688,28 @@ mod tests {
         // Press on the body of tab 1 → Select(1).
         let (_, lx1, _) = bar.entry_geometry[1];
         let body_x = (bar.entries_start_x + lx1 + 1) as u16;
-        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), body_x, 0), &c);
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), body_x, 0),
+            &c,
+        );
         assert!(matches!(res, EventResult::Action(TabBarEvent::Select(1))));
         assert!(bar.drag_state.is_some(), "pressing a tab arms a drag");
 
         // Press on the close glyph (rightmost CLOSE_BUTTON_WIDTH cols) of tab 2.
         let (_, lx2, w2) = bar.entry_geometry[2];
         let close_x = (bar.entries_start_x + lx2 + i32::from(w2 - CLOSE_BUTTON_WIDTH)) as u16;
-        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), close_x, 0), &c);
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), close_x, 0),
+            &c,
+        );
         assert!(
             matches!(res, EventResult::Action(TabBarEvent::Close(2))),
             "close glyph press must emit Close, not arm a drag"
         );
-        assert!(bar.drag_state.is_none(), "close-glyph press must NOT arm a drag");
+        assert!(
+            bar.drag_state.is_none(),
+            "close-glyph press must NOT arm a drag"
+        );
     }
 
     #[test]
@@ -699,7 +724,10 @@ mod tests {
         // Press tab 1 (body) — it must STAY rendered; no ghost yet.
         let (_, lx1, _) = bar.entry_geometry[1];
         let body_x = (bar.entries_start_x + lx1 + 1) as u16;
-        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), body_x, 0), &c);
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), body_x, 0),
+            &c,
+        );
         assert!(matches!(res, EventResult::Action(TabBarEvent::Select(1))));
         assert!(!bar.drag_state.as_ref().unwrap().moved);
 
@@ -737,15 +765,35 @@ mod tests {
         // Press tab 2, drag to the left edge → drop at the front.
         let (_, lx2, _) = bar.entry_geometry[2];
         let body_x = (bar.entries_start_x + lx2 + 1) as u16;
-        bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), body_x, 0), &c);
-        let res = bar.handle_events(&mouse(MouseEventKind::Drag(MouseButton::Left), bar.entries_start_x as u16, 0), &c);
+        bar.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), body_x, 0),
+            &c,
+        );
+        let res = bar.handle_events(
+            &mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                bar.entries_start_x as u16,
+                0,
+            ),
+            &c,
+        );
         assert!(matches!(res, EventResult::Consumed));
         assert_eq!(bar.drag_state.as_ref().unwrap().drop_index, 0);
         // Release commits the reorder.
-        let res = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), bar.entries_start_x as u16, 0), &c);
+        let res = bar.handle_events(
+            &mouse(
+                MouseEventKind::Release(MouseButton::Left),
+                bar.entries_start_x as u16,
+                0,
+            ),
+            &c,
+        );
         assert!(matches!(
             res,
-            EventResult::Action(TabBarEvent::Reorder { key: 2, target_index: 0 })
+            EventResult::Action(TabBarEvent::Reorder {
+                key: 2,
+                target_index: 0
+            })
         ));
         assert!(bar.drag_state.is_none());
     }
@@ -760,7 +808,10 @@ mod tests {
         let c = ctx();
 
         bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 18, 0), &c);
-        let res = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 18, 0), &c);
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 18, 0),
+            &c,
+        );
         assert!(
             matches!(res, EventResult::Consumed),
             "a plain click must not emit a Reorder"
@@ -779,10 +830,16 @@ mod tests {
         bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 1, 0), &c);
         // Drag far right → clamps to the end (target_index = len-1 reduced = 2).
         bar.handle_events(&mouse(MouseEventKind::Drag(MouseButton::Left), 300, 0), &c);
-        let res = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 300, 0), &c);
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 300, 0),
+            &c,
+        );
         assert!(matches!(
             res,
-            EventResult::Action(TabBarEvent::Reorder { key: 0, target_index: 2 })
+            EventResult::Action(TabBarEvent::Reorder {
+                key: 0,
+                target_index: 2
+            })
         ));
     }
 
@@ -830,15 +887,17 @@ mod tests {
         let r = rect(0, 0, 80, 1);
         render_bar(&mut bar, 80, 1, r);
         assert_eq!(
-            bar.entry_geometry[1].2,
-            12,
+            bar.entry_geometry[1].2, 12,
             "closable tab width must include CLOSE_BUTTON_WIDTH"
         );
         // Close glyph of tab 0 sits at its rightmost 2 columns.
         let (_, lx0, w0) = bar.entry_geometry[0];
         let close_x = (bar.entries_start_x + lx0 + i32::from(w0 - CLOSE_BUTTON_WIDTH)) as u16;
         let c = ctx();
-        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), close_x, 0), &c);
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), close_x, 0),
+            &c,
+        );
         assert!(matches!(res, EventResult::Action(TabBarEvent::Close(0))));
     }
 

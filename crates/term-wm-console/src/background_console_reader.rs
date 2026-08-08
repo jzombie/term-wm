@@ -133,11 +133,8 @@ mod tests {
     fn injected_reader() -> (Sender<Event>, BackgroundConsoleReader, Receiver<Event>) {
         let (tx, rx) = bounded(16);
         let handle = thread::spawn(|| {});
-        let src = BackgroundConsoleReader::from_receiver(
-            rx,
-            handle,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let src =
+            BackgroundConsoleReader::from_receiver(rx, handle, Arc::new(AtomicBool::new(false)));
         let rcv = src.receiver();
         (tx, src, rcv)
     }

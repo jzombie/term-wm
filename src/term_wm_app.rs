@@ -33,7 +33,7 @@ use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::{AppRootComponent, NoopComponent};
-use crate::unified_event_source::{UnifiedEvent, EVENT_CHANNEL_CAPACITY};
+use crate::unified_event_source::{EVENT_CHANNEL_CAPACITY, UnifiedEvent};
 
 /// Scrollback size for windows spawned by the default "New Terminal" action.
 const NEW_TERMINAL_SCROLLBACK: usize = 2000;
