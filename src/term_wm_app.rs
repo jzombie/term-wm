@@ -57,9 +57,9 @@ use crate::unified_event_source::UnifiedEvent;
 ///
 /// `new_custom` and `new_with_config` install a fixed, restricted
 /// command-palette allow-list (`CloseMenu`, `ToggleMouseCapture`,
-/// `ToggleClipboardMode`, `ToggleWindowSelection`, `ExitUi`). Use
-/// `new_with_actions` to opt into additional entries such as
-/// `ToggleDebugWindow` or `ToggleSystemPanel`, or to add/remove any action.
+/// `ToggleClipboardMode`, `ToggleWindowSelection`, `ExitUi`, `ToggleMonocle`,
+/// `ToggleTiling`). Use `new_with_actions` to opt into additional entries such
+/// as `ToggleDebugWindow` or `ToggleSystemPanel`, or to add/remove any action.
 ///
 /// `from_wm()` builds the app around a pre-configured `WindowManager`; the
 /// bundled `term-wm` binary uses this path.
@@ -133,6 +133,8 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
                 TermWmAction::ToggleClipboardMode,
                 TermWmAction::ToggleWindowSelection,
                 TermWmAction::ExitUi,
+                TermWmAction::ToggleMonocle,
+                TermWmAction::ToggleTiling,
             ],
         )
     }
@@ -531,6 +533,8 @@ mod tests {
                 TermWmAction::ToggleClipboardMode,
                 TermWmAction::ToggleWindowSelection,
                 TermWmAction::ExitUi,
+                TermWmAction::ToggleMonocle,
+                TermWmAction::ToggleTiling,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );

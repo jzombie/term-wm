@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.15-alpha] - 2026-08-07
+
+### Added
+
+- **Monocle and tile/float toggles in the default Command Palette:** the default palette allow-list for standalone apps built with `TermWmApp::new_custom` / `new_with_config` now also includes `ToggleMonocle` and `ToggleTiling` (the "View" group), so switching between monocle and tiled/float window layouts is available out of the box instead of requiring a custom allow-list.
+
 ## [0.9.14-alpha] - 2026-08-07
 
 ### Added
