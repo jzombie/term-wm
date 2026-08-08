@@ -479,7 +479,7 @@ mod tests {
         let backend = render_at_width(&mut p, 120, true);
         let rendered = collect_rendered(&backend);
 
-        assert!(rendered.contains("Ctrl+N New terminal"));
+        assert!(rendered.contains("Ctrl+N New Terminal"));
         assert!(rendered.contains("Alt+Tab Focus next"));
         assert!(rendered.contains("F1 Open help"));
         assert!(rendered.contains("term-wm 0.1.0"), "info section rendered");

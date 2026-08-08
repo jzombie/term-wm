@@ -13,6 +13,7 @@ pub mod menu;
 pub mod scroll_view;
 
 pub mod svg_image;
+pub mod tab_bar;
 pub mod terminal;
 pub mod text_renderer;
 pub mod toggle_list;
@@ -35,6 +36,7 @@ pub use scroll_view::{
 };
 
 pub use svg_image::SvgImageComponent;
+pub use tab_bar::{TabBarComponent, TabBarEvent, TabItem};
 pub use terminal::{TerminalComponent, default_shell, default_shell_command};
 pub use text_renderer::TextRendererComponent;
 pub use toggle_list::{ToggleItem, ToggleListComponent};
