@@ -1594,11 +1594,10 @@ pub fn render_resize_outline(
     // Mask the outline where the hovered edge is covered — by a window above it
     // OR by an extra occluder (top/bottom panel, or the full area while a modal
     // overlay is open). Chained, no allocation.
-    let is_obscured =
-        |x: u16, y: u16| -> bool {
-            extra_obscuring.iter().any(|r| rect_contains(*r, x, y))
-                || obscuring.iter().any(|r| rect_contains(*r, x, y))
-        };
+    let is_obscured = |x: u16, y: u16| -> bool {
+        extra_obscuring.iter().any(|r| rect_contains(*r, x, y))
+            || obscuring.iter().any(|r| rect_contains(*r, x, y))
+    };
 
     let right = (rect.x + i32::from(rect.width) - 1) as u16;
     let bottom = (rect.y + i32::from(rect.height) - 1) as u16;
@@ -2382,12 +2381,7 @@ mod tests {
             &NOIR,
         );
 
-        let symbol = |x: u16| -> &str {
-            buffer
-                .cell((x, 2))
-                .map(|c| c.symbol())
-                .unwrap_or("?")
-        };
+        let symbol = |x: u16| -> &str { buffer.cell((x, 2)).map(|c| c.symbol()).unwrap_or("?") };
         assert_eq!(symbol(6), "═", "edge left of the occluder must light up");
         assert_eq!(symbol(7), "═", "edge left of the occluder must light up");
         for x in 8..=11 {

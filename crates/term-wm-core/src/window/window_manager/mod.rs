@@ -2416,7 +2416,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     ///
     /// Returns `true` if any hitbox was handled. Panel/overlay actions are
     /// pushed to `actions` for the caller to dispatch.
-    pub fn handle_outside_click(        &mut self,
+    pub fn handle_outside_click(
+        &mut self,
         col: u16,
         row: u16,
         event: &Event,
