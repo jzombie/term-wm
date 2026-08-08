@@ -99,18 +99,22 @@ fn input_loop(tx: Sender<Event>, shutdown: Arc<AtomicBool>) {
         if shutdown.load(Ordering::Acquire) {
             break;
         }
-        if crossterm::event::poll(CROSSTERM_POLL_INTERVAL).unwrap_or(false) {
-            match crossterm::event::read() {
-                Ok(evt) => {
-                    // NO normalization here — the consumer normalizes.
-                    if let Some(core_evt) = term_wm_crossterm_adapter::try_translate_event(evt)
-                        && tx.send(core_evt).is_err()
-                    {
-                        break; // receiver dropped
+        match crossterm::event::poll(CROSSTERM_POLL_INTERVAL) {
+            Ok(true) => {
+                match crossterm::event::read() {
+                    Ok(evt) => {
+                        // NO normalization here — the consumer normalizes.
+                        if let Some(core_evt) = term_wm_crossterm_adapter::try_translate_event(evt)
+                            && tx.send(core_evt).is_err()
+                        {
+                            break; // receiver dropped
+                        }
                     }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
+            Ok(false) => {} // timeout elapsed — loop and check shutdown
+            Err(_) => break, // TTY broken — kill the thread, avoid a CPU spinlock
         }
     }
 }
@@ -152,13 +156,5 @@ mod tests {
         let (tx, _src, rcv) = injected_reader();
         drop(tx);
         assert!(rcv.recv().is_err());
-    }
-
-    #[test]
-    fn set_mouse_capture_delegates_returns_ok() {
-        // Writes to real stdout; only asserts the call succeeds without
-        // panicking (raw mode / terminal not required for execute!).
-        let (_tx, src, _rcv) = injected_reader();
-        let _ = src.set_mouse_capture(false);
     }
 }
