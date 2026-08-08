@@ -88,6 +88,34 @@ struct App {
     pty_wakeup_tx: Sender<UnifiedEvent>,
 }
 
+/// Build the window manager the way the `term-wm` binary runs it: full system
+/// chrome (top panel, bottom panel, FAB) and NO explicit menu-action allow-list,
+/// so the full default action set is available.
+fn build_wm(
+    app_ctx: &Arc<AppContext>,
+) -> term_wm::window::WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
+    let hostname = app_ctx.hostname.as_deref();
+    let app_name = app_ctx.app_name.clone();
+    let app_version = app_ctx.app_version.clone();
+    AppBuilder::<LayerComponent>::new()
+        .app_ctx(Arc::clone(app_ctx))
+        .top_panel(LayerComponent::TopPanel(
+            term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
+        ))
+        .bottom_panel(LayerComponent::BottomPanel(
+            term_wm_sys_ui_components::WmBottomPanelComponent::new(
+                &app_name,
+                &app_version,
+                hostname,
+            ),
+        ))
+        .fab(LayerComponent::Fab(
+            term_wm_sys_ui_components::WmFabComponent::new(),
+        ))
+        .build()
+        .expect("standalone build")
+}
+
 impl App {
     fn new_with(
         commands: Vec<String>,
@@ -102,27 +130,8 @@ impl App {
                     .unwrap_or_else(|| "unknown-host".to_string()),
             ),
         );
-        let hostname = app_ctx.hostname.as_deref();
-        let app_name = app_ctx.app_name.clone();
-        let app_version = app_ctx.app_version.clone();
 
-        let wm = AppBuilder::<LayerComponent>::new()
-            .app_ctx(Arc::clone(&app_ctx))
-            .top_panel(LayerComponent::TopPanel(
-                term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
-            ))
-            .bottom_panel(LayerComponent::BottomPanel(
-                term_wm_sys_ui_components::WmBottomPanelComponent::new(
-                    &app_name,
-                    &app_version,
-                    hostname,
-                ),
-            ))
-            .fab(LayerComponent::Fab(
-                term_wm_sys_ui_components::WmFabComponent::new(),
-            ))
-            .build()
-            .expect("standalone build");
+        let wm = build_wm(&app_ctx);
 
         let inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
         let mut app = Self {
@@ -242,6 +251,19 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_build_wm_gets_full_default_menu_actions() {
+        let app_ctx = Arc::new(
+            AppContext::new("term-wm", "0.0.0").with_hostname("test-host"),
+        );
+        let wm = build_wm(&app_ctx);
+        assert_eq!(
+            wm.supported_menu_actions(),
+            term_wm::constants::DEFAULT_SUPPORTED_MENU_ACTIONS,
+            "the term-wm binary must not restrict the command-palette actions to a subset"
+        );
+    }
 
     #[test]
     fn build_commands_appends_joined_positional_after_run() {

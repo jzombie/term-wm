@@ -494,3 +494,28 @@ impl<C: Component<TermWmAction>>
             .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `new_custom` is what `examples/dual_image.rs` uses to build its app.
+    /// It must keep the command-palette actions limited to the allow-list it
+    /// configures — never the full default set.
+    #[cfg(feature = "sys-ui")]
+    #[test]
+    fn new_custom_limits_supported_menu_actions() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert_eq!(
+            app.wm().supported_menu_actions(),
+            &[
+                TermWmAction::CloseMenu,
+                TermWmAction::ToggleMouseCapture,
+                TermWmAction::ToggleClipboardMode,
+                TermWmAction::ToggleWindowSelection,
+                TermWmAction::ExitUi,
+            ],
+            "new_custom must expose exactly its configured allow-list, not the full default set"
+        );
+    }
+}

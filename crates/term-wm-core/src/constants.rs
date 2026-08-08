@@ -2,6 +2,24 @@
 
 use std::time::Duration;
 
+use crate::actions::TermWmAction;
+
+/// Default actions available in the WM command menu when no explicit
+/// allow-list is configured via `AppBuilder::supported_menu_actions`.
+pub const DEFAULT_SUPPORTED_MENU_ACTIONS: &[TermWmAction] = &[
+    TermWmAction::CloseMenu,
+    TermWmAction::ToggleMouseCapture,
+    TermWmAction::ToggleClipboardMode,
+    TermWmAction::ToggleWindowSelection,
+    TermWmAction::NewWindow,
+    TermWmAction::ToggleDebugWindow,
+    TermWmAction::ToggleSystemPanel,
+    TermWmAction::Help,
+    TermWmAction::ExitUi,
+    TermWmAction::ToggleMonocle,
+    TermWmAction::ToggleTiling,
+];
+
 /// Minimum number of visible cells a floating window must keep within the
 /// viewport so the user can grab its chrome again.
 pub const MIN_FLOATING_VISIBLE_MARGIN: u16 = 4;

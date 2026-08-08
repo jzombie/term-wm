@@ -783,19 +783,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     ) -> Self {
         let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
-            vec![
-                TermWmAction::CloseMenu,
-                TermWmAction::ToggleMouseCapture,
-                TermWmAction::ToggleClipboardMode,
-                TermWmAction::ToggleWindowSelection,
-                TermWmAction::NewWindow,
-                TermWmAction::ToggleDebugWindow,
-                TermWmAction::ToggleSystemPanel,
-                TermWmAction::Help,
-                TermWmAction::ExitUi,
-                TermWmAction::ToggleMonocle,
-                TermWmAction::ToggleTiling,
-            ]
+            crate::constants::DEFAULT_SUPPORTED_MENU_ACTIONS.to_vec()
         });
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
