@@ -292,6 +292,15 @@ impl Component<TermWmAction> for WmTopPanelComponent {
                     }
                     return EventResult::Consumed;
                 }
+                // A press on the panel's background (no applet handled it) must be
+                // consumed so it never falls through to a window behind the panel
+                // (e.g. a floating window overlapping the top row in monocle),
+                // which would close the Command Palette and could hit the window's
+                // close button. Only consume when the panel is actually rendered
+                // (its area is set); an unrendered panel keeps Ignored.
+                if !self.area.is_empty() && rect_contains(self.area, mouse.column, mouse.row) {
+                    return EventResult::Consumed;
+                }
                 EventResult::Ignored
             }
             // Drag/Release/Scroll are delivered under mouse capture (or to the
@@ -828,6 +837,30 @@ mod tests {
         let mut p = WmTopPanelComponent::new("test");
         let result = p.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 0, 0), &ctx());
         assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn press_on_panel_background_is_consumed() {
+        let keys = make_keys(1);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        // A press on the rendered panel's background (past the single tab, not on
+        // menu/tab/chevron/tiling) must be CONSUMED so it never falls through to
+        // a window behind the panel (which would close the Command Palette and
+        // could click the window's close button).
+        let res = p.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 60, 0), &ctx());
+        assert!(
+            matches!(res, EventResult::Consumed),
+            "panel-background press must be consumed, not Ignored"
+        );
     }
 
     #[test]
