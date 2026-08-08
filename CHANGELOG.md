@@ -19,6 +19,7 @@ The format is based on Keep a Changelog and this project adheres to
 ### Fixed
 
 - **Non-closable window headers showing the Close button:** when closable and non-closable windows were mixed, focusing a closable window made the ✕ close button appear on every header — including non-closable windows — because window-management buttons were computed once from the focused window and then drawn on all headers. Header buttons are now derived per window (each window shows its own Close/Maximize/Minimize based on its own closable and maximize state), so a non-closable window never shows ✕ and each header's maximize/restore glyph reflects that window's own state. A regression test covers mixed closable/non-closable windows in both focus orders.
+- Fix outdated reference to older close-button glyph in `docs/WINDOW-BORDERS`.
 
 ## [0.9.14-alpha] - 2026-08-07
 
