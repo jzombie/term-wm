@@ -42,17 +42,27 @@ use crate::unified_event_source::UnifiedEvent;
 ///
 /// # Choosing a constructor
 ///
-/// | You want…                                            | Use                              |
-/// |------------------------------------------------------|----------------------------------|
-/// | Standalone app with full system chrome (panels, menu)| `TermWmApp::<C>::new_custom(ctx)` |
-/// | Full control over an already-built `WindowManager`   | `TermWmApp::from_wm(wm, tx)`      |
+/// | You want…                                            | Use                                            |
+/// |------------------------------------------------------|------------------------------------------------|
+/// | Standalone app with system chrome + default keybindings | `TermWmApp::<C>::new_custom(ctx)`        |
+/// | Standalone app with a custom `WmConfig` (e.g. keybindings) | `TermWmApp::<C>::new_with_config(ctx, config)` |
+/// | Standalone app with custom config AND a custom command-palette allow-list | `TermWmApp::<C>::new_with_actions(ctx, config, actions)` |
+/// | Full control over an already-built `WindowManager`   | `TermWmApp::from_wm(wm, tx)`              |
 ///
 /// `new_custom()` is defined on the generic block and works for any
 /// `C: Component<TermWmAction>`. Because `C` does not appear in its
 /// arguments, callers must provide a type annotation or turbofish —
 /// e.g. `TermWmApp::<NoopComponent>::new_custom(ctx)` when only built-in
-/// components are used. `from_wm()` builds the app around a pre-configured
-/// `WindowManager`; the bundled `term-wm` binary uses this path.
+/// components are used.
+///
+/// `new_custom` and `new_with_config` install a fixed, restricted
+/// command-palette allow-list (`CloseMenu`, `ToggleMouseCapture`,
+/// `ToggleClipboardMode`, `ToggleWindowSelection`, `ExitUi`). Use
+/// `new_with_actions` to opt into additional entries such as
+/// `ToggleDebugWindow` or `ToggleSystemPanel`, or to add/remove any action.
+///
+/// `from_wm()` builds the app around a pre-configured `WindowManager`; the
+/// bundled `term-wm` binary uses this path.
 ///
 /// # Example (built-in components only)
 /// ```ignore
