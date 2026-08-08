@@ -347,6 +347,31 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
                     })
                     .collect()
             };
+            // Extra occluders for the resize outline, using the same
+            // is_obscured masking the tiling drag handles use. Panels mask their
+            // claimed rows. Modal invariant: every overlay (help, command
+            // palette, exit confirm) dims the full managed area, so mask the
+            // whole area while any is open. If a partial overlay is ever added,
+            // iterate its bounds instead of the full area.
+            let mut extra: [term_wm_layout_engine::LayoutRect; 3] =
+                [term_wm_layout_engine::LayoutRect::default(); 3];
+            let mut n = 0;
+            let top = wm.top_claimed_area();
+            if !top.is_empty() {
+                extra[n] = top;
+                n += 1;
+            }
+            let bottom = wm.bottom_claimed_area();
+            if !bottom.is_empty() {
+                extra[n] = bottom;
+                n += 1;
+            }
+            if !wm.overlay_keys().is_empty() {
+                extra[n] = area;
+                n += 1;
+            }
+            let extra_obscuring = &extra[..n];
+
             render_resize_outline(
                 buf,
                 hovered_resize,
@@ -355,6 +380,7 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
                 area,
                 &floating_panes,
                 draw_order,
+                extra_obscuring,
                 &wm.config().theme,
             );
 
