@@ -1321,4 +1321,53 @@ mod tests {
             "auto-scroll re-follows the focused window after a structural reorder"
         );
     }
+
+    #[test]
+    fn pressed_entry_stays_visible_before_drag() {
+        let keys = make_keys(3);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        // Press an entry (no Drag yet) — it must STAY rendered at its normal
+        // position; it must NOT vanish between mouse-down and the first drag.
+        let (_key, lx, _width) = p.strip.entry_geometry[1];
+        let press_col = (p.strip.entries_start_x + lx) as u16;
+        let ctx = ComponentContext::new(false);
+        let press = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: press_col,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        p.handle_events(&press, &ctx);
+        assert_eq!(p.strip.drag_source, Some(keys[1]));
+        assert!(!p.strip.drag_moved, "press must not arm the drag yet");
+
+        let mut backend = make_backend(80, 1);
+        p.render_contents(&mut backend, &NOIR);
+        let cells: Vec<char> = (0..80u16)
+            .map(|xx| {
+                backend
+                    .buffer
+                    .cell((xx, 0))
+                    .map(|c| c.symbol().chars().next().unwrap_or(' '))
+                    .unwrap_or(' ')
+            })
+            .collect();
+        let needle: Vec<char> = "Window 1".chars().collect();
+        let starts: Vec<usize> = (0..=cells.len().saturating_sub(needle.len()))
+            .filter(|&i| cells[i..i + needle.len()] == needle)
+            .collect();
+        assert!(
+            !starts.is_empty(),
+            "the pressed entry must remain visible before any drag starts, starts={starts:?}"
+        );
+    }
 }

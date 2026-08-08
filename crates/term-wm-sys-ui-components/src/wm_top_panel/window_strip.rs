@@ -239,8 +239,11 @@ impl WindowStrip {
 
         for (key, lx, width) in entry_geometry.iter().copied() {
             // The dragged entry is drawn as a gliding ghost AFTER the loop so it
-            // floats above the static entries (highest Z-order).
-            if Some(key) == self.drag_source {
+            // floats above the static entries (highest Z-order). Only treat it as
+            // "being dragged" once the cursor has actually moved — on a plain
+            // press it must stay rendered at its normal position (no gap where it
+            // vanishes before the first Drag).
+            if Some(key) == self.drag_source && self.drag_moved {
                 continue;
             }
             let width = i32::from(width);
