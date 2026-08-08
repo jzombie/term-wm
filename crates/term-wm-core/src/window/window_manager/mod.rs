@@ -299,6 +299,9 @@ pub struct WindowManager<
     scroll: BTreeMap<WindowKey, ScrollState>,
     pub(crate) handles: Vec<SplitHandle>,
     pub(crate) managed_draw_order: Vec<WindowKey>,
+    /// User-specified display order for the top panel / command palette window
+    /// list (set via drag-to-reorder). Empty = fall back to creation order.
+    pub(crate) user_display_order: Vec<WindowKey>,
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     pub(crate) managed_area: Rect,
     pub(crate) monocle_mode: MonocleMode,
@@ -466,6 +469,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Whether the window may be closed. Unknown keys return `false`.
     pub fn is_closable(&self, key: WindowKey) -> bool {
         self.window(key).is_some_and(|w| w.closable())
+    }
+
+    /// Move `key` to position `index` in the top-panel / command palette window
+    /// display order (drag-to-reorder).
+    ///
+    /// List-order only: this changes what `build_display_order` returns and never
+    /// touches the tiling tree, `z_order`, or `managed_draw_order`. The index is
+    /// clamped against the live list length (windows may close between the drag's
+    /// index projection and the release dispatch).
+    pub fn reorder_window(&mut self, key: WindowKey, index: usize) {
+        if !self.windows.contains_key(key) {
+            return;
+        }
+        let mut order = self.build_display_order();
+        order.retain(|k| *k != key);
+        let safe_index = index.min(order.len());
+        order.insert(safe_index, key);
+        self.user_display_order = order;
+        self.mark_layout_dirty();
     }
 
     /// Access the Reaper for async child-process teardown.
@@ -802,6 +824,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             scroll: BTreeMap::new(),
             handles: Vec::new(),
             managed_draw_order: Vec::new(),
+            user_display_order: Vec::new(),
             managed_layout: None,
             managed_area: Rect::default(),
             monocle_mode: MonocleMode::Auto,
@@ -6096,6 +6119,106 @@ mod tests {
                 .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == non_closable)),
             "non-closable window must never expose a Close button for itself"
         );
+    }
+
+    fn display_order_keys(wm: &WindowManager<TestComponent>) -> Vec<WindowKey> {
+        wm.build_display_order()
+    }
+
+    #[test]
+    fn reorder_window_changes_display_order_only() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k0 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [k0, k1, k2] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k0, k1, k2],
+            "creation order initially"
+        );
+
+        // Move the last window to the front.
+        wm.reorder_window(k2, 0);
+        assert_eq!(display_order_keys(&wm), vec![k2, k0, k1]);
+
+        // Move the first window to the end.
+        wm.reorder_window(k2, 999);
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k0, k1, k2],
+            "index clamps to list length"
+        );
+    }
+
+    #[test]
+    fn reorder_window_is_list_only_does_not_touch_layout() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k0 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [k0, k1] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        let draw_order_before = wm.managed_draw_order.clone();
+        wm.reorder_window(k1, 0);
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k1, k0],
+            "display order reordered"
+        );
+        assert_eq!(
+            wm.managed_draw_order, draw_order_before,
+            "reorder must not affect the on-screen draw/stacking order"
+        );
+    }
+
+    #[test]
+    fn reorder_window_unknown_key_is_noop_and_new_windows_append() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k0 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [k0, k1] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        let unknown = WindowKey::default();
+        wm.reorder_window(unknown, 0);
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k0, k1],
+            "unknown key is a no-op"
+        );
+
+        wm.reorder_window(k1, 0);
+        assert_eq!(display_order_keys(&wm), vec![k1, k0]);
+
+        // A window opened after reordering appends to the end.
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k2, WindowState::Mapped);
+        assert_eq!(display_order_keys(&wm), vec![k1, k0, k2]);
+
+        // Closing a window prunes it from the user order.
+        wm.close_window(k1);
+        assert_eq!(display_order_keys(&wm), vec![k0, k2]);
     }
 
     #[test]

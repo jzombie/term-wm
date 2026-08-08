@@ -90,6 +90,12 @@ pub enum TermWmAction {
     ToggleWindowSelection,
     MinimizeWindow(WindowKey),
     MaximizeWindow(WindowKey),
+    /// Reorder the top-panel / command palette window list: move `key` to
+    /// display position `index` (list order only; tiling geometry unchanged).
+    ReorderWindow {
+        key: WindowKey,
+        index: usize,
+    },
 
     ToggleMonocle,
     ToggleTiling,
@@ -238,6 +244,7 @@ impl TermWmAction {
             | TermWmAction::CloseMenu
             | TermWmAction::Help
             | TermWmAction::CloseWindow(_)
+            | TermWmAction::ReorderWindow { .. }
             | TermWmAction::ToggleMouseCapture
             | TermWmAction::ToggleClipboardMode
             | TermWmAction::ToggleWindowSelection
@@ -360,6 +367,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::CloseMenu => "Close menu",
             TermWmAction::Help => "Help",
             TermWmAction::CloseWindow(_) => "Close window",
+            TermWmAction::ReorderWindow { .. } => "Reorder window",
             TermWmAction::ToggleMouseCapture => "Toggle mouse capture",
             TermWmAction::ToggleClipboardMode => "Toggle clipboard mode",
             TermWmAction::ToggleWindowSelection => "Toggle window selection",

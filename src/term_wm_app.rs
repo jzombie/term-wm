@@ -55,7 +55,6 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::NewTerminal,
 ];
 
-
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
 /// Generic parameter `C` allows injecting custom root-level components
@@ -151,11 +150,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// [`Self::new_custom`]; only the configuration differs.
     #[cfg(feature = "sys-ui")]
     pub fn new_with_config(app_ctx: AppContext, config: WmConfig) -> Self {
-        Self::new_with_actions(
-            app_ctx,
-            config,
-            DEFAULT_STANDALONE_MENU_ACTIONS.to_vec(),
-        )
+        Self::new_with_actions(app_ctx, config, DEFAULT_STANDALONE_MENU_ACTIONS.to_vec())
     }
 
     /// Standalone constructor with system chrome + explicit supported command

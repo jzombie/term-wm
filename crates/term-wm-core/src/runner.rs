@@ -92,6 +92,7 @@ fn dispatch_action<
         TermWmAction::Quit | TermWmAction::ExitUi => app.open_exit_confirm(),
         TermWmAction::Help | TermWmAction::OpenHelp => app.open_help_overlay(),
         TermWmAction::CloseWindow(k) => app.wm().close_window(k),
+        TermWmAction::ReorderWindow { key, index } => app.wm().reorder_window(key, index),
         TermWmAction::NewTerminal => drop(app.wm_new_terminal()),
         TermWmAction::MinimizeWindow(k) => app.wm().minimize_window(k),
         TermWmAction::MaximizeWindow(k) => app.wm().toggle_maximize(k),
@@ -263,6 +264,15 @@ where
         EventResult::Consumed => true,
         EventResult::Ignored => false,
     }
+}
+
+/// Whether the command palette should STAY OPEN after an outside click that a
+/// chrome layer (e.g. the top panel) consumed WITHOUT producing an action — such
+/// as a top-panel `◀`/`▶` chevron scroll. Returns `true` (stay open) only when
+/// the click was handled and no action was queued; a genuine outside click
+/// (unhandled) or a real action (focus window, tiling toggle) closes it.
+fn palette_stays_open(handled: bool, produced_action: bool) -> bool {
+    handled && !produced_action
 }
 
 /// Low-level event loop. Drives rendering and input until the app quits.
@@ -553,13 +563,15 @@ where
                     {
                         let palette_key = app.wm().command_palette_key();
                         let mut actions = std::collections::VecDeque::new();
-                        if !app.wm().handle_outside_click(
+                        let handled = app.wm().handle_outside_click(
                             mouse_evt.column,
                             mouse_evt.row,
                             &evt,
                             &mut actions,
                             palette_key,
-                        ) {
+                        );
+                        let produced_action = !actions.is_empty();
+                        if !handled {
                             // No panel/overlay/chrome hit — activate window under cursor
                             app.wm()
                                 .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
@@ -568,8 +580,15 @@ where
                         // so the OpenCommandPalette toggle behavior works correctly:
                         // action checks command_menu_visible() → true → closes palette.
                         drain_action_queue(app, &mut actions);
-                        // Close palette (no-op if already closed by the action above)
-                        app.wm().close_command_palette();
+                        // Close the palette UNLESS a chrome layer consumed the click
+                        // with no action (e.g. a top-panel chevron scroll) — that
+                        // keeps the palette open while the list scrolls. A produced
+                        // action (focus window, tiling toggle) closes it as before,
+                        // and the OpenCommandPalette action toggles it closed via its
+                        // own dispatch above (close_command_palette is idempotent).
+                        if !palette_stays_open(handled, produced_action) {
+                            app.wm().close_command_palette();
+                        }
                         update_selection_snapshot(app);
                         return flush_state_changes(
                             app,
@@ -953,6 +972,22 @@ mod tests {
     use crate::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
     use crate::window::test_component::TestComponent;
     use term_wm_layout_engine::LayoutRect;
+
+    #[test]
+    fn palette_stays_open_for_consumed_actionless_click() {
+        // A chrome layer consumed the click with NO action (e.g. a top-panel
+        // chevron scroll) → the palette must stay open.
+        assert!(palette_stays_open(true, false));
+    }
+
+    #[test]
+    fn palette_closes_for_unhandled_or_action_clicks() {
+        // Genuine outside click (nothing handled) → close.
+        assert!(!palette_stays_open(false, false));
+        // A real action was produced (focus window / tiling toggle) → close.
+        assert!(!palette_stays_open(true, true));
+        assert!(!palette_stays_open(false, true));
+    }
 
     #[test]
     fn auto_layout_empty_and_multiple() {
@@ -1534,6 +1569,43 @@ mod tests {
         let mut queue = std::collections::VecDeque::new();
         dispatch_action(&mut app, k1, TermWmAction::FocusWindow(k2), &mut queue);
         assert_eq!(app.wm.focused_window(), k2);
+    }
+
+    #[test]
+    fn dispatch_reorder_window_calls_reorder_window() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(
+            &mut app,
+            k1,
+            TermWmAction::ReorderWindow { key: k2, index: 0 },
+            &mut queue,
+        );
+        assert_eq!(
+            app.wm.build_display_order(),
+            vec![k2, k1],
+            "ReorderWindow dispatch must move k2 to the front"
+        );
     }
 
     #[test]
