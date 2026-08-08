@@ -1293,7 +1293,6 @@ mod tests {
     fn set_status_callback_fires_from_spawn() {
         // Use cat, which blocks on input, so we control when output happens.
         // Portability: `cat` exists on Unix; on Windows the test is skipped.
-        // TODO: add Windows support with `cmd /c type CON`
         let cmd = CommandBuilder::new(get_test_executable());
         let size = PtySize {
             rows: 24,
