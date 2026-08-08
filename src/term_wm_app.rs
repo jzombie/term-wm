@@ -173,7 +173,10 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         wm.set_notification_component(LayerComponent::NotificationArea(
             WmNotificationAreaComponent::new(),
         ));
+
+        // TODO: Extract to constant; should it be the same as EVENT_CHANNEL_CAPACITY in unified_event_source.rs?
         let (tx, _) = bounded(256);
+
         Self::from_wm(wm, tx)
     }
 
