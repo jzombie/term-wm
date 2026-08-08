@@ -18,6 +18,7 @@ use term_wm_core::components::Component;
 use term_wm_core::events::Event;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
+// TODO: Is this the same as DEFAULT_MAX_LINES in terminal.rs?
 // TODO: Make this user-configurable
 const PTY_SCROLLBACK_LEN: usize = 2000;
 
