@@ -453,6 +453,21 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
+    /// Mark a window as closable (default) or not. Non-closable windows are
+    /// ignored by `close_window` (all close paths, including PTY-child exit),
+    /// their chrome ✕ button is hidden, and the palette "Close" entry is
+    /// disabled.
+    pub fn set_closable(&mut self, key: WindowKey, closable: bool) {
+        if let Some(w) = self.windows.get_mut(key) {
+            w.set_closable(closable);
+        }
+    }
+
+    /// Whether the window may be closed. Unknown keys return `false`.
+    pub fn is_closable(&self, key: WindowKey) -> bool {
+        self.window(key).is_some_and(|w| w.closable())
+    }
+
     /// Access the Reaper for async child-process teardown.
     pub fn reaper(&self) -> &Reaper {
         &self.reaper
@@ -767,21 +782,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         layer_manager: layer_manager::LayerManager<L>,
         semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     ) -> Self {
-        let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
-            vec![
-                TermWmAction::CloseMenu,
-                TermWmAction::ToggleMouseCapture,
-                TermWmAction::ToggleClipboardMode,
-                TermWmAction::ToggleWindowSelection,
-                TermWmAction::NewWindow,
-                TermWmAction::ToggleDebugWindow,
-                TermWmAction::ToggleSystemPanel,
-                TermWmAction::Help,
-                TermWmAction::ExitUi,
-                TermWmAction::ToggleMonocle,
-                TermWmAction::ToggleTiling,
-            ]
-        });
+        let supported_menu_actions = supported_menu_actions
+            .unwrap_or_else(|| crate::constants::DEFAULT_SUPPORTED_MENU_ACTIONS.to_vec());
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let floating_resize_offscreen = config.floating_resize_offscreen;
@@ -2637,11 +2639,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             return Vec::new();
         }
         let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
-        let mut btns = vec![WmButton {
-            action: TermWmAction::CloseWindow(focused),
-            label: "Close Window",
-            symbol: "X",
-        }];
+        let mut btns = Vec::new();
+        if self.window(focused).is_some_and(|w| w.closable()) {
+            btns.push(WmButton {
+                action: TermWmAction::CloseWindow(focused),
+                label: "Close Window",
+                symbol: "X",
+            });
+        }
         if !self.is_monocle() {
             btns.push(WmButton {
                 action: TermWmAction::MaximizeWindow(focused),
@@ -2884,7 +2889,7 @@ mod tests {
     #[test]
     fn map_layout_node_maps_leaf_to_windowkey() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -2916,7 +2921,7 @@ mod tests {
     fn click_focusing_topmost_window() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -2964,7 +2969,7 @@ mod tests {
     #[test]
     fn handle_mouse_focus_click_skipped_in_monocle() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3019,7 +3024,7 @@ mod tests {
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3058,7 +3063,7 @@ mod tests {
     fn enforce_min_visible_margin_vertical() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3094,7 +3099,7 @@ mod tests {
     fn maximize_persists_across_resize() {
         use crate::window::FloatRectSpec;
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3128,7 +3133,7 @@ mod tests {
     fn maximize_tiled_then_focus_other_unmaximizes_and_retiles() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3185,7 +3190,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3242,7 +3247,7 @@ mod tests {
     fn tiled_maximize_toggle_unmaximize() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3296,7 +3301,7 @@ mod tests {
     fn tiled_maximize_void_id_set() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3334,7 +3339,7 @@ mod tests {
     fn floating_maximize_toggle_unmaximize() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3378,7 +3383,7 @@ mod tests {
     fn tiled_maximize_then_advance_focus_unmaximizes() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3418,7 +3423,7 @@ mod tests {
     fn tiled_maximize_then_mouse_click_focus_unmaximizes() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3465,7 +3470,7 @@ mod tests {
     fn tiled_maximize_single_window() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3504,7 +3509,7 @@ mod tests {
     fn tiled_maximize_three_windows() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3555,7 +3560,7 @@ mod tests {
     fn tiled_maximize_then_minimize_and_restore() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3601,7 +3606,7 @@ mod tests {
     fn tiled_maximize_minimize_restore_focus_other_stays_in_tree() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3663,7 +3668,7 @@ mod tests {
     fn minimize_restore_single_tiled_window_takes_full_area() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3703,7 +3708,7 @@ mod tests {
     fn toggle_maximize_already_maximized() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3733,7 +3738,7 @@ mod tests {
     fn focus_same_window_when_maximized() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3766,7 +3771,7 @@ mod tests {
     fn close_maximized_tiled_removes_void() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3805,7 +3810,7 @@ mod tests {
     fn close_maximized_floating_restores_normally() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3837,7 +3842,7 @@ mod tests {
     fn unmap_maximized_tiled_removes_void() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3878,7 +3883,7 @@ mod tests {
     #[test]
     fn try_spawn_floating_default_behavior_matrix() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3928,7 +3933,7 @@ mod tests {
     #[test]
     fn focus_add_preserves_existing_valid_focus() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3952,7 +3957,7 @@ mod tests {
     #[test]
     fn advance_focus_cycles_order_forward_and_backward() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -3980,7 +3985,7 @@ mod tests {
     fn take_synthetic_event_clears_on_take() {
         use crate::events::{Event, KeyCode, KeyEvent, KeyKind, KeyModifiers};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4008,7 +4013,7 @@ mod tests {
     #[test]
     fn select_fallback_focus_handles_empty_and_populated_ring() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4032,7 +4037,7 @@ mod tests {
     fn open_window_when_tiled_window_is_maximized_unmaximizes_and_shows_both() {
         use crate::layout::{LayoutNode, TilingLayout};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4102,7 +4107,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4177,7 +4182,7 @@ mod tests {
     #[test]
     fn select_fallback_focus_handles_empty_ring_safely() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4199,7 +4204,7 @@ mod tests {
     fn minimize_and_restore_preserves_floating_rect() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4257,7 +4262,7 @@ mod tests {
     fn localize_event_converts_to_local_coords() {
         use crate::events::{MouseButton, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4304,7 +4309,7 @@ mod tests {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4361,7 +4366,7 @@ mod tests {
         use crate::window::{FloatRect, FloatRectSpec};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4466,7 +4471,7 @@ mod tests {
     fn hit_test_uses_visible_bounds_for_floating_windows() {
         use crate::window::{FloatRect, FloatRectSpec};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4508,7 +4513,7 @@ mod tests {
     fn hover_targets_respects_occlusion() {
         use crate::layout::tiling::SplitHandle;
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4566,7 +4571,7 @@ mod tests {
     fn drag_hitbox_detaches_to_floating() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4665,7 +4670,7 @@ mod tests {
         use crate::window::{FloatRect, FloatRectSpec};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4745,7 +4750,7 @@ mod tests {
         use crate::window::{FloatRect, FloatRectSpec};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4919,7 +4924,7 @@ mod tests {
     fn adjust_event_rebases_app_mouse_coordinates() {
         use crate::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -4960,7 +4965,7 @@ mod tests {
     fn hover_scroll_routes_to_non_focused_window() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5007,7 +5012,7 @@ mod tests {
     fn hover_scroll_over_focused_window_routes_normally() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5050,7 +5055,7 @@ mod tests {
     fn hover_scroll_outside_all_windows_routes_to_focused() {
         use crate::events::{Event, KeyModifiers, MouseEvent, MouseEventKind};
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5092,7 +5097,7 @@ mod tests {
     #[test]
     fn direct_mode_defaults_to_false() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5106,7 +5111,7 @@ mod tests {
     #[test]
     fn direct_mode_is_per_window() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5121,8 +5126,10 @@ mod tests {
 
     #[test]
     fn drag_snap_timeout_none_disables_remaining() {
-        let mut config = WmConfig::standalone();
-        config.drag_snap_timeout = None;
+        let config = WmConfig {
+            drag_snap_timeout: None,
+            ..Default::default()
+        };
         let mut wm = WindowManager::<TestComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -5137,7 +5144,7 @@ mod tests {
     #[test]
     fn drag_snap_remaining_none_when_no_drag() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5150,7 +5157,7 @@ mod tests {
     #[test]
     fn drag_snap_remaining_returns_some_when_dragging() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5181,7 +5188,7 @@ mod tests {
     #[test]
     fn drag_snap_remaining_zero_when_expired() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5204,7 +5211,7 @@ mod tests {
             snap_applied: false,
         });
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5233,7 +5240,7 @@ mod tests {
     #[test]
     fn apply_drag_snap_if_pending_no_drag_is_noop() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5248,8 +5255,10 @@ mod tests {
         use crate::layout::InsertPosition;
         use crate::window::{FloatRect, FloatRectSpec};
 
-        let mut config = WmConfig::standalone();
-        config.drag_snap_timeout = Some(SHORT_SNAP_TIMEOUT);
+        let config = WmConfig {
+            drag_snap_timeout: Some(SHORT_SNAP_TIMEOUT),
+            ..Default::default()
+        };
         let mut wm = WindowManager::<TestComponent>::with_config(
             config,
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -5330,7 +5339,7 @@ mod tests {
     #[test]
     fn power_profile_change_updates_value() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5350,7 +5359,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5393,7 +5402,7 @@ mod tests {
         use crate::window::FloatRectSpec;
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5507,7 +5516,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5546,7 +5555,7 @@ mod tests {
     #[test]
     fn drag_last_event_updated_on_drag_events() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5663,7 +5672,7 @@ mod tests {
     #[test]
     fn transition_window_realized_to_mapped() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5693,7 +5702,7 @@ mod tests {
     #[test]
     fn transition_window_mapped_to_iconic_retains_z_order() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5720,7 +5729,7 @@ mod tests {
     #[test]
     fn transition_window_iconic_to_mapped_restores_z_order() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5748,7 +5757,7 @@ mod tests {
         use crate::window::{FloatRect, FloatRectSpec};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5821,7 +5830,7 @@ mod tests {
     #[test]
     fn transition_window_mapped_to_unmapped_cleans_up() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5863,7 +5872,7 @@ mod tests {
     #[test]
     fn close_window_cleans_up_layout_and_state() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5895,7 +5904,7 @@ mod tests {
     #[test]
     fn close_window_removes_all_windows_from_slotmap() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5921,7 +5930,7 @@ mod tests {
     #[test]
     fn close_window_unmap_policy_preserves_slotmap_entry() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5949,12 +5958,119 @@ mod tests {
         );
     }
 
+    #[test]
+    fn close_window_ignored_for_non_closable_window() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.set_closable(key, false);
+        wm.transition_window(key, WindowState::Mapped);
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+
+        wm.close_window(key);
+        assert!(
+            wm.has_window(key),
+            "non-closable window must survive close_window"
+        );
+        assert_eq!(
+            wm.window_state(key),
+            Some(WindowState::Mapped),
+            "non-closable window must stay mapped"
+        );
+    }
+
+    #[test]
+    fn set_closable_toggles() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        assert!(wm.is_closable(key), "windows are closable by default");
+        wm.set_closable(key, false);
+        assert!(
+            !wm.is_closable(key),
+            "set_closable(false) marks non-closable"
+        );
+        wm.set_closable(key, true);
+        assert!(wm.is_closable(key), "set_closable(true) re-enables closing");
+    }
+
+    #[test]
+    fn window_management_buttons_hides_close_for_non_closable() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+
+        wm.set_closable(key, false);
+        let buttons = wm.window_management_buttons();
+        assert!(
+            !buttons
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == key)),
+            "non-closable window must not expose a Close button"
+        );
+    }
+
+    #[test]
+    fn wm_menu_items_disables_close_for_non_closable() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+        wm.set_window_title(key, "pinned");
+        wm.set_closable(key, false);
+
+        let items = wm.wm_menu_items();
+        let close_entry = items.iter().find(|entry| match entry {
+            MenuDisplayItem::Item(MenuItem { action, .. }) => {
+                matches!(action, TermWmAction::CloseWindow(k) if *k == key)
+            }
+            MenuDisplayItem::Separator => false,
+        });
+        let MenuDisplayItem::Item(MenuItem { disabled, .. }) = close_entry.expect("Close entry")
+        else {
+            unreachable!("Close entry is an Item");
+        };
+        assert!(
+            *disabled,
+            "Close menu entry must be disabled for non-closable window"
+        );
+    }
+
     // ── shade_window / unshade_window ─────────────────────────────────
 
     #[test]
     fn shade_and_unshade_window() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -5993,7 +6109,7 @@ mod tests {
     #[test]
     fn shade_is_idempotent() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6015,7 +6131,7 @@ mod tests {
     #[test]
     fn dispatch_focused_event_routes_mouse_to_selection_component() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6066,7 +6182,7 @@ mod tests {
     #[test]
     fn phase4_down_dispatches_mouse_action_to_update() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6129,7 +6245,7 @@ mod tests {
     #[test]
     fn phase3_moved_dispatches_mouse_action_to_update() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6192,7 +6308,7 @@ mod tests {
     /// Returns (wm, keys, gap_col, gap_row) where gap is the center of the split handle.
     fn setup_tiling_with_gap() -> (WindowManager<TestComponent>, Vec<WindowKey>, u16, u16) {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6400,7 +6516,7 @@ mod tests {
     #[test]
     fn register_layout_handle_hitboxes_registers_entries() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6449,7 +6565,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6500,7 +6616,7 @@ mod tests {
         use crate::layout::{LayoutNode, TilingLayout};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6580,7 +6696,7 @@ mod tests {
         impl WmCmp for ConsumeLayer {}
 
         let mut wm = WindowManager::<TestComponent, ConsumeLayer>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             layer_manager::LayerManager::<ConsumeLayer>::new(),
@@ -6632,7 +6748,7 @@ mod tests {
     #[test]
     fn overlay_close_exit_confirm_removes_overlay() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6649,7 +6765,7 @@ mod tests {
     #[test]
     fn overlay_help_visible_and_close() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6666,7 +6782,7 @@ mod tests {
     #[test]
     fn handle_exit_confirm_event_returns_none_without_overlay() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6686,7 +6802,7 @@ mod tests {
         use crate::window::{FloatRect, FloatRectSpec};
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6774,7 +6890,7 @@ mod tests {
     #[test]
     fn take_alternate_screen_transition_no_component() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6788,7 +6904,7 @@ mod tests {
     #[test]
     fn take_alternate_screen_transition_delegates() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6805,7 +6921,7 @@ mod tests {
     #[test]
     fn handle_outside_click_empty_registry_returns_false() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6825,7 +6941,7 @@ mod tests {
     #[test]
     fn handle_outside_click_window_hitbox_focuses_window() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6856,7 +6972,7 @@ mod tests {
     #[test]
     fn handle_outside_click_chrome_hitbox_focuses_window() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6889,7 +7005,7 @@ mod tests {
     #[test]
     fn handle_outside_click_layer_no_component_returns_false() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6920,7 +7036,7 @@ mod tests {
     #[test]
     fn handle_outside_click_layer_consumed_returns_true() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6962,7 +7078,7 @@ mod tests {
     #[test]
     fn handle_outside_click_overlay_ignored_by_key() {
         let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -6994,7 +7110,7 @@ mod tests {
     #[test]
     fn handle_outside_click_chrome_non_window_skipped() {
         let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -7042,7 +7158,7 @@ mod tests {
     #[test]
     fn help_key_returns_none_initially() {
         let wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -7056,7 +7172,7 @@ mod tests {
     #[test]
     fn help_overlay_bounds_returns_none_when_no_key() {
         let wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -7068,7 +7184,7 @@ mod tests {
     #[test]
     fn help_overlay_bounds_delegates_to_overlay_render_area() {
         let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -7091,7 +7207,7 @@ mod tests {
     fn handle_outside_click_layer_action_queued() {
         let mut wm = WindowManager::<TestComponent, NoopWmComponent,
             crate::components::NoopOverlay>::with_config(
-            WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")),
+            WmConfig::default(), Arc::new(AppContext::new("test", "0.0.0")),
             None, crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
@@ -7124,7 +7240,7 @@ mod tests {
     #[test]
     fn handle_outside_click_overlay_not_ignored_routes_event() {
         let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -7166,7 +7282,7 @@ mod tests {
     fn handle_outside_click_priority_layer_over_window() {
         let mut wm = WindowManager::<TestComponent, NoopWmComponent,
             crate::components::NoopOverlay>::with_config(
-            WmConfig::standalone(), Arc::new(AppContext::new("test", "0.0.0")),
+            WmConfig::default(), Arc::new(AppContext::new("test", "0.0.0")),
             None, crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
@@ -7212,7 +7328,7 @@ mod tests {
     #[test]
     fn handle_outside_click_stacked_overlay_ignores_stale() {
         let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -7290,7 +7406,7 @@ mod tests {
     #[test]
     fn hovered_tiling_handle_obscured_by_any_overlay() {
         let mut wm = WindowManager::<TestComponent, NoopWmComponent, TestOverlay>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),

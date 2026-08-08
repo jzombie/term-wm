@@ -28,10 +28,10 @@ impl std::error::Error for ConfigError {}
 
 /// Monomorphic builder for [`WindowManager`].
 ///
-/// Configure the compositor's internal features. The only distinction
-/// is whether it boots with default system UI (inject components via
-/// `.top_panel()` / `.bottom_panel()` / `.command_menu()`) or as a
-/// blank canvas (`.bare()` with no chrome).
+/// Start with [`AppBuilder::new`], inject system UI via `.top_panel()` /
+/// `.bottom_panel()` / `.fab()` and `.supported_menu_actions()`, then
+/// `.build()`. The builder begins from `WmConfig::default()`; tweak with
+/// `.config()`, `.theme()`, `.keybindings()`, and `.hint_visibility()`.
 pub struct AppBuilder<L: WmComponent> {
     config: WmConfig,
     app_ctx: Option<Arc<AppContext>>,
@@ -41,10 +41,17 @@ pub struct AppBuilder<L: WmComponent> {
     supported_menu_actions: Option<Vec<TermWmAction>>,
 }
 
+impl<L: WmComponent> Default for AppBuilder<L> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<L: WmComponent> AppBuilder<L> {
-    /// Blank canvas — full standalone config, no chrome injected.
-    /// Use `.config(WmConfig::minimal())` for a minimal preset.
-    pub fn bare() -> Self {
+    /// Blank canvas — starts from `WmConfig::default()` (the full-featured
+    /// standalone config) with no chrome injected. Use `.config()` to swap in a
+    /// different configuration.
+    pub fn new() -> Self {
         Self {
             config: WmConfig::default(),
             app_ctx: None,

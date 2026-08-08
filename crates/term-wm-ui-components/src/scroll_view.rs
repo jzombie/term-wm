@@ -20,6 +20,10 @@ use term_wm_layout_engine::LayoutRect;
 /// Minimum scrollbar thumb size in cells.
 const MIN_THUMB_SIZE: i32 = 1;
 
+/// Thumb glyph for horizontal scrollbars (lower half block). Grounds the
+/// thumb to the bottom edge of the row, keeping the track visible above it.
+const HORIZONTAL_SCROLLBAR_THUMB: &str = "▄";
+
 // --- Scroll Logic Helpers (Public API) ---
 
 #[derive(Debug, Default, Clone)]
@@ -165,7 +169,12 @@ pub fn render_scrollbar_oriented(
     let mut state = ScrollbarState::new(content_len)
         .position(offset.min(content_len.saturating_sub(1)))
         .viewport_content_length(view.max(1));
-    let scrollbar = Scrollbar::new(orientation);
+    let scrollbar = match orientation {
+        ScrollbarOrientation::HorizontalBottom | ScrollbarOrientation::HorizontalTop => {
+            Scrollbar::new(orientation).thumb_symbol(HORIZONTAL_SCROLLBAR_THUMB)
+        }
+        _ => Scrollbar::new(orientation),
+    };
     scrollbar.render(area, buffer, &mut state);
 }
 
@@ -683,6 +692,50 @@ mod tests {
             .saturating_add(1)
             .saturating_sub(1);
         assert!(bottom <= max_offset);
+    }
+
+    #[test]
+    fn horizontal_scrollbar_uses_bottom_half_block_thumb() {
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 1,
+        };
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let total = 100usize;
+        let view = 10usize;
+        // Position so the thumb sits near the start of the track.
+        render_scrollbar_oriented(
+            &mut buf,
+            area,
+            total,
+            view,
+            0,
+            ScrollbarOrientation::HorizontalBottom,
+        );
+
+        let mut thumb_cols = Vec::new();
+        let mut track_cols = Vec::new();
+        for col in area.x..area.x + area.width {
+            if let Some(cell) = buf.cell((col, area.y)) {
+                match cell.symbol() {
+                    "▄" => thumb_cols.push(col),
+                    "═" => track_cols.push(col),
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            !thumb_cols.is_empty(),
+            "horizontal scrollbar should render a ▄ thumb, got: {:?}",
+            buf.content.iter().map(|c| c.symbol()).collect::<Vec<_>>()
+        );
+        assert!(
+            !track_cols.is_empty(),
+            "horizontal scrollbar should render a ═ track, got: {:?}",
+            buf.content.iter().map(|c| c.symbol()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

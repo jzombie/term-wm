@@ -64,6 +64,7 @@ pub struct CommandPaletteComponent {
     nav_keys: KeyBindings,
     list_scroll: ScrollViewComponent<MenuComponent>,
     last_display_sel: usize,
+    last_viewport_rows: usize,
     last_list_area: LayoutRect,
 }
 
@@ -123,6 +124,7 @@ impl CommandPaletteComponent {
             nav_keys,
             list_scroll,
             last_display_sel: 0,
+            last_viewport_rows: 0,
             last_list_area: LayoutRect::default(),
         }
     }
@@ -571,24 +573,22 @@ impl Component<TermWmAction> for CommandPaletteComponent {
 
         // Set content height for ScrollViewComponent and auto-scroll to keep selected item visible
         let total = self.display_nodes.len();
+        let list_height = bounds.height.saturating_sub(1) as usize;
         let handle = self.list_scroll.scroll_handle();
         {
             let mut scroll = handle.scroll.borrow_mut();
             scroll.content_height = total;
-
-            // Only auto-scroll when the selection index changes (not on manual scroll)
-            if display_sel != self.last_display_sel {
-                let list_height = bounds.height.saturating_sub(1) as usize;
-                if list_height > 0 {
-                    if display_sel < scroll.offset_y {
-                        scroll.offset_y = display_sel;
-                    } else if display_sel >= scroll.offset_y.saturating_add(list_height) {
-                        scroll.offset_y = display_sel.saturating_sub(list_height).saturating_add(1);
-                    }
-                }
-            }
+            // Sync physical height (matches list_area.height passed to
+            // list_scroll.render below) so max_offset_y() is accurate even
+            // though this runs before the child ScrollViewComponent renders.
+            scroll.height = list_height;
         }
-        self.last_display_sel = display_sel;
+        handle.ensure_selection_visible(
+            display_sel,
+            list_height,
+            &mut self.last_display_sel,
+            &mut self.last_viewport_rows,
+        );
 
         // Clear background
         let menu_style = Style::default()

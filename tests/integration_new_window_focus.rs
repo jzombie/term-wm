@@ -7,7 +7,7 @@ use term_wm_ui_facade::layer_component::LayerComponent;
 #[test]
 fn new_window_is_focused() {
     let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
-    let mut wm = AppBuilder::<LayerComponent>::bare()
+    let mut wm = AppBuilder::<LayerComponent>::new()
         .app_ctx(ctx)
         .top_panel(LayerComponent::TopPanel(
             term_wm_sys_ui_components::WmTopPanelComponent::new("test"),

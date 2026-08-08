@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListItem};
+use ratatui::widgets::{List, ListItem};
 use term_wm_core::events::Event;
 
-use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect};
+use crate::helpers::{layout_rect_to_clipped_rect, slice_by_columns};
 use ratatui::widgets::Widget;
 use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
@@ -22,6 +22,8 @@ pub struct ToggleListComponent {
     items: Vec<ToggleItem>,
     selected: usize,
     title: String,
+    last_selected: usize,
+    last_viewport_rows: usize,
 }
 
 impl Component<TermWmAction> for ToggleListComponent {
@@ -34,33 +36,39 @@ impl Component<TermWmAction> for ToggleListComponent {
     ) {
         let area = layout_rect_to_clipped_rect(area);
         let backend = crate::helpers::downcast_ratatui(backend);
-        let block = if ctx.focused() {
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("{} (focus)", self.title))
-                .border_style(Style::default().fg(color_to_ratatui(ctx.config().theme.success)))
-        } else {
-            Block::default()
-                .borders(Borders::ALL)
-                .title(self.title.as_str())
-        };
-        let inner = block.inner(area);
-        block.render(area, &mut backend.buffer);
-
-        if inner.width == 0 || inner.height == 0 {
+        if area.width == 0 || area.height == 0 {
             return;
         }
+        let inner = area;
 
         let total_count = self.items.len();
-        // Assuming single line items
+        let max_width = self
+            .items
+            .iter()
+            .map(|item| {
+                format!(
+                    "{} {}",
+                    if item.checked { "[x]" } else { "[ ]" },
+                    item.label
+                )
+                .len()
+            })
+            .max()
+            .unwrap_or(0);
         if let Some(handle) = ctx.scroll_handle() {
-            handle.set_content_size(inner.width as usize, total_count + 2);
-            handle.ensure_vertical_visible(self.selected + 1, self.selected + 2);
+            handle.set_content_size(max_width, total_count);
+            // Keep the selected item visible while preserving manual scroll.
+            let viewport_rows = inner.height as usize;
+            handle.ensure_selection_visible(
+                self.selected,
+                viewport_rows,
+                &mut self.last_selected,
+                &mut self.last_viewport_rows,
+            );
         }
 
         let vp = ctx.viewport();
-        // Similar logic to ListComponent
-        let skip_n = vp.offset_y.saturating_sub(1);
+        let skip_n = vp.offset_y;
 
         let items: Vec<ListItem> = self
             .items
@@ -70,7 +78,12 @@ impl Component<TermWmAction> for ToggleListComponent {
             .take(inner.height as usize)
             .map(|(i, item)| {
                 let marker = if item.checked { "[x]" } else { "[ ]" };
-                let mut li = ListItem::new(format!("{marker} {}", item.label));
+                let text = slice_by_columns(
+                    &format!("{marker} {}", item.label),
+                    vp.offset_x,
+                    inner.width as usize,
+                );
+                let mut li = ListItem::new(text);
                 if i == self.selected {
                     li = li.style(Style::default().add_modifier(Modifier::REVERSED));
                 }
@@ -146,6 +159,8 @@ impl ToggleListComponent {
             items: Vec::new(),
             selected: 0,
             title: title.into(),
+            last_selected: 0,
+            last_viewport_rows: 0,
         }
     }
 
@@ -154,6 +169,20 @@ impl ToggleListComponent {
         if self.selected >= self.items.len() {
             self.selected = self.items.len().saturating_sub(1);
         }
+        self.last_selected = 0;
+        self.last_viewport_rows = 0;
+    }
+
+    /// Replace the items in place WITHOUT resetting the selection or the
+    /// scroll-follow guard. For periodic live-refresh of an existing list so a
+    /// manual scroll is preserved.
+    pub fn update_items(&mut self, items: Vec<ToggleItem>) {
+        self.items = items;
+        if self.selected >= self.items.len() {
+            self.selected = self.items.len().saturating_sub(1);
+        }
+        // last_selected / last_viewport_rows intentionally untouched: the list
+        // identity is unchanged, so the guard holds and manual scroll persists.
     }
 
     pub fn items(&self) -> &[ToggleItem] {
@@ -166,6 +195,10 @@ impl ToggleListComponent {
 
     pub fn selected(&self) -> usize {
         self.selected
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
     }
 
     pub fn set_selected(&mut self, selected: usize) {
@@ -376,6 +409,226 @@ mod tests {
         assert_eq!(t.selected(), 4);
         t.set_items(make_items(2));
         assert_eq!(t.selected(), 1);
+    }
+
+    fn scroll_ctx() -> (
+        ComponentContext,
+        term_wm_core::component_context::ScrollHandle,
+    ) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let handle = term_wm_core::component_context::ScrollHandle {
+            scroll: Rc::new(RefCell::new(
+                term_wm_core::component_context::ScrollBounds::default(),
+            )),
+        };
+        let info = handle.info();
+        let ctx = ComponentContext::new(true).with_viewport(info, Some(handle.clone()));
+        (ctx, handle)
+    }
+
+    fn render_toggle_with_scroll(
+        t: &mut ToggleListComponent,
+        area: LayoutRect,
+        ctx: &ComponentContext,
+    ) {
+        let buffer = ratatui::buffer::Buffer::empty(Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            Rect {
+                x: area.x as u16,
+                y: area.y as u16,
+                width: area.width,
+                height: area.height,
+            },
+        );
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        t.render(&mut backend, area, ctx, &mut registry);
+    }
+
+    #[test]
+    fn scroll_follow_starts_at_offset_zero() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        assert_eq!(handle.scroll.borrow().offset_y, 0);
+    }
+
+    #[test]
+    fn scroll_follow_advances_when_selection_moves_past_viewport() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        for _ in 0..12 {
+            t.move_selection(1);
+        }
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        let offset = handle.scroll.borrow().offset_y;
+        let selected_row = t.selected();
+        assert!(
+            selected_row >= offset && selected_row < offset + 10,
+            "selected row {} must be visible in [{}..{})",
+            selected_row,
+            offset,
+            offset + 10
+        );
+    }
+
+    #[test]
+    fn scroll_follow_goes_back_when_selection_moves_up() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        for _ in 0..18 {
+            t.move_selection(1);
+        }
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        assert!(handle.scroll.borrow().offset_y > 0);
+        for _ in 0..18 {
+            t.move_selection(-1);
+        }
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        // Item 0 is at content row 0 (borderless), so the scroll-back target is 0.
+        assert_eq!(
+            handle.scroll.borrow().offset_y,
+            0,
+            "offset should reset to top when selection moves to top (got {})",
+            handle.scroll.borrow().offset_y
+        );
+    }
+
+    #[test]
+    fn scroll_follow_does_not_override_manual_scroll() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        handle.scroll.borrow_mut().offset_y = 6;
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        assert_eq!(handle.scroll.borrow().offset_y, 6);
+    }
+
+    #[test]
+    fn scroll_follow_reruns_on_viewport_shrink() {
+        let mut t = ToggleListComponent::new("s");
+        t.set_items(make_items(20));
+        let (ctx, handle) = scroll_ctx();
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        for _ in 0..15 {
+            t.move_selection(1);
+        }
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 10,
+            },
+            &ctx,
+        );
+        let before = handle.scroll.borrow().offset_y;
+        render_toggle_with_scroll(
+            &mut t,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 4,
+            },
+            &ctx,
+        );
+        let after = handle.scroll.borrow().offset_y;
+        assert!(after >= before, "offset should not move backward on shrink");
     }
 
     #[test]

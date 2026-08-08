@@ -35,6 +35,10 @@ pub struct ConsoleEventSource {
     /// Set by the runner when there's pending work (e.g. countdown timer)
     /// to force frequent polling regardless of recent input activity.
     pending_work: bool,
+    /// Cap on the poll sleep, set by the runner to the next scheduler /
+    /// frame-pacer deadline so pending tasks fire on time even when idle
+    /// (PowerSaver would otherwise block for 3600s).
+    max_sleep_duration: Option<Duration>,
 }
 
 impl Default for ConsoleEventSource {
@@ -50,6 +54,7 @@ impl ConsoleEventSource {
             event_queue: VecDeque::new(),
             last_event_at: None,
             pending_work: false,
+            max_sleep_duration: None,
         }
     }
 
@@ -143,8 +148,16 @@ impl EventSource for ConsoleEventSource {
         self.pending_work = pending;
     }
 
+    fn set_max_sleep_duration(&mut self, duration: Option<Duration>) {
+        self.max_sleep_duration = duration;
+    }
+
     fn poll_interval(&self) -> Duration {
-        self.current_profile().poll_interval()
+        let base = self.current_profile().poll_interval();
+        match self.max_sleep_duration {
+            Some(max_sleep) => base.min(max_sleep),
+            None => base,
+        }
     }
 
     fn current_profile(&self) -> PowerProfile {
