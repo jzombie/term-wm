@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::sync::{
-    Arc, Condvar, Mutex,
+    Arc, Condvar, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -26,6 +26,41 @@ const HISTORY_TAIL_LEN: usize = 8;
 
 /// Length of the DSR request sequence `\x1b[6n`.
 const DSR_PATTERN_LEN: usize = 4;
+
+/// Env var that enables dumping raw PTY→emulator bytes (as hex) to a file.
+/// Temporary diagnostic aid for seeing exactly what a child app sends (e.g.
+/// pico's escape sequences at the right margin of a long line).
+const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
+
+/// Whether `ESC_TRACE_ENV` is set — checked once per process.
+static ESC_TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
+
+/// Append a chunk of raw bytes fed to the emulator as a hex line to the file
+/// named by `TERM_WM_TRACE_ESC` (default `term_wm_esc_trace.log`). Off by
+/// default; no-op when the env var is unset.
+fn esc_trace_chunk(bytes: &[u8]) {
+    if !*ESC_TRACE_ENABLED.get_or_init(|| std::env::var_os(ESC_TRACE_ENV).is_some()) {
+        return;
+    }
+    let path =
+        std::env::var(ESC_TRACE_ENV).unwrap_or_else(|_| "term_wm_esc_trace.log".to_string());
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(file, "{}", hex_bytes(bytes));
+    }
+}
+
+/// Format bytes as a lowercase hex string (hand-rolled; no extra dependency).
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
 
 /// Buffer size for `proc_name()` on macOS.
 #[cfg(target_os = "macos")]
@@ -841,6 +876,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     let mut shared = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
                     shared.process(&buf[..n]);
                 }
+                esc_trace_chunk(&buf[..n]);
 
                 if let Some(title) = extract_osc_title(&buf[..n]) {
                     let mut guard = pending_title.lock().unwrap_or_else(|err| err.into_inner());
@@ -1218,6 +1254,42 @@ mod tests {
         assert!(last.is_empty());
         assert!(!dsr_requested.load(Ordering::Relaxed));
         assert!(!dirty.load(Ordering::Relaxed));
+    }
+
+    /// Regression: the emulator term-wm builds against must honor DECAWM
+    /// (`ESC[?7l`, autowrap off). Feeding `\x1b[?7l` + 85 chars through the
+    /// production ingestion loop (`parser_read_loop`) must clamp the cursor to
+    /// the right margin instead of wrapping onto the next row. Guards the
+    /// workspace-level integration point: without DECAWM support the emulator
+    /// would ignore the toggle and wrap the 81st character to row 1, failing
+    /// these assertions.
+    #[test]
+    fn parser_read_loop_decawn_off_does_not_wrap() {
+        let mut args = make_parser_test_args();
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"\x1b[?7l");
+        payload.extend_from_slice(&[b'x'; 85]);
+        args.reader = Box::new(Cursor::new(payload));
+        let shared = Arc::clone(&args.shared_parser);
+
+        parser_read_loop(args);
+
+        let parser = shared.lock().unwrap();
+        let screen = parser.screen();
+        assert_eq!(
+            screen.cursor_position(),
+            (0, 79),
+            "DECAWM off must clamp the cursor to the right margin"
+        );
+        assert_eq!(
+            screen.cell(0, 79).unwrap().contents(),
+            "x",
+            "the 85th char must overwrite the margin cell, not wrap"
+        );
+        assert!(
+            (0..80).all(|col| screen.cell(1, col).is_none_or(|cell| cell.contents().is_empty())),
+            "row 1 must remain empty (no wrap)"
+        );
     }
 
     #[test]
