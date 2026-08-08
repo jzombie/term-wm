@@ -439,6 +439,7 @@ impl EventSource for UnifiedEventSource {
         }
     }
 
+    // TODO: This shouldn't set crossterm directly; it should call console_event_source
     fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
         if enabled {
             crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
