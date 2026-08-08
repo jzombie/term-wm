@@ -447,7 +447,10 @@ mod tests {
 
         // Lazy cancel must be visible to the queue queries: the cancelled
         // entry is purged from the top of the heap.
-        assert!(!handle.has_pending(), "cancelled task should not be pending");
+        assert!(
+            !handle.has_pending(),
+            "cancelled task should not be pending"
+        );
         assert!(
             handle.time_until_next().is_none(),
             "cancelled task should not have a next deadline"
