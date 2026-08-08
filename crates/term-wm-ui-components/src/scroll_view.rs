@@ -729,18 +729,12 @@ mod tests {
         assert!(
             !thumb_cols.is_empty(),
             "horizontal scrollbar should render a ▄ thumb, got: {:?}",
-            buf.content
-                .iter()
-                .map(|c| c.symbol())
-                .collect::<Vec<_>>()
+            buf.content.iter().map(|c| c.symbol()).collect::<Vec<_>>()
         );
         assert!(
             !track_cols.is_empty(),
             "horizontal scrollbar should render a ═ track, got: {:?}",
-            buf.content
-                .iter()
-                .map(|c| c.symbol())
-                .collect::<Vec<_>>()
+            buf.content.iter().map(|c| c.symbol()).collect::<Vec<_>>()
         );
     }
 

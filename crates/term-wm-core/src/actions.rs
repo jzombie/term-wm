@@ -136,7 +136,6 @@ pub enum TermWmAction {
     // Valid for any canvas, image, or plotting component. Applications bind
     // keys to these via `WmConfig.keybindings`; the focused component's
     // `update()` interprets them.
-
     /// Zoom into the focused canvas/plot.
     ZoomIn,
     /// Zoom out of the focused canvas/plot.

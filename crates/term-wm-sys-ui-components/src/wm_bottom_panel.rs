@@ -691,17 +691,21 @@ mod tests {
     fn render_overlays_does_not_clobber_command_palette_hints_in_monocle() {
         use std::sync::Arc;
 
+        use term_wm_console::draw_plan_renderer::render_overlays;
         use term_wm_core::app_context::AppContext;
         use term_wm_core::components::NoopComponent;
         use term_wm_core::components::NoopOverlay;
         use term_wm_core::config::AppBuilder;
         use term_wm_core::window::ComponentTag;
-        use term_wm_console::draw_plan_renderer::render_overlays;
 
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
         let mut wm = AppBuilder::<WmBottomPanelComponent>::new()
             .app_ctx(Arc::clone(&app_ctx))
-            .bottom_panel(WmBottomPanelComponent::new("test", "0.1.0", Some("test-host")))
+            .bottom_panel(WmBottomPanelComponent::new(
+                "test",
+                "0.1.0",
+                Some("test-host"),
+            ))
             .build::<NoopComponent, NoopOverlay>()
             .expect("test build");
 

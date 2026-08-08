@@ -7,10 +7,7 @@ use term_wm::term_wm_app::TermWmApp;
 
 /// Default demo image, resolved against the crate root so it loads regardless
 /// of the current working directory.
-const DEFAULT_SVG: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/assets/zenOSmosis-logo.svg"
-);
+const DEFAULT_SVG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/zenOSmosis-logo.svg");
 
 fn main() -> io::Result<()> {
     let mut paths: Vec<String> = std::env::args().skip(1).collect();

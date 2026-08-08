@@ -254,9 +254,7 @@ mod tests {
 
     #[test]
     fn main_build_wm_gets_full_default_menu_actions() {
-        let app_ctx = Arc::new(
-            AppContext::new("term-wm", "0.0.0").with_hostname("test-host"),
-        );
+        let app_ctx = Arc::new(AppContext::new("term-wm", "0.0.0").with_hostname("test-host"));
         let wm = build_wm(&app_ctx);
         assert_eq!(
             wm.supported_menu_actions(),

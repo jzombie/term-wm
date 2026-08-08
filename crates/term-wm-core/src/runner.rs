@@ -776,9 +776,7 @@ where
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));
 
         system_handle.set_keep_awake(!app.wm().overlays().is_empty());
-        driver.set_pending_work(
-            system_handle.is_keep_awake_active() || app_handle.has_pending(),
-        );
+        driver.set_pending_work(system_handle.is_keep_awake_active() || app_handle.has_pending());
         match handler_result {
             Ok(result) => result,
             Err(_) => {

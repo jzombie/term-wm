@@ -286,16 +286,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             crate::wm_config::HintVisibility::Always => {
                 if self.config.wm_command_menu_enabled {
                     let layer = match self.input_mode {
-                        crate::actions::WmInputMode::CommandPalette => {
-                            ActionLayer::CommandPalette
-                        }
+                        crate::actions::WmInputMode::CommandPalette => ActionLayer::CommandPalette,
                         crate::actions::WmInputMode::Help => ActionLayer::Help,
                         _ => ActionLayer::Global,
                     };
                     self.keybindings()
                         .bottom_hints_for_layer(crate::constants::MAX_BOTTOM_HINTS, layer)
                 } else {
-                    self.keybindings().bottom_hints(crate::constants::MAX_BOTTOM_HINTS)
+                    self.keybindings()
+                        .bottom_hints(crate::constants::MAX_BOTTOM_HINTS)
                 }
             }
             _ => Vec::new(),
@@ -310,7 +309,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if let Some(p) =
             self.get_semantic_component_mut(super::layer_manager::ComponentTag::BottomPanel)
         {
-            p.process_action(&crate::components::ComponentAction::SetKeybindingHints(hints));
+            p.process_action(&crate::components::ComponentAction::SetKeybindingHints(
+                hints,
+            ));
         }
         // Compute whether the panel should be active from config + visibility,
         // BEFORE calling consume_area (which needs this state to claim space).

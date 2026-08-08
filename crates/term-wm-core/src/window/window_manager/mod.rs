@@ -782,9 +782,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         layer_manager: layer_manager::LayerManager<L>,
         semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     ) -> Self {
-        let supported_menu_actions = supported_menu_actions.unwrap_or_else(|| {
-            crate::constants::DEFAULT_SUPPORTED_MENU_ACTIONS.to_vec()
-        });
+        let supported_menu_actions = supported_menu_actions
+            .unwrap_or_else(|| crate::constants::DEFAULT_SUPPORTED_MENU_ACTIONS.to_vec());
         let mouse_capture_enabled = config.mouse_capture_enabled;
         let clipboard = Some(crate::clipboard::Clipboard::new());
         let floating_resize_offscreen = config.floating_resize_offscreen;
@@ -6002,7 +6001,10 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         assert!(wm.is_closable(key), "windows are closable by default");
         wm.set_closable(key, false);
-        assert!(!wm.is_closable(key), "set_closable(false) marks non-closable");
+        assert!(
+            !wm.is_closable(key),
+            "set_closable(false) marks non-closable"
+        );
         wm.set_closable(key, true);
         assert!(wm.is_closable(key), "set_closable(true) re-enables closing");
     }
@@ -6053,10 +6055,14 @@ mod tests {
             }
             MenuDisplayItem::Separator => false,
         });
-        let MenuDisplayItem::Item(MenuItem { disabled, .. }) = close_entry.expect("Close entry") else {
+        let MenuDisplayItem::Item(MenuItem { disabled, .. }) = close_entry.expect("Close entry")
+        else {
             unreachable!("Close entry is an Item");
         };
-        assert!(*disabled, "Close menu entry must be disabled for non-closable window");
+        assert!(
+            *disabled,
+            "Close menu entry must be disabled for non-closable window"
+        );
     }
 
     // ── shade_window / unshade_window ─────────────────────────────────

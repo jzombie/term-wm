@@ -114,12 +114,7 @@ impl<T> TaskHandle<T> {
     /// under load.  When `fire_immediate` is true the first fire happens on
     /// the next `drain_expired` (deadline = now); otherwise it waits one
     /// interval.
-    pub fn schedule_repeating(
-        &self,
-        interval: Duration,
-        fire_immediate: bool,
-        payload: T,
-    ) -> TaskId
+    pub fn schedule_repeating(&self, interval: Duration, fire_immediate: bool, payload: T) -> TaskId
     where
         T: Clone,
     {
@@ -151,7 +146,8 @@ impl<T> TaskHandle<T> {
     /// Returns `true` when any tasks are pending (both expired and
     /// non-expired) or [`keep_awake`](Self::set_keep_awake) is active.
     pub fn has_pending(&self) -> bool {
-        let inner = self.inner.borrow();
+        let mut inner = self.inner.borrow_mut();
+        self.purge_cancelled(&mut inner);
         inner.keep_awake || !inner.heap.is_empty()
     }
 
@@ -171,10 +167,23 @@ impl<T> TaskHandle<T> {
     /// Returns the duration until the next deadline, or [`None`] when the
     /// scheduler is empty.
     pub fn time_until_next(&self) -> Option<Duration> {
-        let inner = self.inner.borrow();
+        let mut inner = self.inner.borrow_mut();
+        self.purge_cancelled(&mut inner);
         let deadline = inner.heap.peek()?.deadline;
         let remaining = deadline.saturating_duration_since(Instant::now());
         Some(remaining)
+    }
+
+    /// Pop and discard any cancelled entries at the top of the heap so that
+    /// queries like [`has_pending`](Self::has_pending) and
+    /// [`time_until_next`](Self::time_until_next) reflect only live tasks.
+    fn purge_cancelled(&self, inner: &mut SchedulerInner<T>) {
+        while let Some(entry) = inner.heap.peek() {
+            if !inner.cancelled.remove(&entry.id) {
+                break;
+            }
+            inner.heap.pop();
+        }
     }
 
     /// Drain all expired tasks.
@@ -425,5 +434,100 @@ mod tests {
         assert!(sched.handle().is_keep_awake_active());
         sched.handle().set_keep_awake(false);
         assert!(!sched.handle().is_keep_awake_active());
+    }
+
+    #[test]
+    fn cancel_once_before_deadline_suppresses() {
+        let handle = TaskScheduler::<&str>::new().handle();
+        let id = handle.schedule_once(Duration::from_secs(60), "x");
+        assert!(handle.has_pending());
+        assert!(handle.time_until_next().is_some());
+
+        handle.cancel(id);
+
+        // Lazy cancel must be visible to the queue queries: the cancelled
+        // entry is purged from the top of the heap.
+        assert!(!handle.has_pending(), "cancelled task should not be pending");
+        assert!(
+            handle.time_until_next().is_none(),
+            "cancelled task should not have a next deadline"
+        );
+        assert!(handle.drain_expired().is_empty());
+        assert!(handle.drain_expired_once().is_empty());
+    }
+
+    #[test]
+    fn cancel_once_after_deadline_not_yet_drained_suppresses() {
+        let handle = TaskScheduler::<&str>::new().handle();
+        let id = handle.schedule_once(Duration::from_millis(1), "x");
+        std::thread::sleep(Duration::from_millis(10));
+        // Deadline elapsed but not drained yet — cancel must still suppress.
+        handle.cancel(id);
+        assert!(handle.drain_expired_once().is_empty());
+        assert!(handle.drain_expired().is_empty());
+    }
+
+    #[test]
+    fn cancel_repeating_before_first_fire_suppresses_all() {
+        let handle = TaskScheduler::<&str>::new().handle();
+        let id = handle.schedule_repeating(Duration::from_millis(10), false, "tick");
+        handle.cancel(id);
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(
+            handle.drain_expired().is_empty(),
+            "cancelled repeating task must never fire"
+        );
+    }
+
+    #[test]
+    fn cancel_repeating_fire_immediate_suppresses() {
+        let handle = TaskScheduler::<&str>::new().handle();
+        let id = handle.schedule_repeating(Duration::from_millis(10), true, "tick");
+        handle.cancel(id);
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(
+            handle.drain_expired().is_empty(),
+            "cancelled fire_immediate task must never fire"
+        );
+    }
+
+    #[test]
+    fn cancel_repeating_fire_immediate_then_stops_after_first() {
+        let handle = TaskScheduler::<&str>::new().handle();
+        let id = handle.schedule_repeating(Duration::from_millis(10), true, "tick");
+
+        // fire_immediate: fires on the first drain (deadline = now).
+        let first = handle.drain_expired();
+        assert_eq!(first.len(), 1, "fire_immediate should fire on first drain");
+        assert_eq!(first[0].0, id);
+
+        // Cancel after the immediate fire; future re-inserted fires suppressed.
+        handle.cancel(id);
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(
+            handle.drain_expired().is_empty(),
+            "repeating fire_immediate task must stop after cancel"
+        );
+    }
+
+    #[test]
+    fn cancel_via_shared_handle() {
+        let sched = TaskScheduler::<&str>::new();
+        let h1 = sched.handle();
+        let h2 = sched.handle();
+
+        let once_id = h1.schedule_once(Duration::from_millis(1), "once");
+        let repeat_id = h2.schedule_repeating(Duration::from_millis(10), true, "repeat");
+
+        // Cancel both through a different handle clone.
+        h2.cancel(once_id);
+        h1.cancel(repeat_id);
+
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(
+            h1.drain_expired().is_empty(),
+            "cancelled tasks must not fire via any handle"
+        );
+        assert!(h2.drain_expired_once().is_empty());
     }
 }
