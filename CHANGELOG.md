@@ -14,6 +14,10 @@ The format is based on Keep a Changelog and this project adheres to
 
 - **"New Window" renamed to "New Terminal":** the action (now `NewTerminal`), its Command Palette label, keybinding-help text, and test naming all say "terminal" instead of "window". Standalone apps built with `TermWmApp::new_custom` / `new_with_config` now include "New Terminal" in the default Command Palette, and it actually spawns a new terminal window out of the box — apps can remove it via `new_with_actions`. The `term-wm` binary now routes interactive new-window creation through the shared facade (fixing a title-collision bug where closing a window could reuse a duplicate "Shell N" title), so interactive terminals are titled `Terminal 1`, `Terminal 2`, …; `--run`/command windows keep their `Shell` titles.
 
+### Fixed
+
+- **Non-closable window headers showing the Close button:** when closable and non-closable windows were mixed, focusing a closable window made the ✕ close button appear on every header — including non-closable windows — because window-management buttons were computed once from the focused window and then drawn on all headers. Header buttons are now derived per window (each window shows its own Close/Maximize/Minimize based on its own closable and maximize state), so a non-closable window never shows ✕ and each header's maximize/restore glyph reflects that window's own state. A regression test covers mixed closable/non-closable windows in both focus orders.
+
 ## [0.9.14-alpha] - 2026-08-07
 
 ### Added

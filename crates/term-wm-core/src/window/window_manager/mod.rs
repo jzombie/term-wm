@@ -2629,27 +2629,42 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
-    /// Returns the window management buttons appropriate for the current mode.
-    /// In monocle mode, minimize/maximize are excluded (meaningless when
-    /// the focused window fills the screen). All window-specific buttons are
+    /// Returns the window management buttons appropriate for the current mode
+    /// for the focused window.
+    ///
+    /// In monocle mode, minimize/maximize are excluded (meaningless when the
+    /// focused window fills the screen). All window-specific buttons are
     /// excluded when there is no focused window.
     pub fn window_management_buttons(&self) -> Vec<WmButton> {
         let focused = self.focused_window();
         if !self.windows.contains_key(focused) {
             return Vec::new();
         }
-        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
+        self.window_management_buttons_for(focused)
+    }
+
+    /// Returns the window management buttons for a specific window, based on
+    /// that window's own state (closability, maximize state) rather than the
+    /// currently focused window.
+    ///
+    /// In monocle mode, minimize/maximize are excluded. Unknown keys yield an
+    /// empty list.
+    pub fn window_management_buttons_for(&self, key: WindowKey) -> Vec<WmButton> {
+        if !self.windows.contains_key(key) {
+            return Vec::new();
+        }
+        let is_maxed = self.window(key).is_some_and(|w| w.is_maximized());
         let mut btns = Vec::new();
-        if self.window(focused).is_some_and(|w| w.closable()) {
+        if self.window(key).is_some_and(|w| w.closable()) {
             btns.push(WmButton {
-                action: TermWmAction::CloseWindow(focused),
+                action: TermWmAction::CloseWindow(key),
                 label: "Close Window",
                 symbol: "X",
             });
         }
         if !self.is_monocle() {
             btns.push(WmButton {
-                action: TermWmAction::MaximizeWindow(focused),
+                action: TermWmAction::MaximizeWindow(key),
                 label: if is_maxed {
                     "Restore Window"
                 } else {
@@ -2658,7 +2673,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
-                action: TermWmAction::MinimizeWindow(focused),
+                action: TermWmAction::MinimizeWindow(key),
                 label: "Minimize Window",
                 symbol: "_",
             });
@@ -6029,6 +6044,57 @@ mod tests {
                 .iter()
                 .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == key)),
             "non-closable window must not expose a Close button"
+        );
+    }
+
+    #[test]
+    fn window_management_buttons_are_per_window_for_mixed_closability() {
+        // Regression: focusing a closable window must NOT surface a Close button
+        // on a non-closable window's header. Buttons must be derived from each
+        // window's own state, not the focused window's.
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let closable = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let non_closable = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [closable, non_closable] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        wm.set_closable(non_closable, false);
+
+        // Focus the closable window (the reported trigger) — the non-closable
+        // window's buttons must still be Close-free.
+        wm.focus_window_key(closable);
+        assert!(
+            wm.window_management_buttons_for(closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == closable)),
+            "closable window should show a Close button for itself"
+        );
+        assert!(
+            !wm.window_management_buttons_for(non_closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == non_closable)),
+            "non-closable window must not show a Close button even when another window is focused"
+        );
+
+        // Focus the non-closable window — the closable one must still show its Close.
+        wm.focus_window_key(non_closable);
+        assert!(
+            wm.window_management_buttons_for(closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == closable)),
+            "closable window keeps its Close button when a non-closable window is focused"
+        );
+        assert!(
+            !wm.window_management_buttons_for(non_closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == non_closable)),
+            "non-closable window must never expose a Close button for itself"
         );
     }
 

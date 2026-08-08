@@ -140,7 +140,7 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
                     floating,
                     hover_pos: wm.hover_pos(),
                     theme: wm.config().theme,
-                    wm_buttons: wm.window_management_buttons(),
+                    wm_buttons: wm.window_management_buttons_for(*key),
                     borders_enabled,
                     header_enabled,
                 };
