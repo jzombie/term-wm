@@ -20,7 +20,7 @@ Filename Conventions
 - Do NOT include the word `component` in filenames (avoid `terminal_component.rs`).
 
 - Window-manager-specific components (in the `term-wm-sys-ui-components` crate) must use the `wm_` filename prefix and `Wm` type prefix.
-	- Example: `WmDebugLogComponent` -> `wm_debug_log.rs`, `WmCommandPaletteOverlay` -> `wm_menu_overlay.rs`.
+	- Example: `WmDebugLogComponent` -> `wm_debug_log.rs`, `WmCommandPaletteComponent` -> `wm_command_palette.rs`.
 	- This applies to top-level files and files within category subdirectories (e.g., `sys/wm_help_overlay.rs`).
 	- Internal types (handles, writers, etc.) that are not components do not require the `Wm` prefix.
 
@@ -30,7 +30,7 @@ Component Implementation Placement
 
 Shared ScrollView
 - The shared scroll abstraction is `ScrollViewComponent` (not `ScrollView`). Use `ScrollViewComponent` wherever scrolling behavior is required.
-- Export `ScrollViewComponent` from `src/components/mod.rs` so other components may import it as `crate::components::scroll_view::ScrollViewComponent` or via `crate::components::ScrollViewComponent` if re-exported.
+- Export `ScrollViewComponent` from the crate's `src/lib.rs` so other components may import it via the crate root.
 
 Helper-Method Naming
 - Avoid naming inherent helpers `render` when the `Component::render` trait method exists; prefer `render_content` or another distinct name to prevent accidental recursion.
@@ -54,10 +54,11 @@ Component Developer API (Facade Pattern)
 - Do NOT call `ctx.screen_area()` in `on_mouse` — the framework has already converted to local coordinates.
 
 Module Exports
-- Keep `src/components/mod.rs` updated to re-export the canonical `*Component` names used across the repo.
+- Keep `src/lib.rs` updated to re-export the canonical `*Component` names used across the repo
+  (`pub use term_wm_ui_components::*`).
 
 Refactor & Verification Workflow
-- When renaming or moving a component, update all call sites and `mod.rs` exports.
+- When renaming or moving a component, update all call sites and the crate `lib.rs` exports.
 - After making changes, run:
 
 ```bash
@@ -68,7 +69,7 @@ cargo test
 If failures appear unrelated to your change, stop and ask for guidance.
 
 Pane Trait for Testability
-- `TerminalComponent` stores `Box<dyn Pane>` (defined in `crates/term-wm-core/src/pane.rs`).
+- `TerminalComponent` stores `Box<dyn Pane>` (defined in `crates/term-wm-pty-engine/src/pane.rs`).
 - Always use the `Pane` trait (not `Pty` directly) as the field type so that tests can inject `TestPane`.
 - `TestPane` lives in `crates/term-wm-ui-components/src/terminal.rs` under `#[cfg(test)]`. It wraps a `vt100::Parser` (for `screen()`) but tracks `scrollback`, `max_sb`, and `alt_screen` with its own fields.
 - To create a `TerminalComponent` for tests: `TerminalComponent::from_pane(Box::new(TestPane::new(max_sb)))`.
