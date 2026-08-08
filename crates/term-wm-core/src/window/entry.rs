@@ -109,6 +109,9 @@ pub struct Window {
     component_key: ComponentKey,
     /// What happens when this window is closed.
     close_policy: ClosePolicy,
+    /// Whether the window may be closed (via chrome ✕, palette, action, or
+    /// PTY-child exit). Non-closable windows can never be removed.
+    closable: bool,
     /// Persistent HitboxId for the window's content area.
     content_hitbox_id: HitboxId,
     /// Which leaf component within this window currently holds keyboard focus.
@@ -136,6 +139,7 @@ impl Window {
             chrome_config: ModeChromeConfig::default(),
             component_key,
             close_policy: ClosePolicy::default(),
+            closable: true,
             content_hitbox_id: HitboxId::new(),
             active_keyboard_focus: None,
             tracker: None,
@@ -250,6 +254,14 @@ impl Window {
 
     pub fn set_close_policy(&mut self, policy: ClosePolicy) {
         self.close_policy = policy;
+    }
+
+    pub fn closable(&self) -> bool {
+        self.closable
+    }
+
+    pub fn set_closable(&mut self, closable: bool) {
+        self.closable = closable;
     }
 
     // ── Hitbox ────────────────────────────────────────────────────────────────

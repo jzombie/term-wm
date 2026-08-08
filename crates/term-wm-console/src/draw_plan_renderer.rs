@@ -841,7 +841,9 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
                 .register(hitbox_id, ComponentOwner::Layer(layer_id), top_area);
         }
 
-        // Bottom panel overlay in monocle mode — keybinding hints
+        // Bottom panel overlay in monocle mode — keybinding hints. Hints are
+        // set during the layout phase (register_managed_layout); the render
+        // phase only draws the component's already-established state.
         let bottom_area = LayoutRect {
             x: full_area.x,
             y: full_area.y + i32::from(full_area.height).saturating_sub(1),
@@ -849,12 +851,7 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
             height: 1,
         };
         let mut bottom_hb = HitboxRegistry::new();
-        // Extract hints before mutable borrow (borrow checker safety).
-        let hints = wm
-            .keybindings()
-            .bottom_hints(term_wm_core::constants::MAX_BOTTOM_HINTS);
         if let Some(p) = wm.get_semantic_component_mut(ComponentTag::BottomPanel) {
-            p.process_action(&ComponentAction::SetKeybindingHints(hints));
             let ctx = ComponentContext::new(false).with_screen_area(bottom_area);
             p.render(backend, bottom_area, &ctx, &mut bottom_hb);
         }

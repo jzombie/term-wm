@@ -17,7 +17,7 @@ use crate::hitbox_registry::HitboxRegistry;
 use crate::io::EventSource;
 use crate::io::FramePacer;
 use crate::layout::{LayoutNode, TilingLayout};
-use crate::task_scheduler::TaskScheduler;
+use crate::task_scheduler::{AppTask, TaskHandle, TaskScheduler};
 use crate::window::{WindowKey, WindowManager};
 use std::collections::VecDeque;
 
@@ -59,6 +59,16 @@ pub trait WindowManagerHost<
     /// Called by the runner each frame to render.
     /// The default implementation does nothing — apps override this to draw.
     fn render(&mut self, _backend: &mut dyn term_wm_render::RenderBackend) {}
+
+    /// Called once by `run_with_defaults` after the app-task scheduler is
+    /// installed, BEFORE the event loop starts. Override to schedule recurring
+    /// app tasks (e.g. via `TaskHandle::schedule_repeating` with an
+    /// `AppTask` callback).
+    fn on_app_scheduler_ready(&mut self, _handle: TaskHandle<AppTask<Self>>)
+    where
+        Self: Sized,
+    {
+    }
 
     fn handle_app_event(&mut self, _event: &Event) -> bool {
         false
@@ -265,6 +275,7 @@ pub fn run_event_loop<C, L, Ov, Rt, D, A, FDraw, FMap>(
     driver: &mut D,
     app: &mut A,
     system_scheduler: TaskScheduler<SystemTask>,
+    app_scheduler: TaskScheduler<AppTask<A>>,
     _map_region: FMap,
     mut draw: FDraw,
 ) -> io::Result<()>
@@ -279,6 +290,7 @@ where
     FMap: Fn(WindowKey) -> WindowKey + Copy,
 {
     let system_handle = system_scheduler.handle();
+    let app_handle = app_scheduler.handle();
     let mut profile_tracker =
         crate::power_profile::PowerProfileTracker::new(driver.current_profile());
     let mut frame_pacer = FramePacer::new();
@@ -334,6 +346,11 @@ where
                         }
                     }
                 }
+            }
+
+            // Drain app-level callback tasks (each carries its own closure).
+            for (_id, task) in app_handle.drain_expired() {
+                task.run(app);
             }
 
             // System tasks may have mutated state (notifications, tab outline,
@@ -406,10 +423,15 @@ where
                 // past a pending task timeout (e.g. SuperPassthrough).
                 // Also clamp to the FramePacer deadline so the poll wakes
                 // up when a delayed render is due, even without input.
-                let deadline = match (fp_deadline, system_handle.time_until_next()) {
-                    (Some(fp), Some(sys)) => Some(fp.min(sys)),
-                    (Some(fp), None) => Some(fp),
-                    (None, sys_or_none) => sys_or_none,
+                // The app scheduler (callback tasks) is included so a
+                // recurring app task keeps the loop awake when idle.
+                let app_next = app_handle.time_until_next();
+                let deadline = match (fp_deadline, system_handle.time_until_next(), app_next) {
+                    (Some(fp), Some(sys), Some(app)) => Some(fp.min(sys).min(app)),
+                    (Some(fp), Some(sys), None) => Some(fp.min(sys)),
+                    (Some(fp), None, Some(app)) => Some(fp.min(app)),
+                    (Some(fp), None, None) => Some(fp),
+                    (None, s, a) => s.or(a),
                 };
                 driver.set_max_sleep_duration(deadline);
                 if let Some(profile) = profile_tracker.poll(driver.current_profile()) {
@@ -754,7 +776,7 @@ where
         let handler_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(handler));
 
         system_handle.set_keep_awake(!app.wm().overlays().is_empty());
-        driver.set_pending_work(system_handle.is_keep_awake_active());
+        driver.set_pending_work(system_handle.is_keep_awake_active() || app_handle.has_pending());
         match handler_result {
             Ok(result) => result,
             Err(_) => {
@@ -800,11 +822,16 @@ where
     let system_handle = system_scheduler.handle();
     app.wm().set_system_task_handle(system_handle);
 
+    let app_scheduler = TaskScheduler::<AppTask<A>>::new();
+    let app_handle = app_scheduler.handle();
+    app.on_app_scheduler_ready(app_handle);
+
     run_event_loop(
         output,
         driver,
         app,
         system_scheduler,
+        app_scheduler,
         |key| key,
         |backend, app| {
             app.render(backend);
@@ -933,7 +960,7 @@ mod tests {
         assert!(auto_layout_for_windows(&empty).is_none());
 
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -959,7 +986,7 @@ mod tests {
         }
 
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -993,7 +1020,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1056,7 +1083,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1120,7 +1147,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1175,7 +1202,7 @@ mod tests {
 
         let mut app = FakeApp {
             wm: WindowManager::<TestComponent>::with_config(
-                crate::wm_config::WmConfig::standalone(),
+                crate::wm_config::WmConfig::default(),
                 std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
                 None,
                 crate::window::LayerManager::new(),
@@ -1314,7 +1341,7 @@ mod tests {
 
     fn make_keys(n: usize) -> Vec<WindowKey> {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1371,7 +1398,7 @@ mod tests {
     #[test]
     fn auto_layout_two_windows_creates_split() {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1393,7 +1420,7 @@ mod tests {
     #[test]
     fn auto_layout_three_windows_all_present() {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1412,7 +1439,7 @@ mod tests {
     #[test]
     fn auto_layout_multiple_windows_uses_all() {
         let mut wm = crate::window::WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1492,7 +1519,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1521,7 +1548,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1551,7 +1578,7 @@ mod tests {
             }
         }
         let wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1574,7 +1601,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1604,7 +1631,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1637,7 +1664,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1680,7 +1707,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1708,7 +1735,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1739,7 +1766,7 @@ mod tests {
             }
         }
         let wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1773,7 +1800,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1812,7 +1839,7 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::standalone(),
+            crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -1972,6 +1999,7 @@ mod power_calibration_tests {
             &mut driver,
             &mut app,
             crate::task_scheduler::TaskScheduler::<crate::actions::SystemTask>::new(),
+            crate::task_scheduler::TaskScheduler::<crate::task_scheduler::AppTask<_>>::new(),
             |k| k,
             |_backend, app| {
                 app.draws += 1;

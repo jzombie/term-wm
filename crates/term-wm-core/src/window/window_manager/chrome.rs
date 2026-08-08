@@ -95,11 +95,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// - `Unmap`: transition to `Unmapped` only.  The component and key
     ///   stay alive so the window can be re-shown via `transition_window`.
     pub fn close_window(&mut self, key: WindowKey) {
+        let w = match self.window(key) {
+            Some(w) => w,
+            None => {
+                tracing::warn!(window_key = ?key, "close_window invoked on unknown or destroyed window");
+                return;
+            }
+        };
+        if !w.closable() {
+            tracing::debug!(window_key = ?key, "ignoring close: window is not closable");
+            return;
+        }
         tracing::debug!(window_key = ?key, "closing window");
-        let policy = self
-            .window(key)
-            .map(|w| w.close_policy())
-            .unwrap_or_default();
+        let policy = w.close_policy();
         self.transition_window(key, WindowState::Unmapped);
 
         if policy == ClosePolicy::Destroy {
@@ -126,7 +134,7 @@ mod tests {
 
     fn make_wm() -> WindowManager<NoopComponent> {
         WindowManager::<NoopComponent>::with_config(
-            WmConfig::standalone(),
+            WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),

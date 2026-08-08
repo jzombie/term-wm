@@ -5,10 +5,14 @@ use term_wm::SvgImageComponent;
 use term_wm::components::AppRootComponent;
 use term_wm::term_wm_app::TermWmApp;
 
+/// Default demo image, resolved against the crate root so it loads regardless
+/// of the current working directory.
+const DEFAULT_SVG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/zenOSmosis-logo.svg");
+
 fn main() -> io::Result<()> {
     let mut paths: Vec<String> = std::env::args().skip(1).collect();
     if paths.is_empty() {
-        paths.push("assets/zenOSmosis-logo.svg".to_string());
+        paths.push(DEFAULT_SVG.to_string());
     }
     if paths.len() == 1 {
         paths.push(paths[0].clone());
