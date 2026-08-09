@@ -18,6 +18,7 @@ use crate::io::EventSource;
 use crate::io::FramePacer;
 use crate::layout::{LayoutNode, TilingLayout};
 use crate::task_scheduler::{AppTask, TaskHandle, TaskScheduler};
+use crate::window::window_manager::OutsideClickResult;
 use crate::window::{WindowKey, WindowManager};
 use std::collections::VecDeque;
 
@@ -28,7 +29,7 @@ pub trait WindowManagerHost<
 >
 {
     fn wm(&mut self) -> &mut WindowManager<C, L, O>;
-    fn wm_new_window(&mut self) -> std::io::Result<()> {
+    fn wm_new_terminal(&mut self) -> std::io::Result<()> {
         Ok(())
     }
     fn set_clipboard_enabled(&mut self, _enabled: bool) {}
@@ -92,7 +93,8 @@ fn dispatch_action<
         TermWmAction::Quit | TermWmAction::ExitUi => app.open_exit_confirm(),
         TermWmAction::Help | TermWmAction::OpenHelp => app.open_help_overlay(),
         TermWmAction::CloseWindow(k) => app.wm().close_window(k),
-        TermWmAction::NewWindow => drop(app.wm_new_window()),
+        TermWmAction::ReorderWindow { key, index } => app.wm().reorder_window(key, index),
+        TermWmAction::NewTerminal => drop(app.wm_new_terminal()),
         TermWmAction::MinimizeWindow(k) => app.wm().minimize_window(k),
         TermWmAction::MaximizeWindow(k) => app.wm().toggle_maximize(k),
         TermWmAction::ToggleMonocle => app.wm().toggle_monocle(),
@@ -553,13 +555,14 @@ where
                     {
                         let palette_key = app.wm().command_palette_key();
                         let mut actions = std::collections::VecDeque::new();
-                        if !app.wm().handle_outside_click(
+                        let result = app.wm().handle_outside_click_precise(
                             mouse_evt.column,
                             mouse_evt.row,
                             &evt,
                             &mut actions,
                             palette_key,
-                        ) {
+                        );
+                        if result == OutsideClickResult::Ignored {
                             // No panel/overlay/chrome hit — activate window under cursor
                             app.wm()
                                 .handle_mouse_focus_click(mouse_evt.column, mouse_evt.row);
@@ -568,8 +571,15 @@ where
                         // so the OpenCommandPalette toggle behavior works correctly:
                         // action checks command_menu_visible() → true → closes palette.
                         drain_action_queue(app, &mut actions);
-                        // Close palette (no-op if already closed by the action above)
-                        app.wm().close_command_palette();
+                        // Close the palette UNLESS a layer consumed the click with no
+                        // action (e.g. a top-panel chevron scroll) — that keeps the
+                        // palette open while the list scrolls. A window focus or a
+                        // queued action closes it as before, and the OpenCommandPalette
+                        // action toggles it closed via its own dispatch above
+                        // (close_command_palette is idempotent).
+                        if !matches!(result, OutsideClickResult::LayerConsumed) {
+                            app.wm().close_command_palette();
+                        }
                         update_selection_snapshot(app);
                         return flush_state_changes(
                             app,
@@ -584,9 +594,9 @@ where
                     if let Some(action) = palette_handled {
                         let key = app.wm().focused_window();
                         let mut actions = std::collections::VecDeque::new();
-                        // NewWindow returns Result — propagate the error
-                        if matches!(action, TermWmAction::NewWindow) {
-                            app.wm_new_window()?;
+                        // NewTerminal returns Result — propagate the error
+                        if matches!(action, TermWmAction::NewTerminal) {
+                            app.wm_new_terminal()?;
                         } else {
                             actions.push_back((key, action));
                         }
@@ -1534,6 +1544,43 @@ mod tests {
         let mut queue = std::collections::VecDeque::new();
         dispatch_action(&mut app, k1, TermWmAction::FocusWindow(k2), &mut queue);
         assert_eq!(app.wm.focused_window(), k2);
+    }
+
+    #[test]
+    fn dispatch_reorder_window_calls_reorder_window() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(
+            &mut app,
+            k1,
+            TermWmAction::ReorderWindow { key: k2, index: 0 },
+            &mut queue,
+        );
+        assert_eq!(
+            app.wm.build_display_order(),
+            vec![k2, k1],
+            "ReorderWindow dispatch must move k2 to the front"
+        );
     }
 
     #[test]

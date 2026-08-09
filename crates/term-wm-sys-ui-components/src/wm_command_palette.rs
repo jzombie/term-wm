@@ -410,8 +410,8 @@ mod tests {
         palette.set_items(vec![
             MenuDisplayItem::Item(MenuItem {
                 icon: None,
-                label: "New Window".into(),
-                action: TermWmAction::NewWindow,
+                label: "New Terminal".into(),
+                action: TermWmAction::NewTerminal,
                 disabled: false,
             }),
             MenuDisplayItem::Item(MenuItem {
@@ -464,7 +464,7 @@ mod tests {
             MenuDisplayItem::Item(MenuItem {
                 icon: None,
                 label: "Enabled".into(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 disabled: false,
             }),
             MenuDisplayItem::Item(MenuItem {
@@ -503,7 +503,7 @@ mod tests {
         palette.process_action(&ComponentAction::SetMenuItems(vec![MenuItem {
             icon: None,
             label: "Test".into(),
-            action: TermWmAction::NewWindow,
+            action: TermWmAction::NewTerminal,
             disabled: false,
         }]));
         assert!(!palette.registry.arena().is_empty());

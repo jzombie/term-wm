@@ -11,7 +11,7 @@ pub const DEFAULT_SUPPORTED_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleMouseCapture,
     TermWmAction::ToggleClipboardMode,
     TermWmAction::ToggleWindowSelection,
-    TermWmAction::NewWindow,
+    TermWmAction::NewTerminal,
     TermWmAction::ToggleDebugWindow,
     TermWmAction::ToggleSystemPanel,
     TermWmAction::Help,

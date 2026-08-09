@@ -1,5 +1,3 @@
-// TODO: This has several concerns that might could be placed in the layout crate.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;

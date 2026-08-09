@@ -154,9 +154,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             // Top group
             mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
             mi(
-                "New Window",
+                "New Terminal",
                 Some("+"),
-                crate::actions::TermWmAction::NewWindow,
+                crate::actions::TermWmAction::NewTerminal,
             ),
             MenuDisplayItem::Separator,
         ];

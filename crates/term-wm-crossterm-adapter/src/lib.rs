@@ -139,6 +139,57 @@ pub fn try_translate_event(evt: crossterm::event::Event) -> Option<Event> {
     }
 }
 
+/// Enable or disable crossterm mouse capture by writing the corresponding
+/// escape sequence to stdout. This is the single canonical implementation —
+/// every event source (`ConsoleEventSource`, `BackgroundConsoleReader`, the
+/// root `UnifiedEventSource`) delegates here so crossterm knowledge stays
+/// contained in this crate.
+pub fn set_mouse_capture(enabled: bool) -> std::io::Result<()> {
+    set_mouse_capture_with(&mut std::io::stdout(), enabled)
+}
+
+/// Enable or disable crossterm mouse capture by writing the corresponding
+/// escape sequence to `writer`. The writer is injected so tests can capture
+/// the emitted bytes without touching a real terminal.
+pub fn set_mouse_capture_with<W: std::io::Write>(
+    writer: &mut W,
+    enabled: bool,
+) -> std::io::Result<()> {
+    use crossterm::Command as _;
+
+    struct Adapter<'a, W: std::io::Write> {
+        inner: &'a mut W,
+        res: std::io::Result<()>,
+    }
+    impl<W: std::io::Write> std::fmt::Write for Adapter<'_, W> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.inner.write_all(s.as_bytes()).map_err(|e| {
+                self.res = Err(e);
+                std::fmt::Error
+            })
+        }
+    }
+
+    // crossterm's `execute!` routes Enable/DisableMouseCapture through its
+    // WinAPI backend on Windows (`is_ansi_code_supported` returns false for
+    // these commands), so nothing would be written to `writer` there. Emit the
+    // ANSI representation directly so the same bytes are produced on every
+    // platform.
+    let mut adapter = Adapter {
+        inner: writer,
+        res: Ok(()),
+    };
+    let result = if enabled {
+        crossterm::event::EnableMouseCapture.write_ansi(&mut adapter)
+    } else {
+        crossterm::event::DisableMouseCapture.write_ansi(&mut adapter)
+    };
+    result.map_err(|_| match adapter.res {
+        Ok(()) => std::io::Error::other("crossterm mouse capture command reported an error"),
+        Err(e) => e,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +213,36 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         );
         assert!(try_translate_key_event(key).is_none());
+    }
+
+    #[test]
+    fn test_try_translate_event_drops_unknown_key() {
+        let key = make_key(
+            crossterm::event::KeyCode::CapsLock,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        assert!(try_translate_event(crossterm::event::Event::Key(key)).is_none());
+    }
+
+    #[test]
+    fn test_set_mouse_capture_writes_sequences() {
+        let mut buf = Vec::new();
+        set_mouse_capture_with(&mut buf, true).unwrap();
+        assert!(
+            buf.windows(b"\x1b[?1000h".len())
+                .any(|w| w == b"\x1b[?1000h"),
+            "EnableMouseCapture must emit \\x1b[?1000h; got {:?}",
+            String::from_utf8_lossy(&buf)
+        );
+
+        buf.clear();
+        set_mouse_capture_with(&mut buf, false).unwrap();
+        assert!(
+            buf.windows(b"\x1b[?1000l".len())
+                .any(|w| w == b"\x1b[?1000l"),
+            "DisableMouseCapture must emit \\x1b[?1000l; got {:?}",
+            String::from_utf8_lossy(&buf)
+        );
     }
 
     #[test]

@@ -47,7 +47,7 @@ Options (`term-wm -h`):
 - `-r, --run <CMD>` — command to run in a window; repeatable, one window per `--run`. A trailing `-- CMD...` runs one command in a window after the `--run` windows. Remaining windows launch default shells.
 - `-h, --help`, `-V, --version`
 
-New windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
+New terminal windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
 
 ### Keybindings Quick Reference
 

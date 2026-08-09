@@ -128,9 +128,9 @@ mod tests {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
             (
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 String::new(),
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 false,
             ),
             (
@@ -149,9 +149,9 @@ mod tests {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
             (
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 String::new(),
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 false,
             ),
             (
@@ -171,9 +171,9 @@ mod tests {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
             (
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 String::new(),
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 false,
             ),
             (
@@ -195,9 +195,9 @@ mod tests {
         let mut fmatch = FuzzyMatch::new();
         let items = vec![
             (
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 String::new(),
-                "New Window".to_string(),
+                "New Terminal".to_string(),
                 false,
             ),
             (
@@ -216,14 +216,14 @@ mod tests {
         let r1 = fmatch.score("n", &items);
         assert_eq!(r1.len(), 2, "'n' should match both items");
 
-        // Two chars — only New Window has 'n' followed by 'e'
+        // Two chars — only New Terminal has 'n' followed by 'e'
         let r2 = fmatch.score("ne", &items);
-        assert_eq!(r2.len(), 1, "'ne' should match 'New Window'");
+        assert_eq!(r2.len(), 1, "'ne' should match 'New Terminal'");
         assert_eq!(r2[0], 0);
 
         // Three chars (the reported failing case)
         let r3 = fmatch.score("new", &items);
-        assert_eq!(r3.len(), 1, "'new' should match 'New Window'");
+        assert_eq!(r3.len(), 1, "'new' should match 'New Terminal'");
         assert_eq!(r3[0], 0);
 
         // Verify non-matching still works after successive calls

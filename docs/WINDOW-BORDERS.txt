@@ -11,14 +11,14 @@ difference between the two modes is how their resize and drag handles appear.
 Every window gets a 1-cell-thick border drawn around it with:
 
   ┌───────────────────────────────┐
-  │terminal window title    _ ▢ ✖ │   <- header row (1 cell tall)
+  │terminal window title    _ ▢ X │   <- header row (1 cell tall)
   │                               │
   │         content area          │
   │                               │
   └───────────────────────────────┘
 
   - Top edge:      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐   (1 cell tall)
-  - Header row:    │          title          _ ▢ ✖ │   (1 cell tall)
+  - Header row:    │          title          _ ▢ X │   (1 cell tall)
   - Side edges:    │                               │   (1 cell wide, from header row down to bottom border)
   - Bottom edge:   └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   (1 cell tall)
 
@@ -54,12 +54,12 @@ Content area = window_rect - (2 columns, 3 rows)
 1b. Title Buttons (right-aligned on the header row)
 ---------------------------------------------------
 
-   LEFT TO RIGHT on the header:  _   ▢   ✖
+   LEFT TO RIGHT on the header:  _   ▢   X
                                   |   |   +-- Close
                                   |   +------ Maximize
                                   +---------- Minimize
 
-   RIGHT TO LEFT (from the border):  ✖  ▢  _
+   RIGHT TO LEFT (from the border):  X  ▢  _
 
    3 cells on the header row (one per button), inset 1 column from the
    right border, with 1 empty column between each button.
@@ -67,13 +67,13 @@ Content area = window_rect - (2 columns, 3 rows)
    button itself plus one empty buffer column between adjacent buttons.
 
   DEFAULT STATE (not hovered):
-    Close (✖):    fg = error_bg   (red,   RGB 255, 61, 61)
+    Close (X):    fg = error_bg   (red,   RGB 255, 61, 61)
     Maximize (▢): fg = accent     (green, RGB   0,230,118)
     Minimize (_): fg = warning_bg (amber, RGB 255,193,  7)
 
   HOVER STATE:
     All buttons gain BOLD modifier.
-    Close (✖):    bg = error_bg   (red),   fg = menu_selected_fg (dark)
+    Close (X):    bg = error_bg   (red),   fg = menu_selected_fg (dark)
     Maximize (▢): bg = accent     (green), fg = menu_selected_fg (dark)
     Minimize (_): bg = warning_bg (amber), fg = menu_selected_fg (dark)
 
@@ -93,7 +93,7 @@ Content area = window_rect - (2 columns, 3 rows)
          |                       |
          v                       v
      ┌─────┬──────────────────────┬───────┐
-     │     │  <- drag handle ->   │ _ ▢ ✖ │
+     │     │  <- drag handle ->   │ _ ▢ X │
      │     │                      │       │
      │     │                      │       │
 
@@ -242,7 +242,7 @@ Content area = window_rect - (2 columns, 3 rows)
   + - |     Split handle hover frame
   ═ ║      Resize outline edge      (double-line)
   ╔ ╗ ╚ ╝  Resize outline corners   (double-line)
-  _ ▢ ✖  Title buttons (Minimize, Maximize, Close)
+  _ ▢ X  Title buttons (Minimize, Maximize, Close)
   (space)   Header fill
 
 ===============================================================================

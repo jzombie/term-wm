@@ -299,6 +299,9 @@ pub struct WindowManager<
     scroll: BTreeMap<WindowKey, ScrollState>,
     pub(crate) handles: Vec<SplitHandle>,
     pub(crate) managed_draw_order: Vec<WindowKey>,
+    /// User-specified display order for the top panel / command palette window
+    /// list (set via drag-to-reorder). Empty = fall back to creation order.
+    pub(crate) user_display_order: Vec<WindowKey>,
     pub(crate) managed_layout: Option<TilingLayout<WindowKey>>,
     pub(crate) managed_area: Rect,
     pub(crate) monocle_mode: MonocleMode,
@@ -466,6 +469,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Whether the window may be closed. Unknown keys return `false`.
     pub fn is_closable(&self, key: WindowKey) -> bool {
         self.window(key).is_some_and(|w| w.closable())
+    }
+
+    /// Move `key` to position `index` in the top-panel / command palette window
+    /// display order (drag-to-reorder).
+    ///
+    /// List-order only: this changes what `build_display_order` returns and never
+    /// touches the tiling tree, `z_order`, or `managed_draw_order`. The index is
+    /// clamped against the live list length (windows may close between the drag's
+    /// index projection and the release dispatch).
+    pub fn reorder_window(&mut self, key: WindowKey, index: usize) {
+        if !self.windows.contains_key(key) {
+            return;
+        }
+        let mut order = self.build_display_order();
+        order.retain(|k| *k != key);
+        let safe_index = index.min(order.len());
+        order.insert(safe_index, key);
+        self.user_display_order = order;
+        self.mark_layout_dirty();
     }
 
     /// Access the Reaper for async child-process teardown.
@@ -802,6 +824,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             scroll: BTreeMap::new(),
             handles: Vec::new(),
             managed_draw_order: Vec::new(),
+            user_display_order: Vec::new(),
             managed_layout: None,
             managed_area: Rect::default(),
             monocle_mode: MonocleMode::Auto,
@@ -2401,6 +2424,21 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         actions: &mut VecDeque<(WindowKey, TermWmAction)>,
         ignored_overlay: Option<OverlayKey>,
     ) -> bool {
+        self.handle_outside_click_precise(col, row, event, actions, ignored_overlay)
+            .is_handled()
+    }
+
+    /// Like [`Self::handle_outside_click`], but reports WHAT handled the click so
+    /// callers can distinguish a chrome-layer scroll (e.g. a top-panel chevron)
+    /// from a window focus / action dispatch.
+    pub fn handle_outside_click_precise(
+        &mut self,
+        col: u16,
+        row: u16,
+        event: &Event,
+        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
+        ignored_overlay: Option<OverlayKey>,
+    ) -> OutsideClickResult {
         let position = MousePosition {
             column: col as i16,
             row: row as i16,
@@ -2419,9 +2457,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         match layer_comp.handle_events(event, &ctx) {
                             EventResult::Action(action) => {
                                 actions.push_back((self.focused_window(), action));
-                                return true;
+                                return OutsideClickResult::ActionQueued;
                             }
-                            EventResult::Consumed => return true,
+                            EventResult::Consumed => return OutsideClickResult::LayerConsumed,
                             EventResult::Ignored => {}
                         }
                     }
@@ -2432,9 +2470,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         match overlay.handle_events(event, &ctx) {
                             EventResult::Action(action) => {
                                 actions.push_back((self.focused_window(), action));
-                                return true;
+                                return OutsideClickResult::ActionQueued;
                             }
-                            EventResult::Consumed => return true,
+                            EventResult::Consumed => return OutsideClickResult::LayerConsumed,
                             EventResult::Ignored => {}
                         }
                     }
@@ -2450,18 +2488,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     };
                     if let Some(k) = win_key {
                         self.focus_app_window(k);
-                        return true;
+                        return OutsideClickResult::Focused;
                     }
                 }
                 ComponentOwner::Window(key) => {
                     self.focus_app_window(key);
-                    return true;
+                    return OutsideClickResult::Focused;
                 }
                 _ => {}
             }
         }
 
-        false
+        OutsideClickResult::Ignored
     }
 
     /// No-op: chrome hitbox registration is now handled by the console
@@ -2629,27 +2667,42 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
     }
 
-    /// Returns the window management buttons appropriate for the current mode.
-    /// In monocle mode, minimize/maximize are excluded (meaningless when
-    /// the focused window fills the screen). All window-specific buttons are
+    /// Returns the window management buttons appropriate for the current mode
+    /// for the focused window.
+    ///
+    /// In monocle mode, minimize/maximize are excluded (meaningless when the
+    /// focused window fills the screen). All window-specific buttons are
     /// excluded when there is no focused window.
     pub fn window_management_buttons(&self) -> Vec<WmButton> {
         let focused = self.focused_window();
         if !self.windows.contains_key(focused) {
             return Vec::new();
         }
-        let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
+        self.window_management_buttons_for(focused)
+    }
+
+    /// Returns the window management buttons for a specific window, based on
+    /// that window's own state (closability, maximize state) rather than the
+    /// currently focused window.
+    ///
+    /// In monocle mode, minimize/maximize are excluded. Unknown keys yield an
+    /// empty list.
+    pub fn window_management_buttons_for(&self, key: WindowKey) -> Vec<WmButton> {
+        if !self.windows.contains_key(key) {
+            return Vec::new();
+        }
+        let is_maxed = self.window(key).is_some_and(|w| w.is_maximized());
         let mut btns = Vec::new();
-        if self.window(focused).is_some_and(|w| w.closable()) {
+        if self.window(key).is_some_and(|w| w.closable()) {
             btns.push(WmButton {
-                action: TermWmAction::CloseWindow(focused),
+                action: TermWmAction::CloseWindow(key),
                 label: "Close Window",
                 symbol: "X",
             });
         }
         if !self.is_monocle() {
             btns.push(WmButton {
-                action: TermWmAction::MaximizeWindow(focused),
+                action: TermWmAction::MaximizeWindow(key),
                 label: if is_maxed {
                     "Restore Window"
                 } else {
@@ -2658,12 +2711,32 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 symbol: if is_maxed { "─" } else { "▢" },
             });
             btns.push(WmButton {
-                action: TermWmAction::MinimizeWindow(focused),
+                action: TermWmAction::MinimizeWindow(key),
                 label: "Minimize Window",
                 symbol: "_",
             });
         }
         btns
+    }
+}
+
+/// Outcome of an outside click dispatched by [`WindowManager::handle_outside_click_precise`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutsideClickResult {
+    /// Nothing handled the click (a genuine outside click).
+    Ignored,
+    /// A layer/overlay (top/bottom panel, FAB) consumed the event with no action
+    /// (e.g. a top-panel chevron scroll) — a chrome interaction, not a context shift.
+    LayerConsumed,
+    /// A window body or its chrome was focused.
+    Focused,
+    /// A panel/overlay queued an action for dispatch.
+    ActionQueued,
+}
+
+impl OutsideClickResult {
+    pub fn is_handled(&self) -> bool {
+        !matches!(self, Self::Ignored)
     }
 }
 
@@ -6033,6 +6106,157 @@ mod tests {
     }
 
     #[test]
+    fn window_management_buttons_are_per_window_for_mixed_closability() {
+        // Regression: focusing a closable window must NOT surface a Close button
+        // on a non-closable window's header. Buttons must be derived from each
+        // window's own state, not the focused window's.
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let closable = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let non_closable = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [closable, non_closable] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        wm.set_closable(non_closable, false);
+
+        // Focus the closable window (the reported trigger) — the non-closable
+        // window's buttons must still be Close-free.
+        wm.focus_window_key(closable);
+        assert!(
+            wm.window_management_buttons_for(closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == closable)),
+            "closable window should show a Close button for itself"
+        );
+        assert!(
+            !wm.window_management_buttons_for(non_closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == non_closable)),
+            "non-closable window must not show a Close button even when another window is focused"
+        );
+
+        // Focus the non-closable window — the closable one must still show its Close.
+        wm.focus_window_key(non_closable);
+        assert!(
+            wm.window_management_buttons_for(closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == closable)),
+            "closable window keeps its Close button when a non-closable window is focused"
+        );
+        assert!(
+            !wm.window_management_buttons_for(non_closable)
+                .iter()
+                .any(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == non_closable)),
+            "non-closable window must never expose a Close button for itself"
+        );
+    }
+
+    fn display_order_keys(wm: &WindowManager<TestComponent>) -> Vec<WindowKey> {
+        wm.build_display_order()
+    }
+
+    #[test]
+    fn reorder_window_changes_display_order_only() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k0 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [k0, k1, k2] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k0, k1, k2],
+            "creation order initially"
+        );
+
+        // Move the last window to the front.
+        wm.reorder_window(k2, 0);
+        assert_eq!(display_order_keys(&wm), vec![k2, k0, k1]);
+
+        // Move the first window to the end.
+        wm.reorder_window(k2, 999);
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k0, k1, k2],
+            "index clamps to list length"
+        );
+    }
+
+    #[test]
+    fn reorder_window_is_list_only_does_not_touch_layout() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k0 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [k0, k1] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        let draw_order_before = wm.managed_draw_order.clone();
+        wm.reorder_window(k1, 0);
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k1, k0],
+            "display order reordered"
+        );
+        assert_eq!(
+            wm.managed_draw_order, draw_order_before,
+            "reorder must not affect the on-screen draw/stacking order"
+        );
+    }
+
+    #[test]
+    fn reorder_window_unknown_key_is_noop_and_new_windows_append() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k0 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let k1 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        for key in [k0, k1] {
+            wm.transition_window(key, WindowState::Mapped);
+        }
+        let unknown = WindowKey::default();
+        wm.reorder_window(unknown, 0);
+        assert_eq!(
+            display_order_keys(&wm),
+            vec![k0, k1],
+            "unknown key is a no-op"
+        );
+
+        wm.reorder_window(k1, 0);
+        assert_eq!(display_order_keys(&wm), vec![k1, k0]);
+
+        // A window opened after reordering appends to the end.
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k2, WindowState::Mapped);
+        assert_eq!(display_order_keys(&wm), vec![k1, k0, k2]);
+
+        // Closing a window prunes it from the user order.
+        wm.close_window(k1);
+        assert_eq!(display_order_keys(&wm), vec![k0, k2]);
+    }
+
+    #[test]
     fn wm_menu_items_disables_close_for_non_closable() {
         use crate::components::{MenuDisplayItem, MenuItem};
         let mut wm = WindowManager::<TestComponent>::with_config(
@@ -7073,6 +7297,123 @@ mod tests {
         // NoopWmComponent.handle_events returns Ignored → Layer arm falls through
         // No other hitbox → returns false
         assert!(!wm.handle_outside_click(5, 0, &event, &mut actions, None));
+    }
+
+    #[test]
+    fn handle_outside_click_precise_ignored_when_no_hit() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert_eq!(
+            wm.handle_outside_click_precise(5, 5, &event, &mut actions, None),
+            OutsideClickResult::Ignored
+        );
+    }
+
+    #[test]
+    fn handle_outside_click_precise_focused_on_window_hit() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert_eq!(
+            wm.handle_outside_click_precise(5, 5, &event, &mut actions, None),
+            OutsideClickResult::Focused
+        );
+        assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    #[test]
+    fn handle_outside_click_precise_layer_consumed() {
+        use crate::components::{Component, ComponentContext, EventResult, WmComponent};
+
+        #[derive(Debug)]
+        struct ConsumingWmComponent;
+        impl Component<TermWmAction> for ConsumingWmComponent {
+            fn handle_events(
+                &mut self,
+                _event: &crate::events::Event,
+                _ctx: &ComponentContext,
+            ) -> EventResult<TermWmAction> {
+                // Simulates a top-panel chevron scroll: consumed, no action.
+                EventResult::Consumed
+            }
+            fn render(
+                &mut self,
+                _backend: &mut dyn term_wm_render::RenderBackend,
+                _area: LayoutRect,
+                _ctx: &ComponentContext,
+                _registry: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+            }
+        }
+        impl WmComponent for ConsumingWmComponent {}
+
+        let mut wm = WindowManager::<TestComponent, ConsumingWmComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let layer_id = wm.layer_manager.insert(
+            ConsumingWmComponent,
+            crate::window::window_manager::layer_manager::ZPlane::Background,
+        );
+        wm.hitbox_registry.register(
+            crate::hitbox_registry::HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Layer(layer_id),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 1,
+            },
+        );
+        let event = crate::events::Event::Mouse(crate::events::MouseEvent {
+            kind: crate::events::MouseEventKind::Press(crate::events::MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: crate::events::KeyModifiers::NONE,
+        });
+        let mut actions = VecDeque::new();
+        assert_eq!(
+            wm.handle_outside_click_precise(5, 0, &event, &mut actions, None),
+            OutsideClickResult::LayerConsumed,
+            "a layer consuming the click with no action must be LayerConsumed (e.g. chevron)"
+        );
     }
 
     #[test]

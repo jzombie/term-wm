@@ -537,18 +537,31 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn build_display_order(&self) -> Vec<WindowKey> {
-        let mut ordered: Vec<(WindowKey, &super::Window)> = self.windows.iter().collect();
-        ordered.sort_by_key(|(_, window)| window.creation_order());
+        let in_display_set = |window: &super::Window, key: WindowKey| {
+            self.managed_draw_order.contains(&key) || window.state() == WindowState::Iconic
+        };
 
         let mut out: Vec<WindowKey> = Vec::new();
-        for (key, window) in ordered {
-            if self.managed_draw_order.contains(&key) || window.state() == WindowState::Iconic {
-                out.push(key);
+        // A user-defined order (drag-to-reorder in the top panel) takes
+        // precedence; fall back to creation order when none is set.
+        if !self.user_display_order.is_empty() {
+            for key in &self.user_display_order {
+                if let Some(window) = self.windows.get(*key)
+                    && in_display_set(window, *key)
+                    && !out.contains(key)
+                {
+                    out.push(*key);
+                }
             }
         }
-        for key in &self.managed_draw_order {
-            if !out.contains(key) {
-                out.push(*key);
+
+        // Append any remaining display-set windows not yet listed, in creation
+        // order (covers newly opened windows and windows never reordered).
+        let mut ordered: Vec<(WindowKey, &super::Window)> = self.windows.iter().collect();
+        ordered.sort_by_key(|(_, window)| window.creation_order());
+        for (key, window) in ordered {
+            if !out.contains(&key) && in_display_set(window, key) {
+                out.push(key);
             }
         }
         out
