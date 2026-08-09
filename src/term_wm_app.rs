@@ -200,7 +200,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         wm: WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent>,
         pty_wakeup_tx: Sender<UnifiedEvent>,
     ) -> Self {
-        Self {
+        let mut app = Self {
             wm,
             debug_key: None,
             system_panel_key: None,
@@ -210,7 +210,14 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             pty_wakeup_tx,
             last_key: Rc::new(RefCell::new(None)),
             terminal_counter: 0,
-        }
+        };
+        // Every TermWmApp flows through here — the standalone constructors
+        // (new_custom / new_with_config / new_with_actions) AND the bundled
+        // binary's `from_wm` path — so guarantee the system windows (debug log,
+        // system panel) exist from construction, without any app needing to call
+        // init_system_windows() itself. Idempotent.
+        app.init_system_windows();
+        app
     }
 
     /// Spawn a fully-wired PTY terminal window in a single call.
@@ -543,6 +550,32 @@ impl<C: Component<TermWmAction>>
 mod tests {
     use super::*;
 
+    /// Every construction path must initialize the system windows (debug log,
+    /// system panel) and leave them hidden (`Unmapped`).
+    fn assert_system_windows_initialized(app: &mut TermWmApp<NoopComponent>) {
+        use term_wm_core::window::window_manager::system_tags;
+        use term_wm_core::window::WindowState;
+
+        let debug_key = app
+            .wm()
+            .get_system_window::<system_tags::DebugLog>()
+            .expect("debug log system window must exist");
+        let panel_key = app
+            .wm()
+            .get_system_window::<system_tags::SystemPanel>()
+            .expect("system panel window must exist");
+        assert_eq!(
+            app.wm().window_state(debug_key),
+            Some(WindowState::Unmapped),
+            "debug log must start hidden"
+        );
+        assert_eq!(
+            app.wm().window_state(panel_key),
+            Some(WindowState::Unmapped),
+            "system panel must start hidden"
+        );
+    }
+
     /// `new_custom` is what `examples/dual_image.rs` uses to build its app.
     /// It must keep the command-palette actions limited to the allow-list it
     /// configures — never the full default set.
@@ -565,5 +598,46 @@ mod tests {
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );
+    }
+
+    #[cfg(feature = "sys-ui")]
+    #[test]
+    fn new_custom_initializes_system_windows() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert_system_windows_initialized(&mut app);
+    }
+
+    #[cfg(feature = "sys-ui")]
+    #[test]
+    fn new_with_config_initializes_system_windows() {
+        let mut app = TermWmApp::<NoopComponent>::new_with_config(
+            AppContext::new("test", "0.0.0"),
+            WmConfig::default(),
+        );
+        assert_system_windows_initialized(&mut app);
+    }
+
+    #[cfg(feature = "sys-ui")]
+    #[test]
+    fn new_with_actions_initializes_system_windows() {
+        let mut app = TermWmApp::<NoopComponent>::new_with_actions(
+            AppContext::new("test", "0.0.0"),
+            WmConfig::default(),
+            DEFAULT_STANDALONE_MENU_ACTIONS.to_vec(),
+        );
+        assert_system_windows_initialized(&mut app);
+    }
+
+    #[cfg(feature = "sys-ui")]
+    #[test]
+    fn from_wm_initializes_system_windows() {
+        let ctx = Arc::new(AppContext::new("test", "0.0.0"));
+        let wm = AppBuilder::<LayerComponent>::new()
+            .app_ctx(ctx)
+            .build()
+            .expect("build wm");
+        let (tx, _) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut app = TermWmApp::<NoopComponent>::from_wm(wm, tx);
+        assert_system_windows_initialized(&mut app);
     }
 }
