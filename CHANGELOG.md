@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.16-alpha] - 2026-08-09
+
+### Added
+
+- **Clicking a window title scrolls it fully into view:** in the top-panel window strip, clicking a partially visible tab now brings it fully into view immediately (previously the scroll waited for mouse release), and a title physically longer than the visible area left-aligns so its start is shown. A plain click still just focuses the window; drag-to-reorder is unaffected — the click's scroll target is applied on the next render pass and never mid-drag.
+- **Monocle FAB never overlaps application content (content dodging):** the Floating Action Button stays fixed on the bottom-right row, and when the focused app draws content underneath its footprint (e.g. a full-width status line like opencode's bottom border), the application viewport is given one fewer row so the app renders its own bottom line *above* the reserved FAB row instead of being covered. Detection scans only the FAB's footprint columns (not the whole row) against the window's *current* bottom row from the previous frame's composited content, and latches while content remains — so a left-aligned shell prompt keeps full height, a status-line app reformats natively (PTY resize / SIGWINCH) with no resize loop, and the FAB only ever floats over empty space. The FAB's footprint and hitbox now use true display-column width (wide/CJK-glyph safe, consistent between the render-time detection and the component).
+
 ## [0.9.15-alpha] - 2026-08-08
 
 ### Added
