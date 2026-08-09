@@ -126,14 +126,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_WindowsProgramming",
 ] }
 
-[[bin]]
-name = "term-wm"
-required-features = ["sys-ui"]
-
-[features]
-default = ["sys-ui"]
-sys-ui = ["dep:term-wm-sys-ui-components"]
-
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
@@ -147,7 +139,7 @@ term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 term-wm-render = { workspace = true }
-term-wm-sys-ui-components = { workspace = true, optional = true }
+term-wm-sys-ui-components = { workspace = true }
 term-wm-ui-components = { workspace = true }
 term-wm-ui-facade = { workspace = true }
 tracing = { workspace = true }

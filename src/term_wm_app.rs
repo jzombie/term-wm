@@ -139,7 +139,6 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// This is the generic constructor — works for any `C: Component<TermWmAction>`.
     /// Provide a type annotation or turbofish for `C` (e.g.
     /// `TermWmApp::<NoopComponent>::new_custom(ctx)` for built-ins only).
-    #[cfg(feature = "sys-ui")]
     pub fn new_custom(app_ctx: AppContext) -> Self {
         Self::new_with_config(app_ctx, WmConfig::default())
     }
@@ -148,14 +147,12 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// (e.g. custom keybindings). The chrome wiring (top/bottom panel, FAB,
     /// notification area, supported menu actions) is identical to
     /// [`Self::new_custom`]; only the configuration differs.
-    #[cfg(feature = "sys-ui")]
     pub fn new_with_config(app_ctx: AppContext, config: WmConfig) -> Self {
         Self::new_with_actions(app_ctx, config, DEFAULT_STANDALONE_MENU_ACTIONS.to_vec())
     }
 
     /// Standalone constructor with system chrome + explicit supported command
     /// palette actions. `new_with_config` delegates here with its default list.
-    #[cfg(feature = "sys-ui")]
     pub fn new_with_actions(
         app_ctx: AppContext,
         config: WmConfig,
@@ -579,7 +576,6 @@ mod tests {
     /// `new_custom` is what `examples/dual_image.rs` uses to build its app.
     /// It must keep the command-palette actions limited to the allow-list it
     /// configures — never the full default set.
-    #[cfg(feature = "sys-ui")]
     #[test]
     fn new_custom_limits_supported_menu_actions() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
@@ -600,14 +596,12 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "sys-ui")]
     #[test]
     fn new_custom_initializes_system_windows() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         assert_system_windows_initialized(&mut app);
     }
 
-    #[cfg(feature = "sys-ui")]
     #[test]
     fn new_with_config_initializes_system_windows() {
         let mut app = TermWmApp::<NoopComponent>::new_with_config(
@@ -617,7 +611,6 @@ mod tests {
         assert_system_windows_initialized(&mut app);
     }
 
-    #[cfg(feature = "sys-ui")]
     #[test]
     fn new_with_actions_initializes_system_windows() {
         let mut app = TermWmApp::<NoopComponent>::new_with_actions(
@@ -628,7 +621,6 @@ mod tests {
         assert_system_windows_initialized(&mut app);
     }
 
-    #[cfg(feature = "sys-ui")]
     #[test]
     fn from_wm_initializes_system_windows() {
         let ctx = Arc::new(AppContext::new("test", "0.0.0"));
