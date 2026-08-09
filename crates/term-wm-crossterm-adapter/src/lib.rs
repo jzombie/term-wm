@@ -155,11 +155,39 @@ pub fn set_mouse_capture_with<W: std::io::Write>(
     writer: &mut W,
     enabled: bool,
 ) -> std::io::Result<()> {
-    if enabled {
-        crossterm::execute!(writer, crossterm::event::EnableMouseCapture)
-    } else {
-        crossterm::execute!(writer, crossterm::event::DisableMouseCapture)
+    use crossterm::Command as _;
+
+    struct Adapter<'a, W: std::io::Write> {
+        inner: &'a mut W,
+        res: std::io::Result<()>,
     }
+    impl<W: std::io::Write> std::fmt::Write for Adapter<'_, W> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.inner.write_all(s.as_bytes()).map_err(|e| {
+                self.res = Err(e);
+                std::fmt::Error
+            })
+        }
+    }
+
+    // crossterm's `execute!` routes Enable/DisableMouseCapture through its
+    // WinAPI backend on Windows (`is_ansi_code_supported` returns false for
+    // these commands), so nothing would be written to `writer` there. Emit the
+    // ANSI representation directly so the same bytes are produced on every
+    // platform.
+    let mut adapter = Adapter {
+        inner: writer,
+        res: Ok(()),
+    };
+    let result = if enabled {
+        crossterm::event::EnableMouseCapture.write_ansi(&mut adapter)
+    } else {
+        crossterm::event::DisableMouseCapture.write_ansi(&mut adapter)
+    };
+    result.map_err(|_| match adapter.res {
+        Ok(()) => std::io::Error::other("crossterm mouse capture command reported an error"),
+        Err(e) => e,
+    })
 }
 
 #[cfg(test)]
