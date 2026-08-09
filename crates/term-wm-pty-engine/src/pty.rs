@@ -18,6 +18,92 @@ use crate::pty_state_tracker::PtyPerformAdapter;
 /// (64KB × 60fps ≈ 3.8MB/s throughput, enough for any terminal workload).
 const PTY_READ_BUF_SIZE: usize = 65536;
 
+/// Drain-starvation bound: a continuous stream (`yes`, busy logs) never returns
+/// WouldBlock, so apply any pending resize at least this often to keep the grid
+/// attached to the physical window bounds.
+const MAX_DRAIN_BYTES: usize = 65536;
+
+#[cfg(unix)]
+use std::os::unix::io::RawFd;
+
+/// Wake primitive that nudges the reader thread out of `poll` when the UI
+/// requests a resize. Unix: a self-pipe (the read end is polled; `signal` writes
+/// a byte). Windows: a no-op until the ConPTY read handle is exposed by
+/// portable-pty (the reader applies pending resizes at its read boundary).
+#[cfg(unix)]
+struct ResizeWake {
+    read_fd: RawFd,
+    write_fd: RawFd,
+}
+
+#[cfg(unix)]
+impl ResizeWake {
+    fn new() -> std::io::Result<Self> {
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe writes to a valid 2-element array.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Both ends non-blocking so poll() returns immediately when signalled
+        // and a signal never blocks.
+        for fd in &fds {
+            // SAFETY: fds are valid descriptors returned by pipe() above.
+            unsafe { libc::fcntl(*fd, libc::F_SETFL, libc::O_NONBLOCK) };
+        }
+        Ok(Self {
+            read_fd: fds[0],
+            write_fd: fds[1],
+        })
+    }
+
+    fn read_fd(&self) -> RawFd {
+        self.read_fd
+    }
+
+    fn signal(&self) {
+        let byte = [1u8];
+        // SAFETY: write one byte to the pipe write end.
+        unsafe {
+            let _ = libc::write(self.write_fd, byte.as_ptr() as *const libc::c_void, 1);
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ResizeWake {
+    fn drop(&mut self) {
+        // SAFETY: close the two pipe ends created in `new`.
+        unsafe {
+            libc::close(self.read_fd);
+            libc::close(self.write_fd);
+        }
+    }
+}
+
+#[cfg(windows)]
+struct ResizeWake;
+
+#[cfg(windows)]
+impl ResizeWake {
+    fn new() -> std::io::Result<Self> {
+        Ok(Self)
+    }
+    fn signal(&self) {}
+}
+
+/// Clear (drain) any pending wake bytes on the reader side of the self-pipe.
+#[cfg(unix)]
+fn clear_wake(fd: RawFd) {
+    let mut buf = [0u8; 64];
+    loop {
+        // SAFETY: read into a valid buffer.
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n <= 0 {
+            break;
+        }
+    }
+}
+
 /// Number of bytes from the end of the previous chunk to carry forward
 /// for cross-boundary pattern detection (DSR, OSC 52 header).
 /// Must cover the 5-byte OSC 52 header `\x1b]52;` across chunk boundaries
@@ -105,7 +191,7 @@ impl PtyWriter {
 }
 
 pub struct Pty {
-    master: Box<dyn MasterPty + Send>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     writer: PtyWriter,
     /// Raw bytes from the reader thread, kept for consumers that need
     /// unparsed output (e.g., session server forwarding).
@@ -126,8 +212,14 @@ pub struct Pty {
     /// Condvar for I/O burst budget: reader waits here when budget exceeded
     /// and the UI hasn't rendered yet.
     pub(crate) dirty_cond: Arc<(Mutex<()>, Condvar)>,
-    size: PtySize,
-    pty_size: PtySize,
+    /// Current emulator size. Owned/shared: the reader applies drain-synchronized
+    /// resizes and updates this; the main thread reads it via [`Pty::size`].
+    size: Arc<Mutex<PtySize>>,
+    /// Latest resize requested by the UI, applied by the reader thread at the
+    /// next pipe-drain boundary (never mid-shell-write).
+    pending_resize: Arc<Mutex<Option<PtySize>>>,
+    /// Wake primitive used to nudge the reader out of `poll` on a resize request.
+    resize_wake: ResizeWake,
     scrollback_len: usize,
     child: Option<Box<dyn Child + Send + Sync>>,
     /// Win32 Job Object containing the child's process tree (Windows only).
@@ -271,6 +363,15 @@ impl Pty {
                 .take_writer()
                 .map_err(|err| wrap_err("take_writer", err))?,
         );
+        // The reader thread applies drain-synchronized resizes (reflow + ioctl),
+        // so master must be shared with it.
+        let master = Arc::new(Mutex::new(pair.master));
+        let reader_master = Arc::clone(&master);
+        let size_arc = Arc::new(Mutex::new(size));
+        let reader_size = Arc::clone(&size_arc);
+        let pending_resize = Arc::new(Mutex::new(None));
+        let reader_pending_resize = Arc::clone(&pending_resize);
+        let resize_wake = ResizeWake::new().map_err(|err| wrap_err("resize wake", err))?;
         let pending = Arc::new(Mutex::new(Vec::new()));
         let bytes_received = Arc::new(AtomicUsize::new(0));
         let last_bytes = Arc::new(Mutex::new(Vec::new()));
@@ -297,6 +398,8 @@ impl Pty {
         let reader_dirty = Arc::clone(&dirty);
         let reader_dirty_cond = Arc::clone(&dirty_cond);
         let reader_pending_title = Arc::clone(&pending_title);
+        #[cfg(unix)]
+        let wake_read_fd = resize_wake.read_fd();
         let reader_handle = thread::spawn(move || {
             parser_read_loop(ParserReadLoopArgs {
                 reader,
@@ -314,10 +417,15 @@ impl Pty {
                 clipboard: None,
                 exited_emitted: reader_exited_emitted,
                 tracker: reader_tracker,
+                master: reader_master,
+                size: reader_size,
+                pending_resize: reader_pending_resize,
+                #[cfg(unix)]
+                wake_read_fd,
             })
         });
         Ok(Self {
-            master: pair.master,
+            master,
             writer,
             pending,
             bytes_received,
@@ -330,9 +438,10 @@ impl Pty {
             shared_parser,
             dirty,
             dirty_cond,
+            size: size_arc,
+            pending_resize,
+            resize_wake,
             tracker,
-            size,
-            pty_size: size,
             scrollback_len,
             child: Some(child),
             #[cfg(windows)]
@@ -403,18 +512,11 @@ impl Pty {
         self.reader.is_some()
     }
 
+    /// Request a resize. The reader thread applies it (emulator reflow + OS
+    /// `ioctl` / SIGWINCH) at the next pipe-drain boundary, so the grid width
+    /// never changes while the shell is mid-draw and SIGWINCH is delivered only
+    /// when the child is idle (drain-synchronized; no timers).
     pub fn resize(&mut self, size: PtySize) -> PtyResult<()> {
-        // NOTE (accepted limitation): resizing triggers universal grid reflow
-        // (vt100 `set_size`), which preserves all scrollback data. On a width
-        // shrink, a shell prompt that re-wraps into multiple rows may briefly
-        // show duplicated/stale prompt rows on the host, because the shell's
-        // SIGWINCH redraw (`\r ESC[J`) only erases downward from the cursor and
-        // cannot reach the re-wrapped rows above it. This is a protocol
-        // limitation of shell-driven redraw (present in other reflowing
-        // terminals) and is intentionally not worked around in the emulator:
-        // any emulator/compositor-side correction would destroy buffered data
-        // or corrupt cursor coordinates. No data is ever lost.
-        //
         // WORKAROUND: vt100 0.16.2 Grid::col_wrap (grid.rs:683) panics with a
         // subtraction overflow at cols=1; rows=1 causes similar issues. Clamp
         // the minimum so the PTY emulator doesn't crash when the terminal is
@@ -422,31 +524,13 @@ impl Pty {
         if size.rows < 2 || size.cols < 2 {
             return Ok(());
         }
-        if size == self.pty_size {
-            return Ok(());
+        let mut pending = self.pending_resize.lock().unwrap_or_else(|err| err.into_inner());
+        if *pending == Some(size) {
+            return Ok(()); // already requested
         }
-        // Lock the shared parser before resizing the OS PTY so the reader
-        // thread cannot process post-SIGWINCH bytes against stale dimensions.
-        let sp = self.shared_parser.clone();
-        let mut guard = sp.lock().unwrap();
-        let old_rows = self.pty_size.rows;
-        let new_rows = size.rows;
-        if new_rows < old_rows && !self.tracker.has_custom_margins() {
-            let (cursor_row, _) = guard.screen().cursor_position();
-            if cursor_row >= new_rows {
-                let scroll_lines = cursor_row - new_rows + 1;
-                let seq = format!("[{scroll_lines}S");
-                guard.process(seq.as_bytes());
-            }
-        }
-        self.master
-            .resize(size)
-            .map_err(|err| wrap_err("resize", err))?;
-        guard.screen_mut().set_size(size.rows, size.cols);
-        drop(guard);
-        self.tracker.resize(size.rows);
-        self.pty_size = size;
-        self.size = size;
+        *pending = Some(size);
+        drop(pending);
+        self.resize_wake.signal();
         Ok(())
     }
 
@@ -506,7 +590,11 @@ impl Pty {
 
     #[cfg(unix)]
     fn foreground_pid(&self) -> Option<u32> {
-        self.master.process_group_leader().map(|p| p as u32)
+        self.master
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .process_group_leader()
+            .map(|p| p as u32)
     }
 
     #[cfg(windows)]
@@ -539,8 +627,9 @@ impl Pty {
             .clone();
         let contents = screen.contents();
         let mut lines: Vec<String> = contents.lines().map(|line| line.to_string()).collect();
-        if lines.len() < self.size.rows as usize {
-            lines.resize(self.size.rows as usize, String::new());
+        let rows = self.size.lock().unwrap_or_else(|err| err.into_inner()).rows as usize;
+        if lines.len() < rows {
+            lines.resize(rows, String::new());
         }
         lines
     }
@@ -613,7 +702,10 @@ impl Pty {
     /// (e.g. Windows ConPTY).
     #[cfg(unix)]
     pub fn process_group_id(&self) -> Option<i32> {
-        self.master.process_group_leader()
+        self.master
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .process_group_leader()
     }
 
     /// Send a signal to the child's entire process group, not just the leader.
@@ -627,7 +719,12 @@ impl Pty {
     /// supervisor falls back to `kill_child()` (single process).
     #[cfg(unix)]
     pub fn signal_process_group(&self, signal: i32) -> PtyResult<()> {
-        let Some(pgid) = self.master.process_group_leader() else {
+        let Some(pgid) = self
+            .master
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .process_group_leader()
+        else {
             return Err(wrap_err(
                 "signal_process_group",
                 std::io::Error::new(
@@ -647,7 +744,7 @@ impl Pty {
     }
 
     pub fn size(&self) -> PtySize {
-        self.size
+        *self.size.lock().unwrap_or_else(|err| err.into_inner())
     }
 
     /// Sync dirty state and handle DSR/foreground polling.
@@ -766,8 +863,7 @@ struct ParserReadLoopArgs {
     status_cb: StatusCallback,
     scrollback_len: usize,
     /// Shared latch: taken once by whichever path detects exit first.
-    exited_emitted: Arc<AtomicBool>,
-    /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
+    exited_emitted: Arc<AtomicBool>,    /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
     /// Clipboard to relay extracted OSC 52 sequences through. `None` in
@@ -777,6 +873,15 @@ struct ParserReadLoopArgs {
     clipboard: Option<Clipboard>,
     /// Application state tracker — shared via Arc with Pty.
     tracker: std::sync::Arc<crate::PtyStateTracker>,
+    /// Shared master for drain-synchronized `ioctl` resizes applied by the reader.
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    /// Current emulator size (shared; updated by the reader when it applies a resize).
+    size: Arc<Mutex<PtySize>>,
+    /// Resize requested by the UI, applied at the next pipe-drain boundary.
+    pending_resize: Arc<Mutex<Option<PtySize>>>,
+    /// Read end of the resize wake self-pipe (polled alongside the PTY fd).
+    #[cfg(unix)]
+    wake_read_fd: RawFd,
 }
 
 fn parser_read_loop(args: ParserReadLoopArgs) {
@@ -796,6 +901,11 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         clipboard,
         exited_emitted,
         tracker,
+        master,
+        size,
+        pending_resize,
+        #[cfg(unix)]
+        wake_read_fd,
     } = args;
     let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
@@ -807,16 +917,75 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
     // One clipboard handle for the whole reader lifetime: re-initialising
     // arboard per OSC 52 sequence would repeat the display-server handshake
     // on every copy event.  Each extracted sequence is relayed synchronously
-    // (no debounce) so the final payload of a burst is never dropped.
-    let mut clipboard = clipboard.unwrap_or_else(Clipboard::new);
+    // (no debounce) so the tail payload of a burst is never dropped.
+    //
+    // Initialised lazily on the first OSC 52 sequence: arboard's handshake can
+    // block for 500ms+ (macOS pasteboard / Wayland), and we must not stall the
+    // reader loop's startup (and thus the first drain-synchronized resize) on it.
+    let mut clipboard: Option<Clipboard> = clipboard;
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
-    loop {
-        match reader.read(&mut buf) {
-            Ok(0) => {
+    // The pty master fd never changes — fetch it once to avoid a Mutex lock on
+    // every drain iteration (the UI thread and apply_resize also lock `master`).
+    #[cfg(unix)]
+    let master_fd = master
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .as_raw_fd()
+        .unwrap_or(-1);
+    'reader: loop {
+        // Block until the PTY master or the resize-wake is readable, so a
+        // resize request is noticed even while the pipe is idle.
+        #[cfg(unix)]
+        {
+            let mut pollfds = [
+                libc::pollfd {
+                    fd: master_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: wake_read_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let _ = unsafe {
+                libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1)
+            };
+            if pollfds[1].revents & libc::POLLIN != 0 {
+                clear_wake(wake_read_fd);
+            }
+        }
+
+        // Drain: keep reading until the pipe is empty (or the starvation bound),
+        // then apply any pending resize at the drain boundary.
+        let mut drain_bytes = 0usize;
+        loop {
+            // (Unix) zero-timeout availability check: pipe empty → drain boundary.
+            #[cfg(unix)]
+            {
+                let mut pfd = libc::pollfd {
+                    fd: master_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+            let pr = unsafe { libc::poll(&mut pfd, 1, 0) };
+            let hup = pfd.revents & (libc::POLLHUP | libc::POLLERR) != 0;
+            if pr <= 0 || (pfd.revents & libc::POLLIN == 0 && !hup) {
+                break;
+                }
+            }
+            match reader.read(&mut buf) {
+                Ok(0) => {
                 // EOF — child exited. Flush any buffered OSC 52 payload
                 // (Windows ConPTY may have consumed the terminator).
                 if let Some(text) = osc52.finish() {
-                    clipboard.set(&text);
+                    if clipboard.is_none() {
+                        clipboard = Some(Clipboard::new());
+                    }
+                    if let Some(clip) = clipboard.as_mut() {
+                        clip.set(&text);
+                    }
                     if let Some(ref capture) = osc52_text {
                         *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
                     }
@@ -829,7 +998,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                         cb(crate::PtyStatus::Exited);
                     }
                 }
-                break;
+                break 'reader;
             }
             Ok(n) => {
                 bytes_received.fetch_add(n, Ordering::Relaxed);
@@ -884,8 +1053,15 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
                 // Relay each extracted sequence synchronously via the hoisted
                 // handle — no debounce, so the tail payload is never dropped.
+                // The handle is lazy-initialised on the first sequence so the
+                // reader loop's startup is never blocked on arboard's handshake.
                 if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
-                    clipboard.set(&text);
+                    if clipboard.is_none() {
+                        clipboard = Some(Clipboard::new());
+                    }
+                    if let Some(clip) = clipboard.as_mut() {
+                        clip.set(&text);
+                    }
                     if let Some(ref capture) = osc52_text {
                         *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
                     }
@@ -924,6 +1100,17 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     bytes_since_render = 0;
                 }
 
+                // Drain-sync: break at the starvation bound so a continuous
+                // stream (which never returns WouldBlock) still applies the
+                // pending resize and keeps the grid attached to the window.
+                #[cfg(unix)]
+                {
+                    drain_bytes += n;
+                    if drain_bytes >= MAX_DRAIN_BYTES {
+                        break;
+                    }
+                }
+
                 // Loop back to read() — no parking, no cloning, no render_ready check.
                 // Lock contention is expected under load: the reader will block
                 // on the mutex while the main thread holds it during render.
@@ -936,9 +1123,63 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 {
                     cb(crate::PtyStatus::Exited);
                 }
-                break;
+                break 'reader;
             }
         }
+        // (Windows) one blocking read per outer iteration (no non-blocking drain
+        // until the ConPTY handle is pollable — resizes apply at this boundary).
+        #[cfg(windows)]
+        {
+            break;
+        }
+        }
+        // DRAIN BOUNDARY — pipe empty (or starvation bound): apply any pending
+        // resize here, so the grid is reflowed and SIGWINCH is delivered only
+        // when the shell is not mid-write.
+        let new_size = pending_resize
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take();
+        if let Some(new_size) = new_size {
+            apply_resize(new_size, &shared_parser, &tracker, &master, &size);
+        }
+    }
+}
+
+/// Apply a drain-synchronized resize on the reader thread: reflow the vt100
+/// grid (with the shrink `ESC[S` cursor push), update the tracker and the shared
+/// size, then issue the OS resize (`ioctl` / SIGWINCH) — all so the grid width
+/// never changes mid-shell-write.
+fn apply_resize(
+    new_size: PtySize,
+    shared_parser: &Arc<Mutex<term_wm_vt100::Parser>>,
+    tracker: &Arc<crate::PtyStateTracker>,
+    master: &Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    size: &Arc<Mutex<PtySize>>,
+) {
+    let old_rows = {
+        let parser = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
+        parser.screen().size().0
+    };
+    let mut guard = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
+    if new_size.rows < old_rows && !tracker.has_custom_margins() {
+        let (cursor_row, _) = guard.screen().cursor_position();
+        if cursor_row >= new_size.rows {
+            let scroll_lines = cursor_row - new_size.rows + 1;
+            let seq = format!("\x1b[{scroll_lines}S");
+            guard.process(seq.as_bytes());
+        }
+    }
+    guard.screen_mut().set_size(new_size.rows, new_size.cols);
+    drop(guard);
+    tracker.resize(new_size.rows);
+    *size.lock().unwrap_or_else(|err| err.into_inner()) = new_size;
+    if let Err(e) = master
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .resize(new_size)
+    {
+        tracing::warn!("drain-sync PTY resize failed: {e}");
     }
 }
 
@@ -1104,6 +1345,7 @@ mod tests {
     use super::*;
     use crate::pty::StatusCallback;
     use std::io;
+    #[cfg(windows)]
     use std::io::Cursor;
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1191,10 +1433,57 @@ mod tests {
     }
 
     // ── parser_read_loop ─────────────────────────────────────────────
-
-    fn make_parser_test_args() -> ParserReadLoopArgs {
+    fn make_parser_test_args(payload: &[u8]) -> ParserReadLoopArgs {
+        // A real PTY is required so the drain-synchronized reader loop can poll
+        // the master fd. On Unix the payload is produced by a `printf` child
+        // written to the slave (child output direction → master reader), which
+        // then exits to EOF the loop. On Windows the loop is the non-polling
+        // fallback, so a synchronous Cursor reader works.
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        #[cfg(unix)]
+        let reader = {
+            // Escape the payload for `sh -c 'printf …'` so it is written to the
+            // slave verbatim; the child exits immediately afterward.
+            let mut escaped = String::from("printf '");
+            for &b in payload {
+                match b {
+                    b'\'' => escaped.push_str("'\\''"),
+                    0x1b => escaped.push_str("\\033"),
+                    b'\n' => escaped.push_str("\\n"),
+                    b'\r' => escaped.push_str("\\r"),
+                    b'\t' => escaped.push_str("\\t"),
+                    0x20..=0x7e => escaped.push(b as char),
+                    _ => escaped.push_str(&format!("\\{:03o}", b)),
+                }
+            }
+            escaped.push('\'');
+            let mut builder = CommandBuilder::new("sh");
+            builder.arg("-c");
+            builder.arg(escaped);
+            let _child = pair.slave.spawn_command(builder).expect("spawn printf child");
+            pair.master.try_clone_reader().expect("reader")
+        };
+        #[cfg(windows)]
+        let reader = Box::new(Cursor::new(payload.to_vec()));
+        let master = Arc::new(Mutex::new(pair.master));
+        drop(pair.slave);
+        #[cfg(unix)]
+        let wake_read_fd = {
+            // Keep the wake pipe alive for the reader's poll set; dropping it
+            // here would close the fd and make `poll` return POLLNVAL (busy-spin).
+            let wake = Box::leak(Box::new(ResizeWake::new().expect("resize wake")));
+            wake.read_fd()
+        };
         ParserReadLoopArgs {
-            reader: Box::new(Cursor::new(Vec::new())),
+            reader,
             pending: Arc::new(Mutex::new(Vec::new())),
             bytes_received: Arc::new(AtomicUsize::new(0)),
             last_bytes: Arc::new(Mutex::new(Vec::new())),
@@ -1209,14 +1498,23 @@ mod tests {
             osc52_text: None,
             clipboard: None,
             tracker: std::sync::Arc::new(crate::PtyStateTracker::new(24)),
+            master,
+            size: Arc::new(Mutex::new(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })),
+            pending_resize: Arc::new(Mutex::new(None)),
+            #[cfg(unix)]
+            wake_read_fd,
         }
     }
 
     #[test]
     fn parser_read_loop_reads_and_sets_pending_and_last() {
         let payload = b"hello\r\n\x1b[6nworld";
-        let mut args = make_parser_test_args();
-        args.reader = Box::new(Cursor::new(payload.to_vec()));
+        let args = make_parser_test_args(payload);
         let pending = Arc::clone(&args.pending);
         let bytes_received = Arc::clone(&args.bytes_received);
         let last_bytes = Arc::clone(&args.last_bytes);
@@ -1236,8 +1534,7 @@ mod tests {
 
     #[test]
     fn parser_read_loop_empty_input() {
-        let mut args = make_parser_test_args();
-        args.reader = Box::new(Cursor::new(Vec::new()));
+        let args = make_parser_test_args(b"");
         let pending = Arc::clone(&args.pending);
         let bytes_received = Arc::clone(&args.bytes_received);
         let last_bytes = Arc::clone(&args.last_bytes);
@@ -1264,11 +1561,10 @@ mod tests {
     /// these assertions.
     #[test]
     fn parser_read_loop_decawn_off_does_not_wrap() {
-        let mut args = make_parser_test_args();
         let mut payload = Vec::new();
         payload.extend_from_slice(b"\x1b[?7l");
         payload.extend_from_slice(&[b'x'; 85]);
-        args.reader = Box::new(Cursor::new(payload));
+        let args = make_parser_test_args(&payload);
         let shared = Arc::clone(&args.shared_parser);
 
         parser_read_loop(args);
@@ -1300,10 +1596,8 @@ mod tests {
     /// exact insert sequence through the production ingestion loop.
     #[test]
     fn parser_read_loop_insert_mode_inserts() {
-        let mut args = make_parser_test_args();
         // "hello", move to col 2 (1-based) → (0,1) 0-based, enable IRM, insert 'X'.
-        let payload = b"hello\x1b[1;2H\x1b[4hX\x1b[4l".to_vec();
-        args.reader = Box::new(Cursor::new(payload));
+        let args = make_parser_test_args(b"hello\x1b[1;2H\x1b[4hX\x1b[4l");
         let shared = Arc::clone(&args.shared_parser);
 
         parser_read_loop(args);
@@ -1325,9 +1619,7 @@ mod tests {
 
     #[test]
     fn parser_read_loop_status_callback_called_when_set() {
-        let payload = b"data";
-        let mut args = make_parser_test_args();
-        args.reader = Box::new(Cursor::new(payload.to_vec()));
+        let args = make_parser_test_args(b"data");
         let woke = Arc::new(AtomicBool::new(false));
         let woke_clone = Arc::clone(&woke);
         if let Ok(mut guard) = args.status_cb.lock() {
@@ -1348,9 +1640,7 @@ mod tests {
 
     #[test]
     fn parser_read_loop_tracks_tail_for_cross_boundary_dsr() {
-        let payload = b"XX\x1b[6nYY";
-        let mut args = make_parser_test_args();
-        args.reader = Box::new(Cursor::new(payload.to_vec()));
+        let args = make_parser_test_args(b"XX\x1b[6nYY");
         let dsr_requested = Arc::clone(&args.dsr_requested);
 
         parser_read_loop(args);
@@ -1367,13 +1657,12 @@ mod tests {
         // buffer so the relay is deterministic and the real system clipboard
         // / process-global default buffer are never touched.
         let shared = Arc::new(RwLock::new(None));
-        let mut args = make_parser_test_args();
+        let mut args = make_parser_test_args(&crate::clipboard::format_osc52_bytes(
+            "clip via pty",
+        ));
         args.clipboard = Some(Clipboard::with_shared_buffer(Arc::clone(&shared)));
         let captured = Arc::new(Mutex::new(None));
         args.osc52_text = Some(Arc::clone(&captured));
-        args.reader = Box::new(Cursor::new(crate::clipboard::format_osc52_bytes(
-            "clip via pty",
-        )));
 
         parser_read_loop(args);
 
@@ -2407,5 +2696,109 @@ mod tests {
     /// sanitizer actually applies on this platform.
     fn expected_child_term() -> &'static str {
         CHILD_TERM
+    }
+
+    // ── Drain-synchronized resize ──────────────────────────────────────
+
+    /// A resize request is applied by the reader thread once the pipe drains
+    /// (not mid-shell-write), updating the shared emulator size.
+    #[test]
+    fn drain_sync_applies_resize_after_pipe_drain() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+        let target = PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        pty.resize(target).expect("request resize");
+        // Prompt the reader to drain (the `cat`/`cmd` child echoes "hi" back).
+        let _ = pty.write_bytes(b"hi\n");
+        // Poll (up to 5s) for the reader to apply the resize at the drain.
+        for _ in 0..250 {
+            if pty.size().rows == 30 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(pty.size().rows, 30, "emulator resized after the pipe drained");
+        assert_eq!(pty.size().cols, 100);
+    }
+
+    /// Rapid drag resizes coalesce to the final size only (frame-dropping).
+    #[test]
+    fn drain_sync_coalesces_rapid_resizes_to_final() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+        pty.resize(PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+        pty.resize(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+        let final_size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        pty.resize(final_size).unwrap();
+        let _ = pty.write_bytes(b"x\n");
+        for _ in 0..250 {
+            if pty.size() == final_size {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(pty.size(), final_size, "only the final size is applied");
+    }
+
+    /// For an idle shell (empty pipe), the resize-wake makes the reader drain
+    /// immediately and apply — no data is needed.
+    #[test]
+    fn drain_sync_applies_resize_when_pipe_idle() {
+        let cmd = CommandBuilder::new(get_test_executable());
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+        let target = PtySize {
+            rows: 33,
+            cols: 90,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        pty.resize(target).unwrap();
+        for _ in 0..250 {
+            if pty.size() == target {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(pty.size(), target, "resize applied at the empty-pipe drain");
     }
 }
