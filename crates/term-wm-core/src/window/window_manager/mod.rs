@@ -3212,7 +3212,11 @@ mod tests {
             width: 60,
             height: 24,
         });
-        assert_eq!(wm.managed_area().height, 24, "no reservation when not cramped");
+        assert_eq!(
+            wm.managed_area().height,
+            24,
+            "no reservation when not cramped"
+        );
     }
 
     #[test]

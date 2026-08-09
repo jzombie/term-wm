@@ -760,12 +760,15 @@ mod tests {
         use term_wm_core::components::NoopComponent;
         use term_wm_core::components::NoopOverlay;
         use term_wm_core::config::AppBuilder;
-        use term_wm_core::window::ComponentTag;
 
         let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
         let mut wm = AppBuilder::<WmBottomPanelComponent>::new()
             .app_ctx(Arc::clone(&app_ctx))
-            .bottom_panel(WmBottomPanelComponent::new("test", "0.1.0", Some("test-host")))
+            .bottom_panel(WmBottomPanelComponent::new(
+                "test",
+                "0.1.0",
+                Some("test-host"),
+            ))
             .build::<NoopComponent, NoopOverlay>()
             .expect("test build");
 
@@ -806,7 +809,10 @@ mod tests {
                     .is_some_and(|c| !c.symbol().starts_with(' '))
             })
         };
-        assert!(has_non_space(23), "hints must render on absolute bottom row 23");
+        assert!(
+            has_non_space(23),
+            "hints must render on absolute bottom row 23"
+        );
         assert!(
             !has_non_space(22),
             "hints must NOT rise up to row 22 when the FAB row is reserved"

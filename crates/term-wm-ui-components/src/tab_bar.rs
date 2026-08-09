@@ -43,7 +43,13 @@ const CLOSE_GLYPH: &str = "✕";
 
 /// Horizontal scroll that makes a tab at logical `lx` of `width` columns fully visible.
 /// Tabs wider than the viewport are left-aligned (show the leftmost columns).
-fn scroll_into_view_target(h: i32, lx: i32, width: i32, viewport_width: i32, max_scroll: i32) -> i32 {
+fn scroll_into_view_target(
+    h: i32,
+    lx: i32,
+    width: i32,
+    viewport_width: i32,
+    max_scroll: i32,
+) -> i32 {
     let target = if width > viewport_width || lx < h {
         // Tabs wider than the viewport, or clipped on the left, align to their
         // left edge (show the leftmost columns of the title).
@@ -1018,7 +1024,10 @@ mod tests {
 
         // Release completes the click (a real click = press + release), clearing
         // the drag state so the next render consumes the pending scroll.
-        let _ = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 23, 0), &c);
+        let _ = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 23, 0),
+            &c,
+        );
         assert_eq!(bar.h_scroll, 40, "release must not mutate h_scroll");
 
         // Next render consumes the pending scroll and brings tab 6 fully in view.
@@ -1059,7 +1068,10 @@ mod tests {
         let _ = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 5, 0), &c);
 
         render_bar(&mut bar, 20, 1, r);
-        assert_eq!(bar.h_scroll, 0, "oversized tab left-aligns to its logical origin");
+        assert_eq!(
+            bar.h_scroll, 0,
+            "oversized tab left-aligns to its logical origin"
+        );
     }
 
     #[test]
@@ -1081,10 +1093,16 @@ mod tests {
         assert!(matches!(res, EventResult::Action(TabBarEvent::Select(6))));
 
         // Release completes the click so the pending scroll is consumed.
-        let _ = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 23, 0), &c);
+        let _ = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 23, 0),
+            &c,
+        );
 
         render_bar(&mut bar, 30, 1, r);
-        assert_eq!(bar.h_scroll, 44, "clicked active tab scrolled back into view");
+        assert_eq!(
+            bar.h_scroll, 44,
+            "clicked active tab scrolled back into view"
+        );
     }
 
     #[test]
@@ -1111,16 +1129,24 @@ mod tests {
         assert!(matches!(res, EventResult::Consumed));
         assert_eq!(bar.h_scroll, 40, "drag must not alter h_scroll");
         assert_eq!(
-            bar.drag_state.as_ref().unwrap().drop_index, 4,
+            bar.drag_state.as_ref().unwrap().drop_index,
+            4,
             "reorder target computed from current scroll, no drift"
         );
 
         // A render while the button is held must NOT consume the pending scroll.
         render_bar(&mut bar, 30, 1, r);
-        assert_eq!(bar.pending_scroll_to, Some(6), "pending survives active drag");
+        assert_eq!(
+            bar.pending_scroll_to,
+            Some(6),
+            "pending survives active drag"
+        );
 
         // Release commits the reorder.
-        let res = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 10, 0), &c);
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 10, 0),
+            &c,
+        );
         assert!(matches!(
             res,
             EventResult::Action(TabBarEvent::Reorder {
