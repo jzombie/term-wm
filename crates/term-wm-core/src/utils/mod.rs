@@ -1,8 +1,10 @@
 pub mod ansi;
+pub mod debounce;
 pub mod keyboard_normalizer;
 pub mod linkifier;
 pub mod selectable_text;
 
+pub use debounce::DelayedReleaseBool;
 pub use keyboard_normalizer::KeyboardNormalizer;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};

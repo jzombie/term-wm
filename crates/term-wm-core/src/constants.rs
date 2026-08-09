@@ -61,6 +61,11 @@ pub const DEFAULT_SHELL_FALLBACK: &str = "cmd.exe";
 /// Maximum number of keybinding hint entries shown in the bottom panel.
 pub const MAX_BOTTOM_HINTS: usize = 6;
 
+/// How long the FAB bottom-row reservation is held after the app's content
+/// clears the FAB footprint, so resize-driven reflow cannot oscillate the
+/// window height (and thus resize the PTY) frame-to-frame.
+pub const FAB_RESERVATION_DEBOUNCE: Duration = Duration::from_millis(250);
+
 pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_BASE: Duration = Duration::from_millis(220);
 pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_VERTICAL: Duration = Duration::from_millis(600);
 pub const TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL: Duration = Duration::from_millis(900);

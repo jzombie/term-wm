@@ -234,7 +234,8 @@ impl Component<TermWmAction> for TerminalComponent {
             return;
         }
         let size = (area.width, area.height);
-        if size != self.last_size.get() {
+        let resized = size != self.last_size.get();
+        if resized {
             let mut pane = self.pane.borrow_mut();
             let _ = pane.resize(PtySize {
                 rows: area.height,
@@ -261,7 +262,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 screen_area_lr,
             );
         }
-        self.render_screen(backend, area, ctx);
+        self.render_screen(backend, area, ctx, resized);
     }
 
     fn destroy(&mut self) {
@@ -465,6 +466,13 @@ impl TerminalComponent {
         self.last_max_scrollback.set(val);
     }
 
+    /// Test-only: prime `last_size` so a subsequent `render` at a different
+    /// area is treated as a resize (`resized == true` in the scroll sync).
+    #[cfg(test)]
+    pub fn set_last_size(&mut self, width: u16, height: u16) {
+        self.last_size.set((width, height));
+    }
+
     #[cfg(test)]
     pub fn last_mode_suppressed_scroll(&self) -> bool {
         self.last_mode_suppressed_scroll.get()
@@ -484,6 +492,7 @@ impl TerminalComponent {
         backend: &mut dyn term_wm_render::RenderBackend,
         area: LayoutRect,
         ctx: &ComponentContext,
+        resized: bool,
     ) {
         let screen_area = ctx.screen_area().unwrap_or(area);
 
@@ -512,7 +521,14 @@ impl TerminalComponent {
                         let current_sb = pane.scrollback();
                         let view_offset = ctx.viewport().offset_y;
                         if current_sb == 0 {
-                            if view_offset < self.last_max_scrollback.get().saturating_sub(1) {
+                            if resized {
+                                // Resize artifact: view_offset is stale (the
+                                // ScrollView clamped it against old geometry
+                                // before set_content_size ran). Stay at the tail
+                                // so the prompt doesn't duplicate / jump up.
+                                handle.scroll_vertical_to(usize::MAX);
+                            } else if view_offset < self.last_max_scrollback.get().saturating_sub(1)
+                            {
                                 let target_sb = used.saturating_sub(view_offset);
                                 pane.set_scrollback(target_sb);
                             } else {
@@ -1351,8 +1367,8 @@ mod tests {
     // --- Scroll sync tests ---
 
     #[test]
-    fn scroll_sync_current_sb_zero_view_offset_below_last_max_syncs_scrollback() {
-        // current_sb=0, view_offset < last_max_scrollback - 1
+    fn scroll_sync_current_sb_zero_genuine_scroll_syncs_scrollback() {
+        // current_sb=0, resized=false, view_offset < last_max_scrollback - 1
         // Expect: set_scrollback is called (scrollback becomes non-zero)
         let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
         term.set_last_scrollback(0);
@@ -1375,6 +1391,24 @@ mod tests {
         assert!(
             shared.borrow().pending_offset_y.is_none(),
             "scroll_vertical_to should not have been called"
+        );
+    }
+
+    #[test]
+    fn scroll_sync_current_sb_zero_resize_follows_tail() {
+        // A resize leaves view_offset stale (the ScrollView clamped it against
+        // old geometry before set_content_size ran), so a low offset here is NOT
+        // a user scroll. With current_sb==0, stay at the tail.
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(200)));
+        term.set_last_scrollback(0);
+        term.set_last_max_scrollback(100);
+        // Force render to see a size change (79x24 → 80x24) → resized=true.
+        term.set_last_size(79, 24);
+        let (shared, sb) = run_sync(&mut term, 50);
+        assert_eq!(sb, 0, "must remain at the tail after a resize");
+        assert!(
+            shared.borrow().pending_offset_y.is_some(),
+            "scroll_vertical_to(max) must re-pin the viewport to the bottom"
         );
     }
 
