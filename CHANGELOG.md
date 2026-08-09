@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project adheres to
 
 ## [0.9.17-alpha] - TBD
 
+### Added
+
+- **Public API to distinguish app-owned windows from core/system windows:** `AppRootComponent` now exposes `is_custom()` / `is_core()` predicates, and `TermWmApp` adds `focused_is_custom()` / `focused_is_core()` queries reporting whether the currently focused window is an app-owned (`Custom`) pane or a framework/system window (`Terminal`, `Debug Log`, `System Panel`, …). Host apps can use these to gate global shortcuts on focus — e.g. not intercepting `q` while a PTY terminal or the Debug Log holds focus — without pattern-matching on the framework's component enum.
+
 ### Changed
 
 - **System windows are now initialized automatically for every app:** the Debug Log and System Panel windows are created at `TermWmApp` construction time (hidden by default) on every construction path — the standalone constructors (`new_custom` / `new_with_config` / `new_with_actions`) and `from_wm` (used by the bundled `term-wm` binary). Previously apps had to call `init_system_windows()` themselves; examples like `dual_image` never did, so the "Debug Log" Command Palette toggle silently did nothing. The Debug Log toggle is also a default menu action, so it now works out of the box in every app.
