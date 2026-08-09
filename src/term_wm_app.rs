@@ -311,7 +311,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// so they persist across show/hide cycles. The debug log also installs the
     /// panic hook and logging subscriber. Safe to call multiple times — subsequent
     /// calls are no-ops.
-    pub fn init_system_windows(&mut self) {
+    fn init_system_windows(&mut self) {
         if self.debug_key.is_some() || self.system_panel_key.is_some() {
             return;
         }

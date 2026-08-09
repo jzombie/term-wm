@@ -141,9 +141,6 @@ impl App {
             pty_wakeup_tx,
         };
 
-        // Initialize debug log and system panel windows.
-        app.inner.init_system_windows();
-
         // One window per command (shell + the command as input), then default
         // shells to fill `num_windows`. `commands` is owned and consumed here.
         let mut used = 0;
