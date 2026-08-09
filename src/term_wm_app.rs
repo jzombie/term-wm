@@ -142,6 +142,22 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         Self::new_with_config(app_ctx, WmConfig::default())
     }
 
+    /// Returns true when the currently focused window is an app-owned
+    /// (`AppRootComponent::Custom`) window, as opposed to a core/system window.
+    pub fn focused_is_custom(&self) -> bool {
+        self.wm
+            .component_for_key(self.wm.focused_window())
+            .is_some_and(AppRootComponent::is_custom)
+    }
+
+    /// Returns true when the currently focused window is a core/system window,
+    /// as opposed to an app-owned (`AppRootComponent::Custom`) window.
+    pub fn focused_is_core(&self) -> bool {
+        self.wm
+            .component_for_key(self.wm.focused_window())
+            .is_some_and(AppRootComponent::is_core)
+    }
+
     /// Create a standalone app with system chrome and a custom `WmConfig`
     /// (e.g. custom keybindings). The chrome wiring (top/bottom panel, FAB,
     /// notification area, supported menu actions) is identical to
@@ -639,6 +655,25 @@ mod tests {
             WmConfig::default(),
         );
         assert_system_windows_initialized(&mut app);
+    }
+
+    #[test]
+    fn focused_is_custom_and_core_distinguish_window_kinds() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+
+        // open_window maps and focuses, so focus tracks the last-opened pane.
+        let custom = app.open_window(AppRootComponent::Custom(NoopComponent));
+        assert!(app.focused_is_custom());
+        assert!(!app.focused_is_core());
+
+        let core = app.open_window(AppRootComponent::Core(CoreWmComponent::Noop(NoopComponent)));
+        assert!(app.focused_is_core());
+        assert!(!app.focused_is_custom());
+
+        app.wm().focus_window_key(custom);
+        assert!(app.focused_is_custom());
+        assert!(!app.focused_is_core());
+        let _ = core;
     }
 
     #[test]
