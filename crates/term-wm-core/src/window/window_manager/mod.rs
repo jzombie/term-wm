@@ -41,10 +41,10 @@ use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
 use crate::notification::NotificationQueue;
-use crate::utils::DelayedReleaseBool;
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
+use crate::utils::DelayedReleaseBool;
 #[cfg(test)]
 use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};

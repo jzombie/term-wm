@@ -87,10 +87,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(40));
             flag.set(false);
         }
-        assert!(
-            !flag.get(),
-            "delay must not be extended by repeated clears"
-        );
+        assert!(!flag.get(), "delay must not be extended by repeated clears");
     }
 
     #[test]
