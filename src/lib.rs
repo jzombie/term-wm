@@ -1,4 +1,4 @@
-// TODO: Include README in Rust docs
+#![doc = include_str!("../README.md")]
 
 pub use term_wm_core::*;
 pub use term_wm_ui_components::*;
