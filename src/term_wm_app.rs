@@ -41,9 +41,8 @@ const NEW_TERMINAL_SCROLLBACK: usize = 2000;
 /// Command-palette allow-list installed by `new_custom` / `new_with_config`.
 ///
 /// Deliberately a restricted subset of the full `DEFAULT_SUPPORTED_MENU_ACTIONS`
-/// (which additionally contains `NewTerminal`-adjacent entries like
-/// `ToggleDebugWindow` / `ToggleSystemPanel` / `Help`). Apps that want the full
-/// set — or a different one — use `new_with_actions`.
+/// (which additionally contains `ToggleSystemPanel` / `Help`). Apps that want the
+/// full set — or a different one — use `new_with_actions`.
 const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::CloseMenu,
     TermWmAction::ToggleMouseCapture,
@@ -53,6 +52,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleMonocle,
     TermWmAction::ToggleTiling,
     TermWmAction::NewTerminal,
+    TermWmAction::ToggleDebugWindow,
 ];
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
@@ -79,9 +79,9 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// `new_custom` and `new_with_config` install a fixed, restricted
 /// command-palette allow-list (`CloseMenu`, `ToggleMouseCapture`,
 /// `ToggleClipboardMode`, `ToggleWindowSelection`, `ExitUi`, `ToggleMonocle`,
-/// `ToggleTiling`, `NewTerminal`). Use `new_with_actions` to opt into additional
-/// entries such as `ToggleDebugWindow` or `ToggleSystemPanel`, or to add/remove
-/// any action.
+/// `ToggleTiling`, `NewTerminal`, `ToggleDebugWindow`). Use `new_with_actions` to
+/// opt into additional entries such as `ToggleSystemPanel`, or to add/remove any
+/// action.
 ///
 /// `from_wm()` builds the app around a pre-configured `WindowManager`; the
 /// bundled `term-wm` binary uses this path.
@@ -561,6 +561,7 @@ mod tests {
                 TermWmAction::ToggleMonocle,
                 TermWmAction::ToggleTiling,
                 TermWmAction::NewTerminal,
+                TermWmAction::ToggleDebugWindow,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );
