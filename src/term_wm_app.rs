@@ -247,53 +247,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
 
         // Attach status callback AFTER open_window so the closure captures
         // the known WindowKey directly — no OnceLock, no race condition.
-        let tx = self.pty_wakeup_tx.clone();
-        match self.wm.component_for_key_mut(key) {
-            Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) => {
-                tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
-                scroll_view
-                    .content
-                    .borrow_mut()
-                    .set_pty_callback(move |status| match status {
-                        PtyStatus::Wakeup => {
-                            let _ =
-                                tx.send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
-                        }
-                        PtyStatus::Exited => {
-                            let _ =
-                                tx.send(crate::unified_event_source::UnifiedEvent::AppExited(key));
-                        }
-                        PtyStatus::DirectInputChanged(enabled) => {
-                            tracing::info!(
-                                "[STAGE 2] Sending DirectInputChanged({}) for key {:?}",
-                                enabled,
-                                key
-                            );
-                            if let Err(e) = tx.send(
-                                crate::unified_event_source::UnifiedEvent::DirectInputChanged(
-                                    key, enabled,
-                                ),
-                            ) {
-                                tracing::error!("[STAGE 2] Channel send failed: {:?}", e);
-                            }
-                        }
-                    });
-            }
-            Some(_other) => {
-                tracing::error!(
-                    "[STAGE 2] Window {:?} has unexpected component type — \
-                     status callback will NOT be wired. PTY events will not fire.",
-                    key,
-                );
-            }
-            None => {
-                tracing::error!(
-                    "[STAGE 2] No component found for key {:?} after open_window. \
-                     Status callback will NOT be wired.",
-                    key
-                );
-            }
-        }
+        self.wire_pty_callback(key, self.pty_wakeup_tx.clone());
 
         let clipboard_enabled = self.wm.clipboard_enabled();
         if let Some(comp) = self.wm.component_for_key_mut(key) {
@@ -306,6 +260,43 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         }
         self.wm.set_window_title(key, title.into());
         Ok(key)
+    }
+
+    /// Wire a terminal window's PTY status callback so wakeup / exit /
+    /// direct-input events are sent on `tx`. Also used by `run()` to re-point
+    /// terminals that were spawned before the live event-source channel existed.
+    fn wire_pty_callback(&mut self, key: WindowKey, tx: Sender<UnifiedEvent>) {
+        match self.wm.component_for_key_mut(key) {
+            Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) => {
+                tracing::info!("Setting status callback for key {:?}", key);
+                scroll_view
+                    .content
+                    .borrow_mut()
+                    .set_pty_callback(move |status| match status {
+                        PtyStatus::Wakeup => {
+                            let _ = tx.send(UnifiedEvent::PtyWakeup(key));
+                        }
+                        PtyStatus::Exited => {
+                            let _ = tx.send(UnifiedEvent::AppExited(key));
+                        }
+                        PtyStatus::DirectInputChanged(enabled) => {
+                            tracing::info!("Sending DirectInputChanged({}) for key {:?}", enabled, key);
+                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, enabled)) {
+                                tracing::error!("Channel send failed: {:?}", e);
+                            }
+                        }
+                    });
+            }
+            Some(_other) => {
+                tracing::error!(
+                    "Window {:?} has unexpected component type — status callback will NOT be wired.",
+                    key,
+                );
+            }
+            None => {
+                tracing::error!("No component found for key {:?}.", key);
+            }
+        }
     }
 
     /// Initialize standard system windows (debug log + system panel).
@@ -406,6 +397,24 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         // mouse move).
         let mut input = UnifiedEventSource::new()?;
         self.pty_wakeup_tx = input.pty_wakeup_tx();
+        // Re-point any terminals spawned before run(): their callbacks captured
+        // the constructors' throwaway channel (whose receiver was dropped), so
+        // re-wire them to this live source or their PTY output would never wake
+        // the loop.
+        let terminal_keys: Vec<WindowKey> = self
+            .wm
+            .all_window_keys()
+            .into_iter()
+            .filter(|&k| {
+                matches!(
+                    self.wm.component_for_key(k),
+                    Some(AppRootComponent::Core(CoreWmComponent::Terminal(_)))
+                )
+            })
+            .collect();
+        for key in terminal_keys {
+            self.wire_pty_callback(key, self.pty_wakeup_tx.clone());
+        }
         let result = self.run_with(&mut output, &mut input);
         output.exit()?;
         result
