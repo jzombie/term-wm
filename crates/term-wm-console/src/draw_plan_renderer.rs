@@ -1525,6 +1525,7 @@ pub fn render_resize_outline(
     bounds: LayoutRect,
     floating: &[FloatingPane<WindowKey>],
     draw_order: &[WindowKey],
+    extra_obscuring: &[LayoutRect],
     theme: &Theme,
 ) {
     use ratatui::style::{Modifier, Style};
@@ -1590,8 +1591,13 @@ pub fn render_resize_outline(
     } else {
         Vec::new()
     };
-    let is_obscured =
-        |x: u16, y: u16| -> bool { obscuring.iter().any(|r| rect_contains(*r, x, y)) };
+    // Mask the outline where the hovered edge is covered — by a window above it
+    // OR by an extra occluder (top/bottom panel, or the full area while a modal
+    // overlay is open). Chained, no allocation.
+    let is_obscured = |x: u16, y: u16| -> bool {
+        extra_obscuring.iter().any(|r| rect_contains(*r, x, y))
+            || obscuring.iter().any(|r| rect_contains(*r, x, y))
+    };
 
     let right = (rect.x + i32::from(rect.width) - 1) as u16;
     let bottom = (rect.y + i32::from(rect.height) - 1) as u16;
@@ -2321,5 +2327,71 @@ mod tests {
         };
         render_window(&mut buffer, rect, ctx);
         insta::assert_debug_snapshot!("chrome_header_buttons", buffer);
+    }
+
+    #[test]
+    fn resize_outline_masked_by_extra_obscuring() {
+        use term_wm_core::layout::floating::{ResizeEdge, ResizeHandle};
+        use term_wm_core::layout::{FloatingPane, RectSpec};
+        use term_wm_layout_engine::LayoutRect;
+
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 10,
+        };
+        let key = WindowKey::default();
+        let win_rect = LayoutRect {
+            x: 5,
+            y: 2,
+            width: 10,
+            height: 5,
+        };
+        let hovered = ResizeHandle {
+            key,
+            rect: win_rect,
+            edge: ResizeEdge::Top,
+            hitbox_id: term_wm_core::hitbox_registry::HitboxId::new(),
+        };
+        let floating = vec![FloatingPane {
+            key,
+            rect: RectSpec::Absolute(win_rect),
+        }];
+        // A panel/overlay occluder covering the middle of the top edge.
+        let extra_obscuring = vec![LayoutRect {
+            x: 8,
+            y: 2,
+            width: 4,
+            height: 1,
+        }];
+        let area = ratatui::layout::Rect::new(0, 0, 20, 10);
+        let mut buffer = Buffer::empty(area);
+        let regions = RegionMap::default();
+
+        render_resize_outline(
+            &mut buffer,
+            Some(hovered),
+            None,
+            &regions,
+            bounds,
+            &floating,
+            &[key],
+            &extra_obscuring,
+            &NOIR,
+        );
+
+        let symbol = |x: u16| -> &str { buffer.cell((x, 2)).map(|c| c.symbol()).unwrap_or("?") };
+        assert_eq!(symbol(6), "═", "edge left of the occluder must light up");
+        assert_eq!(symbol(7), "═", "edge left of the occluder must light up");
+        for x in 8..=11 {
+            assert_ne!(
+                symbol(x),
+                "═",
+                "edge under the occluder must be masked (x={x})"
+            );
+        }
+        assert_eq!(symbol(12), "═", "edge right of the occluder must light up");
+        assert_eq!(symbol(13), "═", "edge right of the occluder must light up");
     }
 }

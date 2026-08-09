@@ -8,22 +8,6 @@ use term_wm_core::power_profile::PowerProfile;
 use term_wm_core::utils::KeyboardNormalizer;
 use term_wm_crossterm_adapter;
 
-/// Translate a crossterm event to a core-owned event.
-fn translate_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
-    match evt {
-        crossterm::event::Event::Key(key) => {
-            term_wm_crossterm_adapter::try_translate_key_event(key).map(Event::Key)
-        }
-        crossterm::event::Event::Mouse(mouse) => Some(Event::Mouse(
-            term_wm_crossterm_adapter::translate_mouse_event(mouse),
-        )),
-        crossterm::event::Event::Resize(w, h) => Some(Event::Resize(w, h)),
-        crossterm::event::Event::FocusGained => Some(Event::FocusGained),
-        crossterm::event::Event::FocusLost => Some(Event::FocusLost),
-        crossterm::event::Event::Paste(text) => Some(Event::Paste(text)),
-    }
-}
-
 /// Reads crossterm input events directly on the main thread.
 ///
 /// Used in tests and embedded mode.  Production uses the unified event source
@@ -61,7 +45,7 @@ impl ConsoleEventSource {
     fn read_internal(&mut self) -> io::Result<Event> {
         loop {
             let evt = crossterm::event::read()?;
-            if let Some(translated) = translate_crossterm_event(evt)
+            if let Some(translated) = term_wm_crossterm_adapter::try_translate_event(evt)
                 && let Some(normalized) = self.normalizer.normalize(translated)
             {
                 return Ok(normalized);
@@ -134,11 +118,7 @@ impl EventSource for ConsoleEventSource {
     }
 
     fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
-        if enabled {
-            crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
-        } else {
-            crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
-        }
+        term_wm_crossterm_adapter::set_mouse_capture(enabled)
     }
 
     /// Called by the runner each cycle to signal whether there's pending

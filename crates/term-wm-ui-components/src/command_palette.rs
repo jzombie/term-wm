@@ -712,10 +712,10 @@ mod tests {
         palette.query_dirty = false;
         palette.filtered_items = vec![
             PaletteItem {
-                stable_id: "core:new_window".to_string(),
-                display_name: "New Window".to_string(),
+                stable_id: "core:new_terminal".to_string(),
+                display_name: "New Terminal".to_string(),
                 description: String::new(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 icon: Some("+"),
                 disabled: false,
             },
@@ -756,7 +756,7 @@ mod tests {
     #[test]
     fn selected_action_returns_correct_action() {
         let palette = make_palette_with_items();
-        assert_eq!(palette.selected_action(), Some(&TermWmAction::NewWindow));
+        assert_eq!(palette.selected_action(), Some(&TermWmAction::NewTerminal));
     }
 
     #[test]
@@ -901,7 +901,7 @@ mod tests {
     #[test]
     fn selected_stable_id_returns_correct_id() {
         let palette = make_palette_with_items();
-        assert_eq!(palette.selected_stable_id(), Some("core:new_window"));
+        assert_eq!(palette.selected_stable_id(), Some("core:new_terminal"));
     }
 
     #[test]
@@ -967,10 +967,10 @@ mod tests {
         palette.query_dirty = false;
         palette.filtered_items = vec![
             PaletteItem {
-                stable_id: "core:new_window".to_string(),
-                display_name: "New Window".to_string(),
+                stable_id: "core:new_terminal".to_string(),
+                display_name: "New Terminal".to_string(),
                 description: String::new(),
-                action: TermWmAction::NewWindow,
+                action: TermWmAction::NewTerminal,
                 icon: Some("+"),
                 disabled: false,
             },
@@ -1004,7 +1004,7 @@ mod tests {
     #[test]
     fn selected_action_returns_action_for_enabled_item() {
         let palette = make_palette_with_disabled_item();
-        assert_eq!(palette.selected_action(), Some(&TermWmAction::NewWindow));
+        assert_eq!(palette.selected_action(), Some(&TermWmAction::NewTerminal));
     }
 
     #[test]

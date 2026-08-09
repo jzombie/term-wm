@@ -46,7 +46,7 @@ pub enum TermWmAction {
     OpenHelp,
     FocusNext,
     FocusPrev,
-    NewWindow,
+    NewTerminal,
     HintToggle,
     MenuUp,
     MenuDown,
@@ -90,6 +90,12 @@ pub enum TermWmAction {
     ToggleWindowSelection,
     MinimizeWindow(WindowKey),
     MaximizeWindow(WindowKey),
+    /// Reorder the top-panel / command palette window list: move `key` to
+    /// display position `index` (list order only; tiling geometry unchanged).
+    ReorderWindow {
+        key: WindowKey,
+        index: usize,
+    },
 
     ToggleMonocle,
     ToggleTiling,
@@ -233,11 +239,12 @@ impl TermWmAction {
             | TermWmAction::FocusPrev
             | TermWmAction::FocusWindow(_) => Category::Navigation,
 
-            TermWmAction::NewWindow
+            TermWmAction::NewTerminal
             | TermWmAction::HintToggle
             | TermWmAction::CloseMenu
             | TermWmAction::Help
             | TermWmAction::CloseWindow(_)
+            | TermWmAction::ReorderWindow { .. }
             | TermWmAction::ToggleMouseCapture
             | TermWmAction::ToggleClipboardMode
             | TermWmAction::ToggleWindowSelection
@@ -309,7 +316,7 @@ impl TermWmAction {
             TermWmAction::FocusPrev => Some(65),
             TermWmAction::CycleNextWindow => Some(60),
             TermWmAction::CyclePrevWindow => Some(55),
-            TermWmAction::NewWindow => Some(50),
+            TermWmAction::NewTerminal => Some(50),
             TermWmAction::HintToggle => Some(40),
             TermWmAction::SendSuperKeyToFocusedWindow => Some(45),
 
@@ -329,7 +336,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::OpenHelp => "Open help",
             TermWmAction::FocusNext => "Focus next",
             TermWmAction::FocusPrev => "Focus previous",
-            TermWmAction::NewWindow => "New window",
+            TermWmAction::NewTerminal => "New Terminal",
             TermWmAction::HintToggle => "Toggle hints",
             TermWmAction::MenuUp => "Menu up",
             TermWmAction::MenuDown => "Menu down",
@@ -360,6 +367,7 @@ impl fmt::Display for TermWmAction {
             TermWmAction::CloseMenu => "Close menu",
             TermWmAction::Help => "Help",
             TermWmAction::CloseWindow(_) => "Close window",
+            TermWmAction::ReorderWindow { .. } => "Reorder window",
             TermWmAction::ToggleMouseCapture => "Toggle mouse capture",
             TermWmAction::ToggleClipboardMode => "Toggle clipboard mode",
             TermWmAction::ToggleWindowSelection => "Toggle window selection",

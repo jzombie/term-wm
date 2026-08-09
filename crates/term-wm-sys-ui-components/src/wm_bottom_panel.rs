@@ -465,7 +465,7 @@ mod tests {
 
     fn default_hints() -> Vec<(TermWmAction, Vec<String>)> {
         vec![
-            (TermWmAction::NewWindow, vec!["Ctrl+N".into()]),
+            (TermWmAction::NewTerminal, vec!["Ctrl+N".into()]),
             (TermWmAction::FocusNext, vec!["Alt+Tab".into()]),
             (TermWmAction::OpenHelp, vec!["F1".into()]),
         ]
@@ -479,7 +479,7 @@ mod tests {
         let backend = render_at_width(&mut p, 120, true);
         let rendered = collect_rendered(&backend);
 
-        assert!(rendered.contains("Ctrl+N New window"));
+        assert!(rendered.contains("Ctrl+N New Terminal"));
         assert!(rendered.contains("Alt+Tab Focus next"));
         assert!(rendered.contains("F1 Open help"));
         assert!(rendered.contains("term-wm 0.1.0"), "info section rendered");
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn level_2_descriptions_truncated_combos_atomic() {
         let mut p = make_panel(vec![
-            (TermWmAction::NewWindow, vec!["Ctrl+Shift+N".into()]),
+            (TermWmAction::NewTerminal, vec!["Ctrl+Shift+N".into()]),
             (TermWmAction::FocusNext, vec!["Alt+Tab".into()]),
         ]);
         // 40 cols (hint area = 39): both combos fit, but second description truncates
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn combo_never_truncated_on_boundary() {
         let mut p = make_panel(vec![
-            (TermWmAction::NewWindow, vec!["Ctrl+N".into()]),
+            (TermWmAction::NewTerminal, vec!["Ctrl+N".into()]),
             (TermWmAction::FocusNext, vec!["X".into()]),
         ]);
         // 14 cols: exactly fits "Ctrl+N" + "|" + "X", combo must be atomic

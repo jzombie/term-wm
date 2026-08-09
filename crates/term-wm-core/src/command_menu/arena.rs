@@ -77,8 +77,8 @@ mod tests {
 
     #[test]
     fn static_name_formats_to_string() {
-        let name = CommandName::Static("New Window".to_string());
-        assert_eq!(name.format(ContextMask::NONE), "New Window");
+        let name = CommandName::Static("New Terminal".to_string());
+        assert_eq!(name.format(ContextMask::NONE), "New Terminal");
     }
 
     #[test]

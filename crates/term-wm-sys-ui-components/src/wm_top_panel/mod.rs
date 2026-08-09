@@ -1,8 +1,18 @@
-use std::collections::BTreeMap;
+//! Top status panel — composed of small applets (menu, tab bar, status line,
+//! tiling indicator) that each own a bounded region of the single row.
+//!
+//! The parent runs a small layout pass each frame: it reserves the menu on the
+//! left and the tiling indicator on the right, then hands the middle region to
+//! either the status line or the scrollable, draggable tab bar. Because each
+//! applet renders and interacts strictly inside its own allocated rect, the tab
+//! bar's `◀`/`▶` overflow indicators are always contained and never overwritten
+//! by the menu or the tiling label.
 
-use ratatui::style::{Modifier, Style};
-use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEventKind};
-use term_wm_layout_engine::LayoutRect;
+mod menu;
+mod status;
+mod tiling;
+
+use std::collections::BTreeMap;
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
@@ -10,56 +20,45 @@ use term_wm_core::{
         Component, ComponentAction, ComponentContext, ComponentQuery, ComponentResponse,
         WmComponent,
     },
+    events::{Event, MouseEventKind},
     hitbox_registry::HitboxId,
     layout::rect_contains,
-    utils::truncate_with_ellipsis,
     window::WindowKey,
 };
-use term_wm_ui_components::helpers::{
-    color_to_ratatui, layout_rect_to_clipped_rect, menu_icon, safe_set_string,
-};
+use term_wm_layout_engine::LayoutRect;
+use term_wm_ui_components::helpers::{color_to_ratatui, layout_rect_to_clipped_rect};
+use term_wm_ui_components::tab_bar::{TabBarComponent, TabBarEvent, TabItem};
 
-#[derive(Debug, Clone, Copy)]
-struct PanelWindowHit {
-    id: WindowKey,
-    rect: LayoutRect,
-}
+use menu::MenuButton;
+use status::StatusLine;
+use tiling::TilingIndicator;
 
-#[derive(Debug)]
-struct WindowList {
-    window_hits: Vec<PanelWindowHit>,
-}
-
-impl WindowList {
-    fn new() -> Self {
-        Self {
-            window_hits: Vec::new(),
-        }
-    }
-
-    fn begin_frame(&mut self) {
-        self.window_hits.clear();
-    }
-}
+/// Single-column gap between the menu button and the center region.
+const MENU_GAP: u16 = 1;
+/// Horizontal gap (columns) between the center region's right edge (and its
+/// `▶` chevron) and the right-aligned tiling indicator.
+const TILING_GAP: u16 = 1;
 
 #[derive(Debug)]
 pub struct WmTopPanelComponent {
     visible: bool,
     height: u16,
     area: LayoutRect,
-    menu_rect: Option<LayoutRect>,
-    list: WindowList,
     app_name: String,
     // WmComponent render state (pushed via process_action before render)
     active: bool,
     focus_current: Option<WindowKey>,
     display_order: Vec<WindowKey>,
     status_line: Option<String>,
-    tiling_indicator: Option<(&'static str, term_wm_core::actions::TermWmAction)>,
-    tiling_rect: Option<LayoutRect>,
     menu_open: bool,
     window_labels: BTreeMap<WindowKey, String>,
     hitbox_id: HitboxId,
+
+    // Applets (each owns a bounded region of the row).
+    menu: MenuButton,
+    bar: TabBarComponent<WindowKey>,
+    status: StatusLine,
+    tiling: TilingIndicator,
 }
 
 impl WmTopPanelComponent {
@@ -68,25 +67,25 @@ impl WmTopPanelComponent {
             visible: true,
             height: 1,
             area: LayoutRect::default(),
-            menu_rect: None,
-            list: WindowList::new(),
             app_name: app_name.to_string(),
             active: false,
             focus_current: None,
             display_order: Vec::new(),
             status_line: None,
-            tiling_indicator: None,
-            tiling_rect: None,
             menu_open: false,
             window_labels: BTreeMap::new(),
             hitbox_id: HitboxId::new(),
+            menu: MenuButton::new(app_name),
+            bar: TabBarComponent::new(),
+            status: StatusLine::new(),
+            tiling: TilingIndicator::new(),
         }
     }
 
     pub fn begin_frame(&mut self) {
-        self.list.begin_frame();
-        self.menu_rect = None;
-        self.tiling_rect = None;
+        self.menu.begin_frame();
+        self.bar.begin_frame();
+        self.tiling.begin_frame();
     }
 
     pub fn visible(&self) -> bool {
@@ -110,14 +109,11 @@ impl WmTopPanelComponent {
     }
 
     pub fn menu_icon_rect(&self) -> Option<LayoutRect> {
-        self.menu_rect
+        self.menu.rect()
     }
 
     pub fn menu_icon_contains_point(&self, column: u16, row: u16) -> bool {
-        if let Some(rect) = self.menu_rect {
-            return rect_contains(rect, column, row);
-        }
-        false
+        self.menu.contains(column, row)
     }
 
     pub fn split_area(&mut self, active: bool, area: LayoutRect) -> (LayoutRect, LayoutRect) {
@@ -143,34 +139,36 @@ impl WmTopPanelComponent {
         (panel, managed)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_inner(
+    /// Hit-test a window entry in the tab bar (delegates to the bar applet).
+    pub fn hit_test_window(&self, column: u16, row: u16) -> Option<WindowKey> {
+        self.bar.hit_test(column, row)
+    }
+
+    /// Layout pass + applet rendering into `self.area`.
+    ///
+    /// Reserves the menu (left) and tiling label (right), then hands the middle
+    /// region to EITHER the status line OR the tab bar (mutually exclusive), so
+    /// applets never overlap.
+    fn render_contents(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
-        active: bool,
-        focus_current: WindowKey,
-        display_order: &[WindowKey],
-        status_line: Option<&str>,
-        menu_open: bool,
-        theme: &term_wm_core::theme::Theme,
+        ctx: &ComponentContext,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
-        if !active {
-            return;
-        }
+        let theme = ctx.config().theme;
         let area = self.area;
         if area.width == 0 || area.height == 0 {
             return;
         }
         let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
-        let buffer = &mut ratatui_backend.buffer;
         let ratatui_area = layout_rect_to_clipped_rect(area);
-        let bounds = ratatui_area.intersection(buffer.area);
+        let bounds = ratatui_area.intersection(ratatui_backend.buffer.area);
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
         for yy in bounds.y..bounds.y.saturating_add(bounds.height) {
             for xx in bounds.x..bounds.x.saturating_add(bounds.width) {
-                if let Some(cell) = buffer.cell_mut((xx, yy)) {
+                if let Some(cell) = ratatui_backend.buffer.cell_mut((xx, yy)) {
                     let mut st = cell.style();
                     st.bg = Some(color_to_ratatui(theme.bottom_panel_bg));
                     st.fg = Some(color_to_ratatui(theme.bottom_panel_fg));
@@ -179,130 +177,66 @@ impl WmTopPanelComponent {
                 }
             }
         }
-        let mut x = area.x;
         let y = area.y;
         let max_x = area.x.saturating_add(i32::from(area.width));
-        let menu_label = menu_icon(&self.app_name);
-        let menu_width = menu_label.chars().count() as u16;
-        if x.saturating_add(i32::from(menu_width)) <= max_x {
-            let menu_style = if menu_open {
-                Style::default()
-                    .bg(color_to_ratatui(theme.menu_bg))
-                    .fg(color_to_ratatui(theme.menu_fg))
-            } else {
-                Style::default()
-            };
-            safe_set_string(
-                buffer,
-                bounds,
-                x as u16,
-                y as u16,
-                menu_label.as_str(),
-                menu_style,
-            );
-            self.menu_rect = Some(LayoutRect {
-                x,
+
+        // Menu (left edge).
+        let menu_width = self.menu.label_width();
+        if area.x.saturating_add(i32::from(menu_width)) <= max_x {
+            let menu_slot = LayoutRect {
+                x: area.x,
                 y,
                 width: menu_width,
                 height: 1,
-            });
-            x = x.saturating_add(i32::from(menu_width));
+            };
+            self.menu.render(backend, menu_slot, self.menu_open, &theme);
         }
-        if x < max_x {
-            safe_set_string(buffer, bounds, x as u16, y as u16, " ", Style::default());
-            x = x.saturating_add(1);
-        }
-        if let Some(status) = status_line {
-            let available = (max_x.saturating_sub(x)).max(1);
-            let text = truncate_with_ellipsis(status, available as usize);
-            safe_set_string(buffer, bounds, x as u16, y as u16, &text, Style::default());
+
+        // Center region: [menu + gap, max_x - tiling_width - TILING_GAP).
+        let tiling_width = self.tiling.label_width();
+        let bar_start = area
+            .x
+            .saturating_add(i32::from(menu_width))
+            .saturating_add(i32::from(MENU_GAP));
+        let bar_end = if tiling_width > 0 {
+            max_x.saturating_sub(i32::from(tiling_width + TILING_GAP))
         } else {
-            for key in display_order.iter().copied() {
-                let focused = key == focus_current;
-                let mut label = self
-                    .window_labels
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| format!("{key:?}"));
-                let max_label = (max_x.saturating_sub(x).saturating_sub(2)) as usize;
-                if label.chars().count() > max_label {
-                    label = truncate_with_ellipsis(&label, max_label);
-                }
-                let chunk = format!(" {label} ");
-                let chunk_width = chunk.chars().count() as u16;
-                if x.saturating_add(i32::from(chunk_width)) > max_x {
-                    break;
-                }
-                let item_style = if focused {
-                    Style::default()
-                        .bg(color_to_ratatui(theme.menu_selected_bg))
-                        .fg(color_to_ratatui(theme.menu_selected_fg))
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(color_to_ratatui(theme.panel_inactive_fg))
-                };
-                safe_set_string(buffer, bounds, x as u16, y as u16, &chunk, item_style);
-                self.list.window_hits.push(PanelWindowHit {
-                    id: key,
-                    rect: LayoutRect {
-                        x,
-                        y,
-                        width: chunk_width,
-                        height: 1,
-                    },
-                });
-                x = x.saturating_add(i32::from(chunk_width));
-            }
-        }
-    }
-
-    /// Render the tiling indicator label (right-aligned) and store its rect.
-    fn render_tiling_indicator(
-        &mut self,
-        backend: &mut dyn term_wm_render::RenderBackend,
-        area: LayoutRect,
-        theme: &term_wm_core::theme::Theme,
-    ) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let Some((label, _)) = &self.tiling_indicator else {
-            return;
+            max_x
         };
-        let ratatui_backend = term_wm_ui_components::helpers::downcast_ratatui(backend);
-        let buffer = &mut ratatui_backend.buffer;
-        let ratatui_area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(area);
-        let bounds = ratatui_area.intersection(buffer.area);
-        if bounds.width == 0 || bounds.height == 0 {
-            return;
-        }
-        let y = area.y;
-        let max_x = area.x.saturating_add(i32::from(area.width));
-        let tw = label.chars().count() as u16;
-        let ix = max_x.saturating_sub(i32::from(tw));
-        if ix < area.x {
-            return;
-        }
-        let style = ratatui::style::Style::default()
-            .fg(color_to_ratatui(theme.success))
-            .add_modifier(ratatui::style::Modifier::BOLD);
-        term_wm_ui_components::helpers::safe_set_string(
-            buffer, bounds, ix as u16, y as u16, label, style,
-        );
-        self.tiling_rect = Some(term_wm_layout_engine::LayoutRect {
-            x: ix,
+        let bar_width = bar_end.saturating_sub(bar_start).max(0);
+        let bar_rect = LayoutRect {
+            x: bar_start,
             y,
-            width: tw,
+            width: bar_width as u16,
             height: 1,
-        });
-    }
+        };
 
-    pub fn hit_test_window(&self, column: u16, row: u16) -> Option<WindowKey> {
-        self.list
-            .window_hits
-            .iter()
-            .find(|hit| rect_contains(hit.rect, column, row))
-            .map(|hit| hit.id)
+        if let Some(status) = self.status_line.clone() {
+            self.status.render(backend, bar_rect, &status, &theme);
+        } else if self.focus_current.is_some() {
+            let items: Vec<TabItem<WindowKey>> = self
+                .display_order
+                .iter()
+                .map(|key| TabItem {
+                    key: *key,
+                    label: self
+                        .window_labels
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| format!("{key:?}")),
+                    closable: false,
+                    style_override: None,
+                })
+                .collect();
+            self.bar.set_items(items);
+            self.bar.set_active(self.focus_current);
+            self.bar.render(backend, bar_rect, ctx, registry);
+        }
+
+        // Tiling indicator (right edge).
+        if tiling_width > 0 {
+            self.tiling.render(backend, area, &theme);
+        }
     }
 }
 
@@ -316,35 +250,23 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         backend: &mut dyn term_wm_render::RenderBackend,
         area: LayoutRect,
         ctx: &ComponentContext,
-        _registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
     ) {
         let theme = ctx.config().theme;
         if !self.active {
             // Still render the tiling indicator even when inactive so the
-            // label is visible and tiling_rect is populated for clicks.
-            self.render_tiling_indicator(backend, area, &theme);
+            // label is visible and its rect is populated for clicks.
+            self.bar.clear_drag_state();
+            self.tiling.render(backend, area, &theme);
             return;
         }
         let app_name = ctx.app_name().to_string();
         if app_name != self.app_name {
-            self.app_name = app_name;
+            self.app_name = app_name.clone();
+            self.menu.set_app_name(&app_name);
         }
         self.area = area;
-        if let Some(focus) = self.focus_current {
-            let display_order = self.display_order.clone();
-            let status_line = self.status_line.clone();
-
-            self.render_inner(
-                backend,
-                self.active,
-                focus,
-                &display_order,
-                status_line.as_deref(),
-                self.menu_open,
-                &theme,
-            );
-        }
-        self.render_tiling_indicator(backend, area, &theme);
+        self.render_contents(backend, ctx, registry);
     }
 
     fn handle_events(
@@ -355,39 +277,62 @@ impl Component<TermWmAction> for WmTopPanelComponent {
         let Event::Mouse(mouse) = event else {
             return EventResult::Ignored;
         };
-        if !matches!(mouse.kind, MouseEventKind::Press(_)) {
-            return EventResult::Ignored;
+        match mouse.kind {
+            MouseEventKind::Press(_) => {
+                if self.menu.contains(mouse.column, mouse.row) {
+                    return EventResult::Action(TermWmAction::OpenCommandPalette);
+                }
+                let bar_res = map_bar(self.bar.handle_events(event, ctx));
+                if !bar_res.is_ignored() {
+                    return bar_res;
+                }
+                if self.tiling.contains(mouse.column, mouse.row) {
+                    if let Some(action) = self.tiling.action() {
+                        return EventResult::Action(action);
+                    }
+                    return EventResult::Consumed;
+                }
+                // A press on the panel's background (no applet handled it) must be
+                // consumed so it never falls through to a window behind the panel
+                // (e.g. a floating window overlapping the top row in monocle),
+                // which would close the Command Palette and could hit the window's
+                // close button. Only consume when the panel is actually rendered
+                // (its area is set); an unrendered panel keeps Ignored.
+                if !self.area.is_empty() && rect_contains(self.area, mouse.column, mouse.row) {
+                    return EventResult::Consumed;
+                }
+                EventResult::Ignored
+            }
+            // Drag/Release/Scroll are delivered under mouse capture (or to the
+            // panel's layer) and must never fall through to the terminal below.
+            MouseEventKind::Drag(_) | MouseEventKind::Release(_) => {
+                map_bar(self.bar.handle_events(event, ctx))
+            }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                map_bar(self.bar.handle_events(event, ctx))
+            }
+            _ => EventResult::Consumed,
         }
-        self.on_mouse_press(
-            mouse.column,
-            mouse.row,
-            MouseButton::Left,
-            mouse.modifiers,
-            ctx,
-        )
     }
+}
 
-    fn on_mouse_press(
-        &mut self,
-        column: u16,
-        row: u16,
-        _button: MouseButton,
-        _modifiers: KeyModifiers,
-        _ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        if self.menu_icon_contains_point(column, row) {
-            return EventResult::Action(TermWmAction::OpenCommandPalette);
+/// Map a [`TabBarEvent`] from the tab bar applet to a [`TermWmAction`].
+fn map_bar(res: EventResult<TabBarEvent<WindowKey>>) -> EventResult<TermWmAction> {
+    match res {
+        EventResult::Action(TabBarEvent::Select(k)) => {
+            EventResult::Action(TermWmAction::FocusWindow(k))
         }
-        if let Some(key) = self.hit_test_window(column, row) {
-            return EventResult::Action(TermWmAction::FocusWindow(key));
+        EventResult::Action(TabBarEvent::Close(k)) => {
+            EventResult::Action(TermWmAction::CloseWindow(k))
         }
-        if let Some((_, action)) = &self.tiling_indicator
-            && let Some(rect) = self.tiling_rect
-            && rect_contains(rect, column, row)
-        {
-            return EventResult::Action(action.clone());
+        EventResult::Action(TabBarEvent::Reorder { key, target_index }) => {
+            EventResult::Action(TermWmAction::ReorderWindow {
+                key,
+                index: target_index,
+            })
         }
-        EventResult::Ignored
+        EventResult::Consumed => EventResult::Consumed,
+        EventResult::Ignored => EventResult::Ignored,
     }
 }
 
@@ -417,7 +362,7 @@ impl WmComponent for WmTopPanelComponent {
                 self.display_order = state.display_order.clone();
                 self.status_line = state.status_line.clone();
                 self.menu_open = state.menu_open;
-                self.tiling_indicator = state.tiling_indicator.clone();
+                self.tiling.set_indicator(state.tiling_indicator.clone());
             }
             ComponentAction::SetWindowLabels(labels) => {
                 self.window_labels = labels.clone();
@@ -428,16 +373,13 @@ impl WmComponent for WmTopPanelComponent {
 
     fn query(&self, query: &ComponentQuery) -> ComponentResponse {
         match query {
-            ComponentQuery::MenuIconRect => ComponentResponse::Rect(self.menu_rect),
+            ComponentQuery::MenuIconRect => ComponentResponse::Rect(self.menu.rect()),
             _ => ComponentResponse::None,
         }
     }
 
     fn hit_test(&self, x: u16, y: u16) -> bool {
-        if !self.area.is_empty() && rect_contains(self.area, x, y) {
-            return true;
-        }
-        false
+        !self.area.is_empty() && rect_contains(self.area, x, y)
     }
 
     fn begin_frame(&mut self) {
@@ -466,12 +408,63 @@ mod tests {
     use term_wm_core::components::{
         ComponentAction, ComponentQuery, ComponentResponse, WmComponent,
     };
-    use term_wm_core::theme::NOIR;
+    use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use term_wm_core::wm_config::HintVisibility;
+    use term_wm_ui_components::helpers::menu_icon;
 
     fn make_backend(w: u16, h: u16) -> term_wm_console::RatatuiBackend {
         let buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, w, h));
         term_wm_console::RatatuiBackend::new_simple(buf, ratatui::layout::Rect::new(0, 0, w, h))
+    }
+
+    fn ctx() -> ComponentContext {
+        ComponentContext::new(false)
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn make_keys(n: usize) -> Vec<WindowKey> {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use term_wm_core::app_context::AppContext;
+        use term_wm_core::components::NoopComponent;
+        use term_wm_core::window::{LayerManager, WindowManager};
+        use term_wm_core::wm_config::WmConfig;
+
+        let mut wm = WindowManager::<NoopComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            LayerManager::new(),
+            HashMap::new(),
+        );
+        (0..n).map(|_| wm.create_window(NoopComponent)).collect()
+    }
+
+    fn push_windows(p: &mut WmTopPanelComponent, keys: &[WindowKey], area: LayoutRect) {
+        let labels: std::collections::BTreeMap<_, _> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (*k, format!("Window {}", i)))
+            .collect();
+        p.area = area;
+        p.active = true;
+        p.process_action(&ComponentAction::SetWindowLabels(labels));
+        p.focus_current = keys.first().copied();
+        p.display_order = keys.to_vec();
+    }
+
+    fn render_panel(p: &mut WmTopPanelComponent) {
+        let mut backend = make_backend(p.area.width, p.area.height);
+        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        p.render_contents(&mut backend, &ctx(), &mut reg);
     }
 
     #[test]
@@ -559,25 +552,18 @@ mod tests {
     #[test]
     fn hit_test_window_after_render_with_display_order() {
         let mut p = WmTopPanelComponent::new("test");
-        p.active = true;
         let key = WindowKey::default();
-        p.focus_current = Some(key);
-        p.display_order = vec![key];
-        p.window_labels.insert(key, "W".to_string());
-
         let area = LayoutRect {
             x: 0,
             y: 0,
             width: 80,
             height: 1,
         };
-        let _ = p.split_area(true, area);
-        let mut backend = make_backend(80, 24);
-        p.render_inner(&mut backend, true, key, &[key], None, false, &NOIR);
-        assert!(!p.list.window_hits.is_empty());
-        let hit_rect = p.list.window_hits[0].rect;
-        let hit_key = p.hit_test_window(hit_rect.x as u16 + 1, hit_rect.y as u16);
-        assert!(hit_key.is_some());
+        push_windows(&mut p, &[key], area);
+        render_panel(&mut p);
+        // First tab starts at menu width + gap (no overflow).
+        let bar_start = (menu_icon("test").chars().count() as u16) + MENU_GAP;
+        assert_eq!(p.hit_test_window(bar_start + 1, 0), Some(key));
     }
 
     #[test]
@@ -617,9 +603,12 @@ mod tests {
             width: 80,
             height: 1,
         };
-        let ctx = ComponentContext::new(true);
-        let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
-        p.render(&mut backend, area, &ctx, &mut reg);
+        p.render(
+            &mut backend,
+            area,
+            &ctx(),
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
         // No panic, no-op
     }
 
@@ -631,7 +620,6 @@ mod tests {
         p.focus_current = Some(key);
         p.display_order = vec![key];
         p.status_line = Some("Status: OK".to_string());
-
         let area = LayoutRect {
             x: 0,
             y: 0,
@@ -639,17 +627,7 @@ mod tests {
             height: 1,
         };
         let _ = p.split_area(true, area);
-        let theme = NOIR;
-        let mut backend = make_backend(80, 24);
-        p.render_inner(
-            &mut backend,
-            true,
-            key,
-            &[],
-            Some("Status: OK"),
-            false,
-            &theme,
-        );
+        render_panel(&mut p);
         // Should render without panic
     }
 
@@ -661,7 +639,6 @@ mod tests {
         p.focus_current = Some(key);
         p.display_order = vec![key];
         p.menu_open = true;
-
         let area = LayoutRect {
             x: 0,
             y: 0,
@@ -669,10 +646,7 @@ mod tests {
             height: 1,
         };
         let _ = p.split_area(true, area);
-        let theme = NOIR;
-        let mut backend = make_backend(80, 24);
-        p.render_inner(&mut backend, true, key, &[key], None, true, &theme);
-        // Menu rect should be set after render
+        render_panel(&mut p);
         assert!(p.menu_icon_rect().is_some());
     }
 
@@ -687,7 +661,6 @@ mod tests {
             key,
             "A very long window label that exceeds buffer width".to_string(),
         );
-
         let area = LayoutRect {
             x: 0,
             y: 0,
@@ -695,9 +668,7 @@ mod tests {
             height: 1,
         };
         let _ = p.split_area(true, area);
-        let theme = NOIR;
-        let mut backend = make_backend(20, 1);
-        p.render_inner(&mut backend, true, key, &[key], None, false, &theme);
+        render_panel(&mut p);
     }
 
     #[test]
@@ -798,39 +769,29 @@ mod tests {
     }
 
     #[test]
-    fn begin_frame_clears_state() {
+    fn begin_frame_clears_menu_rect() {
         let mut p = WmTopPanelComponent::new("test");
-        p.menu_rect = Some(LayoutRect {
+        p.menu.rect = Some(LayoutRect {
             x: 0,
             y: 0,
             width: 5,
             height: 1,
         });
-        p.list.window_hits.push(PanelWindowHit {
-            id: WindowKey::default(),
-            rect: LayoutRect {
-                x: 0,
-                y: 0,
-                width: 5,
-                height: 1,
-            },
-        });
         p.begin_frame();
-        assert!(p.menu_rect.is_none());
-        assert!(p.list.window_hits.is_empty());
+        assert!(p.menu.rect.is_none());
     }
 
     #[test]
     fn wmbegin_frame_trait_delegates() {
         let mut p = WmTopPanelComponent::new("test");
-        p.menu_rect = Some(LayoutRect {
+        p.menu.rect = Some(LayoutRect {
             x: 0,
             y: 0,
             width: 5,
             height: 1,
         });
         WmComponent::begin_frame(&mut p);
-        assert!(p.menu_rect.is_none());
+        assert!(p.menu.rect.is_none());
     }
 
     #[test]
@@ -849,36 +810,130 @@ mod tests {
     #[test]
     fn handle_events_non_mouse_returns_ignored() {
         let mut p = WmTopPanelComponent::new("test");
-        let ctx = ComponentContext::new(true);
         let event = term_wm_core::events::Event::Key(term_wm_core::events::KeyEvent {
             code: term_wm_core::events::KeyCode::Char('a'),
             modifiers: term_wm_core::events::KeyModifiers::NONE,
             kind: term_wm_core::events::KeyKind::Press,
         });
-        let result = p.handle_events(&event, &ctx);
+        let result = p.handle_events(&event, &ctx());
         assert!(result.is_ignored());
     }
 
     #[test]
-    fn handle_events_mouse_not_press_returns_ignored() {
+    fn handle_events_mouse_events_never_ignored_after_capture() {
         let mut p = WmTopPanelComponent::new("test");
-        let ctx = ComponentContext::new(true);
-        let event = term_wm_core::events::Event::Mouse(term_wm_core::events::MouseEvent {
-            kind: term_wm_core::events::MouseEventKind::Moved,
-            column: 0,
-            row: 0,
-            modifiers: term_wm_core::events::KeyModifiers::NONE,
-        });
-        let result = p.handle_events(&event, &ctx);
+        // Captured mouse events must be Consumed, never Ignored, so drag/scroll
+        // coordinates never leak into the terminal/PTY below the panel.
+        for kind in [
+            MouseEventKind::Moved,
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Release(MouseButton::Left),
+            MouseEventKind::ScrollLeft,
+            MouseEventKind::ScrollRight,
+        ] {
+            let result = p.handle_events(&mouse(kind, 0, 0), &ctx());
+            assert!(
+                matches!(result, EventResult::Consumed),
+                "mouse kind {kind:?} must be Consumed, not Ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn press_on_empty_panel_returns_ignored() {
+        let mut p = WmTopPanelComponent::new("test");
+        let result = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), 0, 0),
+            &ctx(),
+        );
         assert!(result.is_ignored());
     }
 
     #[test]
-    fn on_mouse_press_no_hit_returns_ignored() {
-        let mut p = WmTopPanelComponent::new("test");
-        let ctx = ComponentContext::new(true);
-        let result = p.on_mouse_press(0, 0, MouseButton::Left, KeyModifiers::NONE, &ctx);
-        assert!(result.is_ignored());
+    fn press_on_panel_background_is_consumed() {
+        let keys = make_keys(1);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        // A press on the rendered panel's background (past the single tab, not on
+        // menu/tab/chevron/tiling) must be CONSUMED so it never falls through to
+        // a window behind the panel (which would close the Command Palette and
+        // could click the window's close button).
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), 60, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Consumed),
+            "panel-background press must be consumed, not Ignored"
+        );
+    }
+
+    #[test]
+    fn press_window_tab_focuses_window() {
+        let keys = make_keys(2);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        // First tab starts at menu width + MENU_GAP (no overflow).
+        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), bar_start + 1, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[0]),
+            "pressing a tab must map to FocusWindow"
+        );
+    }
+
+    #[test]
+    fn drag_release_reorders_window() {
+        let keys = make_keys(3);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
+        // Tab i spans [bar_start + 10*i, bar_start + 10*(i+1)) (label 8 + 2 pad).
+        let tab2 = bar_start + 20;
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), tab2 + 1, 0),
+            &ctx(),
+        );
+        assert!(matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[2]));
+        p.handle_events(
+            &mouse(MouseEventKind::Drag(MouseButton::Left), bar_start, 0),
+            &ctx(),
+        );
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), bar_start, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::ReorderWindow { key, index }) if key == keys[2] && index == 0),
+            "drag+release must map to ReorderWindow"
+        );
     }
 
     #[test]
@@ -891,10 +946,7 @@ mod tests {
             width: 0,
             height: 0,
         };
-        let theme = NOIR;
-        let mut backend = make_backend(80, 24);
-        let key = WindowKey::default();
-        p.render_inner(&mut backend, true, key, &[], None, false, &theme);
+        render_panel(&mut p);
     }
 
     #[test]
@@ -904,7 +956,6 @@ mod tests {
         let key = WindowKey::default();
         p.focus_current = Some(key);
         p.display_order = vec![];
-
         let area = LayoutRect {
             x: 0,
             y: 0,
@@ -912,9 +963,7 @@ mod tests {
             height: 1,
         };
         let _ = p.split_area(true, area);
-        let theme = NOIR;
-        let mut backend = make_backend(80, 24);
-        p.render_inner(&mut backend, true, key, &[], None, false, &theme);
+        render_panel(&mut p);
     }
 
     #[test]

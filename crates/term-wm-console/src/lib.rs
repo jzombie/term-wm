@@ -1,3 +1,4 @@
+pub mod background_console_reader;
 pub mod console_event_source;
 pub mod console_render_target;
 pub mod draw_plan_renderer;

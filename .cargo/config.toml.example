@@ -6,3 +6,4 @@ muxio-rpc-service-endpoint = { path = "../rust-muxio/extensions/muxio-rpc-servic
 muxio-tokio-rpc-ipc-client = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-client" }
 muxio-tokio-rpc-ipc-server = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-server" }
 muxio-tokio-mpsc-adapter = { path = "../rust-muxio/extensions/muxio-tokio-mpsc-adapter" }
+term-wm-vt100 = { path = "../term-wm-vt100" }
