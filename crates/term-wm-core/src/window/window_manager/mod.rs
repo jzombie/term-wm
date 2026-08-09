@@ -390,6 +390,10 @@ pub struct WindowManager<
     pub(crate) input_mode: crate::actions::WmInputMode,
     /// Whether the FAB component is enabled
     pub(crate) fab_enabled: bool,
+    /// True when the app draws content under the FAB's footprint on its bottom
+    /// row (populated by the render pass each frame; consumed by the layout pass
+    /// on the next frame to reserve the FAB's bottom row in cramped monocle).
+    bottom_content: bool,
     /// Namespaced semantic registry for programmatic component lookup.
     /// Hotkeys and structural routing query this instead of hardcoded fields.
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
@@ -886,6 +890,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             last_snap_cursor: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
+            bottom_content: false,
             tap_swap_state: None,
         }
     }
@@ -951,6 +956,20 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Set the FAB enabled state.
     pub fn set_fab_enabled(&mut self, enabled: bool) {
         self.fab_enabled = enabled;
+    }
+
+    /// True when the focused window draws content under the FAB's footprint on
+    /// its bottom row. Populated by the render pass; consumed by the layout pass
+    /// (register_managed_layout) on the next frame to reserve the FAB's row.
+    pub fn has_bottom_content(&self) -> bool {
+        self.bottom_content
+    }
+
+    /// Record whether the app draws content under the FAB's footprint. Cleared by
+    /// the render pass whenever cramped monocle is inactive to avoid a stale flag
+    /// falsely padding the first frame after re-entering cramped monocle.
+    pub fn set_bottom_content_flag(&mut self, has: bool) {
+        self.bottom_content = has;
     }
 
     /// Get a mutable reference to the FAB component.
@@ -2601,6 +2620,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.managed_area
     }
 
+    /// The full screen area passed to `register_managed_layout`, before any FAB
+    /// row reservation shrinks `managed_area`. Used to anchor chrome (e.g. the
+    /// bottom-panel overlay) to the absolute screen bottom regardless of the offset.
+    pub fn last_frame_area(&self) -> LayoutRect {
+        self.last_frame_area
+    }
+
     pub fn overlays(&self) -> &SlotMap<OverlayKey, O> {
         &self.overlays
     }
@@ -3091,6 +3117,149 @@ mod tests {
             key_a,
             "monocle mode must prevent mouse focus switching"
         );
+    }
+
+    #[test]
+    fn cramped_monocle_reserves_fab_bottom_row() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        let key = keys[0];
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(key),
+        ));
+        wm.update_monocle_mode(50);
+        assert!(
+            wm.is_monocle_cramped(),
+            "width 50 < 80 must be cramped monocle"
+        );
+        wm.set_bottom_content_flag(true);
+
+        wm.register_managed_layout(crate::Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 24,
+        });
+        assert_eq!(
+            wm.managed_area().height,
+            23,
+            "cramped monocle must reserve the FAB's bottom row when content detected"
+        );
+    }
+
+    #[test]
+    fn cramped_monocle_without_content_does_not_reserve() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        let key = keys[0];
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(key),
+        ));
+        wm.update_monocle_mode(50);
+        assert!(wm.is_monocle_cramped());
+        wm.set_bottom_content_flag(false);
+
+        wm.register_managed_layout(crate::Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 24,
+        });
+        assert_eq!(
+            wm.managed_area().height,
+            24,
+            "no reservation when the FAB footprint has no content"
+        );
+    }
+
+    #[test]
+    fn wide_terminal_does_not_reserve_fab_row() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        let key = keys[0];
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(key),
+        ));
+        wm.update_monocle_mode(100);
+        assert!(
+            !wm.is_monocle_cramped(),
+            "width 100 >= 80 must not be cramped"
+        );
+        // Even with a stale content flag, a non-cramped viewport must not reserve.
+        wm.set_bottom_content_flag(true);
+
+        wm.register_managed_layout(crate::Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 24,
+        });
+        assert_eq!(
+            wm.managed_area().height,
+            24,
+            "no reservation when not cramped"
+        );
+    }
+
+    #[test]
+    fn reserve_fab_row_does_not_shrink_below_one() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        let key = keys[0];
+        wm.managed_layout = Some(crate::layout::TilingLayout::new(
+            crate::layout::LayoutNode::leaf(key),
+        ));
+        wm.update_monocle_mode(50);
+        wm.set_bottom_content_flag(true);
+
+        // A 1-row-tall area is never shrunk below height 1, even when cramped.
+        wm.register_managed_layout(crate::Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 1,
+        });
+        assert_eq!(wm.managed_area().height, 1, "height must never reach 0");
+    }
+
+    #[test]
+    fn bottom_content_flag_defaults_false_and_toggles() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert!(!wm.has_bottom_content(), "flag defaults to false");
+        wm.set_bottom_content_flag(true);
+        assert!(wm.has_bottom_content(), "setter records true");
+        wm.set_bottom_content_flag(false);
+        assert!(!wm.has_bottom_content(), "setter clears the flag");
     }
 
     #[test]

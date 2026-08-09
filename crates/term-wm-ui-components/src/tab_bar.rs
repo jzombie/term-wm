@@ -41,6 +41,28 @@ const CLOSE_BUTTON_WIDTH: u16 = 2;
 /// Close glyph rendered on closable tabs.
 const CLOSE_GLYPH: &str = "✕";
 
+/// Horizontal scroll that makes a tab at logical `lx` of `width` columns fully visible.
+/// Tabs wider than the viewport are left-aligned (show the leftmost columns).
+fn scroll_into_view_target(
+    h: i32,
+    lx: i32,
+    width: i32,
+    viewport_width: i32,
+    max_scroll: i32,
+) -> i32 {
+    let target = if width > viewport_width || lx < h {
+        // Tabs wider than the viewport, or clipped on the left, align to their
+        // left edge (show the leftmost columns of the title).
+        lx.max(0)
+    } else if lx.saturating_add(width) > h.saturating_add(viewport_width) {
+        // Clipped on the right → reveal the right edge.
+        (lx.saturating_add(width) - viewport_width).max(0)
+    } else {
+        h // already fully visible
+    };
+    target.min(max_scroll).max(0)
+}
+
 /// A single tab: an opaque key plus its display label.
 #[derive(Debug, Clone)]
 pub struct TabItem<K> {
@@ -99,6 +121,9 @@ pub struct TabBarComponent<K> {
     last_auto_focus: Option<K>,
     last_auto_viewport: i32,
     last_focused_logical_bounds: Option<(i32, i32)>,
+    // Tab clicked by the user; scrolled into view on the next render pass.
+    // Never consumed while a drag is in progress (see render()).
+    pending_scroll_to: Option<K>,
 }
 
 impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> TabBarComponent<K> {
@@ -119,6 +144,7 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Tab
             last_auto_focus: None,
             last_auto_viewport: 0,
             last_focused_logical_bounds: None,
+            pending_scroll_to: None,
         }
     }
 
@@ -286,19 +312,34 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static>
             && auto_scroll
             && let Some((flx, fw)) = focused_range
         {
-            let h = i32::from(self.h_scroll);
-            let vp_end = h.saturating_add(scroll_viewport_width);
-            if flx < h {
-                self.h_scroll = flx.max(0) as u16;
-            } else if flx.saturating_add(i32::from(fw)) > vp_end {
-                self.h_scroll =
-                    (flx.saturating_add(i32::from(fw)) - scroll_viewport_width).max(0) as u16;
-            }
-            self.h_scroll = self.h_scroll.min(max_scroll);
+            self.h_scroll = scroll_into_view_target(
+                i32::from(self.h_scroll),
+                flx,
+                i32::from(fw),
+                scroll_viewport_width,
+                i32::from(max_scroll),
+            ) as u16;
         }
         self.last_auto_focus = self.active_key;
         self.last_auto_viewport = scroll_viewport_width;
         self.last_focused_logical_bounds = focused_bounds;
+
+        // Consume a click-requested scroll. drag_state must be checked BEFORE
+        // `.take()`: the `if let` scrutinee runs first, so taking would evict the
+        // pending target on the frame after a click while the button is still held
+        // (drag_state Some → guard fails) — silently breaking click-to-scroll.
+        if self.drag_state.is_none()
+            && let Some(key) = self.pending_scroll_to.take()
+            && let Some((_, lx, width)) = entry_geometry.iter().find(|(k, ..)| *k == key)
+        {
+            self.h_scroll = scroll_into_view_target(
+                i32::from(self.h_scroll),
+                *lx,
+                i32::from(*width),
+                scroll_viewport_width,
+                i32::from(max_scroll),
+            ) as u16;
+        }
 
         self.entries_start_x = entries_start_x;
         self.scroll_viewport_width = scroll_viewport_width;
@@ -549,6 +590,12 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Tab
             return EventResult::Action(TabBarEvent::Close(key));
         }
         if let Some((key, rect)) = self.hit_test_tab(column, row) {
+            // Queue a scroll-into-view for the next render pass. We deliberately
+            // do NOT touch h_scroll here: entry_geometry/item_hits are only
+            // refreshed during render(), and mutating h_scroll mid-event would
+            // desync DragState::grab_col (from the prior frame's hit rects) if a
+            // Drag arrives before the next render.
+            self.pending_scroll_to = Some(key);
             let grab_col = i32::from(column) - rect.x;
             let drop_index = self.items.iter().position(|t| t.key == key).unwrap_or(0);
             self.drag_state = Some(DragState {
@@ -661,6 +708,10 @@ mod tests {
 
     /// Render the bar at a fixed rect with the given items.
     fn render_bar(bar: &mut TabBarComponent<usize>, width: u16, height: u16, rect: LayoutRect) {
+        // Mirrors the production lifecycle (WmTopPanelComponent calls
+        // bar.begin_frame() before render): clears per-frame hit state so
+        // item_hits don't accumulate across renders.
+        bar.begin_frame();
         let mut backend = make_backend(width, height);
         let c = ctx();
         let mut reg = term_wm_core::hitbox_registry::HitboxRegistry::new();
@@ -951,5 +1002,161 @@ mod tests {
             bar.h_scroll, bar.max_scroll,
             "auto-scroll re-follows the active tab after a structural reorder"
         );
+    }
+
+    #[test]
+    fn clicking_partially_visible_tab_scrolls_it_into_view() {
+        let mut bar = TabBarComponent::<usize>::new();
+        bar.set_items(make_items(&[0, 1, 2, 3, 4, 5, 6, 7], false));
+        bar.set_active(Some(0));
+        let r = rect(0, 0, 30, 1);
+        render_bar(&mut bar, 30, 1, r);
+        // Manual scroll so tab 6 (lx=60, width 10) is half-hidden at the right
+        // edge: with h_scroll=40, viewport 26 wide, tab 6 spans vp cols 20..26.
+        bar.h_scroll = 40;
+        render_bar(&mut bar, 30, 1, r);
+        let c = ctx();
+
+        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 23, 0), &c);
+        assert!(matches!(res, EventResult::Action(TabBarEvent::Select(6))));
+        assert_eq!(bar.h_scroll, 40, "press must not mutate h_scroll");
+        assert_eq!(bar.pending_scroll_to, Some(6));
+
+        // Release completes the click (a real click = press + release), clearing
+        // the drag state so the next render consumes the pending scroll.
+        let _ = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 23, 0),
+            &c,
+        );
+        assert_eq!(bar.h_scroll, 40, "release must not mutate h_scroll");
+
+        // Next render consumes the pending scroll and brings tab 6 fully in view.
+        render_bar(&mut bar, 30, 1, r);
+        assert_eq!(bar.h_scroll, 44, "tab 6 right edge lands at viewport end");
+        let vp_x = 60_i32.saturating_sub(i32::from(bar.h_scroll));
+        let vp_end = vp_x.saturating_add(10);
+        assert!(
+            vp_x >= 0 && vp_end <= bar.scroll_viewport_width,
+            "tab 6 fully within viewport"
+        );
+        assert_eq!(bar.pending_scroll_to, None, "pending target consumed");
+    }
+
+    #[test]
+    fn clicking_oversized_tab_left_aligns() {
+        let mut bar = TabBarComponent::<usize>::new();
+        let mut items = make_items(&[0], false);
+        items[0].label = "a".repeat(50); // truncated to MAX_ENTRY_LABEL (40 cols)
+        bar.set_items(items);
+        bar.set_active(Some(0));
+        let r = rect(0, 0, 20, 1);
+        render_bar(&mut bar, 20, 1, r);
+        let (_, lx0, _) = bar.entry_geometry[0];
+        assert!(lx0 >= 0, "single tab starts at logical x 0");
+
+        // Scroll to the end so only the tab's tail is visible.
+        bar.h_scroll = bar.max_scroll;
+        render_bar(&mut bar, 20, 1, r);
+        let c = ctx();
+
+        // Click the visible portion → next render left-aligns the oversized tab.
+        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 5, 0), &c);
+        assert!(matches!(res, EventResult::Action(TabBarEvent::Select(0))));
+        assert_eq!(bar.pending_scroll_to, Some(0));
+
+        // Release completes the click so the pending scroll is consumed.
+        let _ = bar.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 5, 0), &c);
+
+        render_bar(&mut bar, 20, 1, r);
+        assert_eq!(
+            bar.h_scroll, 0,
+            "oversized tab left-aligns to its logical origin"
+        );
+    }
+
+    #[test]
+    fn clicking_active_tab_reeveals_it() {
+        let mut bar = TabBarComponent::<usize>::new();
+        bar.set_items(make_items(&[0, 1, 2, 3, 4, 5, 6, 7], false));
+        bar.set_active(Some(6));
+        let r = rect(0, 0, 30, 1);
+        render_bar(&mut bar, 30, 1, r);
+        // Active tab 6 is fully in view after the first render; now scroll it
+        // partially out again without changing focus.
+        bar.h_scroll = 40;
+        render_bar(&mut bar, 30, 1, r);
+        let c = ctx();
+
+        // Clicking the already-active tab doesn't trip the auto-scroll guard,
+        // but the pending path still reveals it.
+        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 23, 0), &c);
+        assert!(matches!(res, EventResult::Action(TabBarEvent::Select(6))));
+
+        // Release completes the click so the pending scroll is consumed.
+        let _ = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 23, 0),
+            &c,
+        );
+
+        render_bar(&mut bar, 30, 1, r);
+        assert_eq!(
+            bar.h_scroll, 44,
+            "clicked active tab scrolled back into view"
+        );
+    }
+
+    #[test]
+    fn drag_reorder_still_works_after_pending_scroll() {
+        let mut bar = TabBarComponent::<usize>::new();
+        bar.set_items(make_items(&[0, 1, 2, 3, 4, 5, 6, 7], false));
+        bar.set_active(Some(0));
+        let r = rect(0, 0, 30, 1);
+        render_bar(&mut bar, 30, 1, r);
+        bar.h_scroll = 40;
+        render_bar(&mut bar, 30, 1, r);
+        let c = ctx();
+
+        // Press a partially-visible tab: queues a scroll, arms a drag.
+        let res = bar.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 23, 0), &c);
+        assert!(matches!(res, EventResult::Action(TabBarEvent::Select(6))));
+        assert_eq!(bar.h_scroll, 40, "press does not mutate h_scroll");
+        assert!(bar.drag_state.is_some());
+
+        // Drag to column 10 WITHOUT a render: drop target uses the current
+        // h_scroll (40) + logical geometry → virtual_col = 10 - 2 + 40 = 48,
+        // which lands before tab 4 (lx 40..50).
+        let res = bar.handle_events(&mouse(MouseEventKind::Drag(MouseButton::Left), 10, 0), &c);
+        assert!(matches!(res, EventResult::Consumed));
+        assert_eq!(bar.h_scroll, 40, "drag must not alter h_scroll");
+        assert_eq!(
+            bar.drag_state.as_ref().unwrap().drop_index,
+            4,
+            "reorder target computed from current scroll, no drift"
+        );
+
+        // A render while the button is held must NOT consume the pending scroll.
+        render_bar(&mut bar, 30, 1, r);
+        assert_eq!(
+            bar.pending_scroll_to,
+            Some(6),
+            "pending survives active drag"
+        );
+
+        // Release commits the reorder.
+        let res = bar.handle_events(
+            &mouse(MouseEventKind::Release(MouseButton::Left), 10, 0),
+            &c,
+        );
+        assert!(matches!(
+            res,
+            EventResult::Action(TabBarEvent::Reorder {
+                key: 6,
+                target_index: 4
+            })
+        ));
+
+        // Next render applies the pending scroll.
+        render_bar(&mut bar, 30, 1, r);
+        assert_eq!(bar.h_scroll, 44, "pending scroll applies after release");
     }
 }

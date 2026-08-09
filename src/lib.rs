@@ -14,7 +14,7 @@ use term_wm_console::RatatuiBackend;
 use term_wm_console::draw_plan_renderer::{
     ColorConvert, DrawPlanRenderer, composite_window, overlay_shadow_data, render_cursor_overlay,
     render_drop_shadow, render_ghost_preview, render_handles_masked, render_overlays,
-    render_panels, render_resize_outline,
+    render_panels, render_resize_outline, row_has_content_in_range,
 };
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::components::{Component, Overlay, WmComponent};
@@ -251,6 +251,46 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
 
     // Render panels AFTER windows
     render_panels(backend, wm);
+
+    // Detect whether the app draws content under the FAB's footprint on its
+    // bottom row, so the layout pass can reserve the FAB's row next frame in
+    // cramped monocle. Runs before the FAB draws (no self-trigger; the buffer is
+    // recreated each frame). The flag is cleared whenever cramped monocle is
+    // inactive so a stale value can't falsely pad the first frame after
+    // re-entering cramped monocle.
+    if wm.is_monocle_cramped() {
+        // The FAB's label is the shared menu icon; its DISPLAY width (not char count)
+        // is the footprint the app must not collide with. Wide glyphs (Nerd Font,
+        // emoji) span 2 terminal columns but a single char, so `.chars().count()`
+        // would under-size the footprint and miss collisions under the label's left
+        // edge. Matches the FAB component's own width (also display-based).
+        let fab_width = {
+            let ctx = wm.component_context(true);
+            let icon = term_wm_ui_components::helpers::menu_icon(ctx.app_name());
+            unicode_width::UnicodeWidthStr::width(icon.as_str()) as u16
+        };
+        let has = if fab_width == 0 {
+            false
+        } else {
+            let wa = wm.managed_area();
+            let bottom_y = wa.y + i32::from(wa.height).saturating_sub(1);
+            // The FAB is right-aligned to the screen; recompute its footprint from
+            // the CURRENT frame's geometry (a stored x would be stale after a resize
+            // and could clamp the range to empty).
+            let x_start = wa.x + i32::from(wa.width).saturating_sub(i32::from(fab_width));
+            let x_end = wa.x + i32::from(wa.width);
+            // Downcast locally (matching the empty-state block) to avoid holding a
+            // &mut borrow of `backend` across render_panels / the FAB render below.
+            if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
+                row_has_content_in_range(&rb.buffer, x_start, x_end, bottom_y)
+            } else {
+                false
+            }
+        };
+        wm.set_bottom_content_flag(has);
+    } else {
+        wm.set_bottom_content_flag(false);
+    }
 
     // Render FAB only in cramped monocle mode.
     // Hidden when command palette is open; the bottom panel overlay fills the row.
