@@ -2620,6 +2620,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.managed_area
     }
 
+    /// The full screen area passed to `register_managed_layout`, before any FAB
+    /// row reservation shrinks `managed_area`. Used to anchor chrome (e.g. the
+    /// bottom-panel overlay) to the absolute screen bottom regardless of the offset.
+    pub fn last_frame_area(&self) -> LayoutRect {
+        self.last_frame_area
+    }
+
     pub fn overlays(&self) -> &SlotMap<OverlayKey, O> {
         &self.overlays
     }

@@ -882,10 +882,14 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
         // Bottom panel overlay in monocle mode — keybinding hints. Hints are
         // set during the layout phase (register_managed_layout); the render
         // phase only draws the component's already-established state.
+        // Anchor to the ABSOLUTE screen bottom (last_frame_area), not the
+        // managed area: the FAB row reservation shrinks managed_area by one
+        // row, which would otherwise raise the panel up to row H-2.
+        let screen = wm.last_frame_area();
         let bottom_area = LayoutRect {
-            x: full_area.x,
-            y: full_area.y + i32::from(full_area.height).saturating_sub(1),
-            width: full_area.width,
+            x: screen.x,
+            y: screen.y + i32::from(screen.height).saturating_sub(1),
+            width: screen.width,
             height: 1,
         };
         let mut bottom_hb = HitboxRegistry::new();
