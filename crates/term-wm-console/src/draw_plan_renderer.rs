@@ -77,11 +77,17 @@ pub fn row_has_content_in_range(
     if left >= right {
         return false;
     }
-    (left..right).any(|x| {
-        buffer
-            .cell((x as u16, y as u16))
-            .is_some_and(|c| !c.symbol().starts_with(' '))
-    })
+    // Direct slice scan over Ratatui's contiguous `content` array. The row/column
+    // bounds are clamped (and y validated) once above, so the loop itself does zero
+    // per-cell bounds checks and LLVM can auto-vectorize the ASCII-space scan in
+    // --release. All indices are provably within `content.len()`.
+    let buf_w = usize::from(buf.width);
+    let row_offset = (y as usize - buf.y as usize) * buf_w;
+    let start_idx = row_offset + (left as usize - buf.x as usize);
+    let end_idx = row_offset + (right as usize - buf.x as usize);
+    buffer.content[start_idx..end_idx]
+        .iter()
+        .any(|c| !c.symbol().starts_with(' '))
 }
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
@@ -2454,5 +2460,17 @@ mod tests {
         assert!(row_has_content_in_range(&buffer, -5, 6, 2));
         // Empty range.
         assert!(!row_has_content_in_range(&buffer, 10, 10, 2));
+    }
+
+    #[test]
+    fn row_has_content_in_range_nonzero_buffer_origin() {
+        // Buffer origin is not (0,0); the slice-scan row/column offset math must
+        // account for area.x/area.y (e.g. a clipped or translated sub-viewport).
+        let mut buffer = Buffer::empty(RatatuiRect::new(10, 20, 20, 3));
+        buffer.cell_mut((15, 21)).expect("cell").set_symbol("x");
+        assert!(row_has_content_in_range(&buffer, 14, 16, 21));
+        assert!(!row_has_content_in_range(&buffer, 11, 13, 21));
+        // Row 21 is the buffer's middle row; rows outside its area are rejected.
+        assert!(!row_has_content_in_range(&buffer, 14, 16, 23));
     }
 }
