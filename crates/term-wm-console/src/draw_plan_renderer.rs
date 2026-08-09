@@ -52,6 +52,38 @@ struct ChromeHitboxParams {
     header_enabled: bool,
 }
 
+/// True if any cell in `[x_start, x_end)` on row `y` has a non-space symbol.
+/// Coordinates are clipped to `buffer.area` and accessed via the Option-returning
+/// `Buffer::cell`, so a clipped or offscreen range can never panic.
+///
+/// Used to detect whether app content collides with the FAB's bottom-right
+/// footprint. `y` is the window's current bottom row, which moves when the FAB
+/// row is reserved — checking the relative row (not a fixed screen row) is what
+/// prevents SIGWINCH oscillation.
+pub fn row_has_content_in_range(
+    buffer: &ratatui::buffer::Buffer,
+    x_start: i32,
+    x_end: i32,
+    y: i32,
+) -> bool {
+    let buf = buffer.area;
+    let buf_top = i32::from(buf.y);
+    let buf_bottom = buf_top.saturating_add(i32::from(buf.height));
+    if y < buf_top || y >= buf_bottom {
+        return false;
+    }
+    let left = x_start.max(i32::from(buf.x));
+    let right = x_end.min(i32::from(buf.x).saturating_add(i32::from(buf.width)));
+    if left >= right {
+        return false;
+    }
+    (left..right).any(|x| {
+        buffer
+            .cell((x as u16, y as u16))
+            .is_some_and(|c| !c.symbol().starts_with(' '))
+    })
+}
+
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
 /// `frame_size` is (width, height) of the window frame. `screen_origin` is the screen-space
 /// top-left coordinate (x, y). Also registers a content-area hitbox.
@@ -2393,5 +2425,34 @@ mod tests {
         }
         assert_eq!(symbol(12), "═", "edge right of the occluder must light up");
         assert_eq!(symbol(13), "═", "edge right of the occluder must light up");
+    }
+
+    #[test]
+    fn row_has_content_in_range_detects_content_in_range() {
+        let mut buffer = Buffer::empty(RatatuiRect::new(0, 0, 20, 3));
+        buffer.cell_mut((15, 2)).expect("cell").set_symbol("x");
+        assert!(row_has_content_in_range(&buffer, 12, 18, 2));
+        // Content outside the range is not detected.
+        assert!(!row_has_content_in_range(&buffer, 0, 10, 2));
+    }
+
+    #[test]
+    fn row_has_content_in_range_blank_row_is_false() {
+        let buffer = Buffer::empty(RatatuiRect::new(0, 0, 20, 3));
+        assert!(!row_has_content_in_range(&buffer, 0, 20, 1));
+    }
+
+    #[test]
+    fn row_has_content_in_range_offscreen_does_not_panic() {
+        let mut buffer = Buffer::empty(RatatuiRect::new(0, 0, 20, 3));
+        buffer.cell_mut((5, 2)).expect("cell").set_symbol("x");
+        // Row outside the buffer height.
+        assert!(!row_has_content_in_range(&buffer, 0, 20, 9));
+        // Range wholly outside the buffer width (e.g. stale x from a resize).
+        assert!(!row_has_content_in_range(&buffer, 50, 60, 2));
+        // Partially offscreen range is clipped and still detects in-bounds content.
+        assert!(row_has_content_in_range(&buffer, -5, 6, 2));
+        // Empty range.
+        assert!(!row_has_content_in_range(&buffer, 10, 10, 2));
     }
 }

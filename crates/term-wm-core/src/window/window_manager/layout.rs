@@ -12,6 +12,22 @@ use crate::window::entry::WindowMode;
 use crate::window::window_manager::Window;
 use crate::window::{FloatRectSpec, WindowKey, WindowState};
 
+/// Rows reserved for the FAB at the bottom of the screen in cramped monocle.
+/// The focused window is given one fewer row so it never renders beneath the FAB.
+const FAB_RESERVED_ROWS: u16 = 1;
+
+/// Shrink `area` by the FAB's reserved bottom row when the FAB is shown in
+/// cramped monocle. `height` is never shrunk below 1.
+fn reserve_fab_row(area: Rect, cramped_monocle: bool) -> Rect {
+    if cramped_monocle && area.height > 1 {
+        let mut a = area;
+        a.height = a.height.saturating_sub(FAB_RESERVED_ROWS);
+        a
+    } else {
+        area
+    }
+}
+
 impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
     pub fn scroll(&self, key: WindowKey) -> super::ScrollState {
         self.scroll.get(&key).copied().unwrap_or_default()
@@ -384,7 +400,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         };
         self.bottom_claimed = bottom_rect;
         let prev_managed = self.managed_area;
-        self.managed_area = managed_area;
+        // Cramped monocle: the FAB occupies the bottom-right of the screen. Reserve
+        // the bottom row for it while the app draws content under the FAB's footprint,
+        // so the focused window never renders beneath it; the PTY resizes to the shorter
+        // area and apps format status lines above the row natively. The flag is set by
+        // the render pass on the previous frame, so this lags content by one frame.
+        let apply_padding = self.is_monocle_cramped() && self.has_bottom_content();
+        self.managed_area = reserve_fab_row(managed_area, apply_padding);
         // First real frame: the true viewport is now known. If no tiling layout
         // was built yet (startup windows were tiled lazily, not at 0x0), build
         // the tree now from the mapped, non-floating windows in creation order
