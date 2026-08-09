@@ -862,26 +862,57 @@ async fn cli_stop_requires_force_when_live_sessions() {
 /// each connection (no muxio handshake), so Attach fails deterministically
 /// without auto-spawning a new daemon (probe succeeds because something is
 /// bound). Unix-only: the redirect is a unix `dup2` mechanism.
+///
+/// Why garbage instead of just closing? This is deliberate fault injection, not
+/// a Muxio bug. Dropping the connection outright would surface as a bare EOF /
+/// connection-reset, which RPC layers often treat as a benign or retryable
+/// disconnect — potentially bypassing the error path under test. Writing an
+/// invalid frame guarantees the connection completes but the protocol framing
+/// fails with a hard decode error, forcing the failure up through the client's
+/// error-routing pipeline so it reaches stderr.
 #[cfg(unix)]
 #[test]
 fn connection_error_is_printed_to_stderr() {
-    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName, prelude::*};
+    use interprocess::local_socket::{
+        GenericNamespaced, ListenerNonblockingMode, ListenerOptions, ToNsName, prelude::*,
+    };
     use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     let gateway = unique_gateway("silent-exit");
     let name = gateway
         .as_str()
         .to_ns_name::<GenericNamespaced>()
         .expect("gateway ns name");
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_clone = stop_flag.clone();
     let listener = ListenerOptions::new()
         .name(name)
         .try_overwrite(true)
         .create_sync()
         .expect("bind dummy gateway");
+    listener
+        .set_nonblocking(ListenerNonblockingMode::Accept)
+        .expect("set nonblocking");
     let acceptor = std::thread::spawn(move || {
-        while let Ok(mut stream) = listener.accept() {
-            // Garbage + close: muxio decode fails rather than silently EOF.
-            let _ = stream.write_all(b"not-a-muxio-frame");
+        // Feed garbage + close to every connection (the client's probe first,
+        // then the real RPC connection) so muxio decode fails rather than
+        // silently EOF. Non-blocking accept keeps the loop yielding; the stop
+        // flag makes the thread exit cleanly so it can be joined instead of
+        // leaking (a leaked thread blocks coverage instrumentation at exit).
+        while !stop_clone.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok(mut stream) => {
+                    // Garbage + close: muxio decode fails rather than silently EOF.
+                    let _ = stream.write_all(b"not-a-muxio-frame");
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
         }
     });
 
@@ -901,5 +932,8 @@ fn connection_error_is_printed_to_stderr() {
         "client must exit non-zero, got status: {:?}",
         out.status.code()
     );
-    drop(acceptor);
+    // Signal the acceptor to stop, then wait for it to exit so no leaked thread
+    // survives to block coverage instrumentation at process exit.
+    stop_flag.store(true, Ordering::Relaxed);
+    acceptor.join().expect("acceptor thread failed");
 }

@@ -751,4 +751,71 @@ mod tests {
             "palette-filtered hints must include a CommandPalette-layer action, got {actions:?}"
         );
     }
+
+    #[test]
+    fn bottom_panel_overlay_stays_on_absolute_bottom_when_fab_row_reserved() {
+        use std::sync::Arc;
+        use term_wm_console::draw_plan_renderer::render_overlays;
+        use term_wm_core::app_context::AppContext;
+        use term_wm_core::components::NoopComponent;
+        use term_wm_core::components::NoopOverlay;
+        use term_wm_core::config::AppBuilder;
+
+        let app_ctx = Arc::new(AppContext::new("test", "0.1.0"));
+        let mut wm = AppBuilder::<WmBottomPanelComponent>::new()
+            .app_ctx(Arc::clone(&app_ctx))
+            .bottom_panel(WmBottomPanelComponent::new(
+                "test",
+                "0.1.0",
+                Some("test-host"),
+            ))
+            .build::<NoopComponent, NoopOverlay>()
+            .expect("test build");
+
+        // Cramped monocle + command palette open + FAB row reserved (app content
+        // detected under the FAB footprint) → managed_area is 23 rows tall.
+        wm.update_monocle_mode(40);
+        assert!(wm.is_monocle_cramped());
+        wm.set_bottom_content_flag(true);
+        wm.open_command_palette_overlay(NoopOverlay);
+        assert!(wm.command_menu_visible());
+
+        let area = term_wm_core::Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 24,
+        };
+        wm.register_managed_layout(area);
+        assert_eq!(wm.managed_area().height, 23, "FAB row must be reserved");
+
+        let ratatui_area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 24,
+        };
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        render_overlays(&mut backend, &mut wm);
+
+        // The bottom-panel hints must stay on the ABSOLUTE bottom row (23), NOT
+        // rise up to the reserved row above it (22).
+        let has_non_space = |row: u16| {
+            (0..40).any(|x| {
+                backend
+                    .buffer
+                    .cell((x, row))
+                    .is_some_and(|c| !c.symbol().starts_with(' '))
+            })
+        };
+        assert!(
+            has_non_space(23),
+            "hints must render on absolute bottom row 23"
+        );
+        assert!(
+            !has_non_space(22),
+            "hints must NOT rise up to row 22 when the FAB row is reserved"
+        );
+    }
 }
