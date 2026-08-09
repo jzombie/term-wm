@@ -304,6 +304,28 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         }
     }
 
+    /// Re-point every existing terminal window's PTY status callback to `tx`.
+    ///
+    /// `run()` uses this after creating its live event source, so terminals that
+    /// were spawned earlier — with the constructors' throwaway channel, whose
+    /// receiver was dropped — still wake the event loop.
+    fn rewire_terminal_callbacks(&mut self, tx: &Sender<UnifiedEvent>) {
+        let terminal_keys: Vec<WindowKey> = self
+            .wm
+            .all_window_keys()
+            .into_iter()
+            .filter(|&k| {
+                matches!(
+                    self.wm.component_for_key(k),
+                    Some(AppRootComponent::Core(CoreWmComponent::Terminal(_)))
+                )
+            })
+            .collect();
+        for key in terminal_keys {
+            self.wire_pty_callback(key, tx.clone());
+        }
+    }
+
     /// Initialize standard system windows (debug log + system panel).
     ///
     /// Creates both windows in `Unmapped` (hidden) state with `ClosePolicy::Unmap`
@@ -401,25 +423,13 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         // spawned terminal never repaints until the next console event (e.g. a
         // mouse move).
         let mut input = UnifiedEventSource::new()?;
-        self.pty_wakeup_tx = input.pty_wakeup_tx();
+        let tx = input.pty_wakeup_tx();
+        self.pty_wakeup_tx = tx.clone();
         // Re-point any terminals spawned before run(): their callbacks captured
         // the constructors' throwaway channel (whose receiver was dropped), so
         // re-wire them to this live source or their PTY output would never wake
         // the loop.
-        let terminal_keys: Vec<WindowKey> = self
-            .wm
-            .all_window_keys()
-            .into_iter()
-            .filter(|&k| {
-                matches!(
-                    self.wm.component_for_key(k),
-                    Some(AppRootComponent::Core(CoreWmComponent::Terminal(_)))
-                )
-            })
-            .collect();
-        for key in terminal_keys {
-            self.wire_pty_callback(key, self.pty_wakeup_tx.clone());
-        }
+        self.rewire_terminal_callbacks(&tx);
         let result = self.run_with(&mut output, &mut input);
         output.exit()?;
         result
@@ -651,5 +661,44 @@ mod tests {
         let (tx, _) = bounded(EVENT_CHANNEL_CAPACITY);
         let mut app = TermWmApp::<NoopComponent>::from_wm(wm, tx);
         assert_system_windows_initialized(&mut app);
+    }
+
+    /// Regression for the PTY-wakeup bug: terminals spawned before `run()`
+    /// captured the constructors' throwaway `pty_wakeup` channel (whose receiver
+    /// was dropped), so their output never woke the loop. After
+    /// `rewire_terminal_callbacks`, the child's PTY events must land on the
+    /// re-wired (live) channel.
+    #[test]
+    fn rewire_terminal_callbacks_routes_pty_events_to_new_channel() {
+        use std::time::{Duration, Instant};
+
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app
+            .spawn_terminal_window(default_shell_command(), 200, None, "rewire-test")
+            .expect("spawn shell");
+
+        // Simulate run(): point the app and pre-spawned terminals at a live
+        // channel, replacing the orphaned one from construction.
+        let (tx, rx) = bounded::<UnifiedEvent>(16);
+        app.pty_wakeup_tx = tx.clone();
+        app.rewire_terminal_callbacks(&tx);
+
+        // Make the child exit; its exit must be delivered on the re-wired
+        // channel (the original callback bound to the orphaned tx would not be).
+        let mut line = String::from("exit");
+        line.push_str(line_ending::LineEnding::from_current_platform().as_str());
+        if let Some(comp) = app.wm().component_for_key_mut(key) {
+            comp.paste(&line);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(UnifiedEvent::AppExited(k)) if k == key => break,
+                Ok(_) => continue,
+                Err(_) => panic!("timed out: child exit was not delivered on the re-wired channel"),
+            }
+        }
     }
 }
