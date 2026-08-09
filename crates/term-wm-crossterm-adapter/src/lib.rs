@@ -145,7 +145,29 @@ pub fn try_translate_event(evt: crossterm::event::Event) -> Option<Event> {
 /// root `UnifiedEventSource`) delegates here so crossterm knowledge stays
 /// contained in this crate.
 pub fn set_mouse_capture(enabled: bool) -> std::io::Result<()> {
-    set_mouse_capture_with(&mut std::io::stdout(), enabled)
+    set_mouse_capture_with(&mut std::io::stdout(), enabled)?;
+    // The ANSI path above makes the *host* emulator route mouse input back via
+    // SGR, but it never touches the console *input* mode. crossterm's Windows
+    // event reader only surfaces `MOUSE_EVENT_RECORD`s when `ENABLE_MOUSE_INPUT`
+    // is enabled on the console input handle. When term-wm runs inside another
+    // emulator (a ConPTY child — term-wm nested in term-wm, or inside a
+    // term-session), the host routes mouse via SGR, yet the child's reader needs
+    // this mode flag to see those records. On Windows `EnableMouseCapture` /
+    // `DisableMouseCapture` report `is_ansi_code_supported() == false`, so
+    // executing them calls `SetConsoleMode` directly (no duplicate ANSI).
+    // Best-effort: harmless in non-console (test/CI) contexts, where
+    // `SetConsoleMode` simply fails.
+    #[cfg(windows)]
+    {
+        use crossterm::ExecutableCommand as _;
+        let mut stdout = std::io::stdout();
+        let _ = if enabled {
+            stdout.execute(crossterm::event::EnableMouseCapture)
+        } else {
+            stdout.execute(crossterm::event::DisableMouseCapture)
+        };
+    }
+    Ok(())
 }
 
 /// Enable or disable crossterm mouse capture by writing the corresponding

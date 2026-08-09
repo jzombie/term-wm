@@ -166,6 +166,15 @@ pub fn init_terminal<W: Write>(mut writer: W) -> io::Result<TerminalGuard<W>> {
     writer.queue(Hide)?;
     writer.queue(EnableBracketedPaste)?;
     writer.queue(crossterm::event::EnableMouseCapture)?;
+    // crossterm's `EnableMouseCapture` on Windows only calls `SetConsoleMode`
+    // (`is_ansi_code_supported()` returns false), so it emits no ANSI. When
+    // this client runs inside a host emulator (term-wm via ConPTY), the host
+    // therefore never sees the mouse-enable request and never routes mouse
+    // events back to the client — the mouse is dead. Write the ANSI sequences
+    // explicitly so the host detects mouse tracking and forwards mouse input
+    // (on Unix crossterm already writes these, so this is Windows-only).
+    #[cfg(windows)]
+    term_wm_crossterm_adapter::set_mouse_capture_with(&mut writer, true)?;
     writer.flush()?;
     Ok(TerminalGuard {
         writer: Some(writer),
@@ -183,6 +192,10 @@ impl<W: Write> Drop for TerminalGuard<W> {
     fn drop(&mut self) {
         if let Some(ref mut writer) = self.writer {
             let _ = writer.queue(crossterm::event::DisableMouseCapture);
+            // Mirror the init fix (Windows-only): emit the ANSI mouse-disable
+            // so a host emulator stops routing mouse input to the client.
+            #[cfg(windows)]
+            let _ = term_wm_crossterm_adapter::set_mouse_capture_with(writer, false);
             let _ = writer.queue(DisableBracketedPaste);
             let _ = writer.queue(Show);
             let _ = writer.queue(LeaveAlternateScreen);
@@ -929,6 +942,23 @@ mod tests {
         );
     }
 
+    /// crossterm's Windows `EnableMouseCapture` writes no ANSI (it only calls
+    /// `SetConsoleMode`), so `init_terminal` must emit the mouse-enable
+    /// sequences itself — otherwise a host emulator (term-wm via ConPTY) never
+    /// routes mouse input to the client and the mouse is dead inside a session.
+    #[test]
+    fn init_terminal_writes_mouse_enable_ansi() {
+        let (writer, buf) = TestWriter::new();
+        let _guard = init_terminal(writer).expect("init_terminal");
+        let bytes = buf.lock().unwrap();
+        assert!(
+            bytes
+                .windows(b"\x1b[?1000h".len())
+                .any(|w| w == b"\x1b[?1000h"),
+            "init_terminal must emit the mouse-enable ANSI so a host routes mouse input"
+        );
+    }
+
     // ── client identity helpers ─────────────────────────────────────
     //
     // These mutate `SSH_CLIENT`/`SSH_CONNECTION`, which is process-global;
@@ -1042,6 +1072,25 @@ mod tests {
             bytes
                 .windows(b"\x1b[?2004l".len())
                 .any(|w| w == b"\x1b[?2004l")
+        );
+    }
+
+    /// Mirror of the init fix: teardown must emit the ANSI mouse-disable so a
+    /// host emulator stops routing mouse input to the client.
+    #[test]
+    fn terminal_guard_teardown_writes_mouse_disable_ansi() {
+        let (writer, buf) = TestWriter::new();
+        {
+            let _guard = TerminalGuard {
+                writer: Some(writer),
+            };
+        }
+        let bytes = buf.lock().unwrap();
+        assert!(
+            bytes
+                .windows(b"\x1b[?1000l".len())
+                .any(|w| w == b"\x1b[?1000l"),
+            "TerminalGuard teardown must emit the mouse-disable ANSI"
         );
     }
 
