@@ -18,18 +18,27 @@ use crate::pty_state_tracker::PtyPerformAdapter;
 /// (64KB × 60fps ≈ 3.8MB/s throughput, enough for any terminal workload).
 const PTY_READ_BUF_SIZE: usize = 65536;
 
-/// Drain-starvation bound: a continuous stream (`yes`, busy logs) never returns
-/// WouldBlock, so apply any pending resize at least this often to keep the grid
-/// attached to the physical window bounds.
+/// Drain-starvation bound (Unix only): a continuous stream (`yes`, busy logs)
+/// never returns WouldBlock, so apply any pending resize at least this often to
+/// keep the grid attached to the physical window bounds. On Windows the reader
+/// applies pending resizes at every (blocking) read boundary instead.
+#[cfg(unix)]
 const MAX_DRAIN_BYTES: usize = 65536;
+
+/// Windows error `ERROR_OPERATION_ABORTED` (995): the code a blocking
+/// `ReadFile` returns when `CancelSynchronousIo` aborts it. The reader treats
+/// this as a resize wake — never a fatal read error. (Inert on Unix, where
+/// `errno` can never be 995.)
+const ERROR_OPERATION_ABORTED: i32 = 995;
 
 #[cfg(unix)]
 use std::os::unix::io::RawFd;
 
 /// Wake primitive that nudges the reader thread out of `poll` when the UI
-/// requests a resize. Unix: a self-pipe (the read end is polled; `signal` writes
-/// a byte). Windows: a no-op until the ConPTY read handle is exposed by
-/// portable-pty (the reader applies pending resizes at its read boundary).
+/// requests a resize (Unix). A self-pipe: the read end is polled alongside the
+/// PTY master fd, and `signal` writes a byte. On Windows there is no pipe to
+/// poll — the ConPTY output pipe is a blocking anonymous pipe — so the wake is
+/// instead delivered by `CancelSynchronousIo` in [`Pty::wake_reader`].
 #[cfg(unix)]
 struct ResizeWake {
     read_fd: RawFd,
@@ -78,17 +87,6 @@ impl Drop for ResizeWake {
             libc::close(self.write_fd);
         }
     }
-}
-
-#[cfg(windows)]
-struct ResizeWake;
-
-#[cfg(windows)]
-impl ResizeWake {
-    fn new() -> std::io::Result<Self> {
-        Ok(Self)
-    }
-    fn signal(&self) {}
 }
 
 /// Clear (drain) any pending wake bytes on the reader side of the self-pipe.
@@ -191,6 +189,11 @@ impl PtyWriter {
 }
 
 pub struct Pty {
+    /// Shared master for Unix-only process-group queries (`foreground_pid`,
+    /// `process_group_id`, `signal_process_group`). The reader thread owns its
+    /// own clone for drain-synchronized resizes, so on Windows this field is
+    /// absent entirely.
+    #[cfg(unix)]
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     writer: PtyWriter,
     /// Raw bytes from the reader thread, kept for consumers that need
@@ -219,6 +222,7 @@ pub struct Pty {
     /// next pipe-drain boundary (never mid-shell-write).
     pending_resize: Arc<Mutex<Option<PtySize>>>,
     /// Wake primitive used to nudge the reader out of `poll` on a resize request.
+    #[cfg(unix)]
     resize_wake: ResizeWake,
     scrollback_len: usize,
     child: Option<Box<dyn Child + Send + Sync>>,
@@ -371,6 +375,7 @@ impl Pty {
         let reader_size = Arc::clone(&size_arc);
         let pending_resize = Arc::new(Mutex::new(None));
         let reader_pending_resize = Arc::clone(&pending_resize);
+        #[cfg(unix)]
         let resize_wake = ResizeWake::new().map_err(|err| wrap_err("resize wake", err))?;
         let pending = Arc::new(Mutex::new(Vec::new()));
         let bytes_received = Arc::new(AtomicUsize::new(0));
@@ -394,6 +399,7 @@ impl Pty {
         let dirty = Arc::new(AtomicBool::new(false));
         let dirty_cond = Arc::new((Mutex::new(()), Condvar::new()));
         let shutdown = Arc::new(AtomicBool::new(false));
+        let reader_shutdown = Arc::clone(&shutdown);
         let reader_parser = Arc::clone(&shared_parser);
         let reader_dirty = Arc::clone(&dirty);
         let reader_dirty_cond = Arc::clone(&dirty_cond);
@@ -422,9 +428,11 @@ impl Pty {
                 pending_resize: reader_pending_resize,
                 #[cfg(unix)]
                 wake_read_fd,
+                shutdown: reader_shutdown,
             })
         });
         Ok(Self {
+            #[cfg(unix)]
             master,
             writer,
             pending,
@@ -440,6 +448,7 @@ impl Pty {
             dirty_cond,
             size: size_arc,
             pending_resize,
+            #[cfg(unix)]
             resize_wake,
             tracker,
             scrollback_len,
@@ -500,6 +509,10 @@ impl Pty {
         if let Some(reader) = &self.reader {
             reader.thread().unpark();
         }
+        // Wake the reader so it notices `shutdown` and exits promptly (on
+        // Windows this aborts the blocking ConPTY read; on Unix it nudges the
+        // poll), so a later join on the returned handle does not hang.
+        self.wake_reader();
         PtyParts {
             child: self.child.take(),
             reader_handle: self.reader.take(),
@@ -530,8 +543,37 @@ impl Pty {
         }
         *pending = Some(size);
         drop(pending);
-        self.resize_wake.signal();
+        self.wake_reader();
         Ok(())
+    }
+
+    /// Nudge the reader thread out of its blocking wait so it reaches the
+    /// drain boundary and applies a pending resize promptly.
+    ///
+    /// Unix: writes the resize-wake self-pipe, which the reader polls alongside
+    /// the PTY master fd.
+    ///
+    /// Windows: the ConPTY output pipe is a blocking anonymous pipe that cannot
+    /// be polled or timed out (WSAPoll is sockets-only), so the reader parks in
+    /// `ReadFile` while the pipe is idle and would never reach a drain boundary.
+    /// `CancelSynchronousIo` aborts that in-flight read, which the reader
+    /// recognises as a wake (`ERROR_OPERATION_ABORTED`), not an error. Safe to
+    /// call when the reader is not currently blocked — the reader also re-checks
+    /// `pending_resize` before its next blocking read.
+    fn wake_reader(&mut self) {
+        #[cfg(unix)]
+        self.resize_wake.signal();
+        #[cfg(windows)]
+        if let Some(reader) = &self.reader {
+            use std::os::windows::io::{AsHandle, AsRawHandle};
+            // SAFETY: `handle` is the OS thread handle backing the reader's
+            // `JoinHandle`, which is alive for as long as the `Pty` holds it.
+            // It was created by `CreateThread` with `THREAD_ALL_ACCESS`, which
+            // `CancelSynchronousIo` requires.
+            unsafe {
+                kernel32::CancelSynchronousIo(reader.as_handle().as_raw_handle());
+            }
+        }
     }
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
@@ -846,6 +888,7 @@ impl Drop for Pty {
         if let Some(reader) = &self.reader {
             reader.thread().unpark();
         }
+        self.wake_reader();
     }
 }
 
@@ -882,6 +925,9 @@ struct ParserReadLoopArgs {
     /// Read end of the resize wake self-pipe (polled alongside the PTY fd).
     #[cfg(unix)]
     wake_read_fd: RawFd,
+    /// Set by `into_parts`/`Drop`: the reader exits its loop ASAP. On Windows
+    /// in particular the blocking ConPTY read is otherwise uninterruptible.
+    shutdown: Arc<AtomicBool>,
 }
 
 fn parser_read_loop(args: ParserReadLoopArgs) {
@@ -906,6 +952,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         pending_resize,
         #[cfg(unix)]
         wake_read_fd,
+        shutdown,
     } = args;
     let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
     let mut buf = [0u8; PTY_READ_BUF_SIZE];
@@ -933,6 +980,9 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         .as_raw_fd()
         .unwrap_or(-1);
     'reader: loop {
+        if shutdown.load(Ordering::Acquire) {
+            break 'reader;
+        }
         // Block until the PTY master or the resize-wake is readable, so a
         // resize request is noticed even while the pipe is idle.
         #[cfg(unix)]
@@ -959,8 +1009,30 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
 
         // Drain: keep reading until the pipe is empty (or the starvation bound),
         // then apply any pending resize at the drain boundary.
+        #[cfg(unix)]
         let mut drain_bytes = 0usize;
+        // Clippy: on Windows every path through this loop breaks — the blocking
+        // ConPTY read cannot drain multiple chunks per iteration, so the shape
+        // is deliberately a single read + drain boundary (the boundary code is
+        // shared with Unix below).
+        #[allow(clippy::never_loop)]
         loop {
+            // (Windows) The ConPTY read is a blocking anonymous pipe that cannot
+            // be polled or timed out. A `CancelSynchronousIo` wake can be lost
+            // if it lands while the reader is between reads, so check for a
+            // pending resize (and shutdown) before blocking — the boundary apply
+            // below then reflows the grid without waiting for the next chunk of
+            // output.
+            #[cfg(windows)]
+            {
+                let has_pending = pending_resize
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .is_some();
+                if has_pending || shutdown.load(Ordering::Acquire) {
+                    break;
+                }
+            }
             // (Unix) zero-timeout availability check: pipe empty → drain boundary.
             #[cfg(unix)]
             {
@@ -1116,7 +1188,16 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // on the mutex while the main thread holds it during render.
                 // This is intentional mechanical backpressure.
             }
-            Err(_) => {
+            Err(err) => {
+                // Windows: `wake_reader` aborts the blocking ConPTY read via
+                // `CancelSynchronousIo`; the aborted `ReadFile` returns
+                // `ERROR_OPERATION_ABORTED` (995). That is a resize wake, not a
+                // fatal error — break to the drain boundary so the pending
+                // resize is applied. (On Unix `raw_os_error` can never be 995,
+                // so this branch is inert there.)
+                if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED) {
+                    break;
+                }
                 let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
                 if let Some(ref cb) = *guard
                     && !exited_emitted.swap(true, Ordering::AcqRel)
@@ -1332,6 +1413,9 @@ mod kernel32 {
             lpExeName: *mut u16,
             lpdwSize: *mut u32,
         ) -> i32;
+        /// Abort pending synchronous I/O issued by a thread — used to wake the
+        /// reader out of a blocking ConPTY read on a resize request.
+        pub fn CancelSynchronousIo(hThread: *mut std::ffi::c_void) -> i32;
     }
 }
 
@@ -1508,6 +1592,7 @@ mod tests {
             pending_resize: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             wake_read_fd,
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
