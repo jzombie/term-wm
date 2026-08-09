@@ -394,6 +394,9 @@ pub struct WindowManager<
     /// row (populated by the render pass each frame; consumed by the layout pass
     /// on the next frame to reserve the FAB's bottom row in cramped monocle).
     bottom_content: bool,
+    /// When the reservation flag may next drop to false after a clear
+    /// (trailing-edge debounce, see `set_bottom_content_flag`).
+    bottom_content_debounce_until: Option<Instant>,
     /// Namespaced semantic registry for programmatic component lookup.
     /// Hotkeys and structural routing query this instead of hardcoded fields.
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
@@ -891,6 +894,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
             bottom_content: false,
+            bottom_content_debounce_until: None,
             tap_swap_state: None,
         }
     }
@@ -960,16 +964,40 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// True when the focused window draws content under the FAB's footprint on
     /// its bottom row. Populated by the render pass; consumed by the layout pass
-    /// (register_managed_layout) on the next frame to reserve the FAB's row.
+    /// (register_managed_layout) on the next frame to reserve the FAB's row. A
+    /// clear is held for `FAB_RESERVATION_DEBOUNCE` (see `set_bottom_content_flag`).
     pub fn has_bottom_content(&self) -> bool {
-        self.bottom_content
+        if !self.bottom_content {
+            return false;
+        }
+        match self.bottom_content_debounce_until {
+            Some(until) => Instant::now() < until,
+            None => true,
+        }
     }
 
-    /// Record whether the app draws content under the FAB's footprint. Cleared by
-    /// the render pass whenever cramped monocle is inactive to avoid a stale flag
-    /// falsely padding the first frame after re-entering cramped monocle.
+    /// Record whether the app draws content under the FAB's footprint. A clear
+    /// (false) is trailing-edge debounced by `FAB_RESERVATION_DEBOUNCE` so the
+    /// window height (and PTY) does not oscillate when a resize reflow briefly
+    /// changes the bottom-right footprint content. The timer is armed only on
+    /// the first no-content frame, so it always expires after the debounce.
     pub fn set_bottom_content_flag(&mut self, has: bool) {
-        self.bottom_content = has;
+        if has {
+            self.bottom_content = true;
+            self.bottom_content_debounce_until = None;
+        } else if self.bottom_content {
+            if let Some(until) = self.bottom_content_debounce_until {
+                if Instant::now() >= until {
+                    // Debounce elapsed: finalize the clear.
+                    self.bottom_content = false;
+                    self.bottom_content_debounce_until = None;
+                }
+            } else {
+                // First frame without content: start the debounce timer.
+                self.bottom_content_debounce_until =
+                    Some(Instant::now() + crate::constants::FAB_RESERVATION_DEBOUNCE);
+            }
+        }
     }
 
     /// Get a mutable reference to the FAB component.
@@ -3258,8 +3286,54 @@ mod tests {
         assert!(!wm.has_bottom_content(), "flag defaults to false");
         wm.set_bottom_content_flag(true);
         assert!(wm.has_bottom_content(), "setter records true");
+    }
+
+    #[test]
+    fn bottom_content_flag_trailing_edge_debounce_holds() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_bottom_content_flag(true);
+        assert!(wm.has_bottom_content());
+
+        // A clear is held for the debounce window...
         wm.set_bottom_content_flag(false);
-        assert!(!wm.has_bottom_content(), "setter clears the flag");
+        assert!(
+            wm.has_bottom_content(),
+            "reservation must be held within the debounce window"
+        );
+        // ...and repeated clears must NOT extend the timer (no watchdog refeed).
+        wm.set_bottom_content_flag(false);
+        wm.set_bottom_content_flag(false);
+
+        // After the debounce elapses, the reservation drops.
+        std::thread::sleep(crate::constants::FAB_RESERVATION_DEBOUNCE + Duration::from_millis(50));
+        assert!(
+            !wm.has_bottom_content(),
+            "reservation must drop once the debounce elapses"
+        );
+        // A further clear stays cleared.
+        wm.set_bottom_content_flag(false);
+        assert!(!wm.has_bottom_content());
+    }
+
+    #[test]
+    fn bottom_content_flag_re_arms_on_content() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_bottom_content_flag(true);
+        wm.set_bottom_content_flag(false); // held by debounce
+        wm.set_bottom_content_flag(true); // content returns → immediate
+        assert!(wm.has_bottom_content(), "content must re-arm immediately");
     }
 
     #[test]
