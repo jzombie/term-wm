@@ -259,12 +259,15 @@ pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmA
     // inactive so a stale value can't falsely pad the first frame after
     // re-entering cramped monocle.
     if wm.is_monocle_cramped() {
-        // The FAB's label is the shared menu icon; its width is the footprint the
-        // app must not collide with. Computed from the app name, the same source
-        // the FAB component uses, so the footprint always matches the rendered FAB.
+        // The FAB's label is the shared menu icon; its DISPLAY width (not char count)
+        // is the footprint the app must not collide with. Wide glyphs (Nerd Font,
+        // emoji) span 2 terminal columns but a single char, so `.chars().count()`
+        // would under-size the footprint and miss collisions under the label's left
+        // edge. Matches the FAB component's own width (also display-based).
         let fab_width = {
             let ctx = wm.component_context(true);
-            term_wm_ui_components::helpers::menu_icon(ctx.app_name()).chars().count() as u16
+            let icon = term_wm_ui_components::helpers::menu_icon(ctx.app_name());
+            unicode_width::UnicodeWidthStr::width(icon.as_str()) as u16
         };
         let has = if fab_width == 0 {
             false

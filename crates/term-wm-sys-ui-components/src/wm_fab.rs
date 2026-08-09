@@ -1,5 +1,6 @@
 use ratatui::style::Style;
 use term_wm_layout_engine::LayoutRect;
+use unicode_width::UnicodeWidthStr;
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
@@ -64,7 +65,10 @@ impl Component<TermWmAction> for WmFabComponent {
         }
 
         let label = menu_icon(ctx.app_name());
-        let width = label.chars().count() as u16;
+        // Display column width, not char count — wide glyphs (Nerd Font, emoji)
+        // span 2 columns for a single char, so the footprint and hitbox must use
+        // the rendered width (kept in lockstep with render_app's detection).
+        let width = UnicodeWidthStr::width(label.as_str()) as u16;
 
         self.fab_rect = LayoutRect {
             x: area.x + i32::from(area.width).saturating_sub(i32::from(width)),
