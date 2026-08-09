@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.17-alpha] - TBD
+
+### Changed
+
+- **System windows are now initialized automatically for every app:** the Debug Log and System Panel windows are created at `TermWmApp` construction time (hidden by default) on every construction path — the standalone constructors (`new_custom` / `new_with_config` / `new_with_actions`) and `from_wm` (used by the bundled `term-wm` binary). Previously apps had to call `init_system_windows()` themselves; examples like `dual_image` never did, so the "Debug Log" Command Palette toggle silently did nothing. The Debug Log toggle is also a default menu action, so it now works out of the box in every app.
+- **`sys-ui` Cargo feature removed:** the optional `sys-ui` feature was effectively dead — it was default-on, and its incomplete `#[cfg(feature = "sys-ui")]` gating meant a `--no-default-features` build already failed to compile. The feature flag and all its gates are gone; `term-wm-sys-ui-components` is now a plain (non-optional) dependency.
+
 ## [0.9.16-alpha] - 2026-08-09
 
 ### Added
