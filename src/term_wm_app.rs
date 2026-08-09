@@ -280,8 +280,13 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
                             let _ = tx.send(UnifiedEvent::AppExited(key));
                         }
                         PtyStatus::DirectInputChanged(enabled) => {
-                            tracing::info!("Sending DirectInputChanged({}) for key {:?}", enabled, key);
-                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, enabled)) {
+                            tracing::info!(
+                                "Sending DirectInputChanged({}) for key {:?}",
+                                enabled,
+                                key
+                            );
+                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, enabled))
+                            {
                                 tracing::error!("Channel send failed: {:?}", e);
                             }
                         }
@@ -565,8 +570,8 @@ mod tests {
     /// Every construction path must initialize the system windows (debug log,
     /// system panel) and leave them hidden (`Unmapped`).
     fn assert_system_windows_initialized(app: &mut TermWmApp<NoopComponent>) {
-        use term_wm_core::window::window_manager::system_tags;
         use term_wm_core::window::WindowState;
+        use term_wm_core::window::window_manager::system_tags;
 
         let debug_key = app
             .wm()
