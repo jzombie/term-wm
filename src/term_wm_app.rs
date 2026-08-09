@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Sender, bounded};
 
-use term_wm_console::console_event_source::ConsoleEventSource;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
@@ -33,7 +32,7 @@ use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::{AppRootComponent, NoopComponent};
-use crate::unified_event_source::{EVENT_CHANNEL_CAPACITY, UnifiedEvent};
+use crate::unified_event_source::{EVENT_CHANNEL_CAPACITY, UnifiedEvent, UnifiedEventSource};
 
 /// Scrollback size for windows spawned by the default "New Terminal" action.
 const NEW_TERMINAL_SCROLLBACK: usize = 2000;
@@ -396,10 +395,17 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// Run with default console I/O (enters/exits terminal automatically).
     ///
     /// Calls `run_with` → `run_with_defaults` → `run_event_loop`.
-    pub fn run(self) -> io::Result<()> {
+    pub fn run(mut self) -> io::Result<()> {
         let mut output = ConsoleRenderTarget::new()?;
         output.enter()?;
-        let mut input = ConsoleEventSource::new();
+        // Drive the loop with the unified event source so terminal (PTY) output
+        // wakes the loop — not just console input. The constructors hand the app
+        // a throwaway pty_wakeup channel (its receiver is dropped), so point the
+        // app's wakeup sender at this source's receiver; otherwise typing in a
+        // spawned terminal never repaints until the next console event (e.g. a
+        // mouse move).
+        let mut input = UnifiedEventSource::new()?;
+        self.pty_wakeup_tx = input.pty_wakeup_tx();
         let result = self.run_with(&mut output, &mut input);
         output.exit()?;
         result
