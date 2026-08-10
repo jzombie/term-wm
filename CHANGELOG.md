@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
-## [0.9.19-alpha] - 2016-08-09
+## [0.9.19-alpha] - 2026-08-09
 
 ### Added
 
@@ -24,13 +24,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **Apps like `pico`/`nano` lost the ability to select/copy text:** an app on the alternate screen without mouse tracking disabled native selection (keyboard Direct Mode was on) while the mouse-forwarding path dropped every event (no tracking requested) — the mouse was dead. Native click-and-drag selection, right-click paste, link clicks, and wheel scrolling now work whenever the app has not captured the mouse, regardless of keyboard Direct Mode.
 - **Mouse wheel black-hole on alt-screen non-mouse apps:** wheel events were dropped by both the ScrollView (suppressed for Direct Mode) and the terminal (no mouse protocol to forward). Wheel now scrolls natively in that state instead of being discarded.
 
-## [0.9.18-alpha] - 2016-08-09
+## [0.9.18-alpha] - 2026-08-09
 
 ### Fixed
 
 - Cyclic dependency ordering in 0.9.17-alpha's `term-session-mock` and `term-wm-crossterm-adapter` crates preventing workspace publishing.
 
-## [0.9.17-alpha] - 2016-08-09
+## [0.9.17-alpha] - 2026-08-09
 
 ### Added
 
