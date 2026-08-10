@@ -158,18 +158,23 @@ mod tests {
         );
     }
 
-    /// Windows regression guard: `set_mouse_capture` must flip `ENABLE_MOUSE_INPUT`
-    /// on the console input handle, not merely write ANSI — that flag is what lets
-    /// crossterm's reader surface the `MOUSE_EVENT_RECORD`s a host emulator routes
-    /// to a ConPTY child via SGR. Requires a real console (stdin is a terminal);
-    /// skips in CI/piped contexts where `GetConsoleMode` cannot succeed.
+    /// Windows regression guard: `set_mouse_capture` must flip the mouse-input
+    /// flags on the console input handle, not merely write ANSI. Requires a real
+    /// console (stdin is a terminal); skips in CI/piped contexts where
+    /// `GetConsoleMode` cannot succeed. (The CI-runnable, spawned-ConPTY
+    /// equivalent — which also asserts the exact mode — is
+    /// `tests/nested_mouse.rs`.)
     #[test]
     #[cfg(windows)]
     fn test_set_mouse_capture_toggles_console_mouse_input_mode() {
         use std::io::IsTerminal as _;
         use std::os::windows::io::AsRawHandle as _;
 
-        const ENABLE_MOUSE_INPUT: u32 = 0x0010;
+        // The exact flags crossterm's `enable_mouse_capture` sets (all three are
+        // required for the reader to surface MOUSE_EVENT_RECORDs). Nested mouse
+        // only works when the mode is *replaced* with exactly these, clearing
+        // ENABLE_VIRTUAL_TERMINAL_INPUT — see tests/nested_mouse.rs.
+        const MOUSE_INPUT_FLAGS: u32 = 0x0010 | 0x0080 | 0x0008;
 
         unsafe extern "system" {
             fn GetConsoleMode(h: *mut std::ffi::c_void, mode: *mut u32) -> i32;
@@ -191,19 +196,21 @@ mod tests {
 
         let original = input_mode().expect("GetConsoleMode failed on a terminal stdin");
 
+        // Enable must replace the mode with exactly the mouse flags (0x98),
+        // clearing ENABLE_VIRTUAL_TERMINAL_INPUT — the load-bearing behavior for
+        // nested mouse reception.
         set_mouse_capture(true).expect("enable must succeed");
         let enabled_mode = input_mode().expect("GetConsoleMode after enable");
-        assert_ne!(
-            enabled_mode & ENABLE_MOUSE_INPUT,
-            0,
-            "ENABLE_MOUSE_INPUT must be set after set_mouse_capture(true)"
+        assert_eq!(
+            enabled_mode, MOUSE_INPUT_FLAGS,
+            "enable must replace the mode with exactly the mouse flags \
+             (0x{MOUSE_INPUT_FLAGS:x}); mode={enabled_mode:#010x}"
         );
 
         // crossterm's `DisableMouseCapture` restores the *original* console mode
         // (captured at the first enable) rather than unconditionally clearing
-        // ENABLE_MOUSE_INPUT. So disable must return the mode to exactly what we
-        // observed at the start — the flag legitimately remains set if the
-        // console already had it before the test.
+        // the mouse flags. So disable must return the mode to exactly what we
+        // observed at the start.
         set_mouse_capture(false).expect("disable must succeed");
         let disabled_mode = input_mode().expect("GetConsoleMode after disable");
         assert_eq!(
