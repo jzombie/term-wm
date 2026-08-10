@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.19-alpha] - 2016-08-09
+
+### Added
+
+- **Structured `DirectInputMode` snapshot with independent keyboard/mouse dimensions:** Direct Mode is no longer a single all-or-nothing boolean. `PtyStateTracker` now exposes a `DirectInputMode` struct — `keyboard` (alternate screen / custom scroll margins → raw key passthrough) and `mouse` (the app explicitly requested mouse tracking via `\x1b[?1000h`/`?1002h`/`?1003h` with a supported encoding) — plus informational state (`alt_screen`, `application_cursor_keys`, `custom_margins`, `mouse_tracking`, `sgr_mouse`, `utf8_mouse`, `alt_scroll`). The snapshot is carried on `ComponentContext` (`direct_mode()` aggregate, `keyboard_direct()`, `mouse_captured()`) and surfaced to the debug logger on every transition.
+- **Access-level notification toast:** Direct Mode transition toasts now show the window's capture level — `Direct Mode (Full) enabled for vim`, `Direct Mode (Keyboard) enabled for nano`, `Direct Mode (Mouse) enabled for …` — and the transition is logged as `[direct-mode] window=… mode=DirectInputMode { … }` to the in-app debug log.
+- **Shift/Option override for native selection in captured apps:** holding **Shift** (or **Option** on macOS only) while clicking and dragging inside an app that captured the mouse forces native text selection and clipboard copy instead of forwarding the mouse to the app. Alt is deliberately *not* an override on Linux/Windows so SGR `Alt+Click`/`Alt+Drag` modifier bits keep reaching the application (e.g. Emacs/Helix region selection). Best-effort when `term-wm` runs nested inside a host terminal — the host intercepts `Shift+mouse` first.
+
+### Changed
+
+- **Mouse routing is split from keyboard Direct Mode:** the terminal component now decides native-handling vs app-forwarding from the app's mouse-capture state (`ctx.mouse_captured()`) plus the Shift/Option override — not from the keyboard direct-mode flag. Mouse capture is only granted for encodings the emulator can emit (Default/SGR; UTF-8/`?1005` is tracked but not captured).
+- **Wheel follows mouse capture, not keyboard direct mode:** scroll-wheel-to-scrollback is suppressed only while the app captured the mouse; an alt-screen app without mouse tracking keeps native wheel scrolling. Keyboard scroll keys, scrollbars, and scrollback suppression are gated on `keyboard_direct()` instead.
+- **`PtyStatus::DirectInputChanged` now carries the new `DirectInputMode` snapshot** (was a bool) and fires on any full-struct change, so sub-mode shifts within the same aggregate state (e.g. an app already on the alternate screen enabling mouse tracking → `Keyboard` → `Full`) now produce a toast and log entry.
+- **Mouse-tracking state tracking extended:** DEC private mode `9` (X10) is now tracked alongside `1000`/`1002`/`1003`, and `?1005` (UTF-8 encoding) is tracked so capture decisions match the encoding the forward path can actually emit. `reset_all()` (RIS `ESC c` / DECSTR `CSI ! p`) clears the new encoding flag to avoid stale capture state after a crashed or `reset`-spawning TUI.
+
+### Fixed
+
+- **Apps like `pico`/`nano` lost the ability to select/copy text:** an app on the alternate screen without mouse tracking disabled native selection (keyboard Direct Mode was on) while the mouse-forwarding path dropped every event (no tracking requested) — the mouse was dead. Native click-and-drag selection, right-click paste, link clicks, and wheel scrolling now work whenever the app has not captured the mouse, regardless of keyboard Direct Mode.
+- **Mouse wheel black-hole on alt-screen non-mouse apps:** wheel events were dropped by both the ScrollView (suppressed for Direct Mode) and the terminal (no mouse protocol to forward). Wheel now scrolls natively in that state instead of being discarded.
+
 ## [0.9.18-alpha] - 2016-08-09
 
 ### Fixed
