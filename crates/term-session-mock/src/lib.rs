@@ -24,52 +24,40 @@ use std::path::PathBuf;
 /// Never returns a missing path: the binary is built on demand so tests can
 /// never silently skip. Panics if the build fails.
 pub fn get_mock_bin() -> PathBuf {
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_term-session-mock") {
-        return PathBuf::from(path);
-    }
-
-    let resolved = resolve_mock_bin();
-    if let Some(path) = resolved {
-        return path;
-    }
-
-    build_mock_bin();
-
-    match resolve_mock_bin() {
-        Some(path) => path,
-        None => panic!(
-            "term-session-mock binary still missing after `cargo build`; \
-             searched {:?} and {:?}",
-            mock_bin_candidates().0,
-            mock_bin_candidates().1,
-        ),
-    }
+    get_bin("term-session-mock", "CARGO_BIN_EXE_term-session-mock")
 }
 
-/// The two conventional locations for the compiled mock binary.
-fn mock_bin_candidates() -> (PathBuf, PathBuf) {
+/// Locate (building on demand if necessary) the compiled `mouse_test_probe`
+/// binary, using the same resolution strategy as [`get_mock_bin`].
+pub fn get_mouse_test_probe_bin() -> PathBuf {
+    get_bin("mouse_test_probe", "CARGO_BIN_EXE_mouse_test_probe")
+}
+
+/// The two conventional locations for the compiled `bin_name` binary.
+fn bin_candidates(bin_name: &str) -> (PathBuf, PathBuf) {
     let mut path = std::env::current_exe().expect("test exe path");
     path.pop();
     if path.ends_with("deps") {
         path.pop();
     }
-    let plain = path.join(format!("term-session-mock{}", std::env::consts::EXE_SUFFIX));
+    let plain = path.join(format!("{bin_name}{}", std::env::consts::EXE_SUFFIX));
     let deps_dir = path.join("deps");
     (plain, deps_dir)
 }
 
-fn resolve_mock_bin() -> Option<PathBuf> {
-    let (plain, deps_dir) = mock_bin_candidates();
+fn resolve_bin(bin_name: &str) -> Option<PathBuf> {
+    let (plain, deps_dir) = bin_candidates(bin_name);
     if plain.exists() {
         return Some(plain);
     }
 
     let suffix = std::env::consts::EXE_SUFFIX;
+    let prefix = format!("{bin_name}-");
     if let Ok(entries) = std::fs::read_dir(&deps_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("term-session-mock-") && name.ends_with(suffix) {
+            if name.starts_with(&prefix) && name.ends_with(suffix) {
                 return Some(entry.path());
             }
         }
@@ -78,10 +66,10 @@ fn resolve_mock_bin() -> Option<PathBuf> {
     None
 }
 
-/// Invoke `cargo build` for this crate so the binary exists in the target
+/// Invoke `cargo build` for this crate so the binaries exist in the target
 /// directory. Uses the crate's own `Cargo.toml` so it works regardless of
 /// which workspace directory the test process happens to run from.
-fn build_mock_bin() {
+fn build_bin() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let status = std::process::Command::new(env!("CARGO"))
         .arg("build")
@@ -94,6 +82,29 @@ fn build_mock_bin() {
             "`cargo build --manifest-path {}` failed with {status}",
             manifest.display()
         );
+    }
+}
+
+fn get_bin(bin_name: &str, env_var: &str) -> PathBuf {
+    if let Ok(path) = std::env::var(env_var) {
+        return PathBuf::from(path);
+    }
+
+    let resolved = resolve_bin(bin_name);
+    if let Some(path) = resolved {
+        return path;
+    }
+
+    build_bin();
+
+    match resolve_bin(bin_name) {
+        Some(path) => path,
+        None => panic!(
+            "{bin_name} binary still missing after `cargo build`; \
+             searched {:?} and {:?}",
+            bin_candidates(bin_name).0,
+            bin_candidates(bin_name).1,
+        ),
     }
 }
 

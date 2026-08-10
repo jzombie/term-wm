@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3041,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3060,7 +3060,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3087,16 +3087,18 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
+ "crossterm",
  "libc",
  "term-session-muxio-service-definitions",
+ "term-wm-crossterm-adapter",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3106,7 +3108,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3127,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3135,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3172,7 +3174,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3191,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3213,30 +3215,32 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "crossterm",
  "insta",
+ "portable-pty",
+ "term-session-mock",
  "term-wm-events",
 ]
 
 [[package]]
 name = "term-wm-events"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "term-wm-layout-engine",
 ]
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3255,11 +3259,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3275,7 +3279,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -3301,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.9.16-alpha"
+version = "0.9.17-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3311,9 +3315,9 @@ dependencies = [
 
 [[package]]
 name = "term-wm-vt100"
-version = "0.16.2-patch2"
+version = "0.16.2-patch3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c417631d01b30907cf0117f4e39870408d05346f702d47bcb515ce3af0b7ac27"
+checksum = "84b3796f7a6532fee48833e1fef4da859a22cc0588b1a4eee092e5ed9762c69d"
 dependencies = [
  "itoa",
  "unicode-width",

@@ -1,6 +1,6 @@
 [package]
 name = "term-wm-crossterm-adapter"
-description = "Crossterm-to-core event translation adapter for term-wm."
+description = "Crossterm-to-core event translation and terminal (mouse-capture) state adapter for term-wm."
 keywords = ["crossterm", "terminal", "adapter", "backend"]
 categories = ["gui", "api-bindings", "command-line-interface"]
 version.workspace = true
@@ -16,3 +16,5 @@ term-wm-events = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+portable-pty = { workspace = true }
+term-session-mock = { workspace = true }

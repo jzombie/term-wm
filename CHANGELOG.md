@@ -1,8 +1,32 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-The format is based on Keep a Changelog and this project adheres to
+The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
+
+## [0.9.17-alpha] - 2016-08-09
+
+### Added
+
+- **Public API to distinguish app-owned windows from core/system windows:** `AppRootComponent` now exposes `is_custom()` / `is_core()` predicates, and `TermWmApp` adds `focused_is_custom()` / `focused_is_core()` queries reporting whether the currently focused window is an app-owned (`Custom`) pane or a framework/system window (`Terminal`, `Debug Log`, `System Panel`, …). Host apps can use these to gate global shortcuts on focus — e.g. not intercepting `q` while a PTY terminal or the Debug Log holds focus — without pattern-matching on the framework's component enum.
+
+### Changed
+
+- **System windows are now initialized automatically for every app:** the Debug Log and System Panel windows are created at `TermWmApp` construction time (hidden by default) on every construction path — the standalone constructors (`new_custom` / `new_with_config` / `new_with_actions`) and `from_wm` (used by the bundled `term-wm` binary). Previously apps had to call `init_system_windows()` themselves; examples like `dual_image` never did, so the "Debug Log" Command Palette toggle silently did nothing. The Debug Log toggle is also a default menu action, so it now works out of the box in every app.
+- **`sys-ui` Cargo feature removed:** the optional `sys-ui` feature was effectively dead — it was default-on, and its incomplete `#[cfg(feature = "sys-ui")]` gating meant a `--no-default-features` build already failed to compile. The feature flag and all its gates are gone; `term-wm-sys-ui-components` is now a plain (non-optional) dependency.
+
+### Fixed
+
+- **Windows: mouse input did not reach a nested `term-wm` instance or the term-session client.** When one of these ran inside another terminal emulator — a ConPTY child (term-wm hosted by term-wm, or a `term-session` attach) — clicks and drags were dead. Two root causes were fixed:
+  - The nested process requested mouse capture through crossterm's Windows `EnableMouseCapture`, which only calls `SetConsoleMode` on the console input handle and emits **no** ANSI — so the host emulator never saw the enable request and never routed mouse events back to the child. The term-session client's terminal init now emits the VT100 mouse-tracking sequences (`\x1b[?1000h…`) explicitly so the host detects tracking and forwards mouse input, and emits the disable on teardown.
+  - term-wm's own `set_mouse_capture` previously only wrote the ANSI; on Windows it now also sets `ENABLE_MOUSE_INPUT` on the console input handle (`SetConsoleMode`) so the child's crossterm reader surfaces the `MOUSE_EVENT_RECORD`s the host routes via SGR.
+  Regression tests cover the emitted ANSI (`init_terminal_writes_mouse_enable_ansi`, `terminal_guard_teardown_writes_mouse_disable_ansi`).
+
+- **Terminal output not repainting until the next console event in `TermWmApp::run()` apps:** the convenience `run()` path drove the loop with a console-only event source and handed the app a `pty_wakeup` channel whose receiver was dropped, so typing in a spawned terminal (e.g. `git push` in a terminal opened inside `examples/dual_image`) ran the child but its output never woke the event loop — the screen only updated after a mouse move. `run()` now uses the same `UnifiedEventSource` as the bundled binary (console input + PTY wakeups multiplexed) and re-wires any terminals spawned before `run()` to that source's channel, so child output repaints immediately. The bundled `term-wm` binary was unaffected (it already wired a live channel).
+
+- **PTY resize is now drain-synchronized (no more mid-draw grid churn, immediate idle resizes):** `Pty::resize` is now request-only — it records the requested size and wakes the reader, which applies the resize (vt100 reflow + OS `ioctl` / SIGWINCH) at the next **pipe-drain boundary** so the grid width never changes while the shell is mid-write. On Unix the wake is a self-pipe polled alongside the PTY master fd, so an idle shell resizes apply immediately; on Windows the wake aborts the blocking ConPTY read via `CancelSynchronousIo` (`ERROR_OPERATION_ABORTED` is treated as a wake, not an error). The reader's hot path no longer re-locks `master` for the fd on every drain iteration, and the clipboard handle is initialized lazily on the first OSC 52 sequence instead of blocking reader startup on the arboard handshake. New integration tests in `crates/term-wm-pty-engine/tests/drain_sync_resize.rs` cover drain-applied, rapid-coalesced, and idle-wake resizes (with an `AutoKillPty` drop guard so `cat`/`cmd.exe` are always reaped).
+
+- **Terminal grow no longer strands the prompt in blank space (via the `term-wm-vt100` fork, `0.16.2-patch3`):** when the terminal grows vertically, the emulator now keeps the prompt/cursor bottom-anchored instead of padding blank rows below it — growing reveals the most recent scrollback rows at the top (history pull-down, guarded to cursor-at-bottom + tail-follow so grow/shrink oscillations can't multiply blank lines), and a width+height grow that reflows content shorter than the new screen pads blanks *above* the prompt so it stays at the new bottom. Covered by new fork unit/integration tests.
 
 ## [0.9.16-alpha] - 2026-08-09
 
