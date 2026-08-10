@@ -428,6 +428,13 @@ impl TerminalComponent {
         exited
     }
 
+    /// Sync the pane's screen state (DSR responses, foreground polling) — the
+    /// same per-frame call `render` makes. Exposed so callers (and tests) can
+    /// drive exit detection without a full render pass.
+    pub fn sync_screen(&mut self) {
+        self.pane.borrow_mut().sync_screen();
+    }
+
     pub fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
         self.pane.borrow().exit_status()
     }

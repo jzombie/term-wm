@@ -726,14 +726,35 @@ mod tests {
             comp.paste(&line);
         }
 
+        // Exit detection is platform-dependent: on Unix the reader thread sees
+        // EOF and fires the exit callback directly. On Windows ConPTY swallows
+        // the reader EOF, so the app's per-frame `has_exited()` poll is what
+        // synthesizes the exit callback — and the child stalls at startup until
+        // the host answers its DSR cursor query (`sync_screen`). Drive both per
+        // frame here (the real event loop does exactly this every frame) so the
+        // test is platform-independent while still asserting the event arrives
+        // on the re-wired channel.
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            match rx.recv_timeout(remaining) {
-                Ok(UnifiedEvent::AppExited(k)) if k == key => break,
-                Ok(_) => continue,
-                Err(_) => panic!("timed out: child exit was not delivered on the re-wired channel"),
+            if let Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) =
+                app.wm().component_for_key_mut(key)
+            {
+                let mut comp = scroll_view.content.borrow_mut();
+                comp.sync_screen();
+                comp.has_exited();
             }
+            match rx.try_recv() {
+                Ok(UnifiedEvent::AppExited(k)) if k == key => break,
+                Ok(_) => {}
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    panic!("channel disconnected before child exit was delivered");
+                }
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out: child exit was not delivered on the re-wired channel");
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
