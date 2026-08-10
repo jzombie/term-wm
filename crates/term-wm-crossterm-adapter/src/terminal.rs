@@ -199,12 +199,16 @@ mod tests {
             "ENABLE_MOUSE_INPUT must be set after set_mouse_capture(true)"
         );
 
+        // crossterm's `DisableMouseCapture` restores the *original* console mode
+        // (captured at the first enable) rather than unconditionally clearing
+        // ENABLE_MOUSE_INPUT. So disable must return the mode to exactly what we
+        // observed at the start — the flag legitimately remains set if the
+        // console already had it before the test.
         set_mouse_capture(false).expect("disable must succeed");
         let disabled_mode = input_mode().expect("GetConsoleMode after disable");
         assert_eq!(
-            disabled_mode & ENABLE_MOUSE_INPUT,
-            0,
-            "ENABLE_MOUSE_INPUT must be cleared after set_mouse_capture(false)"
+            disabled_mode, original,
+            "disable must restore the pre-enable console mode"
         );
 
         // Restore defensively (crossterm's disable already restores the original
