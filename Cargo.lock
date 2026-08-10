@@ -3217,6 +3217,7 @@ version = "0.9.16-alpha"
 dependencies = [
  "crossterm",
  "insta",
+ "portable-pty",
  "term-wm-events",
 ]
 

@@ -108,6 +108,56 @@ mod tests {
         );
     }
 
+    /// Regression guard: the emitted bytes must match crossterm's canonical
+    /// `write_ansi` output exactly. A past "optimization" hardcoded the bytes and
+    /// silently dropped sequences nested parsers rely on (e.g. `\x1b[?1003h`
+    /// any-motion), breaking mouse tracking inside nested term-wm instances. This
+    /// pins the contract so any future deviation fails.
+    #[test]
+    fn test_set_mouse_capture_matches_crossterm_canonical() {
+        fn crossterm_canonical(enabled: bool) -> Vec<u8> {
+            use crossterm::Command as _;
+            struct Sink(Vec<u8>);
+            impl std::fmt::Write for Sink {
+                fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                    self.0.extend_from_slice(s.as_bytes());
+                    Ok(())
+                }
+            }
+            let mut sink = Sink(Vec::new());
+            if enabled {
+                crossterm::event::EnableMouseCapture
+                    .write_ansi(&mut sink)
+                    .expect("enable write_ansi");
+            } else {
+                crossterm::event::DisableMouseCapture
+                    .write_ansi(&mut sink)
+                    .expect("disable write_ansi");
+            }
+            sink.0
+        }
+
+        for enabled in [true, false] {
+            let mut actual = Vec::new();
+            set_mouse_capture_with(&mut actual, enabled).expect("set_mouse_capture_with");
+            assert_eq!(
+                actual,
+                crossterm_canonical(enabled),
+                "set_mouse_capture_with({enabled}) must emit crossterm's exact canonical bytes"
+            );
+        }
+
+        // Belt and suspenders: the any-motion sequence nested parsers depend on.
+        let mut actual = Vec::new();
+        set_mouse_capture_with(&mut actual, true).unwrap();
+        assert!(
+            actual
+                .windows(b"\x1b[?1003h".len())
+                .any(|w| w == b"\x1b[?1003h"),
+            "EnableMouseCapture must emit the any-motion \\x1b[?1003h that nested parsers rely on"
+        );
+    }
+
     /// Windows regression guard: `set_mouse_capture` must flip `ENABLE_MOUSE_INPUT`
     /// on the console input handle, not merely write ANSI — that flag is what lets
     /// crossterm's reader surface the `MOUSE_EVENT_RECORD`s a host emulator routes
