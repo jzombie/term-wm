@@ -17,6 +17,8 @@
 
 Designed for Linux, macOS, and Windows, `term-wm` brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line. Whether you require mathematically precise tiling for development workflows or overlapping floating windows with mouse support, `term-wm` delivers a native window management experience without requiring a display server.
 
+See the [changelog](CHANGELOG.md) for history (starting with v0.9.0-alpha).
+
 ---
 
 ## Usage
