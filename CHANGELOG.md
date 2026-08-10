@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ### Fixed
 
+- **Windows: mouse input did not reach a nested `term-wm` instance or the term-session client.** When one of these ran inside another terminal emulator — a ConPTY child (term-wm hosted by term-wm, or a `term-session` attach) — clicks and drags were dead. Two root causes were fixed:
+  - The nested process requested mouse capture through crossterm's Windows `EnableMouseCapture`, which only calls `SetConsoleMode` on the console input handle and emits **no** ANSI — so the host emulator never saw the enable request and never routed mouse events back to the child. The term-session client's terminal init now emits the VT100 mouse-tracking sequences (`\x1b[?1000h…`) explicitly so the host detects tracking and forwards mouse input, and emits the disable on teardown.
+  - term-wm's own `set_mouse_capture` previously only wrote the ANSI; on Windows it now also sets `ENABLE_MOUSE_INPUT` on the console input handle (`SetConsoleMode`) so the child's crossterm reader surfaces the `MOUSE_EVENT_RECORD`s the host routes via SGR.
+  Regression tests cover the emitted ANSI (`init_terminal_writes_mouse_enable_ansi`, `terminal_guard_teardown_writes_mouse_disable_ansi`).
+
 - **Terminal output not repainting until the next console event in `TermWmApp::run()` apps:** the convenience `run()` path drove the loop with a console-only event source and handed the app a `pty_wakeup` channel whose receiver was dropped, so typing in a spawned terminal (e.g. `git push` in a terminal opened inside `examples/dual_image`) ran the child but its output never woke the event loop — the screen only updated after a mouse move. `run()` now uses the same `UnifiedEventSource` as the bundled binary (console input + PTY wakeups multiplexed) and re-wires any terminals spawned before `run()` to that source's channel, so child output repaints immediately. The bundled `term-wm` binary was unaffected (it already wired a live channel).
 
 ## [0.9.16-alpha] - 2026-08-09
