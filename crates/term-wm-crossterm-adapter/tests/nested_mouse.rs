@@ -127,7 +127,13 @@ fn nested_mouse_child_receives_routed_mouse() {
     // exact working mode; the MOUSE_EVENT check below is the end-to-end verdict.
     #[cfg(windows)]
     {
-        wait_for_output(&rx, &mut out, "CONSOLE_MODE_BEFORE:", deadline, "CONSOLE_MODE_BEFORE");
+        wait_for_output(
+            &rx,
+            &mut out,
+            "CONSOLE_MODE_BEFORE:",
+            deadline,
+            "CONSOLE_MODE_BEFORE",
+        );
         wait_for_output(&rx, &mut out, "CONSOLE_MODE:", deadline, "CONSOLE_MODE");
 
         fn parse_mode(out: &[u8], marker: &str) -> u32 {

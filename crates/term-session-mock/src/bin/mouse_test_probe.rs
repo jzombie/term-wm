@@ -80,7 +80,10 @@ fn set_vt_input_mode() {
 
     // SAFETY: stdin inside a ConPTY is a console input handle.
     unsafe {
-        SetConsoleMode(std::io::stdin().as_raw_handle(), ENABLE_VIRTUAL_TERMINAL_INPUT);
+        SetConsoleMode(
+            std::io::stdin().as_raw_handle(),
+            ENABLE_VIRTUAL_TERMINAL_INPUT,
+        );
     }
 }
 
