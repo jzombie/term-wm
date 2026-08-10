@@ -45,6 +45,7 @@ use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
 use crate::utils::DelayedReleaseBool;
+use crate::utils::KeyedTaskDebouncer;
 #[cfg(test)]
 use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
@@ -395,10 +396,10 @@ pub struct WindowManager<
     layout_dirty: bool,
     /// Active toast notifications
     notification_queue: NotificationQueue,
-    /// Per-window pending Direct Mode toast: the buffered mode plus the armed
-    /// flush task id. A transition updates the buffered mode; the deadline is
-    /// anchored to the FIRST transition (leading-edge debounce with a cap).
-    direct_mode_debounce: HashMap<WindowKey, (TaskId, DirectInputMode)>,
+    /// Per-window pending Direct Mode toast. The debouncer buffers the latest
+    /// mode per window and arms ONE flush timer on the first transition (the
+    /// deadline is never pushed back — leading-edge debounce with a cap).
+    direct_mode_debounce: KeyedTaskDebouncer<WindowKey, DirectInputMode, SystemTask>,
     /// Universal input mode state machine
     pub(crate) input_mode: crate::actions::WmInputMode,
     /// Whether the FAB component is enabled
@@ -884,7 +885,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             drag_timer_id: None,
             temporal_timer_id: None,
             system_task_handle: None,
-            direct_mode_debounce: HashMap::new(),
+            direct_mode_debounce: KeyedTaskDebouncer::new(
+                DIRECT_MODE_TOAST_DEBOUNCE,
+                SystemTask::FlushDirectModeToast,
+            ),
             last_frame_area: Rect::default(),
             scroll_keyboard_enabled_default: true,
             floating_resize_offscreen,
@@ -2588,6 +2592,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Set the shared `TaskHandle<SystemTask>` for registering/cancelling system
     /// timers.  Called once by the runner during startup.
     pub fn set_system_task_handle(&mut self, handle: TaskHandle<SystemTask>) {
+        self.direct_mode_debounce.set_handle(handle.clone());
         self.system_task_handle = Some(handle);
     }
 
@@ -2688,35 +2693,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// Buffer a Direct Mode transition for a debounced toast.
     ///
-    /// Leading-edge debounce with a hard cap: the FIRST transition for a
+    /// Delegates to [`KeyedTaskDebouncer::submit`]: the first transition for a
     /// window arms the flush timer; later transitions only update the buffered
     /// mode (the deadline is never pushed back), so a slow-trickling sequence
     /// cannot starve the toast — it always fires `DIRECT_MODE_TOAST_DEBOUNCE`
     /// after the first transition in a burst.
     pub fn direct_input_mode_changed(&mut self, key: WindowKey, mode: DirectInputMode) {
-        let Some(handle) = &self.system_task_handle else {
-            // `run_with_defaults` always installs the system task handle before
-            // the loop; reaching here means a non-runner test path. No toast is
-            // produced (identical debounced semantics as production — tests
-            // that assert the toast must call `set_system_task_handle` first).
-            tracing::warn!("direct_input_mode_changed without system task handle; skipping");
-            return;
-        };
-        if let Some((_, buffered)) = self.direct_mode_debounce.get_mut(&key) {
-            *buffered = mode;
-            return;
-        }
-        let id = handle.schedule_once(
-            DIRECT_MODE_TOAST_DEBOUNCE,
-            SystemTask::FlushDirectModeToast(key),
-        );
-        self.direct_mode_debounce.insert(key, (id, mode));
+        self.direct_mode_debounce.submit(key, mode);
     }
 
     /// Flush the buffered Direct Mode as a single toast. Called by the runner
     /// when `SystemTask::FlushDirectModeToast` fires.
     pub fn flush_direct_mode_toast(&mut self, key: WindowKey) {
-        let Some((_, mode)) = self.direct_mode_debounce.remove(&key) else {
+        let Some(mode) = self.direct_mode_debounce.flush(key) else {
             return;
         };
         // The window may have closed during the debounce window.
@@ -5711,7 +5700,7 @@ mod tests {
         // One buffered entry carrying the LATEST mode.
         assert_eq!(wm.direct_mode_debounce.len(), 1);
         assert_eq!(
-            wm.direct_mode_debounce.get(&key).map(|(_, m)| *m),
+            wm.direct_mode_debounce.peek(key).copied(),
             Some(DirectInputMode {
                 keyboard: true,
                 mouse: true,
@@ -5739,7 +5728,7 @@ mod tests {
                 ..DirectInputMode::default()
             },
         );
-        let first_id = wm.direct_mode_debounce.get(&key).unwrap().0;
+        let first_id = wm.direct_mode_debounce.pending_task_id(key).unwrap();
 
         // A subsequent transition must NOT push the deadline back — the armed
         // TaskId stays the same (leading-edge cap).
@@ -5752,7 +5741,7 @@ mod tests {
             },
         );
         assert_eq!(
-            wm.direct_mode_debounce.get(&key).unwrap().0,
+            wm.direct_mode_debounce.pending_task_id(key).unwrap(),
             first_id,
             "second transition must not re-arm the flush timer"
         );
