@@ -27,12 +27,6 @@ pub fn get_mock_bin() -> PathBuf {
     get_bin("term-session-mock", "CARGO_BIN_EXE_term-session-mock")
 }
 
-/// Locate (building on demand if necessary) the compiled `mouse_test_probe`
-/// binary, using the same resolution strategy as [`get_mock_bin`].
-pub fn get_mouse_test_probe_bin() -> PathBuf {
-    get_bin("mouse_test_probe", "CARGO_BIN_EXE_mouse_test_probe")
-}
-
 /// The two conventional locations for the compiled `bin_name` binary.
 fn bin_candidates(bin_name: &str) -> (PathBuf, PathBuf) {
     let mut path = std::env::current_exe().expect("test exe path");

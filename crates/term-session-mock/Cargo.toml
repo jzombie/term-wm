@@ -18,7 +18,6 @@ path = "src/lib.rs"
 crossterm = { workspace = true }
 libc = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
-term-wm-crossterm-adapter = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
