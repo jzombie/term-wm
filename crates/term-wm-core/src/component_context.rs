@@ -8,6 +8,7 @@ use crate::hitbox_registry::HitboxId;
 use crate::keybindings::KeyBindings;
 use crate::window::WindowKey;
 use crate::wm_config::WmConfig;
+use term_wm_pty_engine::DirectInputMode;
 
 // Shared component rendering context
 //
@@ -31,7 +32,7 @@ use crate::wm_config::WmConfig;
 pub struct ComponentContext {
     focused: bool,
     overlay: bool,
-    direct_mode: bool,
+    direct_input_mode: DirectInputMode,
     window_key: Option<WindowKey>,
     viewport: ScrollViewport,
     scroll_handle: Option<ScrollHandle>,
@@ -259,7 +260,7 @@ impl ComponentContext {
         Self {
             focused,
             overlay: false,
-            direct_mode: false,
+            direct_input_mode: DirectInputMode::default(),
             window_key: None,
             viewport: ScrollViewport {
                 offset_x: 0,
@@ -290,9 +291,27 @@ impl ComponentContext {
         self.overlay
     }
 
-    /// Returns whether the component's window is in Direct Mode.
+    /// Returns whether the component's window is in Direct Mode (aggregate of
+    /// keyboard and mouse capture).
     pub const fn direct_mode(&self) -> bool {
-        self.direct_mode
+        self.direct_input_mode.requires_direct_input()
+    }
+
+    /// Returns whether the window requires full-keyboard passthrough
+    /// (alternate screen or custom margins). Independent of mouse capture.
+    pub const fn keyboard_direct(&self) -> bool {
+        self.direct_input_mode.keyboard
+    }
+
+    /// Returns whether the app captured the mouse (requested mouse tracking
+    /// with a supported encoding). Independent of keyboard direct mode.
+    pub const fn mouse_captured(&self) -> bool {
+        self.direct_input_mode.mouse
+    }
+
+    /// Returns the structured direct-input mode snapshot.
+    pub const fn direct_input_mode(&self) -> DirectInputMode {
+        self.direct_input_mode
     }
 
     /// Returns the viewport offset for this component.
@@ -365,10 +384,28 @@ impl ComponentContext {
         ctx
     }
 
+    // TODO: Consider deprecate; replace with with_direct_input_mode
     /// Return a new `ComponentContext` with a modified `direct_mode` flag.
+    ///
+    /// Back-compat convenience: maps to both keyboard and mouse capture so
+    /// `direct_mode()` reads the same as before. Prefer
+    /// [`with_direct_input_mode`](Self::with_direct_input_mode) for the split
+    /// representation.
     pub fn with_direct_mode(&self, direct_mode: bool) -> Self {
         let mut ctx = self.clone();
-        ctx.direct_mode = direct_mode;
+        ctx.direct_input_mode = DirectInputMode {
+            keyboard: direct_mode,
+            mouse: direct_mode,
+            ..ctx.direct_input_mode
+        };
+        ctx
+    }
+
+    /// Return a new `ComponentContext` with the full structured direct-input
+    /// mode snapshot (independent keyboard/mouse dimensions).
+    pub fn with_direct_input_mode(&self, mode: DirectInputMode) -> Self {
+        let mut ctx = self.clone();
+        ctx.direct_input_mode = mode;
         ctx
     }
 
@@ -494,6 +531,36 @@ mod tests {
         let ctx = ComponentContext::new(false).with_direct_mode(true);
         assert!(!ctx.focused());
         assert!(ctx.direct_mode());
+    }
+
+    #[test]
+    fn direct_input_mode_dimensions_split() {
+        use term_wm_pty_engine::DirectInputMode;
+
+        // Keyboard-only (pico/nano): aggregate on, mouse off.
+        let ctx = ComponentContext::new(true).with_direct_input_mode(DirectInputMode {
+            keyboard: true,
+            mouse: false,
+            ..DirectInputMode::default()
+        });
+        assert!(ctx.direct_mode());
+        assert!(ctx.keyboard_direct());
+        assert!(!ctx.mouse_captured());
+
+        // Mouse-only.
+        let ctx = ComponentContext::new(true).with_direct_input_mode(DirectInputMode {
+            keyboard: false,
+            mouse: true,
+            ..DirectInputMode::default()
+        });
+        assert!(ctx.direct_mode());
+        assert!(!ctx.keyboard_direct());
+        assert!(ctx.mouse_captured());
+
+        // with_direct_mode(bool) maps to both dimensions for back-compat.
+        let ctx = ComponentContext::new(true).with_direct_mode(true);
+        assert!(ctx.keyboard_direct());
+        assert!(ctx.mouse_captured());
     }
 
     use crate::events::{

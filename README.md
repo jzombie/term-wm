@@ -17,6 +17,8 @@
 
 Designed for Linux, macOS, and Windows, `term-wm` brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line. Whether you require mathematically precise tiling for development workflows or overlapping floating windows with mouse support, `term-wm` delivers a native window management experience without requiring a display server.
 
+See the [changelog](CHANGELOG.md) for history (starting with v0.9.0-alpha).
+
 ---
 
 ## Usage
@@ -60,6 +62,8 @@ New terminal windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windo
 #### Direct Mode Keybindings
 
 `term-wm` automatically enters **Direct Mode** (unfiltered, zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
+
+Direct Mode is **split into two independent dimensions**: *keyboard* (alternate screen / custom margins → raw key passthrough) and *mouse capture* (the app explicitly requested mouse tracking via `\x1b[?1000h`/`\x1b[?1002h`/`\x1b[?1003h`). Keyboard and mouse are granted independently — an app on the alternate screen without mouse tracking (e.g. `pico`/`nano`) keeps native text selection and wheel scrolling.
 
 This mode is application-specific and different windows running different applications can be in different modes at once.
 
@@ -108,9 +112,18 @@ Traditional terminal multiplexers often collide with the keybindings of the appl
 
 ## Automatic Direct Mode
 
-`term-wm` features zero-configuration input routing. **Direct Mode is automatic.** Driven by the `DirectInputTracker`, `term-wm` continuously monitors the PTY state. When a child application (such as `vim`, `emacs`, or `tmux`) requests the **alternate screen buffer**, enables **mouse tracking**, or defines **custom scroll margins**, the window manager automatically steps out of the way. 
+`term-wm` features zero-configuration input routing. **Direct Mode is automatic.** Driven by the `DirectInputTracker`, `term-wm` continuously monitors the PTY state. When a child application (such as `vim`, `emacs`, or `tmux`) requests the **alternate screen buffer**, enables **mouse tracking**, or defines **custom scroll margins**, the window manager automatically steps out of the way.
 
-All keyboard and mouse events pass through to the application unfiltered, with zero latency. A brief notification toast appears to indicate the transition. The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
+The routing decision is a structured `DirectInputMode` snapshot with independent **keyboard** and **mouse** dimensions:
+
+* **Keyboard direct** (alternate screen / custom margins): all keystrokes pass through to the application unfiltered, with zero latency. Native scrollback navigation is suspended.
+* **Mouse capture** (app requested mouse tracking): mouse events are encoded (SGR/X11) and forwarded to the application. Native text selection is suspended *only while the app holds the mouse*. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling.
+
+A brief notification toast appears on transitions and shows the window's combined access, coalescing rapid sub-mode shifts into one message (e.g. `Direct Mode (keyboard and mouse) enabled for vim`, `Direct Mode (keyboard) enabled for nano`). The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
+
+### Overriding App Mouse Capture
+
+To force native text selection inside an app that captured the mouse, hold **Shift** (or **Option** on macOS) while clicking and dragging. This is best-effort: it applies to SGR mouse streams that reach `term-wm` — when running nested inside a host terminal emulator, the host intercepts `Shift+mouse` first and performs its own selection.
 
 ## Window Snapping with Preview
 

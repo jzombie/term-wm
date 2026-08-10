@@ -45,11 +45,20 @@ use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
 use crate::utils::DelayedReleaseBool;
+use crate::utils::KeyedTaskDebouncer;
 #[cfg(test)]
 use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
 use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
+use term_wm_pty_engine::DirectInputMode;
+
+/// How long a Direct Mode toast waits after the FIRST transition in a burst
+/// before being flushed. Subsequent transitions only update the buffered mode
+/// (the deadline is never pushed back), so a burst can't starve the toast.
+const DIRECT_MODE_TOAST_DEBOUNCE: Duration = Duration::from_millis(200);
+/// How long a Direct Mode toast stays visible.
+const DIRECT_MODE_TOAST_TTL: Duration = Duration::from_secs(3);
 
 /// State machine for in-progress mouse operations (drag, resize).
 ///
@@ -387,6 +396,10 @@ pub struct WindowManager<
     layout_dirty: bool,
     /// Active toast notifications
     notification_queue: NotificationQueue,
+    /// Per-window pending Direct Mode toast. The debouncer buffers the latest
+    /// mode per window and arms ONE flush timer on the first transition (the
+    /// deadline is never pushed back — leading-edge debounce with a cap).
+    direct_mode_debounce: KeyedTaskDebouncer<WindowKey, DirectInputMode, SystemTask>,
     /// Universal input mode state machine
     pub(crate) input_mode: crate::actions::WmInputMode,
     /// Whether the FAB component is enabled
@@ -725,6 +738,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .unwrap_or(false)
     }
 
+    /// The window's structured direct-input mode snapshot (independent
+    /// keyboard/mouse dimensions), used for routing, toasts, and debug logging.
+    pub fn direct_input_mode(&self, key: WindowKey) -> term_wm_pty_engine::DirectInputMode {
+        self.windows
+            .get(key)
+            .map(|w| w.direct_input_mode())
+            .unwrap_or_default()
+    }
+
     /// Set the automatic direct-input tracker for a window.
     pub fn set_window_tracker(
         &mut self,
@@ -863,6 +885,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             drag_timer_id: None,
             temporal_timer_id: None,
             system_task_handle: None,
+            direct_mode_debounce: KeyedTaskDebouncer::new(
+                DIRECT_MODE_TOAST_DEBOUNCE,
+                SystemTask::FlushDirectModeToast,
+            ),
             last_frame_area: Rect::default(),
             scroll_keyboard_enabled_default: true,
             floating_resize_offscreen,
@@ -1121,10 +1147,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Resolves the manual override (`None` = auto) against the automatic
     /// PTY heuristic (alternate screen, mouse tracking, margins).
     pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
-        let resolved = self.direct_mode(key);
+        let mode = self.direct_input_mode(key);
         let mut ctx = self
             .component_context(focused)
-            .with_direct_mode(resolved)
+            .with_direct_input_mode(mode)
             .with_window_key(key)
             .with_screen_area(self.region(key));
         // Inject the window's active keyboard focus into the context.
@@ -2566,6 +2592,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Set the shared `TaskHandle<SystemTask>` for registering/cancelling system
     /// timers.  Called once by the runner during startup.
     pub fn set_system_task_handle(&mut self, handle: TaskHandle<SystemTask>) {
+        self.direct_mode_debounce.set_handle(handle.clone());
         self.system_task_handle = Some(handle);
     }
 
@@ -2662,6 +2689,40 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         tracing::info!("dismiss_notification: id={}", id);
         self.notification_queue.dismiss(id);
         self.mark_layout_dirty();
+    }
+
+    /// Buffer a Direct Mode transition for a debounced toast.
+    ///
+    /// Delegates to [`KeyedTaskDebouncer::submit`]: the first transition for a
+    /// window arms the flush timer; later transitions only update the buffered
+    /// mode (the deadline is never pushed back), so a slow-trickling sequence
+    /// cannot starve the toast — it always fires `DIRECT_MODE_TOAST_DEBOUNCE`
+    /// after the first transition in a burst.
+    pub fn direct_input_mode_changed(&mut self, key: WindowKey, mode: DirectInputMode) {
+        self.direct_mode_debounce.submit(key, mode);
+    }
+
+    /// Flush the buffered Direct Mode as a single toast. Called by the runner
+    /// when `SystemTask::FlushDirectModeToast` fires.
+    pub fn flush_direct_mode_toast(&mut self, key: WindowKey) {
+        let Some(mode) = self.direct_mode_debounce.flush(key) else {
+            return;
+        };
+        // The window may have closed during the debounce window.
+        if !self.windows.contains_key(key) {
+            return;
+        }
+        let title = self.window_title(key);
+        let message = if mode.requires_direct_input() {
+            format!(
+                "Direct Mode ({}) enabled for {}",
+                mode.access_label(),
+                title
+            )
+        } else {
+            format!("Direct Mode disabled for {}", title)
+        };
+        self.push_notification(message, DIRECT_MODE_TOAST_TTL);
     }
 
     /// Read-only access to the notification queue.
@@ -5583,6 +5644,159 @@ mod tests {
         assert_eq!(wm.power_profile, PowerProfile::Interactive);
         wm.set_power_profile(PowerProfile::PowerSaver);
         assert_eq!(wm.power_profile, PowerProfile::PowerSaver);
+    }
+
+    fn make_direct_mode_wm() -> (
+        WindowManager<TestComponent>,
+        crate::task_scheduler::TaskHandle<SystemTask>,
+        WindowKey,
+    ) {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let scheduler = crate::task_scheduler::TaskScheduler::<SystemTask>::new();
+        let handle = scheduler.handle();
+        wm.set_system_task_handle(handle.clone());
+        let keys = make_keys(&mut wm, 1);
+        let key = keys[0];
+        wm.set_window_title(key, "vim");
+        (wm, handle, key)
+    }
+
+    fn direct_mode_messages(wm: &WindowManager<TestComponent>) -> Vec<String> {
+        wm.notifications()
+            .renderable()
+            .map(|n| n.message.as_ref().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn direct_mode_toast_debounce_coalesces() {
+        let (mut wm, _scheduler, key) = make_direct_mode_wm();
+
+        // vim startup burst: alternate screen (keyboard) then mouse tracking
+        // (keyboard + mouse) within the debounce window.
+        wm.direct_input_mode_changed(
+            key,
+            DirectInputMode {
+                keyboard: true,
+                mouse: false,
+                ..DirectInputMode::default()
+            },
+        );
+        wm.direct_input_mode_changed(
+            key,
+            DirectInputMode {
+                keyboard: true,
+                mouse: true,
+                ..DirectInputMode::default()
+            },
+        );
+
+        // One buffered entry carrying the LATEST mode.
+        assert_eq!(wm.direct_mode_debounce.len(), 1);
+        assert_eq!(
+            wm.direct_mode_debounce.peek(key).copied(),
+            Some(DirectInputMode {
+                keyboard: true,
+                mouse: true,
+                ..DirectInputMode::default()
+            })
+        );
+        // No toast until the flush fires.
+        assert!(direct_mode_messages(&wm).is_empty());
+
+        wm.flush_direct_mode_toast(key);
+        let msgs = direct_mode_messages(&wm);
+        assert_eq!(msgs.len(), 1, "must be a single coalesced toast");
+        assert_eq!(msgs[0], "Direct Mode (keyboard and mouse) enabled for vim");
+    }
+
+    #[test]
+    fn direct_mode_toast_cap_does_not_reschedule() {
+        let (mut wm, scheduler, key) = make_direct_mode_wm();
+
+        wm.direct_input_mode_changed(
+            key,
+            DirectInputMode {
+                keyboard: true,
+                mouse: false,
+                ..DirectInputMode::default()
+            },
+        );
+        let first_id = wm.direct_mode_debounce.pending_task_id(key).unwrap();
+
+        // A subsequent transition must NOT push the deadline back — the armed
+        // TaskId stays the same (leading-edge cap).
+        wm.direct_input_mode_changed(
+            key,
+            DirectInputMode {
+                keyboard: true,
+                mouse: true,
+                ..DirectInputMode::default()
+            },
+        );
+        assert_eq!(
+            wm.direct_mode_debounce.pending_task_id(key).unwrap(),
+            first_id,
+            "second transition must not re-arm the flush timer"
+        );
+
+        // Drain before the deadline yields nothing.
+        assert!(scheduler.drain_expired_once().is_empty());
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(scheduler.drain_expired_once().is_empty());
+
+        // After the window elapses, exactly ONE flush fires with the latest mode.
+        std::thread::sleep(Duration::from_millis(180));
+        let expired = scheduler.drain_expired_once();
+        assert_eq!(expired.len(), 1, "must be exactly one flush task");
+        assert!(matches!(
+            expired[0].1,
+            SystemTask::FlushDirectModeToast(k) if k == key
+        ));
+
+        wm.flush_direct_mode_toast(key);
+        let msgs = direct_mode_messages(&wm);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0], "Direct Mode (keyboard and mouse) enabled for vim");
+    }
+
+    #[test]
+    fn direct_mode_toast_disabled() {
+        let (mut wm, _scheduler, key) = make_direct_mode_wm();
+
+        wm.direct_input_mode_changed(key, DirectInputMode::default());
+        wm.flush_direct_mode_toast(key);
+        let msgs = direct_mode_messages(&wm);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0], "Direct Mode disabled for vim");
+    }
+
+    #[test]
+    fn direct_mode_toast_skips_closed_window() {
+        let (mut wm, _scheduler, key) = make_direct_mode_wm();
+
+        wm.direct_input_mode_changed(
+            key,
+            DirectInputMode {
+                keyboard: true,
+                mouse: true,
+                ..DirectInputMode::default()
+            },
+        );
+        // Simulate the window being destroyed during the debounce window.
+        wm.windows.remove(key);
+
+        wm.flush_direct_mode_toast(key);
+        assert!(
+            direct_mode_messages(&wm).is_empty(),
+            "no toast may be pushed for a removed window"
+        );
     }
 
     #[test]

@@ -12,7 +12,9 @@ pub mod title;
 pub use input_encoding::{ctrl_char, key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
 pub use pane::Pane;
 pub use pty::{Pty, PtyResult};
-pub use pty_state_tracker::{DirectInputTracker, MouseTrackingMode, PtyStateTracker};
+pub use pty_state_tracker::{
+    DirectInputMode, DirectInputTracker, MouseTrackingMode, PtyStateTracker,
+};
 
 /// Status notifications from the PTY reader thread to the main loop.
 /// The engine crate is agnostic about `WindowKey` and `UnifiedEvent`.
@@ -22,6 +24,8 @@ pub enum PtyStatus {
     Wakeup,
     /// Child process exited / EOF on PTY master.
     Exited,
-    /// Application input routing state changed (alt screen, mouse tracking, margins).
-    DirectInputChanged(bool),
+    /// Application input routing state changed. Carries the new mode snapshot
+    /// so sub-mode shifts (e.g. alt screen → +mouse tracking) notify even when
+    /// the aggregate boolean is unchanged.
+    DirectInputChanged(DirectInputMode),
 }

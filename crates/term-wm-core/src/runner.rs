@@ -238,11 +238,10 @@ where
     }
 
     // Phase 2 Fallback Prep: Compute immutable state FIRST, before mutably borrowing app
+    // `component_context_for` resolves and injects the window's structured
+    // direct-input mode (independent keyboard/mouse dimensions).
     let direct_mode = app.wm().direct_mode(focus_id);
-    let ctx = app
-        .wm()
-        .component_context_for(!direct_mode, focus_id)
-        .with_direct_mode(direct_mode);
+    let ctx = app.wm().component_context_for(!direct_mode, focus_id);
     let Some((_, localized_evt)) = app.wm().focused_window_event(event) else {
         return false;
     };
@@ -340,6 +339,9 @@ where
                     SystemTask::DismissNotification(id) => {
                         app.wm().dismiss_notification(id);
                     }
+                    SystemTask::FlushDirectModeToast(key) => {
+                        app.wm().flush_direct_mode_toast(key);
+                    }
                     SystemTask::ClearTabOutline => {
                         if let Some(expires_at) = app.wm().tab_outline_until
                             && std::time::Instant::now() >= expires_at
@@ -378,13 +380,15 @@ where
             if !transitions.is_empty() {
                 tracing::info!("[STAGE 4] Draining {} transitions", transitions.len());
             }
-            for (key, enabled) in transitions {
-                let status = if enabled { "enabled" } else { "disabled" };
-                let title = app.wm().window_title(key);
-                app.wm().push_notification(
-                    format!("Direct Mode {} for {}", status, title),
-                    Duration::from_secs(3),
-                );
+            for (key, mode) in transitions {
+                // Debounced toast — coalesces rapid sub-mode transitions
+                // (e.g. vim's alt-screen + mouse-tracking startup pair) into a
+                // single notification with the combined access phrase.
+                app.wm().direct_input_mode_changed(key, mode);
+                tracing::debug!(?key, ?mode, "direct input mode transition");
+                if let Some(handle) = crate::debug_log::global_debug_log() {
+                    handle.push(format!("[direct-mode] window={:?} mode={:?}", key, mode));
+                }
             }
             // PTY child exit removed a window — redraw the layout.
             driver.request_redraw();
@@ -646,7 +650,7 @@ where
                 // Layer 2c: Direct Mode check — forward key events straight to PTY
                 if let Event::Key(key) = &evt {
                     let focus_id = app.wm().focused_window();
-                    if app.wm().direct_mode(focus_id)
+                    if app.wm().direct_input_mode(focus_id).keyboard
                         && !app.wm().command_menu_visible()
                         && matches!(key.kind, KeyKind::Press | KeyKind::Repeat)
                     {

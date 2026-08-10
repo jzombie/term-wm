@@ -295,14 +295,13 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
                         PtyStatus::Exited => {
                             let _ = tx.send(UnifiedEvent::AppExited(key));
                         }
-                        PtyStatus::DirectInputChanged(enabled) => {
+                        PtyStatus::DirectInputChanged(mode) => {
                             tracing::info!(
-                                "Sending DirectInputChanged({}) for key {:?}",
-                                enabled,
+                                "Sending DirectInputChanged({:?}) for key {:?}",
+                                mode,
                                 key
                             );
-                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, enabled))
-                            {
+                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, mode)) {
                                 tracing::error!("Channel send failed: {:?}", e);
                             }
                         }

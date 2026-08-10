@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::events::{Event, KeyEvent, MouseEvent};
 use crate::power_profile::PowerProfile;
+use term_wm_pty_engine::DirectInputMode;
 
 pub trait EventSource {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
@@ -56,7 +57,7 @@ pub trait EventSource {
     }
 
     /// Take accumulated direct-input routing transitions. Default returns empty.
-    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, bool)> {
+    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, DirectInputMode)> {
         Vec::new()
     }
 
@@ -125,7 +126,7 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
         (**self).take_dirty_windows()
     }
 
-    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, bool)> {
+    fn take_direct_input_changed(&mut self) -> Vec<(crate::window::WindowKey, DirectInputMode)> {
         (**self).take_direct_input_changed()
     }
 
