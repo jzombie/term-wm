@@ -1,9 +1,10 @@
-//! Probe binary for the nested-mouse integration test.
+//! Probe binary for the nested-mouse regression test
+//! (`term-wm-crossterm-adapter/tests/nested_mouse.rs`).
 //!
-//! Run by `tests/nested_mouse.rs` *inside* a real `portable_pty` pair, so its
-//! `stdin` is an actual console/ConPTY input handle (unlike the test process,
-//! whose stdin is a redirected pipe in CI). It enables mouse capture through
-//! the adapter and reports:
+//! Run by that test *inside* a real `portable_pty` pair, so its `stdin` is an
+//! actual console/ConPTY input handle (unlike the test process, whose stdin is
+//! a redirected pipe in CI). It enables mouse capture through the adapter and
+//! reports:
 //!
 //! - `MOUSE_READY` — after mouse capture is enabled.
 //! - `CONSOLE_MODE:<hex>` — Windows only: the `GetConsoleMode` value of its own

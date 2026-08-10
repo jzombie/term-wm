@@ -17,10 +17,4 @@ term-wm-events = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true }
 portable-pty = { workspace = true }
-
-# Test-only fixture spawned by `tests/nested_mouse.rs` inside a PTY pair so its
-# stdin is a real console/ConPTY input handle. Never published.
-[[bin]]
-name = "mouse_test_probe"
-path = "src/bin/mouse_test_probe.rs"
-publish = false
+term-session-mock = { workspace = true }
