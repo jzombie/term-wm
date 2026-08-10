@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
-use term_wm_core::events::{Event, KeyCode, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use term_wm_core::events::{
+    Event, KeyCode, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use term_wm_vt100::MouseProtocolEncoding;
 
 use crate::helpers::{

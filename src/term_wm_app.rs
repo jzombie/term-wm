@@ -301,8 +301,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
                                 mode,
                                 key
                             );
-                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, mode))
-                            {
+                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, mode)) {
                                 tracing::error!("Channel send failed: {:?}", e);
                             }
                         }

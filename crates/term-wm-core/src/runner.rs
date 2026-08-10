@@ -387,10 +387,7 @@ where
                 app.wm().direct_input_mode_changed(key, mode);
                 tracing::debug!(?key, ?mode, "direct input mode transition");
                 if let Some(handle) = crate::debug_log::global_debug_log() {
-                    handle.push(format!(
-                        "[direct-mode] window={:?} mode={:?}",
-                        key, mode
-                    ));
+                    handle.push(format!("[direct-mode] window={:?} mode={:?}", key, mode));
                 }
             }
             // PTY child exit removed a window — redraw the layout.

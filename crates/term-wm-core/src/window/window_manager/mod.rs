@@ -2725,7 +2725,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
         let title = self.window_title(key);
         let message = if mode.requires_direct_input() {
-            format!("Direct Mode ({}) enabled for {}", mode.access_label(), title)
+            format!(
+                "Direct Mode ({}) enabled for {}",
+                mode.access_label(),
+                title
+            )
         } else {
             format!("Direct Mode disabled for {}", title)
         };
