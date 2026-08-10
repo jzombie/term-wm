@@ -8,7 +8,7 @@
 //! it spawns a programmatic PTY pair (`portable_pty::openpty`) instead of
 //! relying on the test process's own (piped) stdin.
 //!
-//! The probe binary (`src/bin/mouse_probe.rs`) runs inside the PTY pair and
+//! The probe binary (`src/bin/mouse_test_probe.rs`) runs inside the PTY pair and
 //! reports markers on its stdout:
 //!   MOUSE_READY        — mouse capture enabled
 //!   CONSOLE_MODE:<hex> — Windows: GetConsoleMode of the child's stdin
@@ -69,7 +69,7 @@ fn nested_mouse_child_receives_routed_mouse() {
 
     let mut child = pair
         .slave
-        .spawn_command(CommandBuilder::new(env!("CARGO_BIN_EXE_mouse_probe")))
+        .spawn_command(CommandBuilder::new(env!("CARGO_BIN_EXE_mouse_test_probe")))
         .expect("spawn mouse probe");
     drop(pair.slave);
 
