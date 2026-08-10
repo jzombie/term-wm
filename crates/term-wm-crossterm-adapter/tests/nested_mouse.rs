@@ -27,7 +27,9 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 #[cfg(windows)]
-const ENABLE_MOUSE_INPUT: u32 = 0x0010;
+const MOUSE_INPUT_FLAGS: u32 = 0x0010 | 0x0080 | 0x0008;
+#[cfg(windows)]
+const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
 /// Accumulate probe output until `needle` appears, panicking with the output
 /// seen so far on timeout / disconnect.
@@ -117,25 +119,41 @@ fn nested_mouse_child_receives_routed_mouse() {
 
     wait_for_output(&rx, &mut out, "MOUSE_READY", deadline, "MOUSE_READY");
 
-    // Windows: the probe's own console input mode must carry ENABLE_MOUSE_INPUT —
-    // this is the flag that lets a ConPTY child's crossterm reader surface the
-    // MOUSE_EVENT_RECORDs a host routes via SGR.
+    // Windows: nested mouse only works when `set_mouse_capture` *replaces* the
+    // child's console input mode with the mouse flags (0x98), clearing the
+    // ENABLE_VIRTUAL_TERMINAL_INPUT the probe started with. The OR/AND variant
+    // preserves 0x200 (→ 0x298) and the host's routed SGR never surfaces as a
+    // MOUSE_EVENT_RECORD. Assert the precondition (started at 0x200) and the
+    // exact working mode; the MOUSE_EVENT check below is the end-to-end verdict.
     #[cfg(windows)]
     {
+        wait_for_output(&rx, &mut out, "CONSOLE_MODE_BEFORE:", deadline, "CONSOLE_MODE_BEFORE");
         wait_for_output(&rx, &mut out, "CONSOLE_MODE:", deadline, "CONSOLE_MODE");
-        let text = String::from_utf8_lossy(&out);
-        let mode_line = text
-            .split('\n')
-            .find(|line| line.contains("CONSOLE_MODE:"))
-            .expect("CONSOLE_MODE marker present");
-        let hex = mode_line.trim().rsplit(':').next().unwrap_or("");
-        let mode = u32::from_str_radix(hex.trim_start_matches("0x"), 16)
-            .expect("parse CONSOLE_MODE hex value");
-        assert_ne!(
-            mode & ENABLE_MOUSE_INPUT,
-            0,
-            "ENABLE_MOUSE_INPUT (0x{ENABLE_MOUSE_INPUT:x}) must be set on the child's \
-             console input; mode={mode:#010x}"
+
+        fn parse_mode(out: &[u8], marker: &str) -> u32 {
+            let text = String::from_utf8_lossy(out);
+            let line = text
+                .split('\n')
+                .find(|l| l.contains(marker))
+                .unwrap_or_else(|| panic!("{marker} marker present"));
+            let hex = line.trim().rsplit(':').next().unwrap_or("");
+            u32::from_str_radix(hex.trim_start_matches("0x"), 16)
+                .unwrap_or_else(|_| panic!("parse {marker} hex value"))
+        }
+
+        let before = parse_mode(&out, "CONSOLE_MODE_BEFORE:");
+        let after = parse_mode(&out, "CONSOLE_MODE:");
+        assert_eq!(
+            before & ENABLE_VIRTUAL_TERMINAL_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_INPUT,
+            "probe must start with ENABLE_VIRTUAL_TERMINAL_INPUT set (like term-wm's \
+             raw-mode state) or the test can't discriminate; before={before:#010x}"
+        );
+        assert_eq!(
+            after, MOUSE_INPUT_FLAGS,
+            "set_mouse_capture must replace the mode with exactly the mouse flags \
+             (0x{MOUSE_INPUT_FLAGS:x}), clearing ENABLE_VIRTUAL_TERMINAL_INPUT; \
+             before={before:#010x} after={after:#010x}"
         );
     }
 
