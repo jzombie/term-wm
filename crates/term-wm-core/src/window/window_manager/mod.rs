@@ -36,7 +36,6 @@ use super::entry::{Window, WindowState};
 use crate::actions::{EventResult, SystemTask, TermWmAction};
 use crate::app_context::AppContext;
 use crate::components::{Component, ComponentAction, ComponentContext, Overlay, WmComponent};
-use crate::debounce::KeyedTaskDebouncer;
 use crate::hitbox_registry::HitboxRegistry;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
@@ -46,6 +45,7 @@ use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
 use crate::utils::DelayedReleaseBool;
+use crate::utils::KeyedTaskDebouncer;
 #[cfg(test)]
 use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
