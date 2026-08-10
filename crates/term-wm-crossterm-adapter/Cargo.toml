@@ -17,4 +17,3 @@ term-wm-events = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true }
 portable-pty = { workspace = true }
-term-session-mock = { workspace = true }

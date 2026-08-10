@@ -8,8 +8,8 @@
 //! it spawns a programmatic PTY pair (`portable_pty::openpty`) instead of
 //! relying on the test process's own (piped) stdin.
 //!
-//! The probe binary (`term-session-mock/src/bin/mouse_test_probe.rs`) runs
-//! inside the PTY pair and reports markers on its stdout:
+//! The probe binary (`term-wm-crossterm-adapter/src/bin/mouse_test_probe.rs`)
+//! runs inside the PTY pair and reports markers on its stdout:
 //!   MOUSE_READY        — mouse capture enabled
 //!   CONSOLE_MODE:<hex> — Windows: GetConsoleMode of the child's stdin
 //!   MOUSE_EVENT:<dbg>  — a crossterm mouse event was received
@@ -71,9 +71,7 @@ fn nested_mouse_child_receives_routed_mouse() {
 
     let mut child = pair
         .slave
-        .spawn_command(CommandBuilder::new(
-            term_session_mock::get_mouse_test_probe_bin(),
-        ))
+        .spawn_command(CommandBuilder::new(env!("CARGO_BIN_EXE_mouse_test_probe")))
         .expect("spawn mouse probe");
     drop(pair.slave);
 

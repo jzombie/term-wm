@@ -15,10 +15,8 @@ name = "term_session_mock"
 path = "src/lib.rs"
 
 [dependencies]
-crossterm = { workspace = true }
 libc = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
-term-wm-crossterm-adapter = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
