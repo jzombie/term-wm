@@ -119,7 +119,7 @@ The routing decision is a structured `DirectInputMode` snapshot with independent
 * **Keyboard direct** (alternate screen / custom margins): all keystrokes pass through to the application unfiltered, with zero latency. Native scrollback navigation is suspended.
 * **Mouse capture** (app requested mouse tracking): mouse events are encoded (SGR/X11) and forwarded to the application. Native text selection is suspended *only while the app holds the mouse*. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling.
 
-A brief notification toast appears on transitions and shows the window's access level (e.g. `Direct Mode (Full) enabled for vim`). The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
+A brief notification toast appears on transitions and shows the window's combined access, coalescing rapid sub-mode shifts into one message (e.g. `Direct Mode (keyboard and mouse) enabled for vim`, `Direct Mode (keyboard) enabled for nano`). The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
 
 ### Overriding App Mouse Capture
 

@@ -339,6 +339,9 @@ where
                     SystemTask::DismissNotification(id) => {
                         app.wm().dismiss_notification(id);
                     }
+                    SystemTask::FlushDirectModeToast(key) => {
+                        app.wm().flush_direct_mode_toast(key);
+                    }
                     SystemTask::ClearTabOutline => {
                         if let Some(expires_at) = app.wm().tab_outline_until
                             && std::time::Instant::now() >= expires_at
@@ -378,16 +381,10 @@ where
                 tracing::info!("[STAGE 4] Draining {} transitions", transitions.len());
             }
             for (key, mode) in transitions {
-                let title = app.wm().window_title(key);
-                let status = if mode.requires_direct_input() {
-                    format!("Direct Mode ({}) enabled", mode.access_label())
-                } else {
-                    "Direct Mode disabled".to_string()
-                };
-                app.wm().push_notification(
-                    format!("{} for {}", status, title),
-                    Duration::from_secs(3),
-                );
+                // Debounced toast — coalesces rapid sub-mode transitions
+                // (e.g. vim's alt-screen + mouse-tracking startup pair) into a
+                // single notification with the combined access phrase.
+                app.wm().direct_input_mode_changed(key, mode);
                 tracing::debug!(?key, ?mode, "direct input mode transition");
                 if let Some(handle) = crate::debug_log::global_debug_log() {
                     handle.push(format!(

@@ -39,13 +39,14 @@ impl DirectInputMode {
         self.requires_direct_input()
     }
 
-    /// Human-readable access level used by the transition toast.
+    /// Human-readable access phrase used by the transition toast, e.g.
+    /// `Direct Mode (keyboard and mouse) enabled for vim`.
     pub fn access_label(&self) -> &'static str {
         match (self.keyboard, self.mouse) {
-            (true, true) => "Full",
-            (true, false) => "Keyboard",
-            (false, true) => "Mouse",
-            (false, false) => "Off",
+            (true, true) => "keyboard and mouse",
+            (true, false) => "keyboard",
+            (false, true) => "mouse",
+            (false, false) => "off",
         }
     }
 }
@@ -627,7 +628,7 @@ mod tests {
         let mode = tracker.direct_input_mode();
         assert!(mode.keyboard);
         assert!(!mode.mouse);
-        assert_eq!(mode.access_label(), "Keyboard");
+        assert_eq!(mode.access_label(), "keyboard");
         assert!(mode.requires_direct_input());
     }
 
@@ -638,7 +639,7 @@ mod tests {
         let mode = tracker.direct_input_mode();
         assert!(!mode.keyboard);
         assert!(mode.mouse);
-        assert_eq!(mode.access_label(), "Mouse");
+        assert_eq!(mode.access_label(), "mouse");
     }
 
     #[test]
@@ -648,7 +649,7 @@ mod tests {
         let mode = tracker.direct_input_mode();
         assert!(mode.keyboard);
         assert!(mode.mouse);
-        assert_eq!(mode.access_label(), "Full");
+        assert_eq!(mode.access_label(), "keyboard and mouse");
     }
 
     #[test]
@@ -660,7 +661,7 @@ mod tests {
         let mode = tracker.direct_input_mode();
         assert!(mode.utf8_mouse);
         assert!(!mode.mouse);
-        assert_eq!(mode.access_label(), "Off");
+        assert_eq!(mode.access_label(), "off");
         // Enabling SGR re-grants capture.
         feed(&tracker, b"\x1b[?1006h");
         let mode = tracker.direct_input_mode();
@@ -691,7 +692,7 @@ mod tests {
         assert!(!mode.mouse, "mouse must clear on DECSTR");
         assert!(!mode.sgr_mouse, "sgr_mouse must clear on DECSTR");
         assert!(!mode.utf8_mouse, "utf8_mouse must clear on DECSTR");
-        assert_eq!(mode.access_label(), "Off");
+        assert_eq!(mode.access_label(), "off");
     }
 
     #[test]
