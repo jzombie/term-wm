@@ -104,7 +104,7 @@ term-wm-render = { path = "crates/term-wm-render", version = "0.9.16-alpha" }
 term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.9.16-alpha" }
 term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.9.16-alpha" }
 term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.9.16-alpha" }
-term-wm-vt100 = "0.16.2-patch2"
+term-wm-vt100 = "0.16.2-patch3"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
