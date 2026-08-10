@@ -36,9 +36,15 @@ Direct Mode is fully automatic — see [Automatic Direct Mode](#automatic-direct
 
 When a terminal application (e.g., `vim`, `tmux`, or `less`) requests the alternate screen buffer, mouse tracking, or custom scroll margins, `%PACKAGE%` automatically enters **Direct Mode**.
 
-* **State Awareness:** A brief notification toast appears on screen to indicate when Direct Mode has been enabled or disabled.
-* **Keyboard Routing:** All keystrokes pass directly to the running application unfiltered, ensuring native shortcuts work without WM interference. **%SUPER%** remains active to open the Command Palette.
-* **Mouse & Selection:** WM-level text selection and right-click pasting are suspended — all mouse events over the terminal pass through to the running application. Window chrome (dragging and resizing via the header and borders) continues to work.
+Direct Mode is split into two independent dimensions:
+
+* **State Awareness:** A brief notification toast appears on screen to indicate Direct Mode transitions, showing the window's access level (e.g. `Direct Mode (Full) enabled for vim`).
+* **Keyboard Routing:** When an app is on the alternate screen (or set custom margins), all keystrokes pass directly to the running application unfiltered, ensuring native shortcuts work without WM interference. **%SUPER%** remains active to open the Command Palette.
+* **Mouse Capture:** When the app explicitly requests mouse tracking (`\x1b[?1000h`/`1002h`/`1003h`), mouse events are forwarded to the application and WM text selection is suspended. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling. Window chrome (dragging and resizing via the header and borders) continues to work.
+
+### Overriding App Mouse Capture
+
+To force native text selection inside an app that captured the mouse, hold **Shift** (or **Option** on macOS) while clicking and dragging. Best-effort: when `%PACKAGE%` runs nested inside a host terminal, the host intercepts `Shift+mouse` first and performs its own selection.
 
 ## Mouse Capture
 
