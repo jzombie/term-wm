@@ -45,11 +45,7 @@ impl Drop for AutoKillPty {
 /// On Unix, `cat` blocks on stdin and echoes output. On Windows, `cmd.exe`
 /// blocks on stdin and keeps the ConPTY alive.
 fn get_test_executable() -> &'static str {
-    if cfg!(windows) {
-        "cmd.exe"
-    } else {
-        "cat"
-    }
+    if cfg!(windows) { "cmd.exe" } else { "cat" }
 }
 
 const TEST_SIZE: PtySize = PtySize {
@@ -63,8 +59,8 @@ const TEST_SIZE: PtySize = PtySize {
 /// (not mid-shell-write), updating the shared emulator size.
 #[test]
 fn drain_sync_applies_resize_after_pipe_drain() {
-    let mut pty = AutoKillPty::spawn(CommandBuilder::new(get_test_executable()), TEST_SIZE)
-        .expect("spawn");
+    let mut pty =
+        AutoKillPty::spawn(CommandBuilder::new(get_test_executable()), TEST_SIZE).expect("spawn");
     let target = PtySize {
         rows: 30,
         cols: 100,
@@ -92,8 +88,8 @@ fn drain_sync_applies_resize_after_pipe_drain() {
 /// Rapid drag resizes coalesce to the final size only (frame-dropping).
 #[test]
 fn drain_sync_coalesces_rapid_resizes_to_final() {
-    let mut pty = AutoKillPty::spawn(CommandBuilder::new(get_test_executable()), TEST_SIZE)
-        .expect("spawn");
+    let mut pty =
+        AutoKillPty::spawn(CommandBuilder::new(get_test_executable()), TEST_SIZE).expect("spawn");
     pty.resize(PtySize {
         rows: 30,
         cols: 100,
@@ -129,8 +125,8 @@ fn drain_sync_coalesces_rapid_resizes_to_final() {
 /// immediately and apply — no data is needed.
 #[test]
 fn drain_sync_applies_resize_when_pipe_idle() {
-    let mut pty = AutoKillPty::spawn(CommandBuilder::new(get_test_executable()), TEST_SIZE)
-        .expect("spawn");
+    let mut pty =
+        AutoKillPty::spawn(CommandBuilder::new(get_test_executable()), TEST_SIZE).expect("spawn");
     let target = PtySize {
         rows: 33,
         cols: 90,
