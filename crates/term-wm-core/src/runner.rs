@@ -238,11 +238,10 @@ where
     }
 
     // Phase 2 Fallback Prep: Compute immutable state FIRST, before mutably borrowing app
+    // `component_context_for` resolves and injects the window's structured
+    // direct-input mode (independent keyboard/mouse dimensions).
     let direct_mode = app.wm().direct_mode(focus_id);
-    let ctx = app
-        .wm()
-        .component_context_for(!direct_mode, focus_id)
-        .with_direct_mode(direct_mode);
+    let ctx = app.wm().component_context_for(!direct_mode, focus_id);
     let Some((_, localized_evt)) = app.wm().focused_window_event(event) else {
         return false;
     };
@@ -378,13 +377,24 @@ where
             if !transitions.is_empty() {
                 tracing::info!("[STAGE 4] Draining {} transitions", transitions.len());
             }
-            for (key, enabled) in transitions {
-                let status = if enabled { "enabled" } else { "disabled" };
+            for (key, mode) in transitions {
                 let title = app.wm().window_title(key);
+                let status = if mode.requires_direct_input() {
+                    format!("Direct Mode ({}) enabled", mode.access_label())
+                } else {
+                    "Direct Mode disabled".to_string()
+                };
                 app.wm().push_notification(
-                    format!("Direct Mode {} for {}", status, title),
+                    format!("{} for {}", status, title),
                     Duration::from_secs(3),
                 );
+                tracing::debug!(?key, ?mode, "direct input mode transition");
+                if let Some(handle) = crate::debug_log::global_debug_log() {
+                    handle.push(format!(
+                        "[direct-mode] window={:?} mode={:?}",
+                        key, mode
+                    ));
+                }
             }
             // PTY child exit removed a window — redraw the layout.
             driver.request_redraw();
@@ -646,7 +656,7 @@ where
                 // Layer 2c: Direct Mode check — forward key events straight to PTY
                 if let Event::Key(key) = &evt {
                     let focus_id = app.wm().focused_window();
-                    if app.wm().direct_mode(focus_id)
+                    if app.wm().direct_input_mode(focus_id).keyboard
                         && !app.wm().command_menu_visible()
                         && matches!(key.kind, KeyKind::Press | KeyKind::Repeat)
                     {

@@ -725,6 +725,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .unwrap_or(false)
     }
 
+    /// The window's structured direct-input mode snapshot (independent
+    /// keyboard/mouse dimensions), used for routing, toasts, and debug logging.
+    pub fn direct_input_mode(&self, key: WindowKey) -> term_wm_pty_engine::DirectInputMode {
+        self.windows
+            .get(key)
+            .map(|w| w.direct_input_mode())
+            .unwrap_or_default()
+    }
+
     /// Set the automatic direct-input tracker for a window.
     pub fn set_window_tracker(
         &mut self,
@@ -1121,10 +1130,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     /// Resolves the manual override (`None` = auto) against the automatic
     /// PTY heuristic (alternate screen, mouse tracking, margins).
     pub fn component_context_for(&self, focused: bool, key: WindowKey) -> ComponentContext {
-        let resolved = self.direct_mode(key);
+        let mode = self.direct_input_mode(key);
         let mut ctx = self
             .component_context(focused)
-            .with_direct_mode(resolved)
+            .with_direct_input_mode(mode)
             .with_window_key(key)
             .with_screen_area(self.region(key));
         // Inject the window's active keyboard focus into the context.

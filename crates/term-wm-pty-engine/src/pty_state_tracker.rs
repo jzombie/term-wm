@@ -2,22 +2,71 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 
 use vte::{Params, Perform};
 
+/// Structured snapshot of a window's current direct-input capture level.
+///
+/// The keyboard and mouse dimensions are independent: an application on the
+/// alternate screen (pico/nano) requires raw keyboard routing but has NOT
+/// captured the mouse, so native text selection stays available. Mouse
+/// capture is granted only when the app explicitly requested mouse tracking
+/// with a supported encoding (DECSET 1000/1002/1003 + 1006).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DirectInputMode {
+    /// Full-keyboard passthrough: alternate screen or custom scroll margins.
+    /// When true the WM does not intercept keys or native scroll.
+    pub keyboard: bool,
+    /// Mouse capture: the app requested mouse tracking with a supported
+    /// encoding. When true mouse events are forwarded to the app instead of
+    /// being handled natively (selection/paste/link).
+    pub mouse: bool,
+    // Informational fields (logged/toasted, not used for routing).
+    pub alt_screen: bool,
+    pub application_cursor_keys: bool,
+    pub custom_margins: bool,
+    pub mouse_tracking: MouseTrackingMode,
+    pub sgr_mouse: bool,
+    pub utf8_mouse: bool,
+    pub alt_scroll: bool,
+}
+
+impl DirectInputMode {
+    /// Aggregate routing decision: input should be forwarded to the PTY child
+    /// rather than intercepted by the window manager's native handling.
+    pub const fn requires_direct_input(&self) -> bool {
+        self.keyboard || self.mouse
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.requires_direct_input()
+    }
+
+    /// Human-readable access level used by the transition toast.
+    pub fn access_label(&self) -> &'static str {
+        match (self.keyboard, self.mouse) {
+            (true, true) => "Full",
+            (true, false) => "Keyboard",
+            (false, true) => "Mouse",
+            (false, false) => "Off",
+        }
+    }
+}
+
 /// Trait for automatic direct-input detection at the window boundary.
 /// Implemented by the PTY state tracker to signal when TUI applications
-/// (less, vim) require unfiltered keyboard input (no native scroll interception).
+/// (less, vim) require unfiltered input (no native scroll interception).
 pub trait DirectInputTracker: Send + Sync {
-    fn requires_direct_input(&self) -> bool;
+    fn direct_input_mode(&self) -> DirectInputMode;
 }
 
 impl DirectInputTracker for PtyStateTracker {
-    fn requires_direct_input(&self) -> bool {
-        self.requires_app_routing()
+    fn direct_input_mode(&self) -> DirectInputMode {
+        self.direct_input_mode()
     }
 }
 
 /// Decoded mouse tracking mode from DECSET 1000/1002/1003.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MouseTrackingMode {
+    #[default]
     None,
     X11Normal,
     CellMotion,
@@ -57,6 +106,7 @@ pub struct PtyStateTracker {
     is_application_cursor_keys_active: AtomicBool,
     mouse_tracking_mode: AtomicU8,
     is_sgr_mouse_active: AtomicBool,
+    is_utf8_mouse_active: AtomicBool,
     is_alt_scroll_mode_active: AtomicBool,
     has_custom_margins: AtomicBool,
     terminal_height: AtomicU16,
@@ -69,6 +119,7 @@ impl PtyStateTracker {
             is_application_cursor_keys_active: AtomicBool::new(false),
             mouse_tracking_mode: AtomicU8::new(0),
             is_sgr_mouse_active: AtomicBool::new(false),
+            is_utf8_mouse_active: AtomicBool::new(false),
             is_alt_scroll_mode_active: AtomicBool::new(false),
             has_custom_margins: AtomicBool::new(false),
             terminal_height: AtomicU16::new(terminal_height),
@@ -78,9 +129,35 @@ impl PtyStateTracker {
     /// Unified routing decision: returns true if inputs should be forwarded
     /// to the PTY child rather than intercepted by the native scrollbar.
     pub fn requires_app_routing(&self) -> bool {
-        self.is_alt_screen_active.load(Ordering::Acquire)
-            || self.mouse_tracking_mode.load(Ordering::Acquire) != 0
-            || self.has_custom_margins.load(Ordering::Acquire)
+        self.direct_input_mode().requires_direct_input()
+    }
+
+    /// Snapshot of the current direct-input mode, split into independent
+    /// keyboard/mouse dimensions plus informational state.
+    pub fn direct_input_mode(&self) -> DirectInputMode {
+        let alt_screen = self.is_alt_screen_active.load(Ordering::Acquire);
+        let custom_margins = self.has_custom_margins.load(Ordering::Acquire);
+        let mouse_tracking =
+            MouseTrackingMode::from_u8(self.mouse_tracking_mode.load(Ordering::Acquire));
+        let sgr_mouse = self.is_sgr_mouse_active.load(Ordering::Acquire);
+        let utf8_mouse = self.is_utf8_mouse_active.load(Ordering::Acquire);
+        // The same structural check the terminal forward path applies: capture
+        // requires mouse tracking AND an encoding we can actually emit
+        // (Default, or Sgr; Utf8/1005 is unsupported and so not captured).
+        let encoding_supported = !utf8_mouse || sgr_mouse;
+        DirectInputMode {
+            keyboard: alt_screen || custom_margins,
+            mouse: mouse_tracking != MouseTrackingMode::None && encoding_supported,
+            alt_screen,
+            application_cursor_keys: self
+                .is_application_cursor_keys_active
+                .load(Ordering::Acquire),
+            custom_margins,
+            mouse_tracking,
+            sgr_mouse,
+            utf8_mouse,
+            alt_scroll: self.is_alt_scroll_mode_active.load(Ordering::Acquire),
+        }
     }
 
     pub fn is_alt_screen_active(&self) -> bool {
@@ -98,6 +175,10 @@ impl PtyStateTracker {
 
     pub fn is_sgr_mouse_active(&self) -> bool {
         self.is_sgr_mouse_active.load(Ordering::Acquire)
+    }
+
+    pub fn is_utf8_mouse_active(&self) -> bool {
+        self.is_utf8_mouse_active.load(Ordering::Acquire)
     }
 
     pub fn is_alt_scroll_mode_active(&self) -> bool {
@@ -126,6 +207,10 @@ impl PtyStateTracker {
 
     pub(crate) fn set_sgr_mouse(&self, active: bool) {
         self.is_sgr_mouse_active.store(active, Ordering::Release);
+    }
+
+    pub(crate) fn set_utf8_mouse(&self, active: bool) {
+        self.is_utf8_mouse_active.store(active, Ordering::Release);
     }
 
     pub(crate) fn set_alt_scroll_mode(&self, active: bool) {
@@ -160,6 +245,7 @@ impl PtyStateTracker {
             .store(false, Ordering::Release);
         self.mouse_tracking_mode.store(0, Ordering::Release);
         self.is_sgr_mouse_active.store(false, Ordering::Release);
+        self.is_utf8_mouse_active.store(false, Ordering::Release);
         self.is_alt_scroll_mode_active
             .store(false, Ordering::Release);
         self.has_custom_margins.store(false, Ordering::Release);
@@ -216,9 +302,11 @@ impl Perform for PtyPerformAdapter {
                         match param {
                             1 => self.tracker.set_application_cursor_keys(is_set),
                             47 | 1047 | 1049 => self.tracker.set_alt_screen(is_set),
+                            9 => self.tracker.update_mouse_tracking(1, is_set),
                             1000 => self.tracker.update_mouse_tracking(1, is_set),
                             1002 => self.tracker.update_mouse_tracking(2, is_set),
                             1003 => self.tracker.update_mouse_tracking(3, is_set),
+                            1005 => self.tracker.set_utf8_mouse(is_set),
                             1006 => self.tracker.set_sgr_mouse(is_set),
                             1007 => self.tracker.set_alt_scroll_mode(is_set),
                             _ => {}
@@ -530,5 +618,94 @@ mod tests {
         assert!(tracker.is_application_cursor_keys_active());
         feed(&tracker, b"\x1b[!p");
         assert!(!tracker.is_application_cursor_keys_active());
+    }
+
+    #[test]
+    fn test_direct_input_mode_keyboard_for_alt_screen() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1049h");
+        let mode = tracker.direct_input_mode();
+        assert!(mode.keyboard);
+        assert!(!mode.mouse);
+        assert_eq!(mode.access_label(), "Keyboard");
+        assert!(mode.requires_direct_input());
+    }
+
+    #[test]
+    fn test_direct_input_mode_mouse_for_tracking() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1002h");
+        let mode = tracker.direct_input_mode();
+        assert!(!mode.keyboard);
+        assert!(mode.mouse);
+        assert_eq!(mode.access_label(), "Mouse");
+    }
+
+    #[test]
+    fn test_direct_input_mode_full() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1049h\x1b[?1002h");
+        let mode = tracker.direct_input_mode();
+        assert!(mode.keyboard);
+        assert!(mode.mouse);
+        assert_eq!(mode.access_label(), "Full");
+    }
+
+    #[test]
+    fn test_direct_input_mode_mouse_not_captured_with_utf8_encoding() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        // Utf8 mouse encoding (1005) without SGR (1006) is unsupported by the
+        // forward path, so the app is NOT granted mouse capture.
+        feed(&tracker, b"\x1b[?1002h\x1b[?1005h");
+        let mode = tracker.direct_input_mode();
+        assert!(mode.utf8_mouse);
+        assert!(!mode.mouse);
+        assert_eq!(mode.access_label(), "Off");
+        // Enabling SGR re-grants capture.
+        feed(&tracker, b"\x1b[?1006h");
+        let mode = tracker.direct_input_mode();
+        assert!(mode.mouse);
+    }
+
+    #[test]
+    fn test_x10_mouse_tracking_detected() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?9h");
+        assert_eq!(tracker.mouse_tracking_mode(), MouseTrackingMode::X11Normal);
+        assert!(tracker.direct_input_mode().mouse);
+    }
+
+    #[test]
+    fn test_direct_input_mode_reset_by_decstr() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?1005h");
+        let mode = tracker.direct_input_mode();
+        assert!(mode.keyboard);
+        assert!(mode.mouse);
+        assert!(mode.sgr_mouse);
+        assert!(mode.utf8_mouse);
+        // DECSTR (CSI ! p) must wipe every atomic, including the encoding flags.
+        feed(&tracker, b"\x1b[!p");
+        let mode = tracker.direct_input_mode();
+        assert!(!mode.keyboard, "keyboard must clear on DECSTR");
+        assert!(!mode.mouse, "mouse must clear on DECSTR");
+        assert!(!mode.sgr_mouse, "sgr_mouse must clear on DECSTR");
+        assert!(!mode.utf8_mouse, "utf8_mouse must clear on DECSTR");
+        assert_eq!(mode.access_label(), "Off");
+    }
+
+    #[test]
+    fn test_direct_input_mode_reset_by_ris() {
+        let tracker = std::sync::Arc::new(make_tracker(24));
+        feed(&tracker, b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?1005h");
+        assert!(tracker.direct_input_mode().mouse);
+        // RIS (ESC c) must wipe every atomic, including the encoding flags.
+        feed(&tracker, b"\x1bc");
+        let mode = tracker.direct_input_mode();
+        assert!(!mode.keyboard);
+        assert!(!mode.mouse);
+        assert!(!mode.sgr_mouse);
+        assert!(!mode.utf8_mouse);
+        assert!(!mode.requires_direct_input());
     }
 }

@@ -354,9 +354,12 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
             }
         }
 
-        // Skip in Direct Mode so scroll passes through to the terminal
-        // component for encoding and forwarding to the PTY app.
-        if !ctx.direct_mode() {
+        // Wheel follows the mouse-capture decision, not keyboard direct mode:
+        // when the app has NOT captured the mouse, the WM owns the wheel
+        // (native scrollback/viewport scroll) — even on the alternate screen.
+        // When the app HAS captured the mouse, the wheel falls through to the
+        // terminal for encoding and forwarding to the PTY app.
+        if !ctx.mouse_captured() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     return EventResult::Action(TermWmAction::ScrollView(-3));
@@ -381,7 +384,7 @@ impl<C: Component<TermWmAction>> ScrollViewComponent<C> {
 
         if self.keyboard_mode != ScrollKeyMode::None
             && ctx.focused()
-            && !ctx.direct_mode()
+            && !ctx.keyboard_direct()
             && let Event::Key(key) = event
             && key.kind == term_wm_core::events::KeyKind::Press
         {
@@ -536,7 +539,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
                 st.last_needs_horizontal = needs_horizontal;
             }
 
-            if !ctx.direct_mode() {
+            if !ctx.keyboard_direct() {
                 // Clipped Rect for scrollbar rendering (ratatui Scrollbar needs unsigned Rect)
                 let area_rect = layout_rect_to_clipped_rect(area);
                 if needs_vertical {
@@ -1254,6 +1257,61 @@ mod tests {
         assert!(
             sv.content.borrow().received_scroll,
             "scroll must reach child component in Direct Mode"
+        );
+    }
+
+    /// Wheel follows the mouse-capture decision, not keyboard direct mode: an
+    /// alt-screen app WITHOUT mouse tracking (pico/nano) keeps native wheel
+    /// scrolling — no black-hole where both components drop the event.
+    #[test]
+    fn scroll_view_wheel_follows_mouse_capture() {
+        use term_wm_core::events::KeyModifiers;
+        use term_wm_pty_engine::DirectInputMode;
+
+        // Alt-screen, no mouse capture: wheel must be handled natively.
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        let ctx = ComponentContext::new(true).with_direct_input_mode(DirectInputMode {
+            keyboard: true,
+            mouse: false,
+            ..DirectInputMode::default()
+        });
+        let scroll_down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = sv.handle_events(&scroll_down, &ctx);
+        assert!(
+            !result.is_ignored(),
+            "wheel must be handled natively when the app has not captured the mouse, got {:?}",
+            result
+        );
+        assert!(
+            !sv.content.borrow().received_scroll,
+            "wheel must NOT reach the child when the app has not captured the mouse"
+        );
+
+        // Captured mouse: wheel falls through to the child for forwarding.
+        let mut sv = ScrollViewComponent::new(EventRecorder {
+            received_scroll: false,
+        });
+        let ctx = ComponentContext::new(true).with_direct_input_mode(DirectInputMode {
+            keyboard: true,
+            mouse: true,
+            ..DirectInputMode::default()
+        });
+        let result = sv.handle_events(&scroll_down, &ctx);
+        assert!(
+            result.is_ignored(),
+            "wheel must fall through when the app captured the mouse, got {:?}",
+            result
+        );
+        assert!(
+            sv.content.borrow().received_scroll,
+            "wheel must reach the child when the app captured the mouse"
         );
     }
 

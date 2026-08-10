@@ -1096,18 +1096,18 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
 
                     // Process bytes through the application state tracker
                     // (alternate screen, mouse tracking, margins — atomics, no lock).
-                    let prev_routing = tracker.requires_app_routing();
+                    let prev_mode = tracker.direct_input_mode();
                     vte_parser.advance(&mut tracker_adapter, &buf[..n]);
-                    let new_routing = tracker.requires_app_routing();
-                    if prev_routing != new_routing {
+                    let new_mode = tracker.direct_input_mode();
+                    if prev_mode != new_mode {
                         tracing::info!(
-                            "[STAGE 1] PTY routing flipped: {} -> {}",
-                            prev_routing,
-                            new_routing
+                            "[STAGE 1] PTY routing flipped: {:?} -> {:?}",
+                            prev_mode,
+                            new_mode
                         );
                         let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
                         if let Some(ref cb) = *guard {
-                            cb(crate::PtyStatus::DirectInputChanged(new_routing));
+                            cb(crate::PtyStatus::DirectInputChanged(new_mode));
                         } else {
                             tracing::error!(
                                 "[STAGE 1] status_cb is NONE when transition occurred!"

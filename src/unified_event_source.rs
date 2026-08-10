@@ -11,6 +11,7 @@ use term_wm_core::io::frame_pacer::FramePacer;
 use term_wm_core::power_profile::PowerProfile;
 use term_wm_core::utils::KeyboardNormalizer;
 use term_wm_core::window::WindowKey;
+use term_wm_pty_engine::DirectInputMode;
 
 /// Capacity of the crossbeam channel between event producers and the event
 /// loop. Generous capacity since wakeup gating (dirty.swap) prevents flooding.
@@ -25,8 +26,9 @@ pub enum UnifiedEvent {
     PtyWakeup(WindowKey),
     /// A PTY child process has exited. Sent from the reader thread on EOF.
     AppExited(WindowKey),
-    /// Application direct-input routing state changed (alt screen, mouse tracking, margins).
-    DirectInputChanged(WindowKey, bool),
+    /// Application direct-input routing state changed. Carries the new mode
+    /// snapshot so sub-mode shifts notify even when the aggregate is unchanged.
+    DirectInputChanged(WindowKey, DirectInputMode),
     /// An OS signal was received (SIGINT, SIGTERM).
     Signal,
     /// Periodic tick for timing.
@@ -60,7 +62,7 @@ pub struct UnifiedEventSource {
     /// Accumulated window exit notifications since the last drain.
     exited_windows: Vec<WindowKey>,
     /// Accumulated direct-input routing transitions since the last drain.
-    direct_input_changed: Vec<(WindowKey, bool)>,
+    direct_input_changed: Vec<(WindowKey, DirectInputMode)>,
     /// Cached input event (poll returned true, waiting for read).
     pending_event: Option<Event>,
     /// Buffer for input events drained during `drain_pending`/`drain_console`
@@ -159,14 +161,14 @@ impl UnifiedEventSource {
                 Ok(UnifiedEvent::AppExited(key)) => {
                     self.exited_windows.push(key);
                 }
-                Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                Ok(UnifiedEvent::DirectInputChanged(key, mode)) => {
                     tracing::info!(
-                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {})",
+                        "[STAGE 3] drain_pending collected DirectInputChanged({:?}, {:?})",
                         key,
-                        enabled
+                        mode
                     );
                     self.dirty_windows.insert(key);
-                    self.direct_input_changed.push((key, enabled));
+                    self.direct_input_changed.push((key, mode));
                 }
                 Ok(UnifiedEvent::Signal) => {
                     self.signal_received = true;
@@ -228,14 +230,14 @@ impl UnifiedEventSource {
                 self.frame_pacer.notify_pending(Instant::now());
                 UnifiedPoll::Continue
             }
-            UnifiedEvent::DirectInputChanged(key, enabled) => {
+            UnifiedEvent::DirectInputChanged(key, mode) => {
                 tracing::info!(
-                    "[STAGE 3] recv collected DirectInputChanged({:?}, {})",
+                    "[STAGE 3] recv collected DirectInputChanged({:?}, {:?})",
                     key,
-                    enabled
+                    mode
                 );
                 self.dirty_windows.insert(key);
-                self.direct_input_changed.push((key, enabled));
+                self.direct_input_changed.push((key, mode));
                 self.frame_pacer.notify_pending(Instant::now());
                 UnifiedPoll::RenderDue
             }
@@ -263,14 +265,14 @@ impl UnifiedEventSource {
                 self.exited_windows.push(key);
                 None
             }
-            UnifiedEvent::DirectInputChanged(key, enabled) => {
+            UnifiedEvent::DirectInputChanged(key, mode) => {
                 tracing::info!(
-                    "[STAGE 3] read collected DirectInputChanged({:?}, {})",
+                    "[STAGE 3] read collected DirectInputChanged({:?}, {:?})",
                     key,
-                    enabled
+                    mode
                 );
                 self.dirty_windows.insert(key);
-                self.direct_input_changed.push((key, enabled));
+                self.direct_input_changed.push((key, mode));
                 None
             }
             UnifiedEvent::Signal => {
@@ -505,9 +507,9 @@ impl EventSource for UnifiedEventSource {
                         Ok(UnifiedEvent::AppExited(key)) => {
                             self.exited_windows.push(key);
                         }
-                        Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                        Ok(UnifiedEvent::DirectInputChanged(key, mode)) => {
                             self.dirty_windows.insert(key);
-                            self.direct_input_changed.push((key, enabled));
+                            self.direct_input_changed.push((key, mode));
                         }
                         Ok(UnifiedEvent::Signal) => self.signal_received = true,
                         Ok(UnifiedEvent::Tick) => {}
@@ -531,9 +533,9 @@ impl EventSource for UnifiedEventSource {
                     Ok(UnifiedEvent::AppExited(key)) => {
                         self.exited_windows.push(key);
                     }
-                    Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    Ok(UnifiedEvent::DirectInputChanged(key, mode)) => {
                         self.dirty_windows.insert(key);
-                        self.direct_input_changed.push((key, enabled));
+                        self.direct_input_changed.push((key, mode));
                     }
                     Ok(UnifiedEvent::Signal) => self.signal_received = true,
                     Ok(UnifiedEvent::Tick) => {}
@@ -590,9 +592,9 @@ impl EventSource for UnifiedEventSource {
                         Ok(UnifiedEvent::AppExited(key)) => {
                             self.exited_windows.push(key);
                         }
-                        Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                        Ok(UnifiedEvent::DirectInputChanged(key, mode)) => {
                             self.dirty_windows.insert(key);
-                            self.direct_input_changed.push((key, enabled));
+                            self.direct_input_changed.push((key, mode));
                         }
                         Ok(UnifiedEvent::Signal) => self.signal_received = true,
                         Ok(UnifiedEvent::Tick) => {}
@@ -616,9 +618,9 @@ impl EventSource for UnifiedEventSource {
                     Ok(UnifiedEvent::AppExited(key)) => {
                         self.exited_windows.push(key);
                     }
-                    Ok(UnifiedEvent::DirectInputChanged(key, enabled)) => {
+                    Ok(UnifiedEvent::DirectInputChanged(key, mode)) => {
                         self.dirty_windows.insert(key);
-                        self.direct_input_changed.push((key, enabled));
+                        self.direct_input_changed.push((key, mode));
                     }
                     Ok(UnifiedEvent::Signal) => self.signal_received = true,
                     Ok(UnifiedEvent::Tick) => {}
@@ -681,7 +683,7 @@ impl EventSource for UnifiedEventSource {
         std::mem::take(&mut self.exited_windows)
     }
 
-    fn take_direct_input_changed(&mut self) -> Vec<(WindowKey, bool)> {
+    fn take_direct_input_changed(&mut self) -> Vec<(WindowKey, DirectInputMode)> {
         std::mem::take(&mut self.direct_input_changed)
     }
 
