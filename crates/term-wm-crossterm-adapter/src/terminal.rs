@@ -186,11 +186,7 @@ mod tests {
             // SAFETY: stdin's handle is the console input handle; GetConsoleMode
             // validates it and reports failure via the return value.
             let ok = unsafe { GetConsoleMode(std::io::stdin().as_raw_handle(), &mut mode) };
-            if ok == 0 {
-                None
-            } else {
-                Some(mode)
-            }
+            if ok == 0 { None } else { Some(mode) }
         }
 
         let original = input_mode().expect("GetConsoleMode failed on a terminal stdin");

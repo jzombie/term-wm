@@ -69,14 +69,17 @@ fn nested_mouse_child_receives_routed_mouse() {
 
     let mut child = pair
         .slave
-        .spawn_command(CommandBuilder::new(term_session_mock::get_mouse_test_probe_bin()))
+        .spawn_command(CommandBuilder::new(
+            term_session_mock::get_mouse_test_probe_bin(),
+        ))
         .expect("spawn mouse probe");
     drop(pair.slave);
 
     // The writer is shared: the host loop answers DSR queries, and the test
     // later writes the routed SGR mouse input through it.
-    let writer: Arc<Mutex<Box<dyn Write + Send>>> =
-        Arc::new(Mutex::new(pair.master.take_writer().expect("take master writer")));
+    let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(
+        pair.master.take_writer().expect("take master writer"),
+    ));
     let writer_for_host = Arc::clone(&writer);
 
     // Pump the probe's stdout; answer the ConPTY/child DSR startup handshake

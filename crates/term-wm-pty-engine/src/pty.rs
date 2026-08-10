@@ -537,7 +537,10 @@ impl Pty {
         if size.rows < 2 || size.cols < 2 {
             return Ok(());
         }
-        let mut pending = self.pending_resize.lock().unwrap_or_else(|err| err.into_inner());
+        let mut pending = self
+            .pending_resize
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         if *pending == Some(size) {
             return Ok(()); // already requested
         }
@@ -906,7 +909,8 @@ struct ParserReadLoopArgs {
     status_cb: StatusCallback,
     scrollback_len: usize,
     /// Shared latch: taken once by whichever path detects exit first.
-    exited_emitted: Arc<AtomicBool>,    /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
+    exited_emitted: Arc<AtomicBool>,
+    /// Test-only hook: when `Some`, the extracted OSC 52 text is written here
     /// in addition to the real clipboard, so tests can assert the value.
     osc52_text: Option<Arc<Mutex<Option<String>>>>,
     /// Clipboard to relay extracted OSC 52 sequences through. `None` in
@@ -999,9 +1003,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     revents: 0,
                 },
             ];
-            let _ = unsafe {
-                libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1)
-            };
+            let _ = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
             if pollfds[1].revents & libc::POLLIN != 0 {
                 clear_wake(wake_read_fd);
             }
@@ -1041,178 +1043,181 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     events: libc::POLLIN,
                     revents: 0,
                 };
-            let pr = unsafe { libc::poll(&mut pfd, 1, 0) };
-            let hup = pfd.revents & (libc::POLLHUP | libc::POLLERR) != 0;
-            if pr <= 0 || (pfd.revents & libc::POLLIN == 0 && !hup) {
-                break;
+                let pr = unsafe { libc::poll(&mut pfd, 1, 0) };
+                let hup = pfd.revents & (libc::POLLHUP | libc::POLLERR) != 0;
+                if pr <= 0 || (pfd.revents & libc::POLLIN == 0 && !hup) {
+                    break;
                 }
             }
             match reader.read(&mut buf) {
                 Ok(0) => {
-                // EOF — child exited. Flush any buffered OSC 52 payload
-                // (Windows ConPTY may have consumed the terminator).
-                if let Some(text) = osc52.finish() {
-                    if clipboard.is_none() {
-                        clipboard = Some(Clipboard::new());
+                    // EOF — child exited. Flush any buffered OSC 52 payload
+                    // (Windows ConPTY may have consumed the terminator).
+                    if let Some(text) = osc52.finish() {
+                        if clipboard.is_none() {
+                            clipboard = Some(Clipboard::new());
+                        }
+                        if let Some(clip) = clipboard.as_mut() {
+                            clip.set(&text);
+                        }
+                        if let Some(ref capture) = osc52_text {
+                            *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
+                        }
                     }
-                    if let Some(clip) = clipboard.as_mut() {
-                        clip.set(&text);
-                    }
-                    if let Some(ref capture) = osc52_text {
-                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
-                    }
-                }
-                // Send wakeup for final screen, then exited.
-                let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
-                if let Some(ref cb) = *guard {
-                    cb(crate::PtyStatus::Wakeup);
-                    if !exited_emitted.swap(true, Ordering::AcqRel) {
-                        cb(crate::PtyStatus::Exited);
-                    }
-                }
-                break 'reader;
-            }
-            Ok(n) => {
-                bytes_received.fetch_add(n, Ordering::Relaxed);
-                bytes_since_render += n;
-                // DSR detection: 65536-byte reads make cross-chunk splitting
-                // of the 4-byte \x1b[6n pattern vanishingly unlikely.
-                if buf[..n].windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
-                    dsr_requested.store(true, Ordering::Relaxed);
-                }
-                let mut last = last_bytes.lock().unwrap_or_else(|err| err.into_inner());
-                last.clear();
-                last.extend_from_slice(&buf[..n]);
-                let mut p = pending.lock().unwrap_or_else(|err| err.into_inner());
-                p.extend_from_slice(&buf[..n]);
-                // Cap pending to prevent unbounded growth when no
-                // consumer calls drain_pending() (local terminal mode).
-                const PENDING_CAP: usize = 1024 * 1024; // 1 MB
-                if p.len() > PENDING_CAP {
-                    p.clear();
-                }
-
-                // Process bytes through the application state tracker
-                // (alternate screen, mouse tracking, margins — atomics, no lock).
-                let prev_routing = tracker.requires_app_routing();
-                vte_parser.advance(&mut tracker_adapter, &buf[..n]);
-                let new_routing = tracker.requires_app_routing();
-                if prev_routing != new_routing {
-                    tracing::info!(
-                        "[STAGE 1] PTY routing flipped: {} -> {}",
-                        prev_routing,
-                        new_routing
-                    );
-                    let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
-                    if let Some(ref cb) = *guard {
-                        cb(crate::PtyStatus::DirectInputChanged(new_routing));
-                    } else {
-                        tracing::error!("[STAGE 1] status_cb is NONE when transition occurred!");
-                    }
-                }
-
-                // Process bytes directly into the shared parser.
-                {
-                    let mut shared = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
-                    shared.process(&buf[..n]);
-                }
-                esc_trace_chunk(&buf[..n]);
-
-                if let Some(title) = extract_osc_title(&buf[..n]) {
-                    let mut guard = pending_title.lock().unwrap_or_else(|err| err.into_inner());
-                    *guard = Some(title);
-                }
-                // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
-                // Relay each extracted sequence synchronously via the hoisted
-                // handle — no debounce, so the tail payload is never dropped.
-                // The handle is lazy-initialised on the first sequence so the
-                // reader loop's startup is never blocked on arboard's handshake.
-                if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
-                    if clipboard.is_none() {
-                        clipboard = Some(Clipboard::new());
-                    }
-                    if let Some(clip) = clipboard.as_mut() {
-                        clip.set(&text);
-                    }
-                    if let Some(ref capture) = osc52_text {
-                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
-                    }
-                }
-
-                // Update prev_tail for next iteration's cross-chunk detection.
-                if n >= HISTORY_TAIL_LEN {
-                    prev_tail.copy_from_slice(&buf[n - HISTORY_TAIL_LEN..n]);
-                } else if n > 0 {
-                    prev_tail.rotate_left(n);
-                    prev_tail[HISTORY_TAIL_LEN - n..].copy_from_slice(&buf[..n]);
-                }
-
-                // Edge-triggered wakeup: only notify on false→true transition.
-                // Prevents flooding the IPC channel with thousands of redundant
-                // PtyWakeup messages per second at unthrottled ingestion speeds.
-                if !dirty.swap(true, Ordering::AcqRel) {
+                    // Send wakeup for final screen, then exited.
                     let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
                     if let Some(ref cb) = *guard {
                         cb(crate::PtyStatus::Wakeup);
+                        if !exited_emitted.swap(true, Ordering::AcqRel) {
+                            cb(crate::PtyStatus::Exited);
+                        }
                     }
-                    // Reset budget because a new render cycle has begun
-                    bytes_since_render = 0;
+                    break 'reader;
                 }
-
-                // I/O burst budget: when the reader has ingested more than
-                // IO_BURST_BUDGET bytes without a render, wait on the Condvar
-                // until the UI thread clears dirty. This prevents a single
-                // reader thread from consuming 100% CPU on infinite streams.
-                if bytes_since_render >= IO_BURST_BUDGET {
-                    let (lock, cvar) = &*dirty_cond;
-                    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
-                    while dirty.load(Ordering::Acquire) {
-                        guard = cvar.wait(guard).unwrap_or_else(|err| err.into_inner());
+                Ok(n) => {
+                    bytes_received.fetch_add(n, Ordering::Relaxed);
+                    bytes_since_render += n;
+                    // DSR detection: 65536-byte reads make cross-chunk splitting
+                    // of the 4-byte \x1b[6n pattern vanishingly unlikely.
+                    if buf[..n].windows(DSR_PATTERN_LEN).any(|w| w == b"\x1b[6n") {
+                        dsr_requested.store(true, Ordering::Relaxed);
                     }
-                    bytes_since_render = 0;
-                }
+                    let mut last = last_bytes.lock().unwrap_or_else(|err| err.into_inner());
+                    last.clear();
+                    last.extend_from_slice(&buf[..n]);
+                    let mut p = pending.lock().unwrap_or_else(|err| err.into_inner());
+                    p.extend_from_slice(&buf[..n]);
+                    // Cap pending to prevent unbounded growth when no
+                    // consumer calls drain_pending() (local terminal mode).
+                    const PENDING_CAP: usize = 1024 * 1024; // 1 MB
+                    if p.len() > PENDING_CAP {
+                        p.clear();
+                    }
 
-                // Drain-sync: break at the starvation bound so a continuous
-                // stream (which never returns WouldBlock) still applies the
-                // pending resize and keeps the grid attached to the window.
-                #[cfg(unix)]
-                {
-                    drain_bytes += n;
-                    if drain_bytes >= MAX_DRAIN_BYTES {
+                    // Process bytes through the application state tracker
+                    // (alternate screen, mouse tracking, margins — atomics, no lock).
+                    let prev_routing = tracker.requires_app_routing();
+                    vte_parser.advance(&mut tracker_adapter, &buf[..n]);
+                    let new_routing = tracker.requires_app_routing();
+                    if prev_routing != new_routing {
+                        tracing::info!(
+                            "[STAGE 1] PTY routing flipped: {} -> {}",
+                            prev_routing,
+                            new_routing
+                        );
+                        let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                        if let Some(ref cb) = *guard {
+                            cb(crate::PtyStatus::DirectInputChanged(new_routing));
+                        } else {
+                            tracing::error!(
+                                "[STAGE 1] status_cb is NONE when transition occurred!"
+                            );
+                        }
+                    }
+
+                    // Process bytes directly into the shared parser.
+                    {
+                        let mut shared =
+                            shared_parser.lock().unwrap_or_else(|err| err.into_inner());
+                        shared.process(&buf[..n]);
+                    }
+                    esc_trace_chunk(&buf[..n]);
+
+                    if let Some(title) = extract_osc_title(&buf[..n]) {
+                        let mut guard = pending_title.lock().unwrap_or_else(|err| err.into_inner());
+                        *guard = Some(title);
+                    }
+                    // Intercept OSC 52 clipboard sequences (cross-chunk buffering).
+                    // Relay each extracted sequence synchronously via the hoisted
+                    // handle — no debounce, so the tail payload is never dropped.
+                    // The handle is lazy-initialised on the first sequence so the
+                    // reader loop's startup is never blocked on arboard's handshake.
+                    if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
+                        if clipboard.is_none() {
+                            clipboard = Some(Clipboard::new());
+                        }
+                        if let Some(clip) = clipboard.as_mut() {
+                            clip.set(&text);
+                        }
+                        if let Some(ref capture) = osc52_text {
+                            *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(text);
+                        }
+                    }
+
+                    // Update prev_tail for next iteration's cross-chunk detection.
+                    if n >= HISTORY_TAIL_LEN {
+                        prev_tail.copy_from_slice(&buf[n - HISTORY_TAIL_LEN..n]);
+                    } else if n > 0 {
+                        prev_tail.rotate_left(n);
+                        prev_tail[HISTORY_TAIL_LEN - n..].copy_from_slice(&buf[..n]);
+                    }
+
+                    // Edge-triggered wakeup: only notify on false→true transition.
+                    // Prevents flooding the IPC channel with thousands of redundant
+                    // PtyWakeup messages per second at unthrottled ingestion speeds.
+                    if !dirty.swap(true, Ordering::AcqRel) {
+                        let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                        if let Some(ref cb) = *guard {
+                            cb(crate::PtyStatus::Wakeup);
+                        }
+                        // Reset budget because a new render cycle has begun
+                        bytes_since_render = 0;
+                    }
+
+                    // I/O burst budget: when the reader has ingested more than
+                    // IO_BURST_BUDGET bytes without a render, wait on the Condvar
+                    // until the UI thread clears dirty. This prevents a single
+                    // reader thread from consuming 100% CPU on infinite streams.
+                    if bytes_since_render >= IO_BURST_BUDGET {
+                        let (lock, cvar) = &*dirty_cond;
+                        let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+                        while dirty.load(Ordering::Acquire) {
+                            guard = cvar.wait(guard).unwrap_or_else(|err| err.into_inner());
+                        }
+                        bytes_since_render = 0;
+                    }
+
+                    // Drain-sync: break at the starvation bound so a continuous
+                    // stream (which never returns WouldBlock) still applies the
+                    // pending resize and keeps the grid attached to the window.
+                    #[cfg(unix)]
+                    {
+                        drain_bytes += n;
+                        if drain_bytes >= MAX_DRAIN_BYTES {
+                            break;
+                        }
+                    }
+
+                    // Loop back to read() — no parking, no cloning, no render_ready check.
+                    // Lock contention is expected under load: the reader will block
+                    // on the mutex while the main thread holds it during render.
+                    // This is intentional mechanical backpressure.
+                }
+                Err(err) => {
+                    // Windows: `wake_reader` aborts the blocking ConPTY read via
+                    // `CancelSynchronousIo`; the aborted `ReadFile` returns
+                    // `ERROR_OPERATION_ABORTED` (995). That is a resize wake, not a
+                    // fatal error — break to the drain boundary so the pending
+                    // resize is applied. (On Unix `raw_os_error` can never be 995,
+                    // so this branch is inert there.)
+                    if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED) {
                         break;
                     }
+                    let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
+                    if let Some(ref cb) = *guard
+                        && !exited_emitted.swap(true, Ordering::AcqRel)
+                    {
+                        cb(crate::PtyStatus::Exited);
+                    }
+                    break 'reader;
                 }
-
-                // Loop back to read() — no parking, no cloning, no render_ready check.
-                // Lock contention is expected under load: the reader will block
-                // on the mutex while the main thread holds it during render.
-                // This is intentional mechanical backpressure.
             }
-            Err(err) => {
-                // Windows: `wake_reader` aborts the blocking ConPTY read via
-                // `CancelSynchronousIo`; the aborted `ReadFile` returns
-                // `ERROR_OPERATION_ABORTED` (995). That is a resize wake, not a
-                // fatal error — break to the drain boundary so the pending
-                // resize is applied. (On Unix `raw_os_error` can never be 995,
-                // so this branch is inert there.)
-                if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED) {
-                    break;
-                }
-                let guard = status_cb.lock().unwrap_or_else(|err| err.into_inner());
-                if let Some(ref cb) = *guard
-                    && !exited_emitted.swap(true, Ordering::AcqRel)
-                {
-                    cb(crate::PtyStatus::Exited);
-                }
-                break 'reader;
+            // (Windows) one blocking read per outer iteration (no non-blocking drain
+            // until the ConPTY handle is pollable — resizes apply at this boundary).
+            #[cfg(windows)]
+            {
+                break;
             }
-        }
-        // (Windows) one blocking read per outer iteration (no non-blocking drain
-        // until the ConPTY handle is pollable — resizes apply at this boundary).
-        #[cfg(windows)]
-        {
-            break;
-        }
         }
         // DRAIN BOUNDARY — pipe empty (or starvation bound): apply any pending
         // resize here, so the grid is reflowed and SIGWINCH is delivered only
@@ -1552,7 +1557,10 @@ mod tests {
             let mut builder = CommandBuilder::new("sh");
             builder.arg("-c");
             builder.arg(escaped);
-            let _child = pair.slave.spawn_command(builder).expect("spawn printf child");
+            let _child = pair
+                .slave
+                .spawn_command(builder)
+                .expect("spawn printf child");
             pair.master.try_clone_reader().expect("reader")
         };
         #[cfg(windows)]
@@ -1742,9 +1750,7 @@ mod tests {
         // buffer so the relay is deterministic and the real system clipboard
         // / process-global default buffer are never touched.
         let shared = Arc::new(RwLock::new(None));
-        let mut args = make_parser_test_args(&crate::clipboard::format_osc52_bytes(
-            "clip via pty",
-        ));
+        let mut args = make_parser_test_args(&crate::clipboard::format_osc52_bytes("clip via pty"));
         args.clipboard = Some(Clipboard::with_shared_buffer(Arc::clone(&shared)));
         let captured = Arc::new(Mutex::new(None));
         args.osc52_text = Some(Arc::clone(&captured));
@@ -2813,7 +2819,11 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert_eq!(pty.size().rows, 30, "emulator resized after the pipe drained");
+        assert_eq!(
+            pty.size().rows,
+            30,
+            "emulator resized after the pipe drained"
+        );
         assert_eq!(pty.size().cols, 100);
     }
 
