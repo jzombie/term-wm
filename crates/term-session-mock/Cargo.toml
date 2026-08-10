@@ -1,6 +1,6 @@
 [package]
 name = "term-session-mock"
-description = "Internal test tooling for term-wm: a mock PTY binary and shared test helpers for cross-platform terminal stream simulation, including Windows ConPTY byte-sequence handling."
+description = "Internal test tooling for term-wm: a mock PTY binary, a mouse-capture probe binary, and shared test helpers for cross-platform terminal stream simulation, including Windows ConPTY byte-sequence handling."
 keywords = ["terminal", "pty", "testing", "simulation", "cross-platform"]
 categories = ["development-tools", "emulators", "simulation"]
 authors.workspace = true
@@ -15,8 +15,10 @@ name = "term_session_mock"
 path = "src/lib.rs"
 
 [dependencies]
+crossterm = { workspace = true }
 libc = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
+term-wm-crossterm-adapter = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

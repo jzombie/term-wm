@@ -44,6 +44,7 @@ use crate::notification::NotificationQueue;
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
+use crate::utils::DelayedReleaseBool;
 #[cfg(test)]
 use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
@@ -393,7 +394,10 @@ pub struct WindowManager<
     /// True when the app draws content under the FAB's footprint on its bottom
     /// row (populated by the render pass each frame; consumed by the layout pass
     /// on the next frame to reserve the FAB's bottom row in cramped monocle).
-    bottom_content: bool,
+    /// Wrapped in a `DelayedReleaseBool` so a clear holds for
+    /// `FAB_RESERVATION_DEBOUNCE` instead of toggling the window height
+    /// frame-to-frame during a resize.
+    bottom_content: DelayedReleaseBool,
     /// Namespaced semantic registry for programmatic component lookup.
     /// Hotkeys and structural routing query this instead of hardcoded fields.
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
@@ -890,7 +894,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             last_snap_cursor: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
-            bottom_content: false,
+            bottom_content: DelayedReleaseBool::new(crate::constants::FAB_RESERVATION_DEBOUNCE),
             tap_swap_state: None,
         }
     }
@@ -960,16 +964,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     /// True when the focused window draws content under the FAB's footprint on
     /// its bottom row. Populated by the render pass; consumed by the layout pass
-    /// (register_managed_layout) on the next frame to reserve the FAB's row.
+    /// (register_managed_layout) on the next frame to reserve the FAB's row. A
+    /// clear is held for `FAB_RESERVATION_DEBOUNCE` (see `set_bottom_content_flag`).
     pub fn has_bottom_content(&self) -> bool {
-        self.bottom_content
+        self.bottom_content.get()
     }
 
-    /// Record whether the app draws content under the FAB's footprint. Cleared by
-    /// the render pass whenever cramped monocle is inactive to avoid a stale flag
-    /// falsely padding the first frame after re-entering cramped monocle.
+    /// Record whether the app draws content under the FAB's footprint. A clear
+    /// (false) is held for `FAB_RESERVATION_DEBOUNCE` so the window height (and
+    /// PTY) does not oscillate when a resize reflow briefly changes the
+    /// bottom-right footprint content.
     pub fn set_bottom_content_flag(&mut self, has: bool) {
-        self.bottom_content = has;
+        self.bottom_content.set(has);
     }
 
     /// Get a mutable reference to the FAB component.
@@ -3244,22 +3250,6 @@ mod tests {
             height: 1,
         });
         assert_eq!(wm.managed_area().height, 1, "height must never reach 0");
-    }
-
-    #[test]
-    fn bottom_content_flag_defaults_false_and_toggles() {
-        let mut wm = WindowManager::<TestComponent>::with_config(
-            WmConfig::default(),
-            Arc::new(AppContext::new("test", "0.0.0")),
-            None,
-            crate::window::LayerManager::new(),
-            std::collections::HashMap::new(),
-        );
-        assert!(!wm.has_bottom_content(), "flag defaults to false");
-        wm.set_bottom_content_flag(true);
-        assert!(wm.has_bottom_content(), "setter records true");
-        wm.set_bottom_content_flag(false);
-        assert!(!wm.has_bottom_content(), "setter clears the flag");
     }
 
     #[test]

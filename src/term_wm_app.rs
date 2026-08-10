@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Sender, bounded};
 
-use term_wm_console::console_event_source::ConsoleEventSource;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
 use term_wm_core::actions::TermWmAction;
@@ -33,7 +32,7 @@ use term_wm_ui_facade::core_component::CoreWmComponent;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
 use crate::components::{AppRootComponent, NoopComponent};
-use crate::unified_event_source::{EVENT_CHANNEL_CAPACITY, UnifiedEvent};
+use crate::unified_event_source::{EVENT_CHANNEL_CAPACITY, UnifiedEvent, UnifiedEventSource};
 
 /// Scrollback size for windows spawned by the default "New Terminal" action.
 const NEW_TERMINAL_SCROLLBACK: usize = 2000;
@@ -41,9 +40,8 @@ const NEW_TERMINAL_SCROLLBACK: usize = 2000;
 /// Command-palette allow-list installed by `new_custom` / `new_with_config`.
 ///
 /// Deliberately a restricted subset of the full `DEFAULT_SUPPORTED_MENU_ACTIONS`
-/// (which additionally contains `NewTerminal`-adjacent entries like
-/// `ToggleDebugWindow` / `ToggleSystemPanel` / `Help`). Apps that want the full
-/// set — or a different one — use `new_with_actions`.
+/// (which additionally contains `ToggleSystemPanel` / `Help`). Apps that want the
+/// full set — or a different one — use `new_with_actions`.
 const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::CloseMenu,
     TermWmAction::ToggleMouseCapture,
@@ -53,6 +51,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleMonocle,
     TermWmAction::ToggleTiling,
     TermWmAction::NewTerminal,
+    TermWmAction::ToggleDebugWindow,
 ];
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
@@ -79,9 +78,9 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// `new_custom` and `new_with_config` install a fixed, restricted
 /// command-palette allow-list (`CloseMenu`, `ToggleMouseCapture`,
 /// `ToggleClipboardMode`, `ToggleWindowSelection`, `ExitUi`, `ToggleMonocle`,
-/// `ToggleTiling`, `NewTerminal`). Use `new_with_actions` to opt into additional
-/// entries such as `ToggleDebugWindow` or `ToggleSystemPanel`, or to add/remove
-/// any action.
+/// `ToggleTiling`, `NewTerminal`, `ToggleDebugWindow`). Use `new_with_actions` to
+/// opt into additional entries such as `ToggleSystemPanel`, or to add/remove any
+/// action.
 ///
 /// `from_wm()` builds the app around a pre-configured `WindowManager`; the
 /// bundled `term-wm` binary uses this path.
@@ -139,23 +138,36 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// This is the generic constructor — works for any `C: Component<TermWmAction>`.
     /// Provide a type annotation or turbofish for `C` (e.g.
     /// `TermWmApp::<NoopComponent>::new_custom(ctx)` for built-ins only).
-    #[cfg(feature = "sys-ui")]
     pub fn new_custom(app_ctx: AppContext) -> Self {
         Self::new_with_config(app_ctx, WmConfig::default())
+    }
+
+    /// Returns true when the currently focused window is an app-owned
+    /// (`AppRootComponent::Custom`) window, as opposed to a core/system window.
+    pub fn focused_is_custom(&self) -> bool {
+        self.wm
+            .component_for_key(self.wm.focused_window())
+            .is_some_and(AppRootComponent::is_custom)
+    }
+
+    /// Returns true when the currently focused window is a core/system window,
+    /// as opposed to an app-owned (`AppRootComponent::Custom`) window.
+    pub fn focused_is_core(&self) -> bool {
+        self.wm
+            .component_for_key(self.wm.focused_window())
+            .is_some_and(AppRootComponent::is_core)
     }
 
     /// Create a standalone app with system chrome and a custom `WmConfig`
     /// (e.g. custom keybindings). The chrome wiring (top/bottom panel, FAB,
     /// notification area, supported menu actions) is identical to
     /// [`Self::new_custom`]; only the configuration differs.
-    #[cfg(feature = "sys-ui")]
     pub fn new_with_config(app_ctx: AppContext, config: WmConfig) -> Self {
         Self::new_with_actions(app_ctx, config, DEFAULT_STANDALONE_MENU_ACTIONS.to_vec())
     }
 
     /// Standalone constructor with system chrome + explicit supported command
     /// palette actions. `new_with_config` delegates here with its default list.
-    #[cfg(feature = "sys-ui")]
     pub fn new_with_actions(
         app_ctx: AppContext,
         config: WmConfig,
@@ -200,7 +212,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         wm: WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent>,
         pty_wakeup_tx: Sender<UnifiedEvent>,
     ) -> Self {
-        Self {
+        let mut app = Self {
             wm,
             debug_key: None,
             system_panel_key: None,
@@ -210,7 +222,14 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
             pty_wakeup_tx,
             last_key: Rc::new(RefCell::new(None)),
             terminal_counter: 0,
-        }
+        };
+        // Every TermWmApp flows through here — the standalone constructors
+        // (new_custom / new_with_config / new_with_actions) AND the bundled
+        // binary's `from_wm` path — so guarantee the system windows (debug log,
+        // system panel) exist from construction, without any app needing to call
+        // init_system_windows() itself. Idempotent.
+        app.init_system_windows();
+        app
     }
 
     /// Spawn a fully-wired PTY terminal window in a single call.
@@ -244,53 +263,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
 
         // Attach status callback AFTER open_window so the closure captures
         // the known WindowKey directly — no OnceLock, no race condition.
-        let tx = self.pty_wakeup_tx.clone();
-        match self.wm.component_for_key_mut(key) {
-            Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) => {
-                tracing::info!("[STAGE 2] Setting status callback for key {:?}", key);
-                scroll_view
-                    .content
-                    .borrow_mut()
-                    .set_pty_callback(move |status| match status {
-                        PtyStatus::Wakeup => {
-                            let _ =
-                                tx.send(crate::unified_event_source::UnifiedEvent::PtyWakeup(key));
-                        }
-                        PtyStatus::Exited => {
-                            let _ =
-                                tx.send(crate::unified_event_source::UnifiedEvent::AppExited(key));
-                        }
-                        PtyStatus::DirectInputChanged(enabled) => {
-                            tracing::info!(
-                                "[STAGE 2] Sending DirectInputChanged({}) for key {:?}",
-                                enabled,
-                                key
-                            );
-                            if let Err(e) = tx.send(
-                                crate::unified_event_source::UnifiedEvent::DirectInputChanged(
-                                    key, enabled,
-                                ),
-                            ) {
-                                tracing::error!("[STAGE 2] Channel send failed: {:?}", e);
-                            }
-                        }
-                    });
-            }
-            Some(_other) => {
-                tracing::error!(
-                    "[STAGE 2] Window {:?} has unexpected component type — \
-                     status callback will NOT be wired. PTY events will not fire.",
-                    key,
-                );
-            }
-            None => {
-                tracing::error!(
-                    "[STAGE 2] No component found for key {:?} after open_window. \
-                     Status callback will NOT be wired.",
-                    key
-                );
-            }
-        }
+        self.wire_pty_callback(key, self.pty_wakeup_tx.clone());
 
         let clipboard_enabled = self.wm.clipboard_enabled();
         if let Some(comp) = self.wm.component_for_key_mut(key) {
@@ -305,13 +278,77 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         Ok(key)
     }
 
+    /// Wire a terminal window's PTY status callback so wakeup / exit /
+    /// direct-input events are sent on `tx`. Also used by `run()` to re-point
+    /// terminals that were spawned before the live event-source channel existed.
+    fn wire_pty_callback(&mut self, key: WindowKey, tx: Sender<UnifiedEvent>) {
+        match self.wm.component_for_key_mut(key) {
+            Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) => {
+                tracing::info!("Setting status callback for key {:?}", key);
+                scroll_view
+                    .content
+                    .borrow_mut()
+                    .set_pty_callback(move |status| match status {
+                        PtyStatus::Wakeup => {
+                            let _ = tx.send(UnifiedEvent::PtyWakeup(key));
+                        }
+                        PtyStatus::Exited => {
+                            let _ = tx.send(UnifiedEvent::AppExited(key));
+                        }
+                        PtyStatus::DirectInputChanged(enabled) => {
+                            tracing::info!(
+                                "Sending DirectInputChanged({}) for key {:?}",
+                                enabled,
+                                key
+                            );
+                            if let Err(e) = tx.send(UnifiedEvent::DirectInputChanged(key, enabled))
+                            {
+                                tracing::error!("Channel send failed: {:?}", e);
+                            }
+                        }
+                    });
+            }
+            Some(_other) => {
+                tracing::error!(
+                    "Window {:?} has unexpected component type — status callback will NOT be wired.",
+                    key,
+                );
+            }
+            None => {
+                tracing::error!("No component found for key {:?}.", key);
+            }
+        }
+    }
+
+    /// Re-point every existing terminal window's PTY status callback to `tx`.
+    ///
+    /// `run()` uses this after creating its live event source, so terminals that
+    /// were spawned earlier — with the constructors' throwaway channel, whose
+    /// receiver was dropped — still wake the event loop.
+    fn rewire_terminal_callbacks(&mut self, tx: &Sender<UnifiedEvent>) {
+        let terminal_keys: Vec<WindowKey> = self
+            .wm
+            .all_window_keys()
+            .into_iter()
+            .filter(|&k| {
+                matches!(
+                    self.wm.component_for_key(k),
+                    Some(AppRootComponent::Core(CoreWmComponent::Terminal(_)))
+                )
+            })
+            .collect();
+        for key in terminal_keys {
+            self.wire_pty_callback(key, tx.clone());
+        }
+    }
+
     /// Initialize standard system windows (debug log + system panel).
     ///
     /// Creates both windows in `Unmapped` (hidden) state with `ClosePolicy::Unmap`
     /// so they persist across show/hide cycles. The debug log also installs the
     /// panic hook and logging subscriber. Safe to call multiple times — subsequent
     /// calls are no-ops.
-    pub fn init_system_windows(&mut self) {
+    fn init_system_windows(&mut self) {
         if self.debug_key.is_some() || self.system_panel_key.is_some() {
             return;
         }
@@ -392,10 +429,23 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// Run with default console I/O (enters/exits terminal automatically).
     ///
     /// Calls `run_with` → `run_with_defaults` → `run_event_loop`.
-    pub fn run(self) -> io::Result<()> {
+    pub fn run(mut self) -> io::Result<()> {
         let mut output = ConsoleRenderTarget::new()?;
         output.enter()?;
-        let mut input = ConsoleEventSource::new();
+        // Drive the loop with the unified event source so terminal (PTY) output
+        // wakes the loop — not just console input. The constructors hand the app
+        // a throwaway pty_wakeup channel (its receiver is dropped), so point the
+        // app's wakeup sender at this source's receiver; otherwise typing in a
+        // spawned terminal never repaints until the next console event (e.g. a
+        // mouse move).
+        let mut input = UnifiedEventSource::new()?;
+        let tx = input.pty_wakeup_tx();
+        self.pty_wakeup_tx = tx.clone();
+        // Re-point any terminals spawned before run(): their callbacks captured
+        // the constructors' throwaway channel (whose receiver was dropped), so
+        // re-wire them to this live source or their PTY output would never wake
+        // the loop.
+        self.rewire_terminal_callbacks(&tx);
         let result = self.run_with(&mut output, &mut input);
         output.exit()?;
         result
@@ -543,10 +593,35 @@ impl<C: Component<TermWmAction>>
 mod tests {
     use super::*;
 
+    /// Every construction path must initialize the system windows (debug log,
+    /// system panel) and leave them hidden (`Unmapped`).
+    fn assert_system_windows_initialized(app: &mut TermWmApp<NoopComponent>) {
+        use term_wm_core::window::WindowState;
+        use term_wm_core::window::window_manager::system_tags;
+
+        let debug_key = app
+            .wm()
+            .get_system_window::<system_tags::DebugLog>()
+            .expect("debug log system window must exist");
+        let panel_key = app
+            .wm()
+            .get_system_window::<system_tags::SystemPanel>()
+            .expect("system panel window must exist");
+        assert_eq!(
+            app.wm().window_state(debug_key),
+            Some(WindowState::Unmapped),
+            "debug log must start hidden"
+        );
+        assert_eq!(
+            app.wm().window_state(panel_key),
+            Some(WindowState::Unmapped),
+            "system panel must start hidden"
+        );
+    }
+
     /// `new_custom` is what `examples/dual_image.rs` uses to build its app.
     /// It must keep the command-palette actions limited to the allow-list it
     /// configures — never the full default set.
-    #[cfg(feature = "sys-ui")]
     #[test]
     fn new_custom_limits_supported_menu_actions() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
@@ -561,8 +636,125 @@ mod tests {
                 TermWmAction::ToggleMonocle,
                 TermWmAction::ToggleTiling,
                 TermWmAction::NewTerminal,
+                TermWmAction::ToggleDebugWindow,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );
+    }
+
+    #[test]
+    fn new_custom_initializes_system_windows() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert_system_windows_initialized(&mut app);
+    }
+
+    #[test]
+    fn new_with_config_initializes_system_windows() {
+        let mut app = TermWmApp::<NoopComponent>::new_with_config(
+            AppContext::new("test", "0.0.0"),
+            WmConfig::default(),
+        );
+        assert_system_windows_initialized(&mut app);
+    }
+
+    #[test]
+    fn focused_is_custom_and_core_distinguish_window_kinds() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+
+        // open_window maps and focuses, so focus tracks the last-opened pane.
+        let custom = app.open_window(AppRootComponent::Custom(NoopComponent));
+        assert!(app.focused_is_custom());
+        assert!(!app.focused_is_core());
+
+        let core = app.open_window(AppRootComponent::Core(CoreWmComponent::Noop(NoopComponent)));
+        assert!(app.focused_is_core());
+        assert!(!app.focused_is_custom());
+
+        app.wm().focus_window_key(custom);
+        assert!(app.focused_is_custom());
+        assert!(!app.focused_is_core());
+        let _ = core;
+    }
+
+    #[test]
+    fn new_with_actions_initializes_system_windows() {
+        let mut app = TermWmApp::<NoopComponent>::new_with_actions(
+            AppContext::new("test", "0.0.0"),
+            WmConfig::default(),
+            DEFAULT_STANDALONE_MENU_ACTIONS.to_vec(),
+        );
+        assert_system_windows_initialized(&mut app);
+    }
+
+    #[test]
+    fn from_wm_initializes_system_windows() {
+        let ctx = Arc::new(AppContext::new("test", "0.0.0"));
+        let wm = AppBuilder::<LayerComponent>::new()
+            .app_ctx(ctx)
+            .build()
+            .expect("build wm");
+        let (tx, _) = bounded(EVENT_CHANNEL_CAPACITY);
+        let mut app = TermWmApp::<NoopComponent>::from_wm(wm, tx);
+        assert_system_windows_initialized(&mut app);
+    }
+
+    /// Regression for the PTY-wakeup bug: terminals spawned before `run()`
+    /// captured the constructors' throwaway `pty_wakeup` channel (whose receiver
+    /// was dropped), so their output never woke the loop. After
+    /// `rewire_terminal_callbacks`, the child's PTY events must land on the
+    /// re-wired (live) channel.
+    #[test]
+    fn rewire_terminal_callbacks_routes_pty_events_to_new_channel() {
+        use std::time::{Duration, Instant};
+
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app
+            .spawn_terminal_window(default_shell_command(), 200, None, "rewire-test")
+            .expect("spawn shell");
+
+        // Simulate run(): point the app and pre-spawned terminals at a live
+        // channel, replacing the orphaned one from construction.
+        let (tx, rx) = bounded::<UnifiedEvent>(16);
+        app.pty_wakeup_tx = tx.clone();
+        app.rewire_terminal_callbacks(&tx);
+
+        // Make the child exit; its exit must be delivered on the re-wired
+        // channel (the original callback bound to the orphaned tx would not be).
+        let mut line = String::from("exit");
+        line.push_str(line_ending::LineEnding::from_current_platform().as_str());
+        if let Some(comp) = app.wm().component_for_key_mut(key) {
+            comp.paste(&line);
+        }
+
+        // Exit detection is platform-dependent: on Unix the reader thread sees
+        // EOF and fires the exit callback directly. On Windows ConPTY swallows
+        // the reader EOF, so the app's per-frame `has_exited()` poll is what
+        // synthesizes the exit callback — and the child stalls at startup until
+        // the host answers its DSR cursor query (`sync_screen`). Drive both per
+        // frame here (the real event loop does exactly this every frame) so the
+        // test is platform-independent while still asserting the event arrives
+        // on the re-wired channel.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) =
+                app.wm().component_for_key_mut(key)
+            {
+                let mut comp = scroll_view.content.borrow_mut();
+                comp.sync_screen();
+                comp.has_exited();
+            }
+            match rx.try_recv() {
+                Ok(UnifiedEvent::AppExited(k)) if k == key => break,
+                Ok(_) => {}
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    panic!("channel disconnected before child exit was delivered");
+                }
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out: child exit was not delivered on the re-wired channel");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
