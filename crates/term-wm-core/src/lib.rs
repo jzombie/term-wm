@@ -6,6 +6,7 @@ pub mod command_menu;
 pub mod component_context;
 pub mod components;
 pub mod constants;
+pub mod debounce;
 pub mod debug_event_flags;
 pub mod debug_log;
 pub mod draw_plan;
