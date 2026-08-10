@@ -3089,7 +3089,6 @@ dependencies = [
 name = "term-session-mock"
 version = "0.9.18-alpha"
 dependencies = [
- "crossterm",
  "libc",
  "term-session-muxio-service-definitions",
  "windows-sys 0.61.2",
