@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
-use term_wm_core::events::{Event, KeyCode, KeyKind, MouseButton, MouseEvent, MouseEventKind};
+use term_wm_core::events::{
+    Event, KeyCode, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use term_wm_vt100::MouseProtocolEncoding;
 
 use crate::helpers::{
@@ -27,6 +29,20 @@ use term_wm_pty_engine::{Pane, PtyStatus};
 // This controls the scrollback buffer size in the vt100 parser.
 // It determines how many lines you can scroll up to see.
 const DEFAULT_SCROLLBACK_LEN: usize = 2000;
+
+/// Whether the user is forcing native text selection for a mouse event.
+///
+/// Shift is the universal override; on macOS Option (reported as `alt`) also
+/// counts (iTerm2/Terminal.app convention). Alt is intentionally NOT an
+/// override on Linux/Windows so SGR `Alt+Click`/`Alt+Drag` modifier bits keep
+/// reaching the application (e.g. Emacs/Helix region selection).
+///
+/// Best-effort: when term-wm runs nested inside a host terminal, the host
+/// intercepts Shift+mouse at its OS windowing layer before term-wm sees bytes,
+/// so the override only applies to SGR mouse streams that actually reach us.
+fn force_native_selection(modifiers: KeyModifiers) -> bool {
+    modifiers.shift || (cfg!(target_os = "macos") && modifiers.alt)
+}
 
 pub struct TerminalComponent {
     hitbox_id: HitboxId,
@@ -70,7 +86,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 }
                 if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
                     && key.modifiers.shift
-                    && !ctx.direct_mode()
+                    && !ctx.keyboard_direct()
                 {
                     let delta = if key.code == KeyCode::PageUp {
                         10isize
@@ -87,9 +103,32 @@ impl Component<TermWmAction> for TerminalComponent {
                 EventResult::Action(TermWmAction::KeyToBytes(bytes))
             }
             Event::Mouse(mouse) => {
-                if !ctx.direct_mode() {
+                let area = ctx.screen_area().unwrap_or_default();
+
+                // Mouse capture is split from keyboard Direct Mode: the app
+                // only captures the mouse when it explicitly requested mouse
+                // tracking with a supported encoding (DECSET 1000/1002/1003 +
+                // 1006). Otherwise the WM keeps native mouse handling (text
+                // selection, right-click paste, link clicks) — this is what
+                // keeps pico/nano selectable on the alternate screen.
+                let app_captures_mouse = ctx.mouse_captured();
+
+                // Shift (universal) or Option (macOS only) forces native text
+                // selection even in a captured app. Best-effort: it only
+                // applies to SGR mouse streams that reach term-wm — when
+                // nested inside a host terminal, the host intercepts
+                // Shift+mouse first and term-wm receives no bytes.
+                let override_active = force_native_selection(mouse.modifiers);
+                // Keep a native drag alive even if the override is released
+                // mid-gesture so the selection isn't torn by a stray forward.
+                let gesture_active = {
+                    let selection = self.selection.borrow();
+                    selection.button_down() || selection.is_dragging()
+                };
+
+                if !app_captures_mouse || override_active || gesture_active {
                     // Right-click paste (Windows Cmd/PS convention).
-                    // Only in normal mode — in Direct Mode (tmux, vim, etc.)
+                    // Only when the WM owns the mouse — in a captured app
                     // right-click passes through to the running program.
                     match mouse.kind {
                         MouseEventKind::Press(MouseButton::Right)
@@ -101,19 +140,18 @@ impl Component<TermWmAction> for TerminalComponent {
                         }
                         _ => {}
                     }
-                }
 
-                if !ctx.direct_mode() {
                     let selection_ready = self.selection_enabled;
-                    let area = ctx.screen_area().unwrap_or_default();
                     if handle_selection_mouse(self, selection_ready, mouse, area) {
                         return EventResult::Consumed;
                     }
                     if self.try_handle_link_click(area, mouse) {
                         return EventResult::Consumed;
                     }
+                    // While overriding (or mid native gesture) never forward.
+                    return EventResult::Ignored;
                 }
-                let area = ctx.screen_area().unwrap_or_default();
+
                 let mut pane = self.pane.borrow_mut();
                 let parser_arc = pane.shared_parser();
                 let parser = parser_arc.lock().unwrap();
@@ -510,7 +548,7 @@ impl TerminalComponent {
             let mut pane = self.pane.borrow_mut();
 
             if let Some(handle) = ctx.scroll_handle() {
-                let suppress_scroll = ctx.direct_mode();
+                let suppress_scroll = ctx.keyboard_direct();
 
                 if suppress_scroll {
                     handle.set_content_size(clipped.width as usize, clipped.height as usize);
@@ -574,7 +612,7 @@ impl TerminalComponent {
         let mut pane = self.pane.borrow_mut();
         let new_sb = pane.scrollback();
         if new_sb != sb_before_drag
-            && !ctx.direct_mode()
+            && !ctx.keyboard_direct()
             && let Some(handle) = ctx.scroll_handle()
         {
             let used = pane.max_scrollback();
@@ -2060,18 +2098,24 @@ mod tests {
     }
 
     #[test]
-    fn mouse_selection_skipped_in_direct_mode_via_dispatch() {
+    fn mouse_selection_active_in_direct_mode_without_mouse_capture() {
         use std::sync::Arc;
         use term_wm_core::app_context::AppContext;
         use term_wm_core::components::{Component, NoopOverlay, NoopWmComponent};
         use term_wm_core::config::AppBuilder;
         use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        use term_wm_pty_engine::DirectInputTracker;
+        use term_wm_pty_engine::{DirectInputMode, DirectInputTracker};
 
-        struct AlwaysDirect;
-        impl DirectInputTracker for AlwaysDirect {
-            fn requires_direct_input(&self) -> bool {
-                true
+        // Keyboard-only direct mode: alternate screen WITHOUT mouse tracking —
+        // the pico/nano scenario. Native text selection must keep working.
+        struct KeyboardDirectOnly;
+        impl DirectInputTracker for KeyboardDirectOnly {
+            fn direct_input_mode(&self) -> DirectInputMode {
+                DirectInputMode {
+                    keyboard: true,
+                    mouse: false,
+                    ..DirectInputMode::default()
+                }
             }
         }
 
@@ -2104,8 +2148,9 @@ mod tests {
             height: 24,
         });
         wm.focus_app_window(key);
-        wm.set_window_tracker(key, Arc::new(AlwaysDirect));
+        wm.set_window_tracker(key, Arc::new(KeyboardDirectOnly));
         assert!(wm.direct_mode(key));
+        assert!(!wm.direct_input_mode(key).mouse);
 
         // Render to set last_area
         use term_wm_core::components::ComponentContext;
@@ -2136,7 +2181,8 @@ mod tests {
             );
         }
 
-        // In Direct Mode: a Down+Drag must NOT be consumed by selection
+        // In keyboard-direct mode WITHOUT mouse capture, a Down+Drag must be
+        // consumed by native selection (the pico/nano fix).
         let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             column: (area.x + 1) as u16,
@@ -2149,16 +2195,12 @@ mod tests {
             "down must route to component in Direct Mode, got None"
         );
         let (_, down_evt) = result_down.unwrap();
-        // In Direct Mode, selection is skipped, so Down is not consumed
-        // (it falls through to PTY forwarding, which returns Ignored for
-        //  press-only mode since the test PTY hasn't enabled mouse tracking)
         assert!(
-            !down_evt.is_consumed(),
-            "down must NOT be consumed in Direct Mode: got {:?}",
+            down_evt.is_consumed(),
+            "down must be consumed by native selection when the app has not captured the mouse, got {:?}",
             down_evt
         );
 
-        // Drag must also not be consumed (selection is skipped in Direct Mode)
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
             column: (area.x + 5) as u16,
@@ -2172,19 +2214,19 @@ mod tests {
         );
         let (_, drag_evt) = result_drag.unwrap();
         assert!(
-            !drag_evt.is_consumed(),
-            "drag must NOT be consumed in Direct Mode: got {:?}",
+            drag_evt.is_consumed(),
+            "drag must be consumed by native selection, got {:?}",
             drag_evt
         );
 
-        // Verify no selection was made
+        // Verify a selection was made
         let sel_status = wm
             .component_for_key(key)
             .map(|c| c.selection_status())
             .unwrap();
         assert!(
-            !sel_status.active,
-            "selection should not be active after Direct Mode drag"
+            sel_status.active,
+            "selection should be active after a native drag in keyboard-direct mode"
         );
     }
 
@@ -2203,7 +2245,8 @@ mod tests {
         let mut term = TerminalComponent::from_pane(Box::new(pane));
         term.set_selection_enabled(true);
 
-        // Direct Mode — selection skipped, PTY encoding expected
+        // Captured ctx (mouse_captured = true via with_direct_mode) — selection
+        // skipped, PTY encoding expected.
         let ctx = ComponentContext::new(true)
             .with_direct_mode(true)
             .with_screen_area(LayoutRect {
@@ -2228,9 +2271,18 @@ mod tests {
                 other
             ),
         }
+    }
 
-        // Non-Direct Mode — selection should consume Drag
-        let ctx_normal = ComponentContext::new(true).with_screen_area(LayoutRect {
+    /// When the app has NOT captured the mouse, native selection consumes the
+    /// drag regardless of context (the pico/nano fix at the component level).
+    #[test]
+    fn mouse_selection_consumes_drag_when_not_captured() {
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        term.set_selection_enabled(true);
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
             width: 80,
@@ -2238,13 +2290,18 @@ mod tests {
         });
 
         // Send Down first to set button_down (required for Drag consumption)
-        let down_normal = Event::Mouse(MouseEvent {
+        let down = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Press(MouseButton::Left),
             column: 5,
             row: 2,
             modifiers: KeyModifiers::NONE,
         });
-        let _ = term.handle_events(&down_normal, &ctx_normal);
+        let result_down = term.handle_events(&down, &ctx);
+        assert!(
+            matches!(result_down, EventResult::Consumed),
+            "Down must be consumed by native selection when not captured, got {:?}",
+            result_down
+        );
 
         let drag = Event::Mouse(MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
@@ -2252,12 +2309,103 @@ mod tests {
             row: 2,
             modifiers: KeyModifiers::NONE,
         });
-        let result_drag = term.handle_events(&drag, &ctx_normal);
+        let result_drag = term.handle_events(&drag, &ctx);
         assert!(
             matches!(result_drag, EventResult::Consumed),
-            "in normal mode, Drag must be consumed by selection, got {:?}",
+            "Drag must be consumed by native selection when not captured, got {:?}",
             result_drag
         );
+    }
+
+    /// Shift (universal) or Option (macOS) forces native selection even in a
+    /// captured app — Press/Drag must be consumed instead of forwarded.
+    #[test]
+    fn mouse_override_forces_native_selection_in_captured_app() {
+        use term_wm_core::components::{ComponentContext, EventResult};
+        use term_wm_core::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let shift = KeyModifiers {
+            shift: true,
+            control: false,
+            alt: false,
+        };
+
+        let mut pane = TestPane::new(2000);
+        pane.set_parser_size(24, 80);
+        pane.write_to_parser(b"Hello World");
+        // App captured the mouse (1002h → ButtonMotion).
+        pane.write_to_parser(b"\x1b[?1002h");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.set_selection_enabled(true);
+
+        let ctx = ComponentContext::new(true)
+            .with_direct_mode(true)
+            .with_screen_area(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            });
+
+        // Shift + Down must be consumed by native selection, not forwarded.
+        let shift_down = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 2,
+            modifiers: shift,
+        });
+        let result = term.handle_events(&shift_down, &ctx);
+        assert!(
+            matches!(result, EventResult::Consumed),
+            "Shift+Down must be consumed by native selection in a captured app, got {:?}",
+            result
+        );
+
+        // Shift + Drag continues the native gesture.
+        let shift_drag = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 10,
+            row: 2,
+            modifiers: shift,
+        });
+        let result_drag = term.handle_events(&shift_drag, &ctx);
+        assert!(
+            matches!(result_drag, EventResult::Consumed),
+            "Shift+Drag must be consumed by native selection in a captured app, got {:?}",
+            result_drag
+        );
+    }
+
+    /// Option/Alt is only an override on macOS; on Linux/Windows it must pass
+    /// through as an SGR modifier bit.
+    #[test]
+    fn force_native_selection_modifier_policy() {
+        use term_wm_core::events::KeyModifiers;
+
+        let shift = KeyModifiers {
+            shift: true,
+            control: false,
+            alt: false,
+        };
+        let alt = KeyModifiers {
+            shift: false,
+            control: false,
+            alt: true,
+        };
+        let control = KeyModifiers {
+            shift: false,
+            control: true,
+            alt: false,
+        };
+
+        assert!(force_native_selection(shift));
+        if cfg!(target_os = "macos") {
+            assert!(force_native_selection(alt));
+        } else {
+            assert!(!force_native_selection(alt));
+        }
+        assert!(!force_native_selection(control));
+        assert!(!force_native_selection(KeyModifiers::NONE));
     }
 
     // ── Right-Click Paste Tests ────────────────────────────────────────

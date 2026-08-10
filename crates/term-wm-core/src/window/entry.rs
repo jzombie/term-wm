@@ -292,8 +292,15 @@ impl Window {
     pub fn requires_direct_input(&self) -> bool {
         self.tracker
             .as_ref()
-            .map(|t| t.requires_direct_input())
+            .map(|t| t.direct_input_mode().requires_direct_input())
             .unwrap_or(false)
+    }
+
+    pub fn direct_input_mode(&self) -> term_wm_pty_engine::DirectInputMode {
+        self.tracker
+            .as_ref()
+            .map(|t| t.direct_input_mode())
+            .unwrap_or_default()
     }
 
     // ── Chrome Presentation Evaluation ────────────────────────────────────────
