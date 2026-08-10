@@ -4,13 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
-## [0.9.18-alpha] - 2016-08-09
+## [0.9.18-alpha] - 2026-08-09
 
 ### Fixed
 
 - Cyclic dependency ordering in 0.9.17-alpha's `term-session-mock` and `term-wm-crossterm-adapter` crates preventing workspace publishing.
 
-## [0.9.17-alpha] - 2016-08-09
+## [0.9.17-alpha] - 2026-08-09
 
 ### Added
 
