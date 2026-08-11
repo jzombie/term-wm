@@ -1,3 +1,4 @@
+# Local development overrides (only take effect if copying to config.toml)
 [patch.crates-io]
 muxio-core = { path = "../rust-muxio/core" }
 muxio-rpc-service = { path = "../rust-muxio/extensions/muxio-rpc-service" }
