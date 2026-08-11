@@ -10,6 +10,7 @@
 //! terminal (when stdout is an active terminal) — so it works locally and over
 //! SSH with no flags.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -43,7 +44,18 @@ fn main() -> ExitCode {
 
     let result = match cli.file {
         Some(path) => cb.set_from_path(&path),
-        None => cb.set_from_reader(std::io::stdin().lock()),
+        None => {
+            // With no FILE argument and an interactive (TTY) stdin there is
+            // nothing to read — read_to_string would block forever waiting for
+            // EOF.  Fail fast instead; callers must pass a file or pipe stdin.
+            if std::io::stdin().is_terminal() {
+                eprintln!(
+                    "term-copy: error: no input; pass a FILE argument or pipe stdin"
+                );
+                return ExitCode::FAILURE;
+            }
+            cb.set_from_reader(std::io::stdin().lock())
+        }
     };
 
     match result {
