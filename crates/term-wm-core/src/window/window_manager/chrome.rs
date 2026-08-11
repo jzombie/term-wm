@@ -118,7 +118,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 self.components.remove(w.component_key());
             }
             self.windows.remove(key);
-            // Drop any pending Direct Mode toast debounce for the removed
+            // Drop any pending Direct Input Mode toast debounce for the removed
             // window; an already-armed flush task fires as a harmless no-op.
             self.direct_mode_debounce.cancel(key);
         }

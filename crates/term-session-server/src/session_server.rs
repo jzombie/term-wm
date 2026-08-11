@@ -34,6 +34,19 @@ const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_
 /// status, as a fallback for a missed or raced PTY EOF notification.
 const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Upper bound on the per-channel `output_cache` retained when a session exits
+/// with no subscribers attached. Only the last `MAX_RETAINED_OUTPUT_BYTES` of
+/// the session's final output are kept, bounding heap memory regardless of how
+/// much an unsubscribed background session emitted before terminating.
+const MAX_RETAINED_OUTPUT_BYTES: usize = 64 * 1024;
+
+/// How long to wait for the PTY reader thread to finish its EOF processing
+/// before draining a dead session's final output. On Unix the reader EOFs
+/// within microseconds of process exit, so this is effectively free; on Windows
+/// ConPTY (where EOF can be swallowed) the grace bounds the wait before a
+/// best-effort drain.
+const READER_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Grace between SIGTERM and SIGKILL when terminating a session's process tree.
 const SIGKILL_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -108,6 +121,10 @@ struct ChannelState {
     notify: Arc<Notify>,
     /// Unix seconds when the channel was first created on the gateway.
     created_at_unix: u64,
+    /// Final output retained when a session exits with no subscribers
+    /// attached, so a later subscriber can still receive it. Capped at
+    /// `MAX_RETAINED_OUTPUT_BYTES` (tail retention) and cleared on respawn.
+    output_cache: Vec<u8>,
     /// Monotonic creation sequence (across the whole gateway process). Sort key
     /// for `ListChannels`: creation order, newest last. `created_at_unix` is
     /// only second-resolution wall clock and cannot disambiguate same-second
@@ -175,6 +192,7 @@ impl ChannelState {
             subscribers: Vec::new(),
             notify,
             created_at_unix: now_unix(),
+            output_cache: Vec::new(),
             created_seq,
             cmd,
             input_tx,
@@ -186,6 +204,9 @@ impl ChannelState {
     /// Replace the current session and attach the Notify callback so the
     /// background polling task wakes on PTY output.
     fn set_session(&mut self, mut session: Session) {
+        // A respawned session must not replay the previous session's retained
+        // final output to new subscribers.
+        self.output_cache.clear();
         let n = self.notify.clone();
         session.set_status_callback(Some(Box::new(move |status| {
             if matches!(status, PtyStatus::Wakeup | PtyStatus::Exited) {
@@ -196,6 +217,23 @@ impl ChannelState {
         // Prime notify to process initial startup output generated before the
         // callback was registered.
         self.notify.notify_one();
+    }
+
+    /// Append bytes to the retained-output cache with tail retention: at most
+    /// `MAX_RETAINED_OUTPUT_BYTES` of the session's final output is ever kept,
+    /// so an unsubscribed high-volume session cannot grow the cache unboundedly.
+    fn retain_final_output(&mut self, bytes: &[u8]) {
+        if bytes.len() >= MAX_RETAINED_OUTPUT_BYTES {
+            self.output_cache.clear();
+            self.output_cache
+                .extend_from_slice(&bytes[bytes.len() - MAX_RETAINED_OUTPUT_BYTES..]);
+        } else if self.output_cache.len() + bytes.len() > MAX_RETAINED_OUTPUT_BYTES {
+            let drop = self.output_cache.len() + bytes.len() - MAX_RETAINED_OUTPUT_BYTES;
+            self.output_cache.drain(..drop);
+            self.output_cache.extend_from_slice(bytes);
+        } else {
+            self.output_cache.extend_from_slice(bytes);
+        }
     }
 
     /// Signal the session's process group (non-blocking) and arm the kill
@@ -474,6 +512,12 @@ async fn get_or_create_channel(
                         session.sync_screen();
                         if session.check_exited() {
                             tracing::info!(channel = %name_for_task, "Session exited");
+                            // Retain the session's final output (bounded by
+                            // MAX_RETAINED_OUTPUT_BYTES) so a subscriber that
+                            // attaches after teardown still receives it, instead
+                            // of dropping the Pty's pending buffer wholesale.
+                            let final_out = session.read_final_output(READER_DRAIN_GRACE);
+                            guard.retain_final_output(&final_out);
                             guard.session = None;
                             guard.kill_pending = false;
                         }
@@ -985,12 +1029,18 @@ pub async fn run_gateway(
                         return;
                     };
                     let mut guard = ch.lock().await;
-                    // Drain accumulated PTY output and capture the raw bytes
-                    // so they can be sent to the new subscriber.
-                    let early = guard.session.as_mut().and_then(|s| {
-                        let data = s.read_output();
-                        if data.is_empty() { None } else { Some(data) }
-                    });
+                    // Drain accumulated PTY output and the retained final output
+                    // from a dead session (by clone, so a subscriber that
+                    // attaches and drops does not consume the bytes for later
+                    // subscribers) and capture the raw bytes so they can be sent
+                    // to the new subscriber.
+                    let early = {
+                        let mut all = guard.output_cache.clone();
+                        if let Some(session) = guard.session.as_mut() {
+                            all.extend_from_slice(&session.read_output());
+                        }
+                        if all.is_empty() { None } else { Some(all) }
+                    };
                     let snapshot = guard.session.as_mut().map(|s| s.generate_snapshot());
                     guard.subscribers.push(SubscriberEntry {
                         conn_id,
@@ -998,7 +1048,11 @@ pub async fn run_gateway(
                     });
                     guard.notify.notify_one();
                     let is_dead = guard.session.is_none();
-                    drop(guard);
+                    // Deliver the retained/live output and the end-of-stream
+                    // marker while still holding the channel guard, so the
+                    // polling task's dead-session finalization cannot interleave
+                    // an EOF ahead of this subscriber's data. respond() is
+                    // synchronous and already called under the guard elsewhere.
                     if let Some(data) = snapshot
                         && !data.is_empty()
                     {
@@ -1010,6 +1064,7 @@ pub async fn run_gateway(
                     if is_dead {
                         respond.respond(Vec::new(), true);
                     }
+                    drop(guard);
                 });
             }
         })

@@ -10,7 +10,9 @@ use term_session_muxio_service_definitions::{
 };
 
 mod common;
-use common::mock::{find_osc52_payload, find_sgr_mouse_token, get_mock_bin, mock_pid_alive};
+use common::mock::{
+    EXPECTED_OSC52_PAYLOAD, find_osc52_payload, find_sgr_mouse_token, get_mock_bin, mock_pid_alive,
+};
 use common::session::{
     TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin, list_channels,
     spawn_gateway, spawn_session, test_channel, wait_for_output,
@@ -316,7 +318,7 @@ async fn session_osc52_in_output() {
     Spawn::call(
         &*client,
         SpawnRequest {
-            cmd: Some(vec![mock, "osc52".into()]),
+            cmd: Some(vec![mock, "osc52_alive".into()]),
             cols: TEST_COLS,
             rows: TEST_ROWS,
             cwd: None,
@@ -330,7 +332,9 @@ async fn session_osc52_in_output() {
         .await
         .unwrap();
 
-    let output = wait_for_output(&mut reader, b"52;", Duration::from_secs(3)).await;
+    // Wait for the complete payload (not just the `52;` header) so a payload
+    // split across broadcast chunks can never break the wait early.
+    let output = wait_for_output(&mut reader, EXPECTED_OSC52_PAYLOAD, Duration::from_secs(3)).await;
     let payload = find_osc52_payload(&output);
     assert_eq!(
         payload,
@@ -350,7 +354,7 @@ async fn session_osc52_via_osc52extractor() {
     Spawn::call(
         &*client,
         SpawnRequest {
-            cmd: Some(vec![mock, "osc52".into()]),
+            cmd: Some(vec![mock, "osc52_alive".into()]),
             cols: TEST_COLS,
             rows: TEST_ROWS,
             cwd: None,
@@ -399,6 +403,49 @@ async fn session_osc52_via_osc52extractor() {
         extracted,
         Some("test".to_string()),
         "Osc52Extractor should decode 'test' from real server byte stream"
+    );
+    guard.shutdown().await;
+}
+
+/// Regression: a subscriber that attaches AFTER a session has exited (with no
+/// subscribers attached at exit time) must still receive the session's final
+/// output, which the server retains in a bounded cache across teardown instead
+/// of dropping it with the Pty's pending buffer.
+#[tokio::test]
+#[serial]
+async fn session_osc52_late_subscribe_gets_retained_output() {
+    let mock = get_mock_bin();
+    let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_retained")).await;
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: Some(vec![mock, "osc52".into()]),
+            cols: TEST_COLS,
+            rows: TEST_ROWS,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // The `osc52` mock writes the payload, sleeps 500 ms, then exits. Wait well
+    // past exit + the polling task's detection interval so the session is torn
+    // down and its final output retained in the channel cache. The test is
+    // deterministic either way: subscribe-before-exit is served by the live
+    // early drain, subscribe-after-exit by the retained cache.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+    let output = wait_for_output(&mut reader, EXPECTED_OSC52_PAYLOAD, Duration::from_secs(3)).await;
+    let payload = find_osc52_payload(&output);
+    assert_eq!(
+        payload,
+        Some(common::mock::EXPECTED_OSC52_PAYLOAD),
+        "late subscriber must receive retained final output, got stream: {:?}",
+        String::from_utf8_lossy(&output)
     );
     guard.shutdown().await;
 }

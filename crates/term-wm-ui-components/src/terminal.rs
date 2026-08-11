@@ -23,7 +23,9 @@ use term_wm_core::utils::selectable_text::{
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
+use term_wm_pty_engine::input_encoding::{
+    key_to_bytes, mouse_event_allowed, mouse_event_to_bytes, paste_to_bytes,
+};
 use term_wm_pty_engine::{Pane, PtyStatus};
 
 // This controls the scrollback buffer size in the vt100 parser.
@@ -191,14 +193,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     let parser_lock = parser.lock().unwrap();
                     parser_lock.screen().bracketed_paste()
                 };
-                let bytes = if bracketed_paste {
-                    let mut wrapped = b"\x1b[200~".to_vec();
-                    wrapped.extend_from_slice(text.as_bytes());
-                    wrapped.extend_from_slice(b"\x1b[201~");
-                    wrapped
-                } else {
-                    text.as_bytes().to_vec()
-                };
+                let bytes = paste_to_bytes(text.as_str(), bracketed_paste);
                 EventResult::Action(TermWmAction::KeyToBytes(bytes))
             }
             _ => EventResult::Ignored,
@@ -237,14 +232,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     let parser_lock = parser.lock().unwrap();
                     parser_lock.screen().bracketed_paste()
                 };
-                let bytes = if bracketed_paste {
-                    let mut wrapped = b"\x1b[200~".to_vec();
-                    wrapped.extend_from_slice(text.as_bytes());
-                    wrapped.extend_from_slice(b"\x1b[201~");
-                    wrapped
-                } else {
-                    text.as_bytes().to_vec()
-                };
+                let bytes = paste_to_bytes(text.as_str(), bracketed_paste);
                 self.selection.borrow_mut().clear();
                 self.pane.borrow_mut().set_scrollback(0);
                 if let Some(handle) = ctx.scroll_handle() {
@@ -2602,6 +2590,82 @@ mod tests {
                 assert_eq!(
                     bytes, b"hello",
                     "paste must be raw bytes when child has not enabled DECSET 2004"
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// Without bracketed paste, pasted LF newlines must become CR — the byte
+    /// terminals send for Enter — so raw-mode editors (e.g. classic pico) that
+    /// ignore a lone LF still insert line breaks. This matches the behavior of
+    /// mainstream terminal emulators and of term-wm's own Enter key encoding.
+    #[test]
+    fn paste_sends_cr_for_lf_when_child_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+        // Deliberately do NOT send \x1b[?2004h — bracketed_paste defaults to false.
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("line1\nline2".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert_eq!(
+                    bytes, b"line1\rline2",
+                    "unbracketed paste must convert LF newlines to CR, got {:?}",
+                    bytes
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// Without bracketed paste, CRLF line endings must collapse to a single CR
+    /// (no double-newline insertion) for Windows-sourced clipboard text.
+    #[test]
+    fn paste_collapses_crlf_when_child_disabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("line1\r\nline2".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert_eq!(
+                    bytes, b"line1\rline2",
+                    "unbracketed paste must collapse CRLF to a single CR, got {:?}",
+                    bytes
+                );
+            }
+            other => panic!("expected Action(KeyToBytes), got {:?}", other),
+        }
+    }
+
+    /// With bracketed paste enabled, multi-line pastes are sent verbatim
+    /// (LF preserved inside the markers) so the app can insert the text
+    /// literally without any newline translation.
+    #[test]
+    fn paste_keeps_verbatim_when_child_enabled() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(0)));
+
+        // Simulate the child sending \x1b[?2004h (DECSET 2004).
+        {
+            let parser = term.pane.borrow_mut().shared_parser();
+            parser.lock().unwrap().process(b"\x1b[?2004h");
+        }
+
+        let ctx = ComponentContext::default();
+        let event = Event::Paste("line1\nline2".to_string());
+        let result = term.handle_events(&event, &ctx);
+
+        match result {
+            EventResult::Action(TermWmAction::KeyToBytes(bytes)) => {
+                assert_eq!(
+                    bytes, b"\x1b[200~line1\nline2\x1b[201~",
+                    "bracketed paste must keep LF verbatim inside markers, got {:?}",
+                    bytes
                 );
             }
             other => panic!("expected Action(KeyToBytes), got {:?}", other),

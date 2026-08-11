@@ -1,9 +1,9 @@
 .cargo/config.toml
 target/
 lcov.info
+.DS_Store
 *.save
 samply.json
 
 DEBUG.sh
 *.log
-
