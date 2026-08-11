@@ -8,8 +8,6 @@
 //! sibling `stderr_suppress` module.)
 
 use std::io::BufRead;
-#[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
 
 /// Redirect an OS-level file descriptor into a callback.
 ///

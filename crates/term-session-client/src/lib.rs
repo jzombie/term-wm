@@ -22,6 +22,7 @@ use term_session_muxio_service_definitions::{
     Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
     SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse, path_wire,
 };
+#[cfg(unix)]
 use term_sys_io::redirect_fd_to_tracing;
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
