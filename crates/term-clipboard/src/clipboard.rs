@@ -43,9 +43,9 @@
 //! table — makes the execution invariants impossible to reorder by accident.
 //!
 //! Tests exercise the backends through isolated handles (`with_shared_buffer`)
-//! and inject the relay target into the PTY reader loop
-//! (`ParserReadLoopArgs.clipboard`), so no test ever touches the real system
-//! clipboard or the process-global default buffer.
+//! and inject the relay target into the consumer that triggers OSC 52
+//! extraction, so no test ever touches the real system clipboard or the
+//! process-global default buffer.
 //!
 //! # Layering: a subsystem, not a policy owner
 //!
@@ -70,7 +70,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use base64::Engine;
 use thiserror::Error;
 
-use crate::redirect_stdio::StderrSuppressGuard;
+use crate::stderr_suppress::StderrSuppressGuard;
 
 /// Default cap on OSC 52 emission payload size (1 MB).  Payloads larger than
 /// this are truncated at a valid UTF-8 char boundary so the host terminal
@@ -1000,14 +1000,14 @@ mod tests {
 
     /// Verify that `Clipboard::set()` emits OSC 52 to stdout.
     ///
-    /// This test captures the output that `set_via_osc52` would write to a
-    /// real terminal by routing through the writer-based API.  The arboard
-    /// path is tested implicitly by arboard's own test suite; at the code
-    /// level `Clipboard::set()` clearly calls both:
+    /// This test captures the output that `set_via_osc52_with_writer` would
+    /// write to a real terminal by routing through the writer-based API.  The
+    /// arboard path is tested implicitly by arboard's own test suite; at the
+    /// code level `Clipboard::set()` clearly calls both:
     ///
     /// ```ignore
-    /// let _ = set_via_osc52(text);         // OSC 52 path
-    /// self.inner.set_text(text.to_owned())  // arboard path
+    /// let _ = set_via_osc52_with_writer(text, &mut stdout().lock());
+    /// self.arboard.set_text(text.to_owned())  // arboard path
     /// ```
     #[test]
     fn clipboard_set_triggers_osc52_path() {

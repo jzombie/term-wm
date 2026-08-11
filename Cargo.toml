@@ -22,6 +22,7 @@ development = ["term-bench", "term-session-client"]
 [workspace]
 members = [
     "crates/term-bench",
+    "crates/term-clipboard",
     "crates/term-session",
     "crates/term-session-client",
     "crates/term-session-mock",
@@ -93,6 +94,7 @@ term-session-client = { path = "crates/term-session-client", version = "0.9.20-a
 term-session-mock = { path = "crates/term-session-mock", version = "0.9.20-alpha" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.9.20-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.9.20-alpha" }
+term-clipboard = { path = "crates/term-clipboard", version = "0.9.20-alpha" }
 term-wm = { path = ".", version = "0.9.20-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.9.20-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.9.20-alpha" }
@@ -157,6 +159,7 @@ muxio-tokio-rpc-ipc-client = { workspace = true }
 proptest = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+term-clipboard = { workspace = true }
 term-session-client = { workspace = true }
 term-session-mock = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }

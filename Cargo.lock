@@ -3040,6 +3040,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-clipboard"
+version = "0.9.20-alpha"
+dependencies = [
+ "arboard",
+ "base64 0.23.1",
+ "libc",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "term-session"
 version = "0.9.20-alpha"
 dependencies = [
@@ -3074,6 +3085,7 @@ dependencies = [
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
+ "term-clipboard",
  "term-session-muxio-service-definitions",
  "term-wm-crossterm-adapter",
  "term-wm-events",
@@ -3151,6 +3163,7 @@ dependencies = [
  "ratatui",
  "serial_test",
  "tempfile",
+ "term-clipboard",
  "term-session-client",
  "term-session-mock",
  "term-session-muxio-service-definitions",
@@ -3202,6 +3215,7 @@ dependencies = [
  "slotmap",
  "smallvec",
  "strum",
+ "term-clipboard",
  "term-wm-events",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
@@ -3239,13 +3253,12 @@ dependencies = [
 name = "term-wm-pty-engine"
 version = "0.9.20-alpha"
 dependencies = [
- "arboard",
- "base64 0.23.1",
  "ctrlc",
  "indoc",
  "libc",
  "line-ending",
  "portable-pty",
+ "term-clipboard",
  "term-session-mock",
  "term-wm-events",
  "term-wm-vt100",

@@ -1,4 +1,3 @@
-pub mod clipboard;
 pub mod input_encoding;
 #[cfg(windows)]
 pub mod job_object;

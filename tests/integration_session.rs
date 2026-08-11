@@ -17,7 +17,7 @@ use common::session::{
     TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin, list_channels,
     spawn_gateway, spawn_session, test_channel, wait_for_output,
 };
-use term_wm_pty_engine::clipboard::Osc52Extractor;
+use term_clipboard::Osc52Extractor;
 
 #[tokio::test]
 async fn session_spawn_returns_id() {

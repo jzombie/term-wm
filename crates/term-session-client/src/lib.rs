@@ -25,7 +25,7 @@ use term_session_muxio_service_definitions::{
 };
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
-use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
+use term_clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
 use term_wm_vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};

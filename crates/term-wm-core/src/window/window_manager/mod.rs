@@ -51,6 +51,7 @@ use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
 use term_wm_layout_engine::FocusRing;
 use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
+use term_clipboard::Clipboard;
 use term_wm_pty_engine::DirectInputMode;
 
 /// How long a Direct Input Mode toast waits after the FIRST transition in a burst
@@ -337,9 +338,9 @@ pub struct WindowManager<
     /// to the clipboard.  Driven by the command palette (`ToggleClipboardMode`)
     /// and propagated to components via `set_selection_enabled`.  This is
     /// **not** a
-    /// [`ClipboardConfig`](crate::clipboard::ClipboardConfig) flag — it only
+    /// [`ClipboardConfig`](term_clipboard::ClipboardConfig) flag — it only
     /// gates whether the WM calls
-    /// [`crate::clipboard::Clipboard::set`], and has no effect on
+    /// [`term_clipboard::Clipboard::set`], and has no effect on
     /// the clipboard subsystem's backends.
     clipboard_enabled: bool,
     clipboard_dirty: bool,
@@ -381,14 +382,14 @@ pub struct WindowManager<
     next_window_seq: usize,
     next_title_seq: usize,
     synthetic_event: Option<Event>,
-    /// Handle to the clipboard subsystem in `term-wm-pty-engine`
-    /// ([`crate::clipboard::Clipboard`]).  The WM is a *consumer*: it drives
+    /// Handle to the clipboard subsystem in the `term-clipboard` crate
+    /// ([`term_clipboard::Clipboard`]).  The WM is a *consumer*: it drives
     /// the handle through the public API only and never configures its
-    /// [`ClipboardConfig`](crate::clipboard::ClipboardConfig) (built with
+    /// [`ClipboardConfig`](term_clipboard::ClipboardConfig) (built with
     /// defaults).  This field is unrelated to the
     /// [`clipboard_enabled`](Self::clipboard_enabled) selection toggle, which
     /// is consumer-layer policy and does not affect this handle's backends.
-    clipboard: Option<crate::clipboard::Clipboard>,
+    clipboard: Option<Clipboard>,
     power_profile: PowerProfile,
     pub(crate) reaper: Reaper,
     quit_requested: bool,
@@ -837,7 +838,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let supported_menu_actions = supported_menu_actions
             .unwrap_or_else(|| crate::constants::DEFAULT_SUPPORTED_MENU_ACTIONS.to_vec());
         let mouse_capture_enabled = config.mouse_capture_enabled;
-        let clipboard = Some(crate::clipboard::Clipboard::new());
+        let clipboard = Some(Clipboard::new());
         let floating_resize_offscreen = config.floating_resize_offscreen;
         Self {
             focus: FocusRing::new(
@@ -2241,7 +2242,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.clipboard_enabled
     }
 
-    pub fn clipboard_mut(&mut self) -> Option<&mut crate::clipboard::Clipboard> {
+    pub fn clipboard_mut(&mut self) -> Option<&mut Clipboard> {
         self.clipboard.as_mut()
     }
 
