@@ -1,3 +1,4 @@
+use line_ending::LineEnding;
 use term_wm_events::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use term_wm_vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
@@ -84,6 +85,25 @@ pub fn ctrl_char(c: char) -> Option<u8> {
         Some((c as u8) - b'a' + 1)
     } else {
         None
+    }
+}
+
+/// Convert clipboard paste text to the byte sequence to send to the PTY.
+///
+/// When the app enabled bracketed paste (DECSET 2004) the text is wrapped
+/// verbatim in `\x1b[200~...\x1b[201~` so the app can insert it literally.
+/// Otherwise line endings become CR — the byte terminals send for Enter (see
+/// [`key_to_bytes`]). A lone LF is ignored by many raw-mode apps (e.g. classic
+/// pico), so sending LF concatenates all pasted lines; `LineEnding::CR.apply`
+/// collapses LF / CRLF / CR to a single CR, matching mainstream emulators.
+pub fn paste_to_bytes(text: &str, bracketed_paste: bool) -> Vec<u8> {
+    if bracketed_paste {
+        let mut wrapped = b"\x1b[200~".to_vec();
+        wrapped.extend_from_slice(text.as_bytes());
+        wrapped.extend_from_slice(b"\x1b[201~");
+        wrapped
+    } else {
+        LineEnding::CR.apply(text).into_bytes()
     }
 }
 
@@ -208,6 +228,40 @@ mod tests {
     /// Test helper: calls key_to_bytes with application_cursor_keys=false.
     fn kb(key: &KeyEvent) -> Vec<u8> {
         key_to_bytes(key, false)
+    }
+
+    // --- paste_to_bytes ---
+
+    #[test]
+    fn paste_unbracketed_converts_lf_to_cr() {
+        assert_eq!(paste_to_bytes("line1\nline2", false), b"line1\rline2");
+    }
+
+    #[test]
+    fn paste_unbracketed_collapses_crlf_to_single_cr() {
+        assert_eq!(paste_to_bytes("line1\r\nline2", false), b"line1\rline2");
+        assert_eq!(paste_to_bytes("line1\rline2", false), b"line1\rline2");
+    }
+
+    #[test]
+    fn paste_unbracketed_preserves_single_line() {
+        assert_eq!(paste_to_bytes("hello", false), b"hello");
+    }
+
+    #[test]
+    fn paste_bracketed_wraps_verbatim() {
+        assert_eq!(
+            paste_to_bytes("line1\nline2", true),
+            b"\x1b[200~line1\nline2\x1b[201~"
+        );
+    }
+
+    #[test]
+    fn paste_bracketed_keeps_crlf_verbatim() {
+        assert_eq!(
+            paste_to_bytes("line1\r\nline2", true),
+            b"\x1b[200~line1\r\nline2\x1b[201~"
+        );
     }
 
     // --- key_to_bytes ---

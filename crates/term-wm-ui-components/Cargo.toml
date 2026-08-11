@@ -12,7 +12,6 @@ license.workspace = true
 [dependencies]
 crossterm = { workspace = true }
 indoc = { workspace = true }
-line-ending = { workspace = true }
 linkify = { workspace = true }
 nucleo-matcher = { workspace = true }
 portable-pty = { workspace = true }

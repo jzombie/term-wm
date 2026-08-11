@@ -3244,6 +3244,7 @@ dependencies = [
  "ctrlc",
  "indoc",
  "libc",
+ "line-ending",
  "portable-pty",
  "term-session-mock",
  "term-wm-events",
@@ -3280,7 +3281,6 @@ version = "0.9.19-alpha"
 dependencies = [
  "crossterm",
  "indoc",
- "line-ending",
  "linkify",
  "nucleo-matcher",
  "portable-pty",

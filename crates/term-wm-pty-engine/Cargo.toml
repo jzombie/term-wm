@@ -14,6 +14,7 @@ arboard = { workspace = true }
 base64 = { workspace = true }
 ctrlc = { workspace = true }
 libc = { workspace = true }
+line-ending = { workspace = true }
 portable-pty = { workspace = true }
 term-wm-events = { workspace = true }
 term-wm-vt100 = { workspace = true }

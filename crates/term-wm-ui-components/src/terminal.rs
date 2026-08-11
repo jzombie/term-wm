@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
-use line_ending::LineEnding;
 use term_wm_core::events::{
     Event, KeyCode, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -24,7 +23,9 @@ use term_wm_core::utils::selectable_text::{
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_allowed, mouse_event_to_bytes};
+use term_wm_pty_engine::input_encoding::{
+    key_to_bytes, mouse_event_allowed, mouse_event_to_bytes, paste_to_bytes,
+};
 use term_wm_pty_engine::{Pane, PtyStatus};
 
 // This controls the scrollback buffer size in the vt100 parser.
@@ -43,25 +44,6 @@ const DEFAULT_SCROLLBACK_LEN: usize = 2000;
 /// so the override only applies to SGR mouse streams that actually reach us.
 fn force_native_selection(modifiers: KeyModifiers) -> bool {
     modifiers.shift || (cfg!(target_os = "macos") && modifiers.alt)
-}
-
-/// Convert paste text to the bytes sent to the child PTY.
-///
-/// When the app enabled bracketed paste (DECSET 2004) the text is wrapped
-/// verbatim in `\x1b[200~...\x1b[201~` so the app can insert it literally.
-/// Otherwise line endings become CR — the byte terminals send for Enter (see
-/// `key_to_bytes`). A lone LF is ignored by many raw-mode apps (e.g. classic
-/// pico), so sending LF concatenates all pasted lines; `LineEnding::CR.apply`
-/// collapses LF / CRLF / CR to a single CR, matching mainstream emulators.
-fn paste_to_bytes(text: &str, bracketed_paste: bool) -> Vec<u8> {
-    if bracketed_paste {
-        let mut wrapped = b"\x1b[200~".to_vec();
-        wrapped.extend_from_slice(text.as_bytes());
-        wrapped.extend_from_slice(b"\x1b[201~");
-        wrapped
-    } else {
-        LineEnding::CR.apply(text).into_bytes()
-    }
 }
 
 pub struct TerminalComponent {
@@ -211,7 +193,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     let parser_lock = parser.lock().unwrap();
                     parser_lock.screen().bracketed_paste()
                 };
-                let bytes = paste_to_bytes(&text, bracketed_paste);
+                let bytes = paste_to_bytes(text.as_str(), bracketed_paste);
                 EventResult::Action(TermWmAction::KeyToBytes(bytes))
             }
             _ => EventResult::Ignored,
@@ -250,7 +232,7 @@ impl Component<TermWmAction> for TerminalComponent {
                     let parser_lock = parser.lock().unwrap();
                     parser_lock.screen().bracketed_paste()
                 };
-                let bytes = paste_to_bytes(&text, bracketed_paste);
+                let bytes = paste_to_bytes(text.as_str(), bracketed_paste);
                 self.selection.borrow_mut().clear();
                 self.pane.borrow_mut().set_scrollback(0);
                 if let Some(handle) = ctx.scroll_handle() {
