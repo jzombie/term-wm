@@ -17,6 +17,10 @@ use crate::helpers::{color_to_ratatui, layout_rect_to_clipped_rect, safe_set_str
 use crate::menu::MenuComponent;
 use crate::scroll_view::{ScrollKeyMode, ScrollViewComponent};
 
+/// Placeholder shown under the search bar when the query filters out every
+/// item, matching the bracket style of the `[type to search]` prompt.
+const NO_RESULTS_PLACEHOLDER: &str = "[no search results]";
+
 #[derive(Debug, Clone)]
 pub struct PaletteItem {
     pub stable_id: String,
@@ -526,6 +530,22 @@ impl CommandPaletteComponent {
             }
         }
     }
+
+    /// Render a dim placeholder into the first list row when no items match,
+    /// so the palette never vanishes to just the search bar.
+    fn render_no_results(
+        &self,
+        buffer: &mut ratatui::buffer::Buffer,
+        area: Rect,
+        theme: &term_wm_core::theme::Theme,
+    ) {
+        let style = Style::default()
+            .bg(color_to_ratatui(theme.menu_bg))
+            .fg(color_to_ratatui(theme.panel_inactive_fg));
+        let text_w = NO_RESULTS_PLACEHOLDER.chars().count() as u16;
+        let x = area.x.saturating_add(area.width.saturating_sub(text_w) / 2);
+        safe_set_string(buffer, area, x, area.y, NO_RESULTS_PLACEHOLDER, style);
+    }
 }
 
 impl Component<TermWmAction> for CommandPaletteComponent {
@@ -616,6 +636,15 @@ impl Component<TermWmAction> for CommandPaletteComponent {
         };
         self.last_list_area = list_area;
         self.list_scroll.render(backend, list_area, ctx, registry);
+
+        // Empty result set → surface a no-results hint in the first list row.
+        if self.display_nodes.is_empty() {
+            self.render_no_results(
+                &mut backend.buffer,
+                layout_rect_to_clipped_rect(list_area),
+                &ctx.config().theme,
+            );
+        }
     }
 
     fn handle_events(
@@ -1219,5 +1248,51 @@ mod tests {
                 "auto-scroll should re-engage when selection changes"
             );
         }
+    }
+
+    fn symbols_in_row(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| {
+                buffer
+                    .cell((x, row))
+                    .map(|c| c.symbol().to_string())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn empty_results_keeps_search_bar_and_renders_placeholder() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.query = "zzz".to_string();
+        palette.display_nodes = Vec::new();
+
+        let area = ratatui::prelude::Rect::new(0, 0, 80, 5);
+        let buffer = ratatui::buffer::Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        palette.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 5,
+            },
+            &ctx,
+            &mut registry,
+        );
+
+        let search_row = symbols_in_row(&backend.buffer, 0, 80);
+        assert!(search_row.contains('>'), "search bar must remain visible");
+
+        let list_row = symbols_in_row(&backend.buffer, 1, 80);
+        assert!(
+            list_row.contains(NO_RESULTS_PLACEHOLDER),
+            "expected '{NO_RESULTS_PLACEHOLDER}' in list row, got '{list_row}'"
+        );
     }
 }

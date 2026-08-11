@@ -28,6 +28,9 @@ const PALETTE_MIN_WIDTH: u16 = 30;
 const PALETTE_MAX_HEIGHT: u16 = 20;
 /// Extra rows (search bar) added to the visible item count.
 const PALETTE_EXTRA_ROWS: u16 = 2;
+/// Minimum drawn height when the query filters out every item: keeps the
+/// search bar row plus the "no results" placeholder row visible.
+const NO_RESULTS_MIN_HEIGHT: u16 = 2;
 
 pub struct WmCommandPaletteComponent {
     area: Cell<LayoutRect>,
@@ -210,14 +213,19 @@ impl WmCommandPaletteComponent {
     /// The region actually filled with the palette background. Anchored palettes
     /// fill the full stable footprint; centered palettes background only the
     /// search bar + visible rows (Spotlight look), top-pinned so the bottom
-    /// edge alone grows/shrinks while typing.
+    /// edge alone grows/shrinks while typing. When every item is filtered out
+    /// the box stays at least two rows tall so the search bar plus the
+    /// "no results" placeholder remain visible.
     fn drawn_rect(&self, content_rect: LayoutRect) -> LayoutRect {
         if self.anchor.is_some() {
             return content_rect;
         }
-        let rows = 1u16.saturating_add(
-            (self.palette.display_nodes.len() as u16).min(content_rect.height.saturating_sub(1)),
-        );
+        let visible = self.palette.display_nodes.len() as u16;
+        let rows = if visible == 0 {
+            NO_RESULTS_MIN_HEIGHT.min(content_rect.height)
+        } else {
+            1u16.saturating_add(visible.min(content_rect.height.saturating_sub(1)))
+        };
         LayoutRect {
             x: content_rect.x,
             y: content_rect.y,
@@ -796,7 +804,10 @@ mod tests {
             .expect("bounds after render");
         let rows = palette.drawn_rect(bounds);
         assert_eq!(palette.palette.display_nodes.len(), 0);
-        assert_eq!(rows.height, 1, "search bar row remains, no underflow");
+        assert_eq!(
+            rows.height, 2,
+            "search bar + no-results placeholder row, no underflow"
+        );
         assert_eq!(rows.x, bounds.x);
         assert_eq!(rows.y, bounds.y);
     }
