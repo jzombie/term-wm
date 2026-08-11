@@ -105,6 +105,7 @@ See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for full compatibility deta
 | `term-wm-console` | Crossterm backend, `DrawPlanRenderer`, screen-space `HitboxRegistry` |
 | `term-wm-render` / `term-wm-events` / `term-wm-crossterm-adapter` | Render backend trait, event types, input translation |
 | `term-wm-ui-components` / `term-wm-sys-ui-components` | Component library + WM system chrome (panels, palette, help) |
+| `term-clipboard` / `term-sys-io` | Cross-platform clipboard (arboard + OSC 52 backends) and low-level OS FD/handle redirection |
 | `term-session*` (+ `term-size-box`, `term-bench`) | Detachable client/server session protocol (`muxio`), sizing, benchmarks |
 
 ### Window Lifecycle
