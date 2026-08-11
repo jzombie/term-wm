@@ -65,9 +65,9 @@
 //! observe any backend behaviour here.  Toggling such a flag therefore has no
 //! effect on OSC 52 emission, the in-memory shared buffer, or `arboard`.
 
-use std::io::Write;
 #[cfg(not(test))]
 use std::io::IsTerminal;
+use std::io::Write;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use base64::Engine;
@@ -447,10 +447,9 @@ impl Clipboard {
                     return Ok(text);
                 }
                 Ok(None) => {}
-                Err(e) => tracing::debug!(
-                    "clipboard: get via backend {} failed ({e})",
-                    backend.name()
-                ),
+                Err(e) => {
+                    tracing::debug!("clipboard: get via backend {} failed ({e})", backend.name())
+                }
             }
         }
         tracing::debug!("clipboard: get no backend available (arboard absent, buffer empty)");
@@ -491,14 +490,19 @@ impl Clipboard {
     /// any other read failure yields [`ClipboardError::Io`].  This is the
     /// programmatic ingestion contract for MCP servers / embedded tools that
     /// must not spawn a subprocess.
-    pub fn set_from_reader<R: std::io::Read>(&mut self, mut reader: R) -> Result<(), ClipboardError> {
+    pub fn set_from_reader<R: std::io::Read>(
+        &mut self,
+        mut reader: R,
+    ) -> Result<(), ClipboardError> {
         let mut text = String::new();
         match reader.read_to_string(&mut text) {
             Ok(_) => {
                 self.set(&text);
                 Ok(())
             }
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Err(ClipboardError::InvalidUtf8),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                Err(ClipboardError::InvalidUtf8)
+            }
             Err(e) => Err(ClipboardError::Io(e)),
         }
     }
@@ -508,7 +512,10 @@ impl Clipboard {
     /// Opening the file first validates readability; a missing/unreadable file
     /// yields [`ClipboardError::Io`], and non-UTF-8 content yields
     /// [`ClipboardError::InvalidUtf8`].
-    pub fn set_from_path<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<(), ClipboardError> {
+    pub fn set_from_path<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<(), ClipboardError> {
         let file = std::fs::File::open(path)?;
         self.set_from_reader(file)
     }
@@ -1010,13 +1017,17 @@ mod tests {
         let mut cb = headless_with_buffer(Arc::clone(&buffer));
         let cursor = std::io::Cursor::new(b"hello from reader");
 
-        cb.set_from_reader(cursor).expect("valid utf-8 read must succeed");
+        cb.set_from_reader(cursor)
+            .expect("valid utf-8 read must succeed");
         assert_eq!(
             *buffer.read().unwrap(),
             Some("hello from reader".to_owned()),
             "reader content must land in the shared in-memory buffer"
         );
-        assert!(!cb.osc52_output().is_empty(), "set() must still fan out to OSC 52");
+        assert!(
+            !cb.osc52_output().is_empty(),
+            "set() must still fan out to OSC 52"
+        );
     }
 
     #[test]
@@ -1024,7 +1035,9 @@ mod tests {
         let mut cb = headless_with_buffer(isolated_buffer());
         let cursor = std::io::Cursor::new(vec![0xffu8, 0xfe]);
 
-        let err = cb.set_from_reader(cursor).expect_err("non-UTF-8 must error");
+        let err = cb
+            .set_from_reader(cursor)
+            .expect_err("non-UTF-8 must error");
         assert!(matches!(err, ClipboardError::InvalidUtf8));
     }
 
@@ -1051,7 +1064,9 @@ mod tests {
             std::process::id()
         ));
 
-        let err = cb.set_from_path(&missing).expect_err("missing file must error");
+        let err = cb
+            .set_from_path(&missing)
+            .expect_err("missing file must error");
         assert!(matches!(err, ClipboardError::Io(_)));
     }
 
@@ -1060,9 +1075,8 @@ mod tests {
     #[test]
     fn backend_trait_pluggable_custom_backend() {
         let log = Arc::new(Mutex::new(Vec::new()));
-        let mut cb = Clipboard::with_backends(vec![Box::new(RecordingBackend::new(Arc::clone(
-            &log,
-        )))]);
+        let mut cb =
+            Clipboard::with_backends(vec![Box::new(RecordingBackend::new(Arc::clone(&log)))]);
 
         cb.set("custom text");
         assert_eq!(
@@ -1283,7 +1297,10 @@ mod tests {
         let decoded = extract_osc52_text(cb.osc52_output()).unwrap();
         assert_eq!(decoded, "héll", "must truncate at a valid UTF-8 boundary");
         assert!(decoded.len() <= 5);
-        assert!(!cb.osc52_output().is_empty(), "OSC 52 must still be emitted");
+        assert!(
+            !cb.osc52_output().is_empty(),
+            "OSC 52 must still be emitted"
+        );
     }
 
     /// Verify that `Clipboard::set()` emits OSC 52 to stdout.
