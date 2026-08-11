@@ -142,11 +142,18 @@ The sweep is scoped to `.md` assets so Rust source `\x1b` byte literals (legitim
   `crates/term-wm-sys-ui-components/src/wm_help_overlay.rs` (it already constructs
   `WmHelpOverlayComponent::new`, shows it, renders into a `Buffer`, and joins the
   cells) to assert the joined rendered text contains **zero unexpanded**
-  `%PLACEHOLDER%` tokens. Match the `%[A-Z_]+%` pattern — not `contains('%')`, which
-  would false-positive on legitimate literal `%` in prose. This catches any help.md
-  key that does not exactly match the resolver map in `WmHelpOverlayComponent::new`.
-  `%NEW_TERMINAL%` is already in that map (wm_help_overlay.rs:209), so adding it to
-  help.md is safe and the test guards all placeholders.
+  `%PLACEHOLDER%` tokens.
+  **Std-lib only — no regex dependency.** `term-wm-sys-ui-components` does not depend
+  on `regex` (nor any dev-dep that provides it), and this refactor must not touch crate
+  manifests. Scan the rendered string with `split('%')` + parity:
+  `split('%').enumerate()` — odd-indexed segments are the token interiors; a token is
+  unexpanded when it is non-empty and all chars are ASCII-uppercase or `_`. Assert no
+  odd segment is unexpanded. This is equivalent to matching `%[A-Z_]+%` without pulling
+  in an external regex crate, and avoids `contains('%')` (which would false-positive on
+  legitimate literal `%` in prose). This catches any help.md key that does not exactly
+  match the resolver map in `WmHelpOverlayComponent::new`. `%NEW_TERMINAL%` is already
+  in that map (wm_help_overlay.rs:209), so adding it to help.md is safe and the test
+  guards all placeholders.
 - `cargo test` / `cargo clippy` are unaffected but AGENTS.md workflow calls for a run.
 - Verify `help.md` placeholders still all resolve: `%PACKAGE%`, `%VERSION%`,
   `%PLATFORM%`, `%REPOSITORY%`, `%FOCUS_NEXT%`, `%FOCUS_PREV%`, `%NEW_TERMINAL%`,
