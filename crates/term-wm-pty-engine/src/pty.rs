@@ -8,10 +8,10 @@ use std::time::Instant;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::clipboard::{Clipboard, Osc52Extractor};
 #[cfg(windows)]
 use crate::job_object::JobObject;
 use crate::pty_state_tracker::PtyPerformAdapter;
+use term_clipboard::{Clipboard, Osc52Extractor};
 
 /// Size of the PTY master read buffer (single `read()` call).
 /// 64KB keeps the reader parked most of the time under heavy output
@@ -1772,7 +1772,7 @@ mod tests {
         // buffer so the relay is deterministic and the real system clipboard
         // / process-global default buffer are never touched.
         let shared = Arc::new(RwLock::new(None));
-        let mut args = make_parser_test_args(&crate::clipboard::format_osc52_bytes("clip via pty"));
+        let mut args = make_parser_test_args(&term_clipboard::format_osc52_bytes("clip via pty"));
         args.clipboard = Some(Clipboard::with_shared_buffer(Arc::clone(&shared)));
         let captured = Arc::new(Mutex::new(None));
         args.osc52_text = Some(Arc::clone(&captured));

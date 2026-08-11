@@ -4,8 +4,8 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Layer, layer::Context};
 
+use term_sys_io::redirect_fd_to_tracing;
 use term_wm_core::debug_event_flags::trigger_error_pending;
-use term_wm_pty_engine::redirect_stdio::redirect_fd_to_tracing;
 
 use term_wm_core::debug_log::{DebugLogWriter, global_debug_log};
 

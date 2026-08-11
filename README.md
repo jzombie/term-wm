@@ -80,6 +80,8 @@ In Direct Input Mode, the following keybindings **are not-effective**, and are c
 
 > **Note on Clipboard Sync:** Clipboard behavior depends on your host OS and terminal emulator. Standard keyboard shortcuts (e.g., `Cmd+C`/`Cmd+V` on macOS, `Ctrl+Shift+C`/`Ctrl+Shift+V` on Linux/Windows) may work depending on your terminal's pass-through rules, but are not guaranteed.
 
+> **Clipboard split-brain:** `term-wm` keeps an *internal* clipboard alongside your OS clipboard. In most setups they stay in sync, but where the OS clipboard is unreachable — e.g. inside a terminal that doesn't support OSC 52, or over SSH — the two can diverge. **Paste** is one unified action: it reads the OS clipboard when available and otherwise falls back to the internal copy, so you never have to pick between them. It is bound to mouse right-click, and if a Direct Input Mode app is consuming right-click, **Paste** is also available from the Command Palette.
+
 ## System Requirements & Compatibility
 
 `term-wm` is designed to be highly resilient, running anywhere a standard terminal environment is available, but relies on modern terminal standards for its optimal presentation.

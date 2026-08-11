@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3040,8 +3040,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-clipboard"
+version = "0.9.21-alpha"
+dependencies = [
+ "arboard",
+ "base64 0.23.1",
+ "clap",
+ "tempfile",
+ "term-sys-io",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "term-session"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3060,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3074,7 +3087,9 @@ dependencies = [
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
+ "term-clipboard",
  "term-session-muxio-service-definitions",
+ "term-sys-io",
  "term-wm-crossterm-adapter",
  "term-wm-events",
  "term-wm-pty-engine",
@@ -3087,7 +3102,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3096,7 +3111,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3106,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3127,15 +3142,23 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
 ]
 
 [[package]]
+name = "term-sys-io"
+version = "0.9.21-alpha"
+dependencies = [
+ "libc",
+ "tracing",
+]
+
+[[package]]
 name = "term-wm"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3151,10 +3174,12 @@ dependencies = [
  "ratatui",
  "serial_test",
  "tempfile",
+ "term-clipboard",
  "term-session-client",
  "term-session-mock",
  "term-session-muxio-service-definitions",
  "term-session-server",
+ "term-sys-io",
  "term-wm-console",
  "term-wm-core",
  "term-wm-layout-engine",
@@ -3172,7 +3197,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3191,7 +3216,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3202,6 +3227,7 @@ dependencies = [
  "slotmap",
  "smallvec",
  "strum",
+ "term-clipboard",
  "term-wm-events",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
@@ -3213,7 +3239,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3223,30 +3249,30 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "term-wm-layout-engine",
 ]
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
- "arboard",
- "base64 0.23.1",
  "ctrlc",
  "indoc",
  "libc",
  "line-ending",
  "portable-pty",
+ "term-clipboard",
  "term-session-mock",
+ "term-sys-io",
  "term-wm-events",
  "term-wm-vt100",
  "thiserror 2.0.19",
@@ -3257,11 +3283,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3277,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -3303,7 +3329,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.9.20-alpha"
+version = "0.9.21-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",

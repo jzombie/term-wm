@@ -1,11 +1,9 @@
-pub mod clipboard;
 pub mod input_encoding;
 #[cfg(windows)]
 pub mod job_object;
 pub mod pane;
 pub mod pty;
 pub mod pty_state_tracker;
-pub mod redirect_stdio;
 pub mod signal;
 pub mod title;
 

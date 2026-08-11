@@ -1,0 +1,15 @@
+[package]
+name = "term-sys-io"
+description = "Low-level cross-platform OS I/O primitives (FD/handle redirection) for term-wm."
+keywords = ["sys", "io", "fd", "dup2", "cross-platform"]
+categories = ["os", "external-ffi-bindings", "concurrency"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc = { workspace = true }
+tracing = { workspace = true }

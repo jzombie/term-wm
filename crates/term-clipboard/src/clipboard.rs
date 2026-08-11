@@ -21,31 +21,32 @@
 //!    SSH, tmux, etc. because the *host* terminal intercepts the sequence and
 //!    writes to the real system clipboard.
 //!
-//! # Design: explicit static orchestration
+//! # Design: pluggable backend registry
 //!
 //! The backends have fundamentally asymmetric capabilities: `arboard` and the
 //! in-memory buffer can read and write, while OSC 52 is strictly write-only
 //! (terminals do not reliably answer clipboard read queries).  [`Clipboard`]
-//! therefore orchestrates them as a **fixed, explicit pipeline**, not a
-//! uniform backend registry:
+//! therefore orchestrates them as a **registry of [`ClipboardBackend`]s**,
+//! composed in a fixed order:
 //!
-//! - `set()` is an ordered fan-out — in-memory buffer, then `arboard`, then
-//!   **OSC 52 last** so the host terminal emulator becomes the final owner of
-//!   the system clipboard (required for reliable X11 ownership).  It is
-//!   infallible: each backend failure is logged and ignored so the remaining
-//!   back-ends still run.
-//! - `get()` is a fallback chain — `arboard`, then the shared in-memory
-//!   buffer — and never consults OSC 52.
+//! - `set()` is an ordered fan-out over every registered backend — `arboard`,
+//!   the in-memory buffer, then **OSC 52 last** so the host terminal emulator
+//!   becomes the final owner of the system clipboard (required for reliable
+//!   X11 ownership).  It is infallible: each backend failure is logged and
+//!   ignored so the remaining backends still run.
+//! - `get()` returns the first backend that can supply text — `arboard`, then
+//!   the shared in-memory buffer — and never consults OSC 52 (write-only).
 //!
-//! Each step lives in a private helper (`write_system_clipboard`,
-//! `read_system_clipboard`, `truncate_for_osc52`).  Keeping the ordering
-//! structural — rather than driving it through a loop, iterator, or priority
-//! table — makes the execution invariants impossible to reorder by accident.
+//! Each backend lives behind the [`ClipboardBackend`] trait, and [`Clipboard::set`]
+//! / [`Clipboard::get`] drive them through a plain loop, so the execution
+//! invariants live in the registration order rather than a hardcoded chain.
+//! [`Clipboard::with_backends`] exposes the registry so callers can compose a
+//! custom backend set.
 //!
 //! Tests exercise the backends through isolated handles (`with_shared_buffer`)
-//! and inject the relay target into the PTY reader loop
-//! (`ParserReadLoopArgs.clipboard`), so no test ever touches the real system
-//! clipboard or the process-global default buffer.
+//! and inject the relay target into the consumer that triggers OSC 52
+//! extraction, so no test ever touches the real system clipboard or the
+//! process-global default buffer.
 //!
 //! # Layering: a subsystem, not a policy owner
 //!
@@ -64,13 +65,15 @@
 //! observe any backend behaviour here.  Toggling such a flag therefore has no
 //! effect on OSC 52 emission, the in-memory shared buffer, or `arboard`.
 
+#[cfg(not(test))]
+use std::io::IsTerminal;
 use std::io::Write;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use base64::Engine;
 use thiserror::Error;
 
-use crate::redirect_stdio::StderrSuppressGuard;
+use term_sys_io::StderrSuppressGuard;
 
 /// Default cap on OSC 52 emission payload size (1 MB).  Payloads larger than
 /// this are truncated at a valid UTF-8 char boundary so the host terminal
@@ -106,11 +109,14 @@ const OSC52_HDR_WIN: &[u8] = "←]52;".as_bytes();
 
 #[derive(Debug, Error)]
 pub enum ClipboardError {
+    #[error("input is not valid UTF-8")]
+    InvalidUtf8,
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("clipboard backend error: {0}")]
     Backend(#[from] arboard::Error),
-
-    #[error("I/O error writing OSC 52 sequence: {0}")]
-    Io(#[from] std::io::Error),
 
     #[error("clipboard backend not available (running remotely?)")]
     NotAvailable,
@@ -157,39 +163,219 @@ fn default_shared_buffer() -> Arc<RwLock<Option<String>>> {
     BUF.get_or_init(|| Arc::new(RwLock::new(None))).clone()
 }
 
-/// A persistent clipboard handle backed by `arboard` (optional), a shared
-/// in-memory buffer, and OSC 52 (optional).
+/// A pluggable clipboard backend.
 ///
-/// It is a **static orchestrator** over those backends: `set()` fans out to
-/// each in a fixed order and `get()` follows an explicit fallback chain, with
-/// each step delegated to a private helper.  See the module docs for the
-/// design rationale (and why this deliberately avoids a trait-based backend
-/// registry).
+/// [`Clipboard`] composes backends and fans `set()` out to all of them in
+/// registration order; `get()` returns the first backend that can supply text.
+pub trait ClipboardBackend: Send {
+    /// Best-effort write of `text`.  `Err` is logged by the caller; the
+    /// fan-out continues to the remaining backends.
+    fn set(&mut self, text: &str) -> Result<(), ClipboardError>;
+
+    /// Read the clipboard.  `Ok(None)` when this backend cannot supply text
+    /// (e.g. OSC 52 is write-only); `Err` on backend failure.
+    fn get(&mut self) -> Result<Option<String>, ClipboardError>;
+
+    /// Stable identifier for logging / diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// Test-only: return this backend's captured OSC 52 output, if it is the
+    /// OSC 52 backend.  Defaults to `None`.
+    #[cfg(test)]
+    fn osc52_capture(&self) -> Option<&[u8]> {
+        None
+    }
+}
+
+/// System-clipboard backend backed by `arboard` (optional).
 ///
 /// Holding a long-lived [`arboard::Clipboard`] instance avoids the macOS
 /// problem where a short-lived connection is torn down before the pasteboard
 /// server finishes processing the write.
+pub struct ArboardBackend {
+    clipboard: Option<arboard::Clipboard>,
+}
+
+impl ArboardBackend {
+    /// Create the backend, probing for a local display.  Headless / SSH
+    /// environments silently get `None` (its `set`/`get` then no-op).
+    pub fn new() -> Self {
+        let clipboard = arboard::Clipboard::new().ok();
+        tracing::debug!(
+            "clipboard: backend arboard={}",
+            if clipboard.is_some() {
+                "available"
+            } else {
+                "unavailable"
+            }
+        );
+        Self { clipboard }
+    }
+}
+
+impl Default for ArboardBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ClipboardBackend for ArboardBackend {
+    fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
+        let Some(cb) = self.clipboard.as_mut() else {
+            tracing::debug!("clipboard: set arboard unavailable; in-memory buffer + OSC 52 only");
+            return Ok(());
+        };
+        // On X11 this claims the CLIPBOARD selection, but arboard hosts the
+        // data in its own background thread, which can silently drop or serve
+        // stale data.  macOS AppKit/NSPasteboard writes debug spam to stderr
+        // when setting the clipboard — suppressed by StderrSuppressGuard.
+        let _guard = StderrSuppressGuard::new();
+        cb.set_text(text.to_owned())?;
+        tracing::debug!("clipboard: set wrote via arboard");
+        Ok(())
+    }
+
+    fn get(&mut self) -> Result<Option<String>, ClipboardError> {
+        let Some(cb) = self.clipboard.as_mut() else {
+            return Ok(None);
+        };
+        match cb.get_text() {
+            Ok(text) => {
+                tracing::debug!("clipboard: get read via arboard ({} bytes)", text.len());
+                Ok(Some(text))
+            }
+            Err(e) => {
+                tracing::debug!("clipboard: get via arboard failed ({e})");
+                Err(e.into())
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "arboard"
+    }
+}
+
+/// Process-shared in-memory buffer backend (Tier-1 copy→paste fallback).
 ///
-/// When running over SSH the arboard handle will be `None`; `set()` still
-/// works via OSC 52 emitted to stdout, and the shared in-memory buffer lets
-/// `get()` round-trip copy→paste inside the process.
-pub struct Clipboard {
-    arboard: Option<arboard::Clipboard>,
-    /// Process-shared in-memory buffer (Tier-1 fallback).  Every instance
-    /// constructed with the default buffer writes and reads the same memory,
-    /// so headless copy→paste round-trips across handles (PTY reader thread
-    /// → Window Manager paste).
+/// Every instance sharing the same buffer writes and reads the same memory, so
+/// headless copy→paste round-trips across handles (PTY reader thread → Window
+/// Manager paste).
+pub struct InMemoryBackend {
     shared: Arc<RwLock<Option<String>>>,
-    /// Whether OSC 52 emission to the host terminal is enabled.
-    osc52_enabled: bool,
-    /// Maximum size of the text emitted over OSC 52, in bytes.  Payloads
-    /// above this cap are truncated at a UTF-8 char boundary; the in-memory
-    /// buffer and arboard always receive the full text.
-    osc52_limit: usize,
-    /// Captured OSC 52 output — only present in test builds so that tests
-    /// can verify the OSC 52 path was exercised alongside the arboard path.
+}
+
+impl InMemoryBackend {
+    pub fn new(shared: Arc<RwLock<Option<String>>>) -> Self {
+        Self { shared }
+    }
+}
+
+impl ClipboardBackend for InMemoryBackend {
+    fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
+        if let Ok(mut guard) = self.shared.write() {
+            *guard = Some(text.to_owned());
+        }
+        Ok(())
+    }
+
+    fn get(&mut self) -> Result<Option<String>, ClipboardError> {
+        // Recover from a poisoned lock (a thread panicked while holding a
+        // guard) so the Tier-1 fallback stays available for later operations.
+        Ok(self
+            .shared
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone())
+    }
+
+    fn name(&self) -> &'static str {
+        "in-memory"
+    }
+}
+
+/// Write-only OSC 52 backend: emits the escape sequence to the host terminal's
+/// stdout, which the terminal emulator turns into the real system clipboard.
+pub struct Osc52Backend {
+    enabled: bool,
+    limit: usize,
+    /// Captured OSC 52 output — only present in test builds so that tests can
+    /// verify the OSC 52 path was exercised alongside the other backends.
     #[cfg(test)]
-    pub osc52_output: Vec<u8>,
+    output: Vec<u8>,
+}
+
+impl Osc52Backend {
+    pub fn new(config: ClipboardConfig) -> Self {
+        Self {
+            enabled: config.osc52_enabled,
+            limit: config.osc52_limit,
+            #[cfg(test)]
+            output: Vec::new(),
+        }
+    }
+}
+
+impl ClipboardBackend for Osc52Backend {
+    fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
+        if !self.enabled {
+            tracing::debug!("clipboard: set OSC 52 emission disabled; skipping");
+            return Ok(());
+        }
+        // Truncate at a valid UTF-8 char boundary so oversized payloads still
+        // reach the host up to the cap without corrupting multibyte characters.
+        let osc52_text = truncate_for_osc52(text, self.limit);
+        // Only emit to an active terminal.  In an MCP server / daemon / IPC
+        // worker stdout is a structured protocol stream, and a redirected
+        // pipe/file must not be polluted with raw escape bytes — so the TTY
+        // check is what keeps this backend out of non-terminal stdout.
+        #[cfg(not(test))]
+        if std::io::stdout().is_terminal() {
+            let mut out = std::io::stdout().lock();
+            set_via_osc52_with_writer(osc52_text, &mut out)?;
+        }
+        // In tests, capture to `output` instead of stdout (test stdout is a
+        // pipe, so the TTY gate is intentionally bypassed here).
+        #[cfg(test)]
+        {
+            let mut buf = Vec::new();
+            set_via_osc52_with_writer(osc52_text, &mut buf)?;
+            self.output = buf;
+        }
+        Ok(())
+    }
+
+    fn get(&mut self) -> Result<Option<String>, ClipboardError> {
+        // OSC 52 is strictly write-only: terminals do not reliably answer
+        // clipboard read queries, so this backend never supplies text.
+        Ok(None)
+    }
+
+    fn name(&self) -> &'static str {
+        "osc52"
+    }
+
+    #[cfg(test)]
+    fn osc52_capture(&self) -> Option<&[u8]> {
+        Some(&self.output)
+    }
+}
+
+/// A clipboard handle composed from a list of pluggable backends.
+///
+/// `set()` fans out to every backend in registration order (infallible:
+/// per-backend failures are logged and the remaining backends still run).
+/// `get()` returns the first backend that can supply text, short-circuiting.
+///
+/// Default backends (in order): [`ArboardBackend`] (authoritative system
+/// clipboard), [`InMemoryBackend`] (headless round-trip fallback), and
+/// [`Osc52Backend`] emitted **last** so the host terminal emulator becomes the
+/// final owner of the system clipboard (required for reliable X11 ownership).
+/// When running over SSH the arboard handle is `None`; `set()` still works via
+/// OSC 52 emitted to stdout, and the shared in-memory buffer lets `get()`
+/// round-trip copy→paste inside the process.
+pub struct Clipboard {
+    backends: Vec<Box<dyn ClipboardBackend>>,
 }
 
 impl Default for Clipboard {
@@ -209,25 +395,6 @@ impl Clipboard {
         Self::with_config(ClipboardConfig::default())
     }
 
-    /// Create a headless clipboard handle backed by `buffer` as its Tier-1
-    /// shared in-memory store, with the default OSC 52 config.
-    ///
-    /// Test-only seam: forces `arboard` to `None` and lets sibling modules
-    /// (e.g. the PTY reader loop tests) exercise the shared-buffer and
-    /// OSC 52 paths deterministically on any machine, regardless of whether
-    /// a display server is present, without exposing the internal backend
-    /// fields or touching the real system clipboard.
-    pub fn with_shared_buffer(buffer: Arc<RwLock<Option<String>>>) -> Self {
-        Self {
-            arboard: None,
-            shared: buffer,
-            osc52_enabled: ClipboardConfig::default().osc52_enabled,
-            osc52_limit: ClipboardConfig::default().osc52_limit,
-            #[cfg(test)]
-            osc52_output: Vec::new(),
-        }
-    }
-
     /// Create a clipboard handle from a [`ClipboardConfig`].
     ///
     /// The arboard backend is active only when a local display is available;
@@ -237,162 +404,139 @@ impl Clipboard {
     /// boundary so the host terminal still receives output up to the cap; the
     /// in-memory buffer and arboard always receive the full, untruncated text.
     pub fn with_config(config: ClipboardConfig) -> Self {
-        let arboard = arboard::Clipboard::new().ok();
-        tracing::debug!(
-            "clipboard: backend arboard={}, osc52 enabled={}",
-            if arboard.is_some() {
-                "available"
-            } else {
-                "unavailable"
-            },
-            config.osc52_enabled
-        );
-        Self {
-            arboard,
-            shared: default_shared_buffer(),
-            osc52_enabled: config.osc52_enabled,
-            osc52_limit: config.osc52_limit,
-            #[cfg(test)]
-            osc52_output: Vec::new(),
-        }
+        Self::with_backends(default_backends(config))
+    }
+
+    /// Create a headless clipboard handle backed by `buffer` as its Tier-1
+    /// shared in-memory store, with the default OSC 52 config.
+    ///
+    /// Test seam: no arboard backend, so sibling modules (e.g. the PTY reader
+    /// loop tests) exercise the shared-buffer and OSC 52 paths deterministically
+    /// on any machine, regardless of whether a display server is present,
+    /// without touching the real system clipboard.
+    pub fn with_shared_buffer(buffer: Arc<RwLock<Option<String>>>) -> Self {
+        Self::with_backends(vec![
+            Box::new(InMemoryBackend::new(buffer)),
+            Box::new(Osc52Backend::new(ClipboardConfig::default())),
+        ])
+    }
+
+    /// Compose a clipboard from a custom backend list.
+    ///
+    /// `set()` fans out in list order; `get()` returns the first backend that
+    /// supplies text.  This is the pluggable entry point of the backend system.
+    pub fn with_backends(backends: Vec<Box<dyn ClipboardBackend>>) -> Self {
+        Self { backends }
     }
 
     /// Read the clipboard as a `String`.
     ///
-    /// Prefers `arboard` (the real system clipboard) when available; on
-    /// headless / remote machines it falls back to the shared in-memory
-    /// buffer written by [`Clipboard::set`], so copy→paste round-trips
-    /// inside term-wm.  Does **not** attempt OSC 52 reads because most
-    /// terminal emulators do not support them.
+    /// Returns the first backend that can supply text: `arboard` (the real
+    /// system clipboard) when available, then the shared in-memory buffer, so
+    /// copy→paste round-trips inside term-wm even headless.  Does **not**
+    /// consult OSC 52 (write-only).
     pub fn get(&mut self) -> Result<String, ClipboardError> {
-        match read_system_clipboard(&mut self.arboard) {
-            Ok(Some(text)) => return Ok(text),
-            Ok(None) => {}
-            Err(e) => {
-                tracing::debug!(
-                    "clipboard: get via arboard failed ({e}); falling back to in-memory buffer"
-                );
+        for backend in &mut self.backends {
+            match backend.get() {
+                Ok(Some(text)) => {
+                    tracing::debug!(
+                        "clipboard: get read via backend {} ({} bytes)",
+                        backend.name(),
+                        text.len()
+                    );
+                    return Ok(text);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::debug!("clipboard: get via backend {} failed ({e})", backend.name())
+                }
             }
         }
-        // arboard absent or errored: fall back to the shared in-memory buffer.
-        // Recover from a poisoned lock (a thread panicked while holding a
-        // guard) so the Tier-1 fallback stays available for later operations.
-        let text = self
-            .shared
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        match text {
-            Some(text) => {
-                tracing::debug!(
-                    "clipboard: get read via in-memory shared buffer ({} bytes)",
-                    text.len()
-                );
-                Ok(text)
-            }
-            None => {
-                tracing::debug!(
-                    "clipboard: get no backend available (arboard absent, buffer empty)"
-                );
-                Err(ClipboardError::NotAvailable)
-            }
-        }
+        tracing::debug!("clipboard: get no backend available (arboard absent, buffer empty)");
+        Err(ClipboardError::NotAvailable)
     }
 
     /// Set the system clipboard to `text`.
     ///
-    /// Best-effort fan-out to every active backend; failures are logged and
-    /// ignored so the remaining back-ends still run:
+    /// Best-effort fan-out to every registered backend; failures are logged
+    /// and ignored so the remaining backends still run:
     ///
-    /// 1. **In-memory buffer** — always written first, so an internal paste
-    ///    is guaranteed even if a later backend fails.
-    /// 2. `arboard` — writes to the local system clipboard directly.
-    /// 3. **OSC 52** (when enabled) — writes to the host terminal's clipboard
-    ///    via the escape sequence, and is emitted **last** so the host
-    ///    terminal emulator becomes the final owner of the system clipboard.
-    ///    This ensures copy works when embedded in remote/embedded terminals
-    ///    (Zed, tmux, SSH), and on X11 it supersedes arboard's in-process
-    ///    selection thread, whose clipboard ownership is known to be
-    ///    unreliable (pastes can silently serve stale data).  The terminal
-    ///    emulator then answers paste requests directly.  Oversized payloads
-    ///    are truncated at a valid UTF-8 char boundary to the OSC 52 emission
-    ///    cap (default [`DEFAULT_MAX_OSC52_BYTES`], settable via
-    ///    [`Clipboard::with_config`]), so the host still receives output up
-    ///    to the cap; the in-memory buffer and arboard always receive the
-    ///    full untruncated text.
+    /// 1. `arboard` — writes to the local system clipboard directly.
+    /// 2. **In-memory buffer** — always written, so an internal paste is
+    ///    guaranteed even if a later backend fails.
+    /// 3. **OSC 52** (when enabled) — written to the host terminal's stdout,
+    ///    emitted **last** so the host terminal emulator becomes the final
+    ///    owner of the system clipboard.  This ensures copy works when embedded
+    ///    in remote/embedded terminals (Zed, tmux, SSH), and on X11 it
+    ///    supersedes arboard's in-process selection thread, whose clipboard
+    ///    ownership is known to be unreliable (pastes can silently serve stale
+    ///    data).  Oversized payloads are truncated at a valid UTF-8 char
+    ///    boundary to the OSC 52 emission cap (default
+    ///    [`DEFAULT_MAX_OSC52_BYTES`], settable via [`Clipboard::with_config`]);
+    ///    the in-memory buffer and arboard always receive the full untruncated
+    ///    text.
     pub fn set(&mut self, text: &str) {
-        if let Ok(mut guard) = self.shared.write() {
-            *guard = Some(text.to_owned());
+        for backend in &mut self.backends {
+            if let Err(e) = backend.set(text) {
+                tracing::debug!("clipboard: backend {} set failed ({e})", backend.name());
+            }
         }
-        write_system_clipboard(&mut self.arboard, text);
+    }
 
-        if !self.osc52_enabled {
-            tracing::debug!("clipboard: set OSC 52 emission disabled; skipping");
-            return;
+    /// Read UTF-8 content from any `Read` stream (file, stdin, network socket)
+    /// and copy it across all backends.
+    ///
+    /// A stream that is not valid UTF-8 yields [`ClipboardError::InvalidUtf8`];
+    /// any other read failure yields [`ClipboardError::Io`].  This is the
+    /// programmatic ingestion contract for MCP servers / embedded tools that
+    /// must not spawn a subprocess.
+    pub fn set_from_reader<R: std::io::Read>(
+        &mut self,
+        mut reader: R,
+    ) -> Result<(), ClipboardError> {
+        let mut text = String::new();
+        match reader.read_to_string(&mut text) {
+            Ok(_) => {
+                self.set(&text);
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                Err(ClipboardError::InvalidUtf8)
+            }
+            Err(e) => Err(ClipboardError::Io(e)),
         }
+    }
 
-        // Emit OSC 52 for the host terminal LAST.  When the host terminal
-        // emulator supports OSC 52 (VTE, Alacritty, WezTerm, …) it responds
-        // by taking over the system clipboard, making it the final owner —
-        // which on X11 is far more reliable than arboard's in-process
-        // selection thread for answering paste requests.  Truncate at a
-        // valid UTF-8 char boundary so oversized payloads still reach the
-        // host up to the cap without corrupting multibyte characters.
-        let osc52_text = truncate_for_osc52(text, self.osc52_limit);
-        #[cfg(not(test))]
-        if let Err(e) = set_via_osc52_with_writer(osc52_text, &mut std::io::stdout().lock()) {
-            tracing::debug!("clipboard: set OSC 52 to stdout failed ({e})");
-        }
+    /// Read UTF-8 content from a file path and copy it across all backends.
+    ///
+    /// Opening the file first validates readability; a missing/unreadable file
+    /// yields [`ClipboardError::Io`], and non-UTF-8 content yields
+    /// [`ClipboardError::InvalidUtf8`].
+    pub fn set_from_path<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<(), ClipboardError> {
+        let file = std::fs::File::open(path)?;
+        self.set_from_reader(file)
+    }
 
-        // In tests, capture to osc52_output instead of stdout.
-        #[cfg(test)]
-        {
-            let mut buf = Vec::new();
-            let _ = set_via_osc52_with_writer(osc52_text, &mut buf);
-            self.osc52_output = buf;
-        }
+    /// Test-only: OSC 52 bytes captured by the OSC 52 backend, if present.
+    #[cfg(test)]
+    pub fn osc52_output(&self) -> &[u8] {
+        self.backends
+            .iter()
+            .find_map(|b| b.osc52_capture())
+            .unwrap_or(&[])
     }
 }
 
-/// Best-effort write to the local system clipboard via `arboard`.
-///
-/// On X11 this claims the CLIPBOARD selection, but arboard hosts the data in
-/// its own background thread, which can silently drop or serve stale data.
-/// macOS AppKit/NSPasteboard writes debug spam to stderr when setting the
-/// clipboard — suppressed by [`StderrSuppressGuard`].
-fn write_system_clipboard(clipboard: &mut Option<arboard::Clipboard>, text: &str) {
-    let Some(cb) = clipboard.as_mut() else {
-        tracing::debug!("clipboard: set arboard unavailable; in-memory buffer + OSC 52 only");
-        return;
-    };
-    let _guard = StderrSuppressGuard::new();
-    match cb.set_text(text.to_owned()) {
-        Ok(()) => tracing::debug!("clipboard: set wrote via arboard"),
-        Err(e) => tracing::debug!("clipboard: set via arboard failed ({e})"),
-    }
-}
-
-/// Best-effort read from the local system clipboard via `arboard`.
-///
-/// `Ok(None)` when there is no system clipboard backend (headless / SSH); an
-/// `Err` propagates an arboard read failure so the caller can decide whether
-/// to fall back to the shared in-memory buffer.
-fn read_system_clipboard(
-    clipboard: &mut Option<arboard::Clipboard>,
-) -> Result<Option<String>, ClipboardError> {
-    let Some(cb) = clipboard.as_mut() else {
-        return Ok(None);
-    };
-    match cb.get_text() {
-        Ok(text) => {
-            tracing::debug!("clipboard: get read via arboard ({} bytes)", text.len());
-            Ok(Some(text))
-        }
-        Err(e) => {
-            tracing::debug!("clipboard: get via arboard failed ({e})");
-            Err(e.into())
-        }
-    }
+/// Default backend set, in order: arboard, in-memory, OSC 52 last.
+fn default_backends(config: ClipboardConfig) -> Vec<Box<dyn ClipboardBackend>> {
+    vec![
+        Box::new(ArboardBackend::new()),
+        Box::new(InMemoryBackend::new(default_shared_buffer())),
+        Box::new(Osc52Backend::new(config)),
+    ]
 }
 
 /// Truncate `text` to `limit` bytes at a valid UTF-8 char boundary so OSC 52
@@ -400,7 +544,6 @@ fn read_system_clipboard(
 fn truncate_for_osc52(text: &str, limit: usize) -> &str {
     &text[..text.floor_char_boundary(limit)]
 }
-
 /// Build the raw bytes of an OSC 52 clipboard sequence.
 ///
 /// Format: `ESC ] 5 2 ; c ; <base64> BEL`
@@ -664,6 +807,7 @@ impl Default for Osc52Extractor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     /// An isolated shared buffer for a single test, so the process-global
     /// default buffer is never touched and tests do not leak state to each
@@ -677,6 +821,43 @@ mod tests {
     /// deterministically on any machine regardless of display availability.
     fn headless_with_buffer(buffer: Arc<RwLock<Option<String>>>) -> Clipboard {
         Clipboard::with_shared_buffer(buffer)
+    }
+
+    /// Minimal custom backend for registry tests.  Records `set` payloads into
+    /// a shared log (so the test can inspect them after the backend is boxed),
+    /// answers `get` from `read`, and can be told to fail every `set`.
+    struct RecordingBackend {
+        written: Arc<Mutex<Vec<String>>>,
+        read: Option<String>,
+        fail_set: bool,
+    }
+
+    impl RecordingBackend {
+        fn new(written: Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                written,
+                read: None,
+                fail_set: false,
+            }
+        }
+    }
+
+    impl ClipboardBackend for RecordingBackend {
+        fn set(&mut self, text: &str) -> Result<(), ClipboardError> {
+            if self.fail_set {
+                return Err(ClipboardError::NotAvailable);
+            }
+            self.written.lock().unwrap().push(text.to_owned());
+            Ok(())
+        }
+
+        fn get(&mut self) -> Result<Option<String>, ClipboardError> {
+            Ok(self.read.clone())
+        }
+
+        fn name(&self) -> &'static str {
+            "recording"
+        }
     }
 
     #[test]
@@ -752,8 +933,12 @@ mod tests {
             ClipboardError::NotAvailable.to_string(),
             "clipboard backend not available (running remotely?)"
         );
+        assert_eq!(
+            ClipboardError::InvalidUtf8.to_string(),
+            "input is not valid UTF-8"
+        );
         let io = ClipboardError::Io(std::io::Error::other("boom"));
-        assert_eq!(io.to_string(), "I/O error writing OSC 52 sequence: boom");
+        assert_eq!(io.to_string(), "I/O error: boom");
         let backend = ClipboardError::Backend(arboard::Error::ContentNotAvailable);
         assert_eq!(
             backend.to_string(),
@@ -774,21 +959,18 @@ mod tests {
         let config = ClipboardConfig::default();
         assert!(config.osc52_enabled);
         assert_eq!(config.osc52_limit, DEFAULT_MAX_OSC52_BYTES);
-
-        let cb = Clipboard::new();
-        assert!(cb.osc52_enabled);
-        assert_eq!(cb.osc52_limit, DEFAULT_MAX_OSC52_BYTES);
     }
 
     #[test]
     fn set_always_writes_memory_buffer_even_when_osc52_disabled() {
         let buffer = isolated_buffer();
-        let mut cb = Clipboard::with_config(ClipboardConfig {
-            osc52_enabled: false,
-            ..ClipboardConfig::default()
-        });
-        cb.arboard = None;
-        cb.shared = Arc::clone(&buffer);
+        let mut cb = Clipboard::with_backends(vec![
+            Box::new(InMemoryBackend::new(Arc::clone(&buffer))),
+            Box::new(Osc52Backend::new(ClipboardConfig {
+                osc52_enabled: false,
+                ..ClipboardConfig::default()
+            })),
+        ]);
 
         cb.set("gated text");
         assert_eq!(
@@ -797,7 +979,7 @@ mod tests {
             "in-memory buffer must be written regardless of OSC 52 gating"
         );
         assert!(
-            cb.osc52_output.is_empty(),
+            cb.osc52_output().is_empty(),
             "OSC 52 must not be emitted when osc52_enabled is false"
         );
     }
@@ -808,10 +990,10 @@ mod tests {
         cb.set("hello from test");
 
         assert!(
-            !cb.osc52_output.is_empty(),
+            !cb.osc52_output().is_empty(),
             "OSC 52 output must not be empty"
         );
-        let seq = String::from_utf8_lossy(&cb.osc52_output);
+        let seq = String::from_utf8_lossy(cb.osc52_output());
         assert!(
             seq.starts_with("\x1b]52;c;"),
             "OSC 52 must start with correct header, got: {seq:?}"
@@ -821,10 +1003,130 @@ mod tests {
             "OSC 52 must end with BEL, got: {seq:?}"
         );
         assert_eq!(
-            extract_osc52_text(&cb.osc52_output),
+            extract_osc52_text(cb.osc52_output()),
             Some("hello from test".to_string()),
             "OSC 52 output must survive extract roundtrip"
         );
+    }
+
+    // ── Ingestion (set_from_reader / set_from_path) ────────────────
+
+    #[test]
+    fn set_from_reader_copies_valid_utf8() {
+        let buffer = isolated_buffer();
+        let mut cb = headless_with_buffer(Arc::clone(&buffer));
+        let cursor = std::io::Cursor::new(b"hello from reader");
+
+        cb.set_from_reader(cursor)
+            .expect("valid utf-8 read must succeed");
+        assert_eq!(
+            *buffer.read().unwrap(),
+            Some("hello from reader".to_owned()),
+            "reader content must land in the shared in-memory buffer"
+        );
+        assert!(
+            !cb.osc52_output().is_empty(),
+            "set() must still fan out to OSC 52"
+        );
+    }
+
+    #[test]
+    fn set_from_reader_rejects_non_utf8() {
+        let mut cb = headless_with_buffer(isolated_buffer());
+        let cursor = std::io::Cursor::new(vec![0xffu8, 0xfe]);
+
+        let err = cb
+            .set_from_reader(cursor)
+            .expect_err("non-UTF-8 must error");
+        assert!(matches!(err, ClipboardError::InvalidUtf8));
+    }
+
+    #[test]
+    fn set_from_path_copies_file() {
+        let mut file = tempfile::NamedTempFile::new().expect("create fixture");
+        std::io::Write::write_all(&mut file, b"content from a file").expect("write fixture");
+
+        let buffer = isolated_buffer();
+        let mut cb = headless_with_buffer(Arc::clone(&buffer));
+        cb.set_from_path(file.path()).expect("read a real file");
+
+        assert_eq!(
+            *buffer.read().unwrap(),
+            Some("content from a file".to_owned())
+        );
+    }
+
+    #[test]
+    fn set_from_path_missing_file_returns_io() {
+        let mut cb = headless_with_buffer(isolated_buffer());
+        let missing = std::env::temp_dir().join(format!(
+            "term_clipboard_does_not_exist_{}",
+            std::process::id()
+        ));
+
+        let err = cb
+            .set_from_path(&missing)
+            .expect_err("missing file must error");
+        assert!(matches!(err, ClipboardError::Io(_)));
+    }
+
+    // ── Backend registry ────────────────────────────────────────────
+
+    #[test]
+    fn backend_trait_pluggable_custom_backend() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut cb =
+            Clipboard::with_backends(vec![Box::new(RecordingBackend::new(Arc::clone(&log)))]);
+
+        cb.set("custom text");
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["custom text".to_string()],
+            "a custom backend composed via with_backends must receive set()"
+        );
+    }
+
+    #[test]
+    fn set_fans_out_past_failing_backend() {
+        let buffer = isolated_buffer();
+        let mut failing = RecordingBackend::new(Arc::new(Mutex::new(Vec::new())));
+        failing.fail_set = true;
+        let mut cb = Clipboard::with_backends(vec![
+            Box::new(failing),
+            Box::new(InMemoryBackend::new(Arc::clone(&buffer))),
+        ]);
+
+        cb.set("text survives");
+        assert_eq!(
+            *buffer.read().unwrap(),
+            Some("text survives".to_owned()),
+            "set() fan-out must continue to later backends past a failing one"
+        );
+    }
+
+    #[test]
+    fn get_uses_first_readable_backend() {
+        let buffer = isolated_buffer();
+        *buffer.write().unwrap() = Some("from memory".to_owned());
+        let mut cb = Clipboard::with_backends(vec![
+            Box::new(RecordingBackend::new(Arc::new(Mutex::new(Vec::new())))),
+            Box::new(InMemoryBackend::new(buffer)),
+        ]);
+        assert_eq!(cb.get().unwrap(), "from memory");
+
+        let mut empty = Clipboard::with_backends(vec![Box::new(RecordingBackend::new(Arc::new(
+            Mutex::new(Vec::new()),
+        )))]);
+        assert!(
+            matches!(empty.get(), Err(ClipboardError::NotAvailable)),
+            "get() with no readable backend must return NotAvailable"
+        );
+    }
+
+    #[test]
+    fn osc52_backend_get_is_write_only() {
+        let mut backend = Osc52Backend::new(ClipboardConfig::default());
+        assert!(matches!(backend.get(), Ok(None)));
     }
 
     #[test]
@@ -949,18 +1251,19 @@ mod tests {
     #[test]
     fn osc52_emission_truncated_over_limit() {
         let buffer = isolated_buffer();
-        let mut cb = Clipboard::with_config(ClipboardConfig {
-            osc52_enabled: true,
-            osc52_limit: 8,
-        });
-        cb.arboard = None;
-        cb.shared = Arc::clone(&buffer);
+        let mut cb = Clipboard::with_backends(vec![
+            Box::new(InMemoryBackend::new(Arc::clone(&buffer))),
+            Box::new(Osc52Backend::new(ClipboardConfig {
+                osc52_enabled: true,
+                osc52_limit: 8,
+            })),
+        ]);
 
         let oversized = "this text is longer than the 8-byte cap";
         cb.set(oversized);
 
         // OSC 52 output must be truncated to <= limit bytes at a char boundary.
-        let decoded = extract_osc52_text(&cb.osc52_output).unwrap();
+        let decoded = extract_osc52_text(cb.osc52_output()).unwrap();
         assert!(
             decoded.len() <= 8,
             "OSC 52 emission must be truncated to the cap, got {} bytes",
@@ -981,33 +1284,35 @@ mod tests {
 
     #[test]
     fn osc52_truncation_respects_utf8_boundary() {
-        let mut cb = Clipboard::with_config(ClipboardConfig {
+        let mut cb = Clipboard::with_backends(vec![Box::new(Osc52Backend::new(ClipboardConfig {
             osc52_enabled: true,
             osc52_limit: 5,
-        });
-        cb.arboard = None;
+        }))]);
 
         // "héllo" — 'é' is 2 bytes.  A byte-5 cut would land inside 'é';
         // floor_char_boundary must land at index 4 (after 'h' + 'é').
         let text = "héllo";
         cb.set(text);
 
-        let decoded = extract_osc52_text(&cb.osc52_output).unwrap();
+        let decoded = extract_osc52_text(cb.osc52_output()).unwrap();
         assert_eq!(decoded, "héll", "must truncate at a valid UTF-8 boundary");
         assert!(decoded.len() <= 5);
-        assert!(!cb.osc52_output.is_empty(), "OSC 52 must still be emitted");
+        assert!(
+            !cb.osc52_output().is_empty(),
+            "OSC 52 must still be emitted"
+        );
     }
 
     /// Verify that `Clipboard::set()` emits OSC 52 to stdout.
     ///
-    /// This test captures the output that `set_via_osc52` would write to a
-    /// real terminal by routing through the writer-based API.  The arboard
-    /// path is tested implicitly by arboard's own test suite; at the code
-    /// level `Clipboard::set()` clearly calls both:
+    /// This test captures the output that `set_via_osc52_with_writer` would
+    /// write to a real terminal by routing through the writer-based API.  The
+    /// arboard path is tested implicitly by arboard's own test suite; at the
+    /// code level `Clipboard::set()` clearly calls both:
     ///
     /// ```ignore
-    /// let _ = set_via_osc52(text);         // OSC 52 path
-    /// self.inner.set_text(text.to_owned())  // arboard path
+    /// let _ = set_via_osc52_with_writer(text, &mut stdout().lock());
+    /// self.arboard.set_text(text.to_owned())  // arboard path
     /// ```
     #[test]
     fn clipboard_set_triggers_osc52_path() {

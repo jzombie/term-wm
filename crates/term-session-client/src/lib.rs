@@ -3,8 +3,6 @@ mod remote_pane;
 pub use remote_pane::RemotePane;
 
 use std::io::{self, IsTerminal, Write, stdout};
-#[cfg(unix)]
-use std::os::unix::io::FromRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -19,66 +17,17 @@ use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCallerInterface};
 use portable_pty::PtySize;
+use term_clipboard::{Clipboard, Osc52Extractor};
 use term_session_muxio_service_definitions::{
     Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
     SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse, path_wire,
 };
+use term_sys_io::redirect_fd_to_tracing;
 use term_wm_events::{Event, KeyKind, KeyModifiers, MouseEventKind};
 use term_wm_pty_engine::Pane;
-use term_wm_pty_engine::clipboard::{Clipboard, Osc52Extractor};
 use term_wm_pty_engine::input_encoding::{key_to_bytes, mouse_event_to_bytes};
 use term_wm_pty_engine::signal::install_sigint_handler;
 use term_wm_vt100::{MouseProtocolEncoding, MouseProtocolMode, Parser, Screen};
-
-/// Redirect an OS-level file descriptor (stdout or stderr) into `tracing`.
-///
-/// macOS system frameworks (AppKit, NSPasteboard, etc.) often write debug
-/// output directly to FD 1 or 2.  When the terminal is in raw/alt-screen mode
-/// this junk leaks to the display.  This function creates a pipe, redirects
-/// the given FD into it, and spawns a background thread that feeds incoming
-/// lines into `tracing::info!` (stdout) or `tracing::error!` (stderr).
-#[cfg(unix)]
-pub fn redirect_fd_to_tracing(target_fd: libc::c_int, is_stderr: bool) -> std::io::Result<()> {
-    let mut fds: [libc::c_int; 2] = [0; 2];
-    unsafe {
-        if libc::pipe(fds.as_mut_ptr()) == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if libc::dup2(fds[1], target_fd) == -1 {
-            libc::close(fds[0]);
-            libc::close(fds[1]);
-            return Err(std::io::Error::last_os_error());
-        }
-        libc::close(fds[1]);
-    }
-    let read_fd = fds[0];
-    let name = if is_stderr {
-        "stderr-tracing"
-    } else {
-        "stdout-tracing"
-    };
-    std::thread::Builder::new()
-        .name(name.into())
-        .spawn(move || {
-            use std::io::BufRead;
-            let file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-            let mut reader = std::io::BufReader::new(file);
-            let mut buf = Vec::new();
-            while reader.read_until(b'\n', &mut buf).unwrap_or(0) > 0 {
-                let text = String::from_utf8_lossy(&buf);
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    if is_stderr {
-                        tracing::error!(target: "c_stderr", "{}", trimmed);
-                    } else {
-                        tracing::info!(target: "c_stdout", "{}", trimmed);
-                    }
-                }
-                buf.clear();
-            }
-        })?;
-    Ok(())
-}
 
 /// Disable Windows console "QuickEdit" mode so mouse clicks select nothing and
 /// never suspend the console's output. Best-effort: console-less sessions
