@@ -122,6 +122,8 @@ pub enum TermWmAction {
     OpenCommandPalette,
     /// Close the command palette and return to passthrough mode.
     CloseCommandPalette,
+    /// Clear the command palette's search query (keyed via the main bindings table).
+    ClearCommandPaletteQuery,
     /// Begin tap-to-swap targeting for the given window.
     BeginTapSwap(WindowKey),
     /// Select a target window for tap-to-swap.
@@ -258,6 +260,7 @@ impl TermWmAction {
             | TermWmAction::SendNotification(_)
             | TermWmAction::OpenCommandPalette
             | TermWmAction::CloseCommandPalette
+            | TermWmAction::ClearCommandPaletteQuery
             | TermWmAction::BeginTapSwap(_)
             | TermWmAction::TapSwapTarget(_)
             | TermWmAction::ConfirmSwap
@@ -385,7 +388,8 @@ impl fmt::Display for TermWmAction {
             TermWmAction::ProfileChange(_) => "Profile change",
             TermWmAction::RequestKeyboardFocus(_) => "Request keyboard focus",
             TermWmAction::OpenCommandPalette => "Open Command Palette",
-            TermWmAction::CloseCommandPalette => "Close command palette",
+            TermWmAction::CloseCommandPalette => "Close Command Palette",
+            TermWmAction::ClearCommandPaletteQuery => "Clear Command Palette query",
             TermWmAction::BeginTapSwap(_) => "Begin tap-to-swap",
             TermWmAction::TapSwapTarget(_) => "Tap swap target",
             TermWmAction::ConfirmSwap => "Confirm swap",

@@ -686,6 +686,21 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             return EventResult::Action(TermWmAction::MenuSelect);
         }
 
+        // Clear-query binding from the main keybindings table (active only while
+        // the search bar is populated). Consumed, never Action, so the overlay
+        // barrier does not dismiss the palette.
+        if !self.query.is_empty()
+            && ctx
+                .config()
+                .keybindings
+                .matches(TermWmAction::ClearCommandPaletteQuery, key)
+        {
+            self.query.clear();
+            self.cursor = 0;
+            self.query_dirty = true;
+            return EventResult::Consumed;
+        }
+
         // Char input for search bar
         match key.code {
             KeyCode::Esc => EventResult::Action(TermWmAction::CloseMenu),
@@ -934,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_chars_ignored() {
+    fn ctrl_c_noop_with_empty_query() {
         let mut palette = make_palette_with_items();
         palette.query_dirty = false;
         let ctx = ComponentContext::new(true);
@@ -949,6 +964,51 @@ mod tests {
         });
         let result = palette.handle_events(&event, &ctx);
         assert!(result.is_ignored());
+        assert!(palette.query.is_empty());
+        assert!(!palette.query_dirty);
+    }
+
+    #[test]
+    fn ctrl_c_clears_populated_query() {
+        let mut palette = make_palette_with_items();
+        palette.query = "new t".to_string();
+        palette.cursor = 6;
+        palette.query_dirty = false;
+        let ctx = ComponentContext::new(true);
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers {
+                control: true,
+                shift: false,
+                alt: false,
+            },
+            kind: KeyKind::Press,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(result.is_consumed());
+        assert!(palette.query.is_empty());
+        assert_eq!(palette.cursor, 0);
+        assert!(palette.query_dirty);
+    }
+
+    #[test]
+    fn control_chars_other_than_clear_binding_stay_ignored() {
+        let mut palette = make_palette_with_items();
+        palette.query = "new t".to_string();
+        palette.query_dirty = false;
+        let ctx = ComponentContext::new(true);
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers {
+                control: true,
+                shift: false,
+                alt: false,
+            },
+            kind: KeyKind::Press,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(result.is_ignored());
+        assert_eq!(palette.query, "new t");
         assert!(!palette.query_dirty);
     }
 

@@ -811,4 +811,33 @@ mod tests {
         assert_eq!(rows.x, bounds.x);
         assert_eq!(rows.y, bounds.y);
     }
+
+    #[test]
+    fn ctrl_c_clears_query_and_keeps_palette_open() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
+        palette.palette.query = "alp".to_string();
+        palette.palette.cursor = 3;
+        palette.palette.query_dirty = true;
+
+        let ctx = ComponentContext::new(true);
+        use term_wm_core::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers {
+                control: true,
+                shift: false,
+                alt: false,
+            },
+            kind: KeyKind::Press,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(result.is_consumed());
+        assert!(palette.palette.query.is_empty());
+        assert_eq!(palette.palette.cursor, 0);
+        assert!(
+            <WmCommandPaletteComponent as Overlay<TermWmAction>>::visible(&palette),
+            "consumed events must not dismiss the palette"
+        );
+    }
 }
