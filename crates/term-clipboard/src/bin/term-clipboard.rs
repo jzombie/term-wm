@@ -7,61 +7,45 @@
 //!
 //! Only UTF-8 text is supported; binary input is an error.
 
-use std::ffi::OsString;
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+use clap::Parser;
 use term_clipboard::{Clipboard, set_via_osc52_with_writer};
 
-const USAGE: &str = "\
-term-clipboard — copy text to the clipboard (system + OSC 52), cross-platform.
+/// Copy text to the clipboard (system + OSC 52), cross-platform.
+#[derive(Parser, Debug)]
+#[command(
+    name = env!("CARGO_PKG_NAME"),
+    version = env!("CARGO_PKG_VERSION"),
+    about = env!("CARGO_PKG_DESCRIPTION"),
+    long_about = concat!(
+        env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ",
+        env!("CARGO_PKG_DESCRIPTION"),
+        "\n\nReads UTF-8 text from FILE (or stdin when omitted) and copies it to the ",
+        "clipboard.  Default mode uses the full Clipboard pipeline (shared in-memory ",
+        "buffer -> arboard -> OSC 52); --osc52 emits the OSC 52 escape sequence to ",
+        "stdout only.  Only UTF-8 text is supported; binary input is an error (exit code 1)."
+    ),
+)]
+struct Cli {
+    /// Emit the OSC 52 escape sequence to stdout only (no arboard).
+    #[arg(long)]
+    osc52: bool,
 
-USAGE:
-    term-clipboard [--osc52] [FILE]
-
-ARGS:
-    [FILE]    Text to copy, read as UTF-8.  When omitted, reads from stdin.
-
-OPTIONS:
-    --osc52   Emit the OSC 52 escape sequence to stdout only (no arboard).
-              Use over SSH or to pipe into scripts.
-    -h, --help
-              Print this help and exit.
-
-Non-UTF-8 input is an error (exit code 1).
-";
+    /// Text to copy, read as UTF-8.  When omitted, reads from stdin.
+    file: Option<PathBuf>,
+}
 
 fn main() -> ExitCode {
-    // Deterministic argument scanner: flags may appear in any position, and a
-    // single positional `[FILE]` argument (or stdin when absent) supplies the
-    // input.  `--osc52 file.txt` and `file.txt --osc52` behave identically.
-    let mut osc52 = false;
-    let mut file: Option<OsString> = None;
+    // `Cli::parse()` enforces deterministic semantics: `--osc52` may appear in
+    // any position and at most one `[FILE]` positional is accepted.  CLI parse
+    // errors (unknown flag, extra positional) exit with clap's code 2; runtime
+    // errors below exit with code 1.
+    let cli = Cli::parse();
 
-    for arg in std::env::args_os().skip(1) {
-        match arg.to_str() {
-            Some("-h") | Some("--help") => {
-                print!("{USAGE}");
-                return ExitCode::SUCCESS;
-            }
-            Some("--osc52") => osc52 = true,
-            Some(s) if s.starts_with('-') => {
-                eprintln!("term-clipboard: unknown flag `{s}`");
-                eprint!("{USAGE}");
-                return ExitCode::FAILURE;
-            }
-            _ => {
-                if file.is_some() {
-                    eprintln!("term-clipboard: error: too many arguments");
-                    eprint!("{USAGE}");
-                    return ExitCode::FAILURE;
-                }
-                file = Some(arg);
-            }
-        }
-    }
-
-    let text = match read_input(file) {
+    let text = match read_input(cli.file) {
         Ok(text) => text,
         Err(msg) => {
             eprintln!("term-clipboard: {msg}");
@@ -69,7 +53,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let result = if osc52 {
+    let result = if cli.osc52 {
         let mut out = std::io::stdout().lock();
         set_via_osc52_with_writer(&text, &mut out)
     } else {
@@ -90,7 +74,7 @@ fn main() -> ExitCode {
 /// Read UTF-8 input from `FILE` (opening it first to validate readability) or
 /// stdin.  Returns a clean error message for missing/unreadable files and for
 /// non-UTF-8 content.
-fn read_input(file: Option<OsString>) -> Result<String, String> {
+fn read_input(file: Option<PathBuf>) -> Result<String, String> {
     let mut reader: Box<dyn Read> = match file {
         Some(path) => {
             let f = std::fs::File::open(&path)
