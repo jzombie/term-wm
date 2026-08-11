@@ -686,15 +686,17 @@ impl Component<TermWmAction> for CommandPaletteComponent {
             return EventResult::Action(TermWmAction::MenuSelect);
         }
 
-        // Clear-query binding from the main keybindings table (active only while
-        // the search bar is populated). Consumed, never Action, so the overlay
-        // barrier does not dismiss the palette.
-        if !self.query.is_empty()
-            && ctx
-                .config()
-                .keybindings
-                .matches(TermWmAction::ClearCommandPaletteQuery, key)
+        // Clear-query binding from the main keybindings table. Populated search →
+        // clear it and stay open (Consumed); empty search → dismiss, same as Esc
+        // (CloseMenu bubbles through the wrapper and the WM unmounts the overlay).
+        if ctx
+            .config()
+            .keybindings
+            .matches(TermWmAction::ClearCommandPaletteQuery, key)
         {
+            if self.query.is_empty() {
+                return EventResult::Action(TermWmAction::CloseMenu);
+            }
             self.query.clear();
             self.cursor = 0;
             self.query_dirty = true;
@@ -949,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_noop_with_empty_query() {
+    fn ctrl_c_closes_when_query_empty() {
         let mut palette = make_palette_with_items();
         palette.query_dirty = false;
         let ctx = ComponentContext::new(true);
@@ -963,7 +965,10 @@ mod tests {
             kind: KeyKind::Press,
         });
         let result = palette.handle_events(&event, &ctx);
-        assert!(result.is_ignored());
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::CloseMenu)
+        ));
         assert!(palette.query.is_empty());
         assert!(!palette.query_dirty);
     }

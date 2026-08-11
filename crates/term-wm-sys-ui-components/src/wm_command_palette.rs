@@ -840,4 +840,30 @@ mod tests {
             "consumed events must not dismiss the palette"
         );
     }
+
+    #[test]
+    fn ctrl_c_empty_query_closes_palette() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.show();
+        palette.palette.query = String::new();
+        palette.palette.query_dirty = true;
+
+        let ctx = ComponentContext::new(true);
+        use term_wm_core::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers {
+                control: true,
+                shift: false,
+                alt: false,
+            },
+            kind: KeyKind::Press,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(matches!(
+            result,
+            EventResult::Action(TermWmAction::CloseMenu)
+        ));
+        assert!(palette.palette.query.is_empty());
+    }
 }
