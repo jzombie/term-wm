@@ -1,0 +1,26 @@
+[package]
+name = "term-clipboard"
+description = "Cross-platform terminal clipboard utility: system clipboard (arboard) + OSC 52, for term-wm."
+keywords = ["clipboard", "osc52", "terminal", "cross-platform"]
+categories = ["command-line-utilities", "os", "external-ffi-bindings"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "term-copy"
+path = "src/bin/term-copy.rs"
+
+[dependencies]
+arboard = { workspace = true }
+base64 = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+term-sys-io = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

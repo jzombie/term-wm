@@ -25,7 +25,9 @@ muxio-rpc-service-endpoint = { workspace = true }
 muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
 portable-pty = { workspace = true }
+term-clipboard = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
+term-sys-io = { workspace = true }
 term-wm-crossterm-adapter = { workspace = true }
 term-wm-events = { workspace = true }
 term-wm-pty-engine = { workspace = true }

@@ -23,7 +23,6 @@ pub mod reaper;
 pub mod task_scheduler;
 pub mod term_color;
 pub use term_wm_pty_engine::PtyStatus;
-pub use term_wm_pty_engine::clipboard;
 pub mod config;
 pub mod runner;
 pub mod theme;

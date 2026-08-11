@@ -930,7 +930,17 @@ impl TerminalComponent {
             let offset = vt100_max_scrollback - viewport_start;
             guard.screen.set_scrollback(offset);
 
+            // `viewport_row` is the viewport-relative row index (0..height)
+            // for `absolute_row` after the `set_scrollback(offset)` above —
+            // the coordinate space `contents_between` / `row_wrapped` expect.
             let viewport_row = (absolute_row - viewport_start) as u16;
+
+            // Bounds-guard BEFORE any screen query: never pass an out-of-range
+            // row index to the grid, even defensively, so scrollback/resize
+            // races cannot issue an out-of-bounds coordinate.
+            if viewport_row >= viewport_rows {
+                continue;
+            }
 
             let col_start = if absolute_row == vt100_start_row {
                 start_col as u16
@@ -948,9 +958,21 @@ impl TerminalComponent {
                 guard
                     .screen
                     .contents_between(viewport_row, col_start, viewport_row, col_end);
+
+            // Soft-wrapped rows join with the following row (no `\n`).  Strip
+            // trailing padding so terminal-width blank cells cannot leak into
+            // the middle of a joined continuous string.
+            let wrapped = guard.screen.row_wrapped(viewport_row);
+            let line = if wrapped {
+                line.trim_end_matches(' ').to_owned()
+            } else {
+                line
+            };
             result.push_str(&line);
 
-            if absolute_row < vt100_end_row {
+            // Only push `\n` after a row that is NOT soft-wrapped (and not the
+            // last row).  `viewport_row` was validated in-bounds above.
+            if absolute_row < vt100_end_row && !wrapped {
                 result.push('\n');
             }
         }
@@ -1898,6 +1920,123 @@ mod tests {
         );
         let line_count = t.lines().count();
         assert_eq!(line_count, 4, "should span 4 lines, got {}", line_count);
+    }
+
+    /// A soft-wrapped long line (50 chars at width 20 spans 3 rows) must copy
+    /// back as one continuous string with no `\n` at the wrap points.
+    #[test]
+    fn selection_text_wrapped_long_line_is_continuous() {
+        let (term, rb) = make_term_with_content(20, 24, 2000, &"a".repeat(50));
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb + 2, 10));
+        let text = term.selection_text();
+        assert_eq!(
+            text,
+            Some("a".repeat(50)),
+            "wrapped line must join without newlines, got: {:?}",
+            text
+        );
+    }
+
+    /// A wrapped line followed by a real `\r\n` joins inside the wrap but keeps
+    /// the `\n` at the genuine line break.
+    #[test]
+    fn selection_text_wrapped_line_then_real_newline_keeps_break() {
+        let (term, rb) =
+            make_term_with_content(20, 24, 2000, &format!("{}\r\nsecond", "a".repeat(50)));
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb + 3, 6));
+        let text = term.selection_text();
+        assert_eq!(
+            text,
+            Some(format!("{}\nsecond", "a".repeat(50))),
+            "wrap seam joins, real break keeps \\n, got: {:?}",
+            text
+        );
+    }
+
+    /// Wrap seams inside scrollback must also join: the paginated
+    /// `set_scrollback(offset)` -> `row_wrapped(viewport_row)` ordering stays
+    /// correct for rows that scrolled off the viewport.
+    #[test]
+    fn selection_text_wrapped_rows_in_scrollback() {
+        let max_sb = 10;
+        let width = 20u16;
+        let height = 24u16;
+        // 30 lines of 50 chars at width 20 = 90 rows; scrollback maxes out at
+        // 10 rows (the newest scrolled-off rows).  With a full scrollback the
+        // pane-to-vt100 offset is 0, so selection rows map 1:1 to the
+        // scrollback+viewport window (row 0 = oldest retained scrollback row).
+        let text = (0..30)
+            .map(|_| "L".repeat(50))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+
+        let mut pane = TestPane::new(max_sb);
+        pane.set_parser_size(height, width);
+        pane.write_to_parser(text.as_bytes());
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.selection_enabled = true;
+
+        // Window rows 1-2 are a wrap seam inside scrollback (row 1 is
+        // soft-wrapped onto row 2) -> joins with no `\n`.
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(1, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(2, 20));
+        let seam = term.selection_text();
+        assert_eq!(
+            seam,
+            Some("L".repeat(40)),
+            "scrollback wrap seam must join without newline, got: {:?}",
+            seam
+        );
+
+        // Window rows 2-4: a wrapped pair (rows 2-3) then a real line break
+        // after row 3 -> joins inside the wrap, keeps `\n` at the real break.
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(2, 0));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(4, 20));
+        let break_text = term.selection_text();
+        assert_eq!(
+            break_text,
+            Some(format!("{}\n{}", "L".repeat(30), "L".repeat(20))),
+            "scrollback seam joins, real break keeps \\n, got: {:?}",
+            break_text
+        );
+    }
+
+    /// A selection that ends mid-continuation (inside a wrapped pair) stays
+    /// continuous up to the end column.
+    #[test]
+    fn selection_text_wrapped_partial_selection_mid_continuation() {
+        let (term, rb) = make_term_with_content(20, 24, 2000, &"a".repeat(30));
+        term.selection
+            .borrow_mut()
+            .begin_drag(LogicalPosition::new(rb, 15));
+        term.selection
+            .borrow_mut()
+            .update_drag(LogicalPosition::new(rb + 1, 10));
+        let text = term.selection_text();
+        assert_eq!(
+            text,
+            Some("a".repeat(15)),
+            "partial selection across a wrap seam must stay continuous, got: {:?}",
+            text
+        );
     }
 
     /// A zero-length selection (click without drag) must return None.
