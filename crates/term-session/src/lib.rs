@@ -8,6 +8,7 @@ use term_session_muxio_service_definitions::{
     KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
 };
 
+// TODO: Rename to TERM_SESSION_CHANNEL
 pub const CHANNEL_ENV_VAR: &str = "TERM_WM_CHANNEL";
 pub const DEFAULT_CHANNEL: &str = "default/main";
 

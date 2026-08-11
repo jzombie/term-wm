@@ -9,6 +9,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+mod anchor;
 mod floating;
 mod hit_test;
 mod layout;
@@ -22,6 +23,7 @@ mod scroll;
 mod snap;
 mod split;
 
+pub use anchor::{AnchorPlacement, place_anchored};
 pub use floating::{
     DragHandle, FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, HeaderDrag, ResizeDrag, ResizeEdge,
     ResizeHandle, apply_resize_drag_signed, floating_header_for_region, resize_handles_for_region,

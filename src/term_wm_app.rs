@@ -543,6 +543,8 @@ impl<C: Component<TermWmAction>>
     fn open_command_palette(&mut self) {
         use term_wm_core::components::MenuDisplayItem;
         let mut palette = WmCommandPaletteComponent::new();
+        let anchor = self.wm.take_pending_palette_anchor();
+        palette.set_anchor(anchor);
         palette.show();
         let items = self.wm.wm_menu_items();
         let supported = self.wm.supported_menu_actions();
