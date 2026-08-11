@@ -101,9 +101,10 @@ While dragging a floating window by its title bar, hovering over a snap target s
 On release, the selection is automatically copied to the system clipboard
 and a brief notification is shown.
 
-**Pasting:** Right-click to paste the system clipboard contents at the cursor position.
-Paste also works via your terminal emulator's standard shortcut (e.g., Ctrl+Shift+V),
-which sends the text as a bracketed-paste event.
+**Pasting:** Right-click, or choose **Paste** from the Command Palette (`%SUPER%`),
+to paste the clipboard at the cursor position. Paste also works via your terminal
+emulator's standard shortcut (e.g., Ctrl+Shift+V), which sends the text as a
+bracketed-paste event.
 
 **OSC 52 copy:** Terminal applications (e.g., `vim`, `tmux`) can write to the system
 clipboard using the OSC 52 escape sequence. `%PACKAGE%` intercepts these sequences
@@ -117,6 +118,10 @@ Notes:
   "Clipboard Mode".
 * To enable or disable window text selection via the Command Palette, toggle
   "Window Selection: On/Off".
+* `%PACKAGE%` keeps an internal clipboard alongside the OS clipboard; where the OS
+  clipboard is unreachable (e.g. a terminal without OSC 52 support, or over SSH) the
+  two can diverge. Paste reads the OS clipboard when available and falls back to the
+  internal copy, so the same **Paste** action should work in most cases.
 
 ## Environment & Compatibility
 
