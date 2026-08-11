@@ -1,9 +1,9 @@
-//! `term-clipboard` — standalone clipboard CLI.
+//! `term-copy` — standalone clipboard CLI.
 //!
 //! Reads text from `FILE` (or stdin when omitted) and copies it to the
-//! clipboard.  Default mode uses the full [`Clipboard`] pipeline (shared
-//! in-memory buffer → arboard → OSC 52); `--osc52` emits the OSC 52 escape
-//! sequence to stdout only (useful over SSH / for piping into scripts).
+//! clipboard.  [`Clipboard::set`] fans out to every registered backend — the
+//! system clipboard (arboard), the shared in-memory buffer, and OSC 52 to the
+//! host terminal — so it works locally and over SSH with no flags.
 //!
 //! Only UTF-8 text is supported; binary input is an error.
 
@@ -12,63 +12,41 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
-use term_clipboard::{Clipboard, set_via_osc52_with_writer};
+use term_clipboard::Clipboard;
 
-/// Copy text to the clipboard (system + OSC 52), cross-platform.
+/// Copy text to the clipboard, cross-platform.
 #[derive(Parser, Debug)]
 #[command(
-    name = env!("CARGO_PKG_NAME"),
+    name = env!("CARGO_BIN_NAME"),
     version = env!("CARGO_PKG_VERSION"),
     about = env!("CARGO_PKG_DESCRIPTION"),
     long_about = concat!(
-        env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ",
+        env!("CARGO_BIN_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ",
         env!("CARGO_PKG_DESCRIPTION"),
         "\n\nReads UTF-8 text from FILE (or stdin when omitted) and copies it to the ",
-        "clipboard.  Default mode uses the full Clipboard pipeline (shared in-memory ",
-        "buffer -> arboard -> OSC 52); --osc52 emits the OSC 52 escape sequence to ",
-        "stdout only.  Only UTF-8 text is supported; binary input is an error (exit code 1)."
+        "clipboard.  Writes to every available backend in order: the system clipboard, ",
+        "the shared in-memory buffer, and OSC 52 to the host terminal — so it works ",
+        "locally and over SSH with no flags.  Only UTF-8 text is supported; binary ",
+        "input is an error (exit code 1)."
     ),
 )]
 struct Cli {
-    /// Emit the OSC 52 escape sequence to stdout only (no arboard).
-    #[arg(long)]
-    osc52: bool,
-
     /// Text to copy, read as UTF-8.  When omitted, reads from stdin.
     file: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
-    // `Cli::parse()` enforces deterministic semantics: `--osc52` may appear in
-    // any position and at most one `[FILE]` positional is accepted.  CLI parse
-    // errors (unknown flag, extra positional) exit with clap's code 2; runtime
-    // errors below exit with code 1.
     let cli = Cli::parse();
-
     let text = match read_input(cli.file) {
         Ok(text) => text,
         Err(msg) => {
-            eprintln!("term-clipboard: {msg}");
+            eprintln!("term-copy: {msg}");
             return ExitCode::FAILURE;
         }
     };
-
-    let result = if cli.osc52 {
-        let mut out = std::io::stdout().lock();
-        set_via_osc52_with_writer(&text, &mut out)
-    } else {
-        let mut cb = Clipboard::new();
-        cb.set(&text);
-        Ok(())
-    };
-
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("term-clipboard: error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    let mut cb = Clipboard::new();
+    cb.set(&text);
+    ExitCode::SUCCESS
 }
 
 /// Read UTF-8 input from `FILE` (opening it first to validate readability) or

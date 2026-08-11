@@ -19,5 +19,5 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [[bin]]
-name = "term-clipboard"
-path = "src/bin/term-clipboard.rs"
+name = "term-copy"
+path = "src/bin/term-copy.rs"
