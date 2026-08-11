@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [0.9.20-alpha] - TBD
 
+### Changed
+
+- **An exited session with no subscribers no longer loses its final output:** the session server now retains the last 64 KiB of an exited session's output in a per-channel cache (tail-retention, cleared on respawn) and serves it to any subscriber that attaches afterward, instead of dropping the PTY's pending buffer with the session. The final drain waits (bounded, 50 ms) for the PTY reader thread to finish EOF processing so trailing bytes are not truncated, and retained bytes are delivered to each late subscriber (not consumed by the first).
+
+### Fixed
+
+- **Flaky OSC 52 integration tests (`session_osc52_in_output`, `session_osc52_via_osc52extractor`):** the `osc52` mock wrote its clipboard sequence then exited after 500 ms, so the tests only passed when the output-subscribe landed inside that window — after the session was reaped the payload was silently dropped. The mock now has an `osc52_alive` mode that stays alive until killed (like `echo`), and the tests wait for the complete payload rather than the `52;` header so a cross-chunk split can't break them early. New regression test `session_osc52_late_subscribe_gets_retained_output` proves a subscriber attaching after exit still receives the payload.
+
 ## [0.9.19-alpha] - 2026-08-09
 
 ### Added
