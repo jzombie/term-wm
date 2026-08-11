@@ -3046,6 +3046,7 @@ dependencies = [
  "arboard",
  "base64 0.23.1",
  "clap",
+ "tempfile",
  "term-sys-io",
  "thiserror 2.0.19",
  "tracing",

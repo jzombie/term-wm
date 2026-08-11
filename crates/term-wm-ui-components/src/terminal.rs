@@ -935,6 +935,13 @@ impl TerminalComponent {
             // the coordinate space `contents_between` / `row_wrapped` expect.
             let viewport_row = (absolute_row - viewport_start) as u16;
 
+            // Bounds-guard BEFORE any screen query: never pass an out-of-range
+            // row index to the grid, even defensively, so scrollback/resize
+            // races cannot issue an out-of-bounds coordinate.
+            if viewport_row >= viewport_rows {
+                continue;
+            }
+
             let col_start = if absolute_row == vt100_start_row {
                 start_col as u16
             } else {
@@ -964,10 +971,8 @@ impl TerminalComponent {
             result.push_str(&line);
 
             // Only push `\n` after a row that is NOT soft-wrapped (and not the
-            // last row).  The bounds check is defensive: `row_wrapped` is
-            // out-of-bounds safe (returns false), and `viewport_row` is always
-            // in 0..viewport_rows by construction above.
-            if absolute_row < vt100_end_row && viewport_row < viewport_rows && !wrapped {
+            // last row).  `viewport_row` was validated in-bounds above.
+            if absolute_row < vt100_end_row && !wrapped {
                 result.push('\n');
             }
         }

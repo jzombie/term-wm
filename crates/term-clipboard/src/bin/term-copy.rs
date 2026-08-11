@@ -1,13 +1,15 @@
 //! `term-copy` — standalone clipboard CLI.
 //!
-//! Reads text from `FILE` (or stdin when omitted) and copies it to the
-//! clipboard.  [`Clipboard::set`] fans out to every registered backend — the
-//! system clipboard (arboard), the shared in-memory buffer, and OSC 52 to the
-//! host terminal — so it works locally and over SSH with no flags.
+//! A thin argument-parsing wrapper: all file/stdin ingestion and UTF-8
+//! validation lives in the library (`Clipboard::set_from_reader` /
+//! `Clipboard::set_from_path`), so MCP servers, AI agents, and external tools
+//! can ingest files/streams programmatically without spawning this binary.
 //!
-//! Only UTF-8 text is supported; binary input is an error.
+//! `Clipboard::set` fans out to every registered backend — the system
+//! clipboard (arboard), the shared in-memory buffer, and OSC 52 to the host
+//! terminal (when stdout is an active terminal) — so it works locally and over
+//! SSH with no flags.
 
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -25,9 +27,9 @@ use term_clipboard::Clipboard;
         env!("CARGO_PKG_DESCRIPTION"),
         "\n\nReads UTF-8 text from FILE (or stdin when omitted) and copies it to the ",
         "clipboard.  Writes to every available backend in order: the system clipboard, ",
-        "the shared in-memory buffer, and OSC 52 to the host terminal — so it works ",
-        "locally and over SSH with no flags.  Only UTF-8 text is supported; binary ",
-        "input is an error (exit code 1)."
+        "the shared in-memory buffer, and OSC 52 to the host terminal (only when stdout ",
+        "is an active terminal) — so it works locally and over SSH with no flags.  ",
+        "Only UTF-8 text is supported; binary input is an error (exit code 1)."
     ),
 )]
 struct Cli {
@@ -37,37 +39,18 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let text = match read_input(cli.file) {
-        Ok(text) => text,
-        Err(msg) => {
-            eprintln!("term-copy: {msg}");
-            return ExitCode::FAILURE;
-        }
-    };
     let mut cb = Clipboard::new();
-    cb.set(&text);
-    ExitCode::SUCCESS
-}
 
-/// Read UTF-8 input from `FILE` (opening it first to validate readability) or
-/// stdin.  Returns a clean error message for missing/unreadable files and for
-/// non-UTF-8 content.
-fn read_input(file: Option<PathBuf>) -> Result<String, String> {
-    let mut reader: Box<dyn Read> = match file {
-        Some(path) => {
-            let f = std::fs::File::open(&path)
-                .map_err(|e| format!("error: cannot read {}: {e}", path.to_string_lossy()))?;
-            Box::new(f)
-        }
-        None => Box::new(std::io::stdin().lock()),
+    let result = match cli.file {
+        Some(path) => cb.set_from_path(&path),
+        None => cb.set_from_reader(std::io::stdin().lock()),
     };
 
-    let mut text = String::new();
-    match reader.read_to_string(&mut text) {
-        Ok(_) => Ok(text),
-        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-            Err("error: input is not valid UTF-8".to_string())
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("term-copy: {e}");
+            ExitCode::FAILURE
         }
-        Err(e) => Err(format!("error: cannot read input: {e}")),
     }
 }

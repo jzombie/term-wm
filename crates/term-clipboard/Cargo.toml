@@ -18,6 +18,9 @@ term-sys-io = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [[bin]]
 name = "term-copy"
 path = "src/bin/term-copy.rs"

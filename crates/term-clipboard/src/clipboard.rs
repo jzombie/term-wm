@@ -66,6 +66,8 @@
 //! effect on OSC 52 emission, the in-memory shared buffer, or `arboard`.
 
 use std::io::Write;
+#[cfg(not(test))]
+use std::io::IsTerminal;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use base64::Engine;
@@ -107,11 +109,14 @@ const OSC52_HDR_WIN: &[u8] = "←]52;".as_bytes();
 
 #[derive(Debug, Error)]
 pub enum ClipboardError {
+    #[error("input is not valid UTF-8")]
+    InvalidUtf8,
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("clipboard backend error: {0}")]
     Backend(#[from] arboard::Error),
-
-    #[error("I/O error writing OSC 52 sequence: {0}")]
-    Io(#[from] std::io::Error),
 
     #[error("clipboard backend not available (running remotely?)")]
     NotAvailable,
@@ -320,9 +325,17 @@ impl ClipboardBackend for Osc52Backend {
         // Truncate at a valid UTF-8 char boundary so oversized payloads still
         // reach the host up to the cap without corrupting multibyte characters.
         let osc52_text = truncate_for_osc52(text, self.limit);
+        // Only emit to an active terminal.  In an MCP server / daemon / IPC
+        // worker stdout is a structured protocol stream, and a redirected
+        // pipe/file must not be polluted with raw escape bytes — so the TTY
+        // check is what keeps this backend out of non-terminal stdout.
         #[cfg(not(test))]
-        set_via_osc52_with_writer(osc52_text, &mut std::io::stdout().lock())?;
-        // In tests, capture to `output` instead of stdout.
+        if std::io::stdout().is_terminal() {
+            let mut out = std::io::stdout().lock();
+            set_via_osc52_with_writer(osc52_text, &mut out)?;
+        }
+        // In tests, capture to `output` instead of stdout (test stdout is a
+        // pipe, so the TTY gate is intentionally bypassed here).
         #[cfg(test)]
         {
             let mut buf = Vec::new();
@@ -469,6 +482,35 @@ impl Clipboard {
                 tracing::debug!("clipboard: backend {} set failed ({e})", backend.name());
             }
         }
+    }
+
+    /// Read UTF-8 content from any `Read` stream (file, stdin, network socket)
+    /// and copy it across all backends.
+    ///
+    /// A stream that is not valid UTF-8 yields [`ClipboardError::InvalidUtf8`];
+    /// any other read failure yields [`ClipboardError::Io`].  This is the
+    /// programmatic ingestion contract for MCP servers / embedded tools that
+    /// must not spawn a subprocess.
+    pub fn set_from_reader<R: std::io::Read>(&mut self, mut reader: R) -> Result<(), ClipboardError> {
+        let mut text = String::new();
+        match reader.read_to_string(&mut text) {
+            Ok(_) => {
+                self.set(&text);
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Err(ClipboardError::InvalidUtf8),
+            Err(e) => Err(ClipboardError::Io(e)),
+        }
+    }
+
+    /// Read UTF-8 content from a file path and copy it across all backends.
+    ///
+    /// Opening the file first validates readability; a missing/unreadable file
+    /// yields [`ClipboardError::Io`], and non-UTF-8 content yields
+    /// [`ClipboardError::InvalidUtf8`].
+    pub fn set_from_path<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<(), ClipboardError> {
+        let file = std::fs::File::open(path)?;
+        self.set_from_reader(file)
     }
 
     /// Test-only: OSC 52 bytes captured by the OSC 52 backend, if present.
@@ -884,8 +926,12 @@ mod tests {
             ClipboardError::NotAvailable.to_string(),
             "clipboard backend not available (running remotely?)"
         );
+        assert_eq!(
+            ClipboardError::InvalidUtf8.to_string(),
+            "input is not valid UTF-8"
+        );
         let io = ClipboardError::Io(std::io::Error::other("boom"));
-        assert_eq!(io.to_string(), "I/O error writing OSC 52 sequence: boom");
+        assert_eq!(io.to_string(), "I/O error: boom");
         let backend = ClipboardError::Backend(arboard::Error::ContentNotAvailable);
         assert_eq!(
             backend.to_string(),
@@ -954,6 +1000,59 @@ mod tests {
             Some("hello from test".to_string()),
             "OSC 52 output must survive extract roundtrip"
         );
+    }
+
+    // ── Ingestion (set_from_reader / set_from_path) ────────────────
+
+    #[test]
+    fn set_from_reader_copies_valid_utf8() {
+        let buffer = isolated_buffer();
+        let mut cb = headless_with_buffer(Arc::clone(&buffer));
+        let cursor = std::io::Cursor::new(b"hello from reader");
+
+        cb.set_from_reader(cursor).expect("valid utf-8 read must succeed");
+        assert_eq!(
+            *buffer.read().unwrap(),
+            Some("hello from reader".to_owned()),
+            "reader content must land in the shared in-memory buffer"
+        );
+        assert!(!cb.osc52_output().is_empty(), "set() must still fan out to OSC 52");
+    }
+
+    #[test]
+    fn set_from_reader_rejects_non_utf8() {
+        let mut cb = headless_with_buffer(isolated_buffer());
+        let cursor = std::io::Cursor::new(vec![0xffu8, 0xfe]);
+
+        let err = cb.set_from_reader(cursor).expect_err("non-UTF-8 must error");
+        assert!(matches!(err, ClipboardError::InvalidUtf8));
+    }
+
+    #[test]
+    fn set_from_path_copies_file() {
+        let mut file = tempfile::NamedTempFile::new().expect("create fixture");
+        std::io::Write::write_all(&mut file, b"content from a file").expect("write fixture");
+
+        let buffer = isolated_buffer();
+        let mut cb = headless_with_buffer(Arc::clone(&buffer));
+        cb.set_from_path(file.path()).expect("read a real file");
+
+        assert_eq!(
+            *buffer.read().unwrap(),
+            Some("content from a file".to_owned())
+        );
+    }
+
+    #[test]
+    fn set_from_path_missing_file_returns_io() {
+        let mut cb = headless_with_buffer(isolated_buffer());
+        let missing = std::env::temp_dir().join(format!(
+            "term_clipboard_does_not_exist_{}",
+            std::process::id()
+        ));
+
+        let err = cb.set_from_path(&missing).expect_err("missing file must error");
+        assert!(matches!(err, ClipboardError::Io(_)));
     }
 
     // ── Backend registry ────────────────────────────────────────────
