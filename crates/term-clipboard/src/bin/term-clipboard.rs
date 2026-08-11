@@ -93,9 +93,8 @@ fn main() -> ExitCode {
 fn read_input(file: Option<OsString>) -> Result<String, String> {
     let mut reader: Box<dyn Read> = match file {
         Some(path) => {
-            let f = std::fs::File::open(&path).map_err(|e| {
-                format!("error: cannot read {}: {e}", path.to_string_lossy())
-            })?;
+            let f = std::fs::File::open(&path)
+                .map_err(|e| format!("error: cannot read {}: {e}", path.to_string_lossy()))?;
             Box::new(f)
         }
         None => Box::new(std::io::stdin().lock()),

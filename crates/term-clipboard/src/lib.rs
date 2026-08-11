@@ -6,6 +6,5 @@
 //! support without pulling in the full PTY stack.
 
 pub mod clipboard;
-pub mod stderr_suppress;
 
 pub use clipboard::*;

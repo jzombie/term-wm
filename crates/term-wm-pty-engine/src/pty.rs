@@ -8,10 +8,10 @@ use std::time::Instant;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use term_clipboard::{Clipboard, Osc52Extractor};
 #[cfg(windows)]
 use crate::job_object::JobObject;
 use crate::pty_state_tracker::PtyPerformAdapter;
+use term_clipboard::{Clipboard, Osc52Extractor};
 
 /// Size of the PTY master read buffer (single `read()` call).
 /// 64KB keeps the reader parked most of the time under heavy output

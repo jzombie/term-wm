@@ -3,9 +3,9 @@
 //! macOS system frameworks (AppKit, NSPasteboard) and C libraries often write
 //! debug output directly to FD 1 or 2.  When the terminal is in raw/alt-screen
 //! mode this junk leaks to the display.  These helpers pipe the FD through a
-//! background thread into `tracing`.  (The `StderrSuppressGuard` that used to
-//! live here — a short-lived null-device redirect for `arboard` — now lives in
-//! the `term-clipboard` crate.)
+//! background thread into `tracing`.  (The `StderrSuppressGuard` — a
+//! short-lived null-device redirect for `arboard` — lives in this crate's
+//! sibling `stderr_suppress` module.)
 
 use std::io::BufRead;
 #[cfg(windows)]

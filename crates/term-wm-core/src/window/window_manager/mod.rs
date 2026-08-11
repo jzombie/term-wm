@@ -49,9 +49,9 @@ use crate::utils::KeyedTaskDebouncer;
 #[cfg(test)]
 use crate::window::test_component::TestComponent;
 use crate::wm_config::{HintVisibility, WmConfig};
+use term_clipboard::Clipboard;
 use term_wm_layout_engine::FocusRing;
 use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
-use term_clipboard::Clipboard;
 use term_wm_pty_engine::DirectInputMode;
 
 /// How long a Direct Input Mode toast waits after the FIRST transition in a burst

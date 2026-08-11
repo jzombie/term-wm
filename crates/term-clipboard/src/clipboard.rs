@@ -70,7 +70,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use base64::Engine;
 use thiserror::Error;
 
-use crate::stderr_suppress::StderrSuppressGuard;
+use term_sys_io::StderrSuppressGuard;
 
 /// Default cap on OSC 52 emission payload size (1 MB).  Payloads larger than
 /// this are truncated at a valid UTF-8 char boundary so the host terminal

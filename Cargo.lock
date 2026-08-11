@@ -3045,7 +3045,7 @@ version = "0.9.20-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
- "libc",
+ "term-sys-io",
  "thiserror 2.0.19",
  "tracing",
 ]
@@ -3087,6 +3087,7 @@ dependencies = [
  "portable-pty",
  "term-clipboard",
  "term-session-muxio-service-definitions",
+ "term-sys-io",
  "term-wm-crossterm-adapter",
  "term-wm-events",
  "term-wm-pty-engine",
@@ -3146,6 +3147,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-sys-io"
+version = "0.9.20-alpha"
+dependencies = [
+ "libc",
+ "tracing",
+]
+
+[[package]]
 name = "term-wm"
 version = "0.9.20-alpha"
 dependencies = [
@@ -3168,6 +3177,7 @@ dependencies = [
  "term-session-mock",
  "term-session-muxio-service-definitions",
  "term-session-server",
+ "term-sys-io",
  "term-wm-console",
  "term-wm-core",
  "term-wm-layout-engine",
@@ -3260,6 +3270,7 @@ dependencies = [
  "portable-pty",
  "term-clipboard",
  "term-session-mock",
+ "term-sys-io",
  "term-wm-events",
  "term-wm-vt100",
  "thiserror 2.0.19",

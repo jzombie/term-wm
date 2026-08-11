@@ -23,6 +23,7 @@ development = ["term-bench", "term-session-client"]
 members = [
     "crates/term-bench",
     "crates/term-clipboard",
+    "crates/term-sys-io",
     "crates/term-session",
     "crates/term-session-client",
     "crates/term-session-mock",
@@ -95,6 +96,7 @@ term-session-mock = { path = "crates/term-session-mock", version = "0.9.20-alpha
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.9.20-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.9.20-alpha" }
 term-clipboard = { path = "crates/term-clipboard", version = "0.9.20-alpha" }
+term-sys-io = { path = "crates/term-sys-io", version = "0.9.20-alpha" }
 term-wm = { path = ".", version = "0.9.20-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.9.20-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.9.20-alpha" }
@@ -136,6 +138,7 @@ libc = { workspace = true }
 line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
+term-sys-io = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }
