@@ -121,7 +121,9 @@ impl WmCommandPaletteComponent {
             }
         }
         let width = (max_label_width.saturating_add(PALETTE_WIDTH_PADDING)).max(PALETTE_MIN_WIDTH);
-        let height = rows.saturating_add(PALETTE_EXTRA_ROWS).min(PALETTE_MAX_HEIGHT);
+        let height = rows
+            .saturating_add(PALETTE_EXTRA_ROWS)
+            .min(PALETTE_MAX_HEIGHT);
         (width, height)
     }
 
@@ -198,7 +200,8 @@ impl WmCommandPaletteComponent {
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let rect = match self.anchor {
             Some((anchor, placement)) => {
-                self.dialog.rect_for_anchored(ratatui_area, anchor, placement)
+                self.dialog
+                    .rect_for_anchored(ratatui_area, anchor, placement)
             }
             None => self.dialog.rect_for(ratatui_area),
         };
@@ -251,9 +254,10 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             self.dialog_bounds.set(content_rect);
             if content_rect.width > 0 && content_rect.height > 0 {
                 let ratatui = downcast_ratatui(backend);
-                Block::default()
-                    .borders(Borders::ALL)
-                    .render(layout_rect_to_clipped_rect(content_rect), &mut ratatui.buffer);
+                Block::default().borders(Borders::ALL).render(
+                    layout_rect_to_clipped_rect(content_rect),
+                    &mut ratatui.buffer,
+                );
             }
             return;
         }
@@ -268,8 +272,7 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
             return;
         }
 
-        self.dialog
-            .render_backdrop(backend, area, Some(drawn_rect));
+        self.dialog.render_backdrop(backend, area, Some(drawn_rect));
         {
             let ratatui = downcast_ratatui(backend);
             Clear.render(layout_rect_to_clipped_rect(drawn_rect), &mut ratatui.buffer);
@@ -750,11 +753,7 @@ mod tests {
         assert!(rows.height <= bounds.height);
         assert_eq!(rows.x, bounds.x, "rows top-pinned to content rect");
         assert_eq!(rows.y, bounds.y, "rows top-pinned to content rect");
-        assert_eq!(
-            rows.height,
-            1 + 3,
-            "search bar + all three rows"
-        );
+        assert_eq!(rows.height, 1 + 3, "search bar + all three rows");
     }
 
     #[test]
@@ -766,8 +765,9 @@ mod tests {
         palette.show();
 
         render_palette(&mut palette, area);
-        let bounds_full = <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette)
-            .expect("bounds after full render");
+        let bounds_full =
+            <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette)
+                .expect("bounds after full render");
         let rows_full = palette.drawn_rect(bounds_full);
         assert_eq!(rows_full.height, 4);
 

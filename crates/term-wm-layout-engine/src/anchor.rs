@@ -53,10 +53,7 @@ pub fn place_anchored(
     let max_y = bounds_bottom.saturating_sub(i32::from(h));
 
     let (mut x, mut y) = match placement {
-        AnchorPlacement::BelowLeft => (
-            anchor.x,
-            anchor.y.saturating_add(i32::from(anchor.height)),
-        ),
+        AnchorPlacement::BelowLeft => (anchor.x, anchor.y.saturating_add(i32::from(anchor.height))),
         AnchorPlacement::BelowRight => (
             anchor
                 .x
@@ -64,10 +61,7 @@ pub fn place_anchored(
                 .saturating_sub(i32::from(w)),
             anchor.y.saturating_add(i32::from(anchor.height)),
         ),
-        AnchorPlacement::AboveLeft => (
-            anchor.x,
-            anchor.y.saturating_sub(i32::from(h)),
-        ),
+        AnchorPlacement::AboveLeft => (anchor.x, anchor.y.saturating_sub(i32::from(h))),
         AnchorPlacement::AboveRight => (
             anchor
                 .x
@@ -89,12 +83,10 @@ pub fn place_anchored(
     }
     if x < bounds.x || x.saturating_add(i32::from(w)) > bounds_right {
         x = match placement {
-            AnchorPlacement::BelowLeft | AnchorPlacement::AboveLeft => {
-                anchor
-                    .x
-                    .saturating_add(i32::from(anchor.width))
-                    .saturating_sub(i32::from(w))
-            }
+            AnchorPlacement::BelowLeft | AnchorPlacement::AboveLeft => anchor
+                .x
+                .saturating_add(i32::from(anchor.width))
+                .saturating_sub(i32::from(w)),
             AnchorPlacement::BelowRight | AnchorPlacement::AboveRight => anchor.x,
         };
     }
