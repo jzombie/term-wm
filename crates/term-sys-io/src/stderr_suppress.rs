@@ -29,7 +29,7 @@ use std::os::windows::io::AsRawHandle;
 ///   for CRT stderr and `SetStdHandle` for the Win32 handle.
 ///
 /// The trailing `_lock` field (dropped after `Drop::drop` runs) holds the
-/// process-global [`STDERR_MUTEX`] until the original fd is restored.
+/// process-global `STDERR_MUTEX` until the original fd is restored.
 #[cfg(unix)]
 pub struct StderrSuppressGuard {
     saved_fd: libc::c_int,
