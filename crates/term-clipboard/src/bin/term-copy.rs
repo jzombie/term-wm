@@ -49,9 +49,7 @@ fn main() -> ExitCode {
             // nothing to read — read_to_string would block forever waiting for
             // EOF.  Fail fast instead; callers must pass a file or pipe stdin.
             if std::io::stdin().is_terminal() {
-                eprintln!(
-                    "term-copy: error: no input; pass a FILE argument or pipe stdin"
-                );
+                eprintln!("term-copy: error: no input; pass a FILE argument or pipe stdin");
                 return ExitCode::FAILURE;
             }
             cb.set_from_reader(std::io::stdin().lock())
