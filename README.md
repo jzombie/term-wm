@@ -93,7 +93,7 @@ See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for full compatibility deta
 
 ## Architecture & Core Capabilities
 
-`term-wm` is engineered with a strict modular architecture, separating core domain logic from presentation across a multi-crate Cargo workspace. Layout calculation, rendering, and PTY I/O are decoupled so the UI thread never blocks on I/O.
+`term-wm` is engineered with a strict modular architecture, separating core domain logic from presentation across a multi-crate Cargo workspace, with the draw pipeline built on Ratatui. Layout calculation, rendering, and PTY I/O are decoupled so the UI thread never blocks on I/O.
 
 | Crate | Primary Responsibility |
 | :--- | :--- |
