@@ -5713,7 +5713,10 @@ mod tests {
         wm.flush_direct_mode_toast(key);
         let msgs = direct_mode_messages(&wm);
         assert_eq!(msgs.len(), 1, "must be a single coalesced toast");
-        assert_eq!(msgs[0], "Direct Input Mode (keyboard and mouse) enabled for vim");
+        assert_eq!(
+            msgs[0],
+            "Direct Input Mode (keyboard and mouse) enabled for vim"
+        );
     }
 
     #[test]
@@ -5763,7 +5766,10 @@ mod tests {
         wm.flush_direct_mode_toast(key);
         let msgs = direct_mode_messages(&wm);
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0], "Direct Input Mode (keyboard and mouse) enabled for vim");
+        assert_eq!(
+            msgs[0],
+            "Direct Input Mode (keyboard and mouse) enabled for vim"
+        );
     }
 
     #[test]
