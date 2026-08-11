@@ -14,6 +14,7 @@ _See also: [No-Keybinding-Conflict Philosophy](#no-keybinding-conflict-philosoph
 The following keybindings are active in the WM layer. The Command Palette binding works in any mode, including Direct Mode:
 
 * **%SUPER%**: Open (or close) the Command Palette.
+* **%NEW_TERMINAL%**: Open a new terminal window.
 
 While the Command Palette is open:
 
@@ -21,6 +22,26 @@ While the Command Palette is open:
 * **%MENU_NAV%**: Move up/down in lists and menus.
 * **%MENU_SELECT%**: Activate the selected menu item.
 * **%HELP_MENU%**: Open this help overlay. (Alternatively: press **%SUPER%** to open the Command Palette and search for 'Help').
+
+Outside Direct Mode, the WM also intercepts **PageUp / PageDown / Home / End** for scrollback when the focused window has scrollback available.
+
+## Command Palette
+
+Press **%SUPER%** to open the Command Palette — a fuzzy-searchable list of actions (open a window, change the layout, toggle modes, and more). While it is open:
+
+* Type to filter the list; press **%MENU_NAV%** to move and **%MENU_SELECT%** to activate the highlighted command.
+* Press **%FOCUS_NEXT% / %FOCUS_PREV%** to cycle focus between windows without closing the palette.
+* Press **%SUPER%** again to send the **%SUPER%** keystroke to the focused application.
+
+## Window Navigation & Focus
+
+* **Cycle focus:** Press **%FOCUS_NEXT% / %FOCUS_PREV%** (with the Command Palette open) to move focus between windows.
+* **Float vs. tile:** Windows tile automatically by default. Use the Command Palette to float or re-tile a window; floating windows can be repositioned by dragging their title bar.
+* **Splits:** The tiling layout adjusts as windows open and close — empty space is filled and panes are rebalanced automatically.
+
+## Nested Application Behavior
+
+Full-screen terminal applications (e.g. `vim`, `htop`, `less`) run inside a window just as they would in a bare terminal. When such an app requests the alternate screen buffer, mouse tracking, or custom scroll margins, `%PACKAGE%` automatically enters Direct Mode and passes raw key and mouse events straight through — no manual mode switch required. See [Automatic Direct Mode](#automatic-direct-mode).
 
 ## No-Keybinding-Conflict Philosophy
 
@@ -40,7 +61,7 @@ Direct Mode is split into two independent dimensions:
 
 * **State Awareness:** A brief notification toast appears on screen to indicate Direct Mode transitions, showing the window's combined access and coalescing rapid sub-mode shifts into one message (e.g. `Direct Mode (keyboard and mouse) enabled for vim`, `Direct Mode (keyboard) enabled for nano`).
 * **Keyboard Routing:** When an app is on the alternate screen (or set custom margins), all keystrokes pass directly to the running application unfiltered, ensuring native shortcuts work without WM interference. **%SUPER%** remains active to open the Command Palette.
-* **Mouse Capture:** When the app explicitly requests mouse tracking (`\x1b[?1000h`/`1002h`/`1003h`), mouse events are forwarded to the application and WM text selection is suspended. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling. Window chrome (dragging and resizing via the header and borders) continues to work.
+* **Mouse Capture:** When the app explicitly requests mouse tracking, mouse events are forwarded to the application and WM text selection is suspended. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling. Window chrome (dragging and resizing via the header and borders) continues to work.
 
 ### Overriding App Mouse Capture
 
