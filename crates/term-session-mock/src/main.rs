@@ -10,9 +10,13 @@ use term_session_muxio_service_definitions::path_wire;
 /// - `echo` — reads stdin, writes to stdout (unbuffered pass-through).
 ///   On Windows, enables raw VT mode so ANSI escape sequences
 ///   pass through ConPTY without being consumed as INPUT_RECORDs.
-/// - `osc52` — writes a pre-defined OSC 52 clipboard sequence to stdout.
-///   On Windows, temporarily disables VT processing so the ESC
-///   byte isn't intercepted by ConPTY.
+/// - `osc52` — writes a pre-defined OSC 52 clipboard sequence to stdout,
+///   sleeps 500 ms, then exits. Lets E2E tests exercise the server's
+///   session-exit output retention path. On Windows, temporarily disables VT
+///   processing so the ESC byte isn't intercepted by ConPTY.
+/// - `osc52_alive` — writes the same OSC 52 sequence to stdout, then stays
+///   alive (echoes stdin until EOF) so tests can subscribe without racing
+///   the process exiting.
 /// - `sleep <ms>` — sleeps for N milliseconds, then exits.
 /// - `exit <code>` — exits with the given status code.
 /// - `spawn_child <ms>` — spawns a grandchild (`sleep <ms>`), prints
@@ -105,7 +109,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "Usage: term_session_mock <echo|osc52|sleep|exit|spawn_child|check_pid|pwd> [args]"
+            "Usage: term_session_mock <echo|osc52|osc52_alive|sleep|exit|spawn_child|check_pid|pwd> [args]"
         );
         std::process::exit(1);
     }
@@ -144,6 +148,31 @@ fn main() {
             let _ = stdout.write_all(b"\x07");
             let _ = stdout.flush();
             std::thread::sleep(Duration::from_millis(500));
+        }
+        "osc52_alive" => {
+            #[cfg(windows)]
+            win_console::enable_raw_vt();
+            #[cfg(windows)]
+            win_console::disable_stdout_vt_processing();
+            disable_stdin_echo();
+
+            let mut stdout = io::stdout();
+            let _ = stdout.write_all(b"\x1b]52;");
+            let _ = stdout.write_all(OSC52_TEST_PAYLOAD);
+            let _ = stdout.write_all(b"\x07");
+            let _ = stdout.flush();
+
+            // Stay alive until the session is killed (stdin EOF), so tests
+            // can subscribe without racing this process exiting.
+            let mut buffer = [0u8; 4096];
+            let mut stdin = io::stdin();
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
         }
         "capture" => {
             #[cfg(windows)]

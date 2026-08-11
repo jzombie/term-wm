@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.20-alpha] - TBD
+
+### Changed
+
+- **An exited session with no subscribers no longer loses its final output:** the session server now retains the last 64 KiB of an exited session's output in a per-channel cache (tail-retention, cleared on respawn) and serves it to any subscriber that attaches afterward, instead of dropping the PTY's pending buffer with the session. The final drain waits (bounded, 50 ms) for the PTY reader thread to finish EOF processing so trailing bytes are not truncated, and retained bytes are delivered to each late subscriber (not consumed by the first).
+
+### Fixed
+
+- **Pasting multi-line text into raw-mode editors (e.g. pico) lost all line breaks:** the paste path sent clipboard text verbatim with LF line endings, and a lone LF is ignored by those apps, so every pasted line ran together and scripts could not be pasted. Paste line endings are now sent as CR (carriage return) when the app has not enabled bracketed paste — matching mainstream terminal emulators and term-wm's own Enter key encoding — and clipboard LF / CRLF / CR line endings are normalized to a single CR via the `line-ending` crate. Bracketed-paste-aware apps (vim, nano, opencode) still receive the text verbatim inside `\x1b[200~…\x1b[201~` markers. The conversion lives in `term_wm_pty_engine::input_encoding::paste_to_bytes`, shared by the paste event and clipboard-paste action paths, with unit and end-to-end tests.
+- **Flaky OSC 52 integration tests (`session_osc52_in_output`, `session_osc52_via_osc52extractor`):** the `osc52` mock wrote its clipboard sequence then exited after 500 ms, so the tests only passed when the output-subscribe landed inside that window — after the session was reaped the payload was silently dropped. The mock now has an `osc52_alive` mode that stays alive until killed (like `echo`), and the tests wait for the complete payload rather than the `52;` header so a cross-chunk split can't break them early. New regression test `session_osc52_late_subscribe_gets_retained_output` proves a subscriber attaching after exit still receives the payload.
+
 ## [0.9.19-alpha] - 2026-08-09
 
 ### Added

@@ -328,6 +328,25 @@ mod tests {
             joined.push_str(&row);
             joined.push('\n');
         }
+
+        // Detect unexpanded %PLACEHOLDER% tokens with std-only scanning (no
+        // regex dependency). Odd segments of split('%') are token interiors;
+        // an unexpanded token is non-empty and all ASCII-uppercase or `_`.
+        let unexpanded: Vec<&str> = joined
+            .split('%')
+            .enumerate()
+            .filter(|(i, segment)| {
+                i % 2 == 1
+                    && !segment.is_empty()
+                    && segment.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+            })
+            .map(|(_, segment)| segment)
+            .collect();
+        assert!(
+            unexpanded.is_empty(),
+            "unexpanded placeholders remain in rendered help output: {unexpanded:?}"
+        );
+
         let joined = joined.to_lowercase();
 
         let pkg = env!("CARGO_PKG_NAME").to_lowercase();

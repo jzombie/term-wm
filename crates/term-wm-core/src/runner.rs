@@ -387,7 +387,10 @@ where
                 app.wm().direct_input_mode_changed(key, mode);
                 tracing::debug!(?key, ?mode, "direct input mode transition");
                 if let Some(handle) = crate::debug_log::global_debug_log() {
-                    handle.push(format!("[direct-mode] window={:?} mode={:?}", key, mode));
+                    handle.push(format!(
+                        "[direct-input-mode] window={:?} mode={:?}",
+                        key, mode
+                    ));
                 }
             }
             // PTY child exit removed a window — redraw the layout.
@@ -456,7 +459,7 @@ where
                 // PRE-LAYER: Global app event observer.
                 // Runs before all layer checks so the app can observe or consume
                 // EVERY event — including those later consumed by overlays,
-                // keybindings, or direct-mode PTY routing.
+                // keybindings, or direct-input-mode PTY routing.
                 if app.handle_app_event(&evt) {
                     update_selection_snapshot(app);
                     return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
@@ -647,14 +650,14 @@ where
                     return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
                 }
 
-                // Layer 2c: Direct Mode check — forward key events straight to PTY
+                // Layer 2c: Direct Input Mode check — forward key events straight to PTY
                 if let Event::Key(key) = &evt {
                     let focus_id = app.wm().focused_window();
                     if app.wm().direct_input_mode(focus_id).keyboard
                         && !app.wm().command_menu_visible()
                         && matches!(key.kind, KeyKind::Press | KeyKind::Repeat)
                     {
-                        // Direct Mode — forward to terminal immediately.
+                        // Direct Input Mode — forward to terminal immediately.
                         let _ = handle_focused_app_event(&evt, app);
                         update_selection_snapshot(app);
                         return flush_state_changes(
@@ -1195,7 +1198,7 @@ mod tests {
         let consumed = handle_focused_app_event(&evt, &mut app);
         assert!(
             consumed,
-            "Repeat event must route through handle_focused_app_event in Direct Mode"
+            "Repeat event must route through handle_focused_app_event in Direct Input Mode"
         );
     }
 

@@ -53,11 +53,11 @@ use term_wm_layout_engine::FocusRing;
 use term_wm_layout_engine::{LayoutRect, apply_resize_drag_signed};
 use term_wm_pty_engine::DirectInputMode;
 
-/// How long a Direct Mode toast waits after the FIRST transition in a burst
+/// How long a Direct Input Mode toast waits after the FIRST transition in a burst
 /// before being flushed. Subsequent transitions only update the buffered mode
 /// (the deadline is never pushed back), so a burst can't starve the toast.
 const DIRECT_MODE_TOAST_DEBOUNCE: Duration = Duration::from_millis(200);
-/// How long a Direct Mode toast stays visible.
+/// How long a Direct Input Mode toast stays visible.
 const DIRECT_MODE_TOAST_TTL: Duration = Duration::from_secs(3);
 
 /// State machine for in-progress mouse operations (drag, resize).
@@ -396,7 +396,7 @@ pub struct WindowManager<
     layout_dirty: bool,
     /// Active toast notifications
     notification_queue: NotificationQueue,
-    /// Per-window pending Direct Mode toast. The debouncer buffers the latest
+    /// Per-window pending Direct Input Mode toast. The debouncer buffers the latest
     /// mode per window and arms ONE flush timer on the first transition (the
     /// deadline is never pushed back — leading-edge debounce with a cap).
     direct_mode_debounce: KeyedTaskDebouncer<WindowKey, DirectInputMode, SystemTask>,
@@ -728,7 +728,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .unwrap_or_else(|| self.default_cascading_rect(index))
     }
 
-    /// Direct Mode: purely automatic from the PTY state tracker.
+    /// Direct Input Mode: purely automatic from the PTY state tracker.
     /// Returns true when the application requires unfiltered input
     /// (alternate screen, mouse tracking, custom margins).
     pub fn direct_mode(&self, key: WindowKey) -> bool {
@@ -2691,7 +2691,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.mark_layout_dirty();
     }
 
-    /// Buffer a Direct Mode transition for a debounced toast.
+    /// Buffer a Direct Input Mode transition for a debounced toast.
     ///
     /// Delegates to [`KeyedTaskDebouncer::submit`]: the first transition for a
     /// window arms the flush timer; later transitions only update the buffered
@@ -2702,7 +2702,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.direct_mode_debounce.submit(key, mode);
     }
 
-    /// Flush the buffered Direct Mode as a single toast. Called by the runner
+    /// Flush the buffered Direct Input Mode as a single toast. Called by the runner
     /// when `SystemTask::FlushDirectModeToast` fires.
     pub fn flush_direct_mode_toast(&mut self, key: WindowKey) {
         let Some(mode) = self.direct_mode_debounce.flush(key) else {
@@ -2715,12 +2715,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         let title = self.window_title(key);
         let message = if mode.requires_direct_input() {
             format!(
-                "Direct Mode ({}) enabled for {}",
+                "Direct Input Mode ({}) enabled for {}",
                 mode.access_label(),
                 title
             )
         } else {
-            format!("Direct Mode disabled for {}", title)
+            format!("Direct Input Mode disabled for {}", title)
         };
         self.push_notification(message, DIRECT_MODE_TOAST_TTL);
     }
@@ -5713,7 +5713,10 @@ mod tests {
         wm.flush_direct_mode_toast(key);
         let msgs = direct_mode_messages(&wm);
         assert_eq!(msgs.len(), 1, "must be a single coalesced toast");
-        assert_eq!(msgs[0], "Direct Mode (keyboard and mouse) enabled for vim");
+        assert_eq!(
+            msgs[0],
+            "Direct Input Mode (keyboard and mouse) enabled for vim"
+        );
     }
 
     #[test]
@@ -5763,7 +5766,10 @@ mod tests {
         wm.flush_direct_mode_toast(key);
         let msgs = direct_mode_messages(&wm);
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0], "Direct Mode (keyboard and mouse) enabled for vim");
+        assert_eq!(
+            msgs[0],
+            "Direct Input Mode (keyboard and mouse) enabled for vim"
+        );
     }
 
     #[test]
@@ -5774,7 +5780,7 @@ mod tests {
         wm.flush_direct_mode_toast(key);
         let msgs = direct_mode_messages(&wm);
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0], "Direct Mode disabled for vim");
+        assert_eq!(msgs[0], "Direct Input Mode disabled for vim");
     }
 
     #[test]
@@ -5837,7 +5843,7 @@ mod tests {
         });
 
         let result = wm.dispatch_focused_event(&click);
-        // In Direct Mode, content clicks bypass chrome and reach the component.
+        // In Direct Input Mode, content clicks bypass chrome and reach the component.
         assert!(result.is_some(), "event must route to window component");
     }
 

@@ -660,6 +660,28 @@ impl Pty {
         pending.split_off(0)
     }
 
+    /// Drain all buffered output after the child has exited, first waiting
+    /// (bounded by `grace`) for the reader thread to finish its EOF processing.
+    ///
+    /// The OS exit signal (`child.try_wait()`) can precede the reader thread's
+    /// final read of the master fd, so draining immediately could truncate
+    /// trailing bytes. The reader thread appends each chunk to `pending` before
+    /// it reads EOF, so once the thread terminates `pending` is guaranteed
+    /// complete. On Unix the reader EOFs within microseconds of process exit, so
+    /// the wait is effectively free; on Windows ConPTY (where EOF can be
+    /// swallowed and `has_exited()` relies on the `try_wait` fallback) the grace
+    /// bounds the wait and we drain best-effort.
+    pub fn drain_final_output(&mut self, grace: std::time::Duration) -> Vec<u8> {
+        self.screen();
+        if let Some(handle) = self.reader.as_ref() {
+            let deadline = std::time::Instant::now() + grace;
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        self.drain_pending()
+    }
+
     pub fn screen_lines(&mut self) -> Vec<String> {
         self.screen(); // sync dirty state
         // Clone the screen out of the lock and drop the guard before any

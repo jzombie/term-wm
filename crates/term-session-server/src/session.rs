@@ -87,6 +87,18 @@ impl Session {
         self.pty.drain_pending()
     }
 
+    /// Drain the session's final output after the child has exited, waiting
+    /// (bounded by `grace`) for the PTY reader thread to finish EOF processing
+    /// so trailing bytes are not truncated. Used when retaining output for a
+    /// late subscriber across session teardown.
+    pub fn read_final_output(&mut self, grace: std::time::Duration) -> Vec<u8> {
+        let out = self.pty.drain_final_output(grace);
+        if let Some(title) = self.pty.take_pending_title() {
+            self.title = Some(title);
+        }
+        out
+    }
+
     /// Sync screen state without draining pending output.
     /// Clears the dirty flag (waking the reader thread from I/O burst budget parking)
     /// and syncs the title, but leaves accumulated bytes in the pending buffer so
