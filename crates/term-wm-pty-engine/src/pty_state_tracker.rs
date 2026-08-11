@@ -40,7 +40,7 @@ impl DirectInputMode {
     }
 
     /// Human-readable access phrase used by the transition toast, e.g.
-    /// `Direct Mode (keyboard and mouse) enabled for vim`.
+    /// `Direct Input Mode (keyboard and mouse) enabled for vim`.
     pub fn access_label(&self) -> &'static str {
         match (self.keyboard, self.mouse) {
             (true, true) => "keyboard and mouse",

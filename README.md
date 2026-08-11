@@ -59,17 +59,17 @@ New terminal windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windo
 | Send `Ctrl+A` to the focused app | `Ctrl+A` (When Command Palette is open)
 | Cycle focus between windows | `Tab` / `Shift+Tab` (When Command Palette is open)
 
-#### Direct Mode Keybindings
+#### Direct Input Mode Keybindings
 
-`term-wm` automatically enters **Direct Mode** (unfiltered, zero-latency key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
+`term-wm` automatically enters **Direct Input Mode** (unfiltered, zero-delay key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
 
-Direct Mode is **split into two independent dimensions**: *keyboard* (alternate screen / custom margins → raw key passthrough) and *mouse capture* (the app explicitly requested mouse tracking). Keyboard and mouse are granted independently — an app on the alternate screen without mouse tracking (e.g. `pico`/`nano`) keeps native text selection and wheel scrolling.
+Direct Input Mode is **split into two independent dimensions**: *keyboard* (alternate screen / custom margins → raw key passthrough) and *mouse capture* (the app explicitly requested mouse tracking). Keyboard and mouse are granted independently — an app on the alternate screen without mouse tracking (e.g. `pico`/`nano`) keeps native text selection and wheel scrolling.
 
 This mode is application-specific and different windows running different applications can be in different modes at once.
 
-In Direct Mode, the following keybindings **are not-effective**, and are contingent upon the app running inside the window to handle them.
+In Direct Input Mode, the following keybindings **are not-effective**, and are contingent upon the app running inside the window to handle them.
 
-#### Non-Direct Mode Keybindings
+#### Non-Direct Input Mode Keybindings
 
 | Action | Keybinding / Input |
 | --- | --- |
@@ -117,9 +117,9 @@ The layout engine builds a tree (BSP or N-ary) over the workspace. `insert_windo
 
 The UI event loop runs synchronously on a single thread. Each PTY runs its own reader thread (`parser_read_loop`) feeding a unified event channel (input, PTY wakeup, app-exited, direct-input change, signal, tick); a dedicated `Reaper` thread reaps zombie children via SIGHUP→SIGKILL escalation. The UI thread never blocks on I/O.
 
-### Automatic Direct Input
+### Direct Input Mode
 
-`PtyStateTracker` watches the byte stream for alternate-screen and mouse-tracking modes and hands raw input to nested TUI apps (vim, less, htop) with zero-delay, unbuffered pass-through — no manual mode switching required.
+`PtyStateTracker` (`term-wm-pty-engine`) monitors the PTY byte stream for alternate-screen or mouse-tracking requests. When active, `term-wm` enters **Direct Input Mode**, bypassing window manager keybinding/focus evaluation and eliminating ESC sequence buffering to hand raw input to applications like Vim or Less via zero-delay pass-through.
 
 ### Draw Pipeline
 
@@ -140,21 +140,21 @@ The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with te
 Traditional terminal multiplexers often collide with the keybindings of the applications running inside them. `term-wm` is deliberately **minimally invasive**: its keybindings primarily listen for the `Ctrl+A` Super Key plus a small set of scrollback navigation keys, and pass everything else straight through to the running application.
 
 * **The Super Key:** The default modifier is `Ctrl+A` (configurable via `KeyBindings`).
-* **Scrollback Keys:** Outside of Direct Mode, the WM also intercepts `PageUp` / `PageDown` / `Home` / `End` (no modifier) for scrollback when a window has scrollback available; arrow keys and other navigation fall through to the child application.
+* **Scrollback Keys:** Outside of Direct Input Mode, the WM also intercepts `PageUp` / `PageDown` / `Home` / `End` (no modifier) for scrollback when a window has scrollback available; arrow keys and other navigation fall through to the child application.
 * **Command Palette:** Press `Ctrl+A` to open the central Command Palette overlay. This fuzzy-searchable menu (powered by `nucleo` with exponential decay scoring for recency) is the primary method for executing actions, opening windows, and altering layouts.
 * **Window Navigation:** While the palette is open, press `Tab` or `Shift+Tab` to instantly cycle focus between active windows. Press `Enter` to activate the selected command.
 * **Key Passthrough:** Pressing `Ctrl+A` while the palette is already open immediately sends the `Ctrl+A` keystroke to the focused child application (`SendSuperKeyToFocusedWindow`).
 
-## Automatic Direct Mode
+## Automatic Direct Input Mode
 
-`term-wm` features zero-configuration input routing. **Direct Mode is automatic.** Driven by the `DirectInputTracker`, `term-wm` continuously monitors the PTY state. When a child application (such as `vim`, `emacs`, or `tmux`) requests the **alternate screen buffer**, enables **mouse tracking**, or defines **custom scroll margins**, the window manager automatically steps out of the way.
+`term-wm` features zero-configuration input routing. **Direct Input Mode is automatic.** Driven by the `DirectInputTracker`, `term-wm` continuously monitors the PTY state. When a child application (such as `vim`, `emacs`, or `tmux`) requests the **alternate screen buffer**, enables **mouse tracking**, or defines **custom scroll margins**, the window manager automatically steps out of the way.
 
 The routing decision is a structured `DirectInputMode` snapshot with independent **keyboard** and **mouse** dimensions:
 
 * **Keyboard direct** (alternate screen / custom margins): all keystrokes pass through to the application unfiltered — zero-delay, unbuffered pass-through. Native scrollback navigation is suspended.
 * **Mouse capture** (app requested mouse tracking): mouse events are encoded and forwarded to the application. Native text selection is suspended *only while the app holds the mouse*. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling.
 
-A brief notification toast appears on transitions and shows the window's combined access, coalescing rapid sub-mode shifts into one message (e.g. `Direct Mode (keyboard and mouse) enabled for vim`, `Direct Mode (keyboard) enabled for nano`). The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
+A brief notification toast appears on transitions and shows the window's combined access, coalescing rapid sub-mode shifts into one message (e.g. `Direct Input Mode (keyboard and mouse) enabled for vim`, `Direct Input Mode (keyboard) enabled for nano`). The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
 
 ### Overriding App Mouse Capture
 

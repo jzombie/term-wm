@@ -11,7 +11,7 @@ Welcome to `%PACKAGE%`! This page is a quick reference for navigating the UI.
 
 _See also: [No-Keybinding-Conflict Philosophy](#no-keybinding-conflict-philosophy)_
 
-The following keybindings are active in the WM layer. The Command Palette binding works in any mode, including Direct Mode:
+The following keybindings are active in the WM layer. The Command Palette binding works in any mode, including Direct Input Mode:
 
 * **%SUPER%**: Open (or close) the Command Palette.
 * **%NEW_TERMINAL%**: Open a new terminal window.
@@ -23,7 +23,7 @@ While the Command Palette is open:
 * **%MENU_SELECT%**: Activate the selected menu item.
 * **%HELP_MENU%**: Open this help overlay. (Alternatively: press **%SUPER%** to open the Command Palette and search for 'Help').
 
-Outside Direct Mode, the WM also intercepts **PageUp / PageDown / Home / End** for scrollback when the focused window has scrollback available.
+Outside Direct Input Mode, the WM also intercepts **PageUp / PageDown / Home / End** for scrollback when the focused window has scrollback available.
 
 ## Command Palette
 
@@ -41,25 +41,25 @@ Press **%SUPER%** to open the Command Palette — a fuzzy-searchable list of act
 
 ## Nested Application Behavior
 
-Full-screen terminal applications (e.g. `vim`, `htop`, `less`) run inside a window just as they would in a bare terminal. When such an app requests the alternate screen buffer, mouse tracking, or custom scroll margins, `%PACKAGE%` automatically enters Direct Mode and passes raw key and mouse events straight through — no manual mode switch required. See [Automatic Direct Mode](#automatic-direct-mode).
+Full-screen terminal applications (e.g. `vim`, `htop`, `less`) run inside a window just as they would in a bare terminal. When such an app requests the alternate screen buffer, mouse tracking, or custom scroll margins, `%PACKAGE%` automatically enters Direct Input Mode and passes raw key and mouse events straight through — no manual mode switch required. See [Automatic Direct Input Mode](#automatic-direct-input-mode).
 
 ## No-Keybinding-Conflict Philosophy
 
 A core goal of `%PACKAGE%` is **minimally invasive** keybindings so you can run terminal apps (e.g., `screen`, `tmux`, editors, etc.) without the window manager (WM) stealing their keys.
 
-By default, the WM's keybindings are **minimally invasive**: it primarily listens for **%SUPER%**, plus a small set of navigation keys — **PageUp / PageDown / Home / End** — which its built-in scrollback consumes when a window is focused and not in Direct Mode. Everything else (including arrow keys) falls through to the running application. Press **%SUPER%** to open the Command Palette and use WM commands (like **%FOCUS_NEXT%** / **%FOCUS_PREV%**).
+By default, the WM's keybindings are **minimally invasive**: it primarily listens for **%SUPER%**, plus a small set of navigation keys — **PageUp / PageDown / Home / End** — which its built-in scrollback consumes when a window is focused and not in Direct Input Mode. Everything else (including arrow keys) falls through to the running application. Press **%SUPER%** to open the Command Palette and use WM commands (like **%FOCUS_NEXT%** / **%FOCUS_PREV%**).
 
 To send **%SUPER%** to the currently focused application, press **%SUPER%** while the Command Palette is open (the key is forwarded to the active window).
 
-Direct Mode is fully automatic — see [Automatic Direct Mode](#automatic-direct-mode) below.
+Direct Input Mode is fully automatic — see [Automatic Direct Input Mode](#automatic-direct-input-mode) below.
 
-## Automatic Direct Mode
+## Automatic Direct Input Mode
 
-When a terminal application (e.g., `vim`, `tmux`, or `less`) requests the alternate screen buffer, mouse tracking, or custom scroll margins, `%PACKAGE%` automatically enters **Direct Mode**.
+When a terminal application (e.g., `vim`, `tmux`, or `less`) requests the alternate screen buffer, mouse tracking, or custom scroll margins, `%PACKAGE%` automatically enters **Direct Input Mode**.
 
-Direct Mode is split into two independent dimensions:
+Direct Input Mode is split into two independent dimensions:
 
-* **State Awareness:** A brief notification toast appears on screen to indicate Direct Mode transitions, showing the window's combined access and coalescing rapid sub-mode shifts into one message (e.g. `Direct Mode (keyboard and mouse) enabled for vim`, `Direct Mode (keyboard) enabled for nano`).
+* **State Awareness:** A brief notification toast appears on screen to indicate Direct Input Mode transitions, showing the window's combined access and coalescing rapid sub-mode shifts into one message (e.g. `Direct Input Mode (keyboard and mouse) enabled for vim`, `Direct Input Mode (keyboard) enabled for nano`).
 * **Keyboard Routing:** When an app is on the alternate screen (or set custom margins), all keystrokes pass directly to the running application unfiltered, ensuring native shortcuts work without WM interference. **%SUPER%** remains active to open the Command Palette.
 * **Mouse Capture:** When the app explicitly requests mouse tracking, mouse events are forwarded to the application and WM text selection is suspended. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling. Window chrome (dragging and resizing via the header and borders) continues to work.
 
@@ -111,8 +111,8 @@ automatically.
 
 Notes:
 
-* Selection and right-click paste are available only while **not** in Direct Mode.
-  In Direct Mode, all mouse events pass through to the running application unfiltered.
+* Selection and right-click paste are available only while **not** in Direct Input Mode.
+  In Direct Input Mode, all mouse events pass through to the running application unfiltered.
 * To disable clipboard integration, open the Command Palette (`%SUPER%`) and toggle
   "Clipboard Mode".
 * To enable or disable window text selection via the Command Palette, toggle
