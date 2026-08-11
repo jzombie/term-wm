@@ -10,6 +10,10 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "term-copy"
+path = "src/bin/term-copy.rs"
+
 [dependencies]
 arboard = { workspace = true }
 base64 = { workspace = true }
@@ -20,7 +24,3 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
-[[bin]]
-name = "term-copy"
-path = "src/bin/term-copy.rs"

@@ -23,13 +23,13 @@ development = ["term-bench", "term-session-client"]
 members = [
     "crates/term-bench",
     "crates/term-clipboard",
-    "crates/term-sys-io",
     "crates/term-session",
     "crates/term-session-client",
     "crates/term-session-mock",
     "crates/term-session-muxio-service-definitions",
     "crates/term-session-server",
     "crates/term-size-box",
+    "crates/term-sys-io",
     "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-crossterm-adapter",
@@ -90,12 +90,12 @@ slotmap = "1.1"
 smallvec = "1.15"
 strum = { version = "0.28", features = ["derive"] }
 tempfile = "3.24.0"
+term-clipboard = { path = "crates/term-clipboard", version = "0.9.21-alpha" }
 term-session = { path = "crates/term-session", version = "0.9.21-alpha" }
 term-session-client = { path = "crates/term-session-client", version = "0.9.21-alpha" }
 term-session-mock = { path = "crates/term-session-mock", version = "0.9.21-alpha" }
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.9.21-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.9.21-alpha" }
-term-clipboard = { path = "crates/term-clipboard", version = "0.9.21-alpha" }
 term-sys-io = { path = "crates/term-sys-io", version = "0.9.21-alpha" }
 term-wm = { path = ".", version = "0.9.21-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.9.21-alpha" }
