@@ -266,6 +266,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     Some("●"),
                     crate::actions::TermWmAction::ToggleWindowSelection,
                 ));
+                items.push(mi(
+                    "Paste",
+                    Some("■"),
+                    crate::actions::TermWmAction::PasteClipboard,
+                ));
             }
 
             items.push(MenuDisplayItem::Separator);
