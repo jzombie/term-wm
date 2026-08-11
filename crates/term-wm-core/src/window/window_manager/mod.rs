@@ -328,6 +328,11 @@ pub struct WindowManager<
     pub(crate) mouse_capture: Option<MouseCaptureState>,
     pub(crate) last_header_click: Option<(WindowKey, Instant)>,
     pub(crate) hover: Option<(u16, u16)>,
+    /// Hitbox rect that produced `OpenCommandPalette` during the current mouse
+    /// dispatch. Valid only within a single `dispatch_mouse` cycle: cleared at
+    /// the start of every dispatch and consumed (`take`) by the runner on open,
+    /// so a keyboard-open always sees `None` (centered palette).
+    pending_palette_anchor: Option<LayoutRect>,
     capture_deadline: Option<Instant>,
     pending_deadline: Option<Instant>,
     mouse_capture_enabled: bool,
@@ -869,6 +874,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             mouse_capture: None,
             last_header_click: None,
             hover: None,
+            pending_palette_anchor: None,
             capture_deadline: None,
             pending_deadline: None,
             mouse_capture_enabled,
@@ -1424,6 +1430,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         // at the current pointer location.
         self.hover = Some((col, row));
 
+        // Anchor state is valid only within this dispatch cycle: reset now so a
+        // keyboard-open (which never runs through dispatch_mouse) always sees None.
+        self.pending_palette_anchor = None;
+
         // Phase 1 — Active capture: extract-operate-restore pattern.
         if !matches!(kind, MouseEventKind::Press(_)) {
             if let Some(mut capture) = self.mouse_capture.take() {
@@ -1896,6 +1906,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         EventResult::Consumed
                     }
                     crate::chrome::ChromeTarget::EmptyStatePlaceholder => {
+                        self.pending_palette_anchor = Some(hit_rect);
                         EventResult::Action((None, TermWmAction::OpenCommandPalette))
                     }
                 };
@@ -1940,7 +1951,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         // --- Exhaustive owner match ---
         // Every hitbox has exactly one owner. No iteration, no fallback.
-        match owner {
+        let result = match owner {
             ComponentOwner::Window(key) => {
                 // Z-stack elevation: clicking a floating window brings it to front
                 if matches!(kind, MouseEventKind::Press(_)) && self.is_window_floating(key) {
@@ -2004,7 +2015,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 }
             }
             ComponentOwner::Chrome(_) | ComponentOwner::Test => EventResult::Ignored,
+        };
+        if matches!(
+            result,
+            EventResult::Action((_, TermWmAction::OpenCommandPalette))
+        ) {
+            self.pending_palette_anchor = Some(hit_rect);
         }
+        result
     }
 
     /// Initialize window drag capture state.
@@ -7872,6 +7890,124 @@ mod tests {
         // Chrome(EmptyStatePlaceholder) has no key → skipped. Then Window hitbox found → focuses.
         assert!(wm.handle_outside_click(5, 5, &event, &mut actions, None));
         assert_eq!(*wm.focus.current(), keys[0]);
+    }
+
+    // ── pending palette anchor lifecycle ───────────────────────────────────
+
+    #[test]
+    fn mouse_open_records_pending_palette_anchor() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let anchor = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.hitbox_registry.register(
+            HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Chrome(
+                crate::chrome::ChromeTarget::EmptyStatePlaceholder,
+            ),
+            anchor,
+        );
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        let evt = Event::Mouse(mouse);
+        let wm_event = crate::events::core_event_to_wm(&evt).unwrap();
+        let result = wm.dispatch_mouse(&wm_event);
+        assert!(matches!(
+            result,
+            EventResult::Action((None, TermWmAction::OpenCommandPalette))
+        ));
+        // The trigger rect is captured for the app to anchor the palette to.
+        assert_eq!(wm.take_pending_palette_anchor(), Some(anchor));
+        // Consumed — a second take returns None.
+        assert_eq!(wm.take_pending_palette_anchor(), None);
+    }
+
+    #[test]
+    fn pending_palette_anchor_cleared_at_dispatch_start() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 1);
+        wm.hitbox_registry.register(
+            HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Window(keys[0]),
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        // A plain window press must not leave stale anchor state behind.
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        let evt = Event::Mouse(mouse);
+        let wm_event = crate::events::core_event_to_wm(&evt).unwrap();
+        let result = wm.dispatch_mouse(&wm_event);
+        assert!(!matches!(
+            result,
+            EventResult::Action((_, TermWmAction::OpenCommandPalette))
+        ));
+        assert_eq!(wm.take_pending_palette_anchor(), None);
+    }
+
+    #[test]
+    fn close_command_palette_clears_pending_anchor() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let anchor = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.hitbox_registry.register(
+            HitboxId::new(),
+            crate::hitbox_registry::ComponentOwner::Chrome(
+                crate::chrome::ChromeTarget::EmptyStatePlaceholder,
+            ),
+            anchor,
+        );
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        let evt = Event::Mouse(mouse);
+        let wm_event = crate::events::core_event_to_wm(&evt).unwrap();
+        // Seed the anchor without consuming it.
+        wm.dispatch_mouse(&wm_event);
+        assert!(wm.pending_palette_anchor.is_some());
+        // The toggle-close path must clear any residue.
+        wm.close_command_palette();
+        assert_eq!(wm.take_pending_palette_anchor(), None);
     }
 
     // ── overlay key accessor tests ─────────────────────────────────────────

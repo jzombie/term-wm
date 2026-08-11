@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 use term_wm_core::events::Event;
-use term_wm_layout_engine::LayoutRect;
+use term_wm_layout_engine::{AnchorPlacement, LayoutRect};
 
 use term_wm_core::{
     actions::{EventResult, TermWmAction},
@@ -20,12 +20,27 @@ use term_wm_ui_components::DialogOverlayComponent;
 use term_wm_ui_components::command_palette::CommandPaletteComponent;
 use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 
+/// Width padding added around the longest item label.
+const PALETTE_WIDTH_PADDING: u16 = 8;
+/// Minimum palette width.
+const PALETTE_MIN_WIDTH: u16 = 30;
+/// Maximum palette height (search bar + item rows).
+const PALETTE_MAX_HEIGHT: u16 = 20;
+/// Extra rows (search bar) added to the visible item count.
+const PALETTE_EXTRA_ROWS: u16 = 2;
+
 pub struct WmCommandPaletteComponent {
     area: Cell<LayoutRect>,
     /// The actual dialog rectangle within the managed area (centered, sized to
     /// content). Used for spatial hit-testing — clicks outside this rect
     /// dismiss the palette and activate the window underneath.
     dialog_bounds: Cell<LayoutRect>,
+    /// When opened by a mouse hit, the hitbox rect to anchor the palette to
+    /// (and the placement side). `None` keeps the centered layout.
+    anchor: Option<(LayoutRect, AnchorPlacement)>,
+    /// Stable palette footprint computed once from the full unfiltered item
+    /// list; does not change while filtering so the palette never bounces.
+    stable_size: (u16, u16),
     dialog: DialogOverlayComponent,
     palette: CommandPaletteComponent,
     managed_area: LayoutRect,
@@ -59,6 +74,8 @@ impl WmCommandPaletteComponent {
         Self {
             area: Cell::new(LayoutRect::default()),
             dialog_bounds: Cell::new(LayoutRect::default()),
+            anchor: None,
+            stable_size: (PALETTE_MIN_WIDTH, PALETTE_EXTRA_ROWS),
             dialog,
             palette: CommandPaletteComponent::new(),
             managed_area: LayoutRect::default(),
@@ -79,6 +96,32 @@ impl WmCommandPaletteComponent {
         self.dialog.set_visible(false);
     }
 
+    /// Anchor the palette to `rect` (a mouse-triggering hitbox), showing it as
+    /// an adjacent popup. `None` restores the centered layout.
+    pub fn set_anchor(&mut self, anchor: Option<LayoutRect>) {
+        self.anchor = anchor.map(|rect| (rect, AnchorPlacement::BelowLeft));
+    }
+
+    /// The stable footprint (width, height) used by the palette across every
+    /// filter state. Mirrors the `compute_content_dimensions` heuristics but
+    /// derives them from the full unfiltered item list once.
+    fn compute_stable_size(&self, items: &[MenuDisplayItem<TermWmAction>]) -> (u16, u16) {
+        let mut rows = 0u16;
+        let mut max_label_width = 0u16;
+        for item in items {
+            match item {
+                MenuDisplayItem::Item(display) => {
+                    rows += 1;
+                    max_label_width = max_label_width.max(display.label.chars().count() as u16);
+                }
+                MenuDisplayItem::Separator => rows += 1,
+            }
+        }
+        let width = (max_label_width.saturating_add(PALETTE_WIDTH_PADDING)).max(PALETTE_MIN_WIDTH);
+        let height = rows.saturating_add(PALETTE_EXTRA_ROWS).min(PALETTE_MAX_HEIGHT);
+        (width, height)
+    }
+
     pub fn set_items(
         &mut self,
         items: Vec<term_wm_core::components::MenuDisplayItem<TermWmAction>>,
@@ -86,6 +129,7 @@ impl WmCommandPaletteComponent {
         use term_wm_core::command_menu::{CommandAction, CommandName, CommandNode, ContextMask};
         use term_wm_core::components::MenuDisplayItem;
         self.registry = CommandRegistry::new();
+        self.stable_size = self.compute_stable_size(&items);
         let mut active_nodes = Vec::new();
         for display_item in items {
             match display_item {
@@ -137,18 +181,49 @@ impl WmCommandPaletteComponent {
         }
     }
 
+    /// Stable footprint — never reads live filtered data, so it is identical
+    /// across every filter state.
     fn compute_content_dimensions(&self) -> (u16, u16) {
-        let item_count = self.palette.display_nodes.len();
-        let max_label_width = self
-            .palette
-            .filtered_items
-            .iter()
-            .map(|item| item.display_name.chars().count() as u16)
-            .max()
-            .unwrap_or(20);
-        let width = (max_label_width + 8).max(30);
-        let height = (item_count as u16 + 2).min(20);
-        (width, height)
+        self.stable_size
+    }
+
+    /// The dialog footprint within `area` (stable size), anchored to the mouse
+    /// hitbox when present, else centered.
+    fn dialog_rect(&mut self, area: LayoutRect) -> LayoutRect {
+        let (content_width, content_height) = self.compute_content_dimensions();
+        self.dialog.set_size(content_width, content_height);
+        let ratatui_area = layout_rect_to_clipped_rect(area);
+        let rect = match self.anchor {
+            Some((anchor, placement)) => {
+                self.dialog.rect_for_anchored(ratatui_area, anchor, placement)
+            }
+            None => self.dialog.rect_for(ratatui_area),
+        };
+        LayoutRect {
+            x: i32::from(rect.x),
+            y: i32::from(rect.y),
+            width: rect.width,
+            height: rect.height,
+        }
+    }
+
+    /// The region actually filled with the palette background. Anchored palettes
+    /// fill the full stable footprint; centered palettes background only the
+    /// search bar + visible rows (Spotlight look), top-pinned so the bottom
+    /// edge alone grows/shrinks while typing.
+    fn drawn_rect(&self, content_rect: LayoutRect) -> LayoutRect {
+        if self.anchor.is_some() {
+            return content_rect;
+        }
+        let rows = 1u16.saturating_add(
+            (self.palette.display_nodes.len() as u16).min(content_rect.height.saturating_sub(1)),
+        );
+        LayoutRect {
+            x: content_rect.x,
+            y: content_rect.y,
+            width: content_rect.width,
+            height: rows,
+        }
     }
 }
 
@@ -164,39 +239,21 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
 
         if self.is_tab_outline_active() {
             self.refresh_if_dirty();
-            let (content_width, content_height) = self.compute_content_dimensions();
-            self.dialog.set_size(content_width, content_height);
-            let ratatui_area = layout_rect_to_clipped_rect(area);
-            let rect = self.dialog.rect_for(ratatui_area);
-            let content_rect = LayoutRect {
-                x: i32::from(rect.x),
-                y: i32::from(rect.y),
-                width: rect.width,
-                height: rect.height,
-            };
+            let content_rect = self.dialog_rect(area);
             self.dialog_bounds.set(content_rect);
             if content_rect.width > 0 && content_rect.height > 0 {
                 let ratatui = downcast_ratatui(backend);
                 Block::default()
                     .borders(Borders::ALL)
-                    .render(rect, &mut ratatui.buffer);
+                    .render(layout_rect_to_clipped_rect(content_rect), &mut ratatui.buffer);
             }
             return;
         }
 
         self.refresh_if_dirty();
 
-        let (content_width, content_height) = self.compute_content_dimensions();
-        self.dialog.set_size(content_width, content_height);
-
-        let ratatui_area = layout_rect_to_clipped_rect(area);
-        let rect = self.dialog.rect_for(ratatui_area);
-        let content_rect = LayoutRect {
-            x: i32::from(rect.x),
-            y: i32::from(rect.y),
-            width: rect.width,
-            height: rect.height,
-        };
+        let content_rect = self.dialog_rect(area);
+        let drawn_rect = self.drawn_rect(content_rect);
         self.dialog_bounds.set(content_rect);
 
         if content_rect.width == 0 || content_rect.height == 0 {
@@ -204,13 +261,13 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
         }
 
         self.dialog
-            .render_backdrop(backend, area, Some(content_rect));
+            .render_backdrop(backend, area, Some(drawn_rect));
         {
             let ratatui = downcast_ratatui(backend);
-            Clear.render(rect, &mut ratatui.buffer);
+            Clear.render(layout_rect_to_clipped_rect(drawn_rect), &mut ratatui.buffer);
         }
 
-        self.palette.render(backend, content_rect, ctx, registry);
+        self.palette.render(backend, drawn_rect, ctx, registry);
     }
 
     fn handle_events(
@@ -226,21 +283,18 @@ impl Component<TermWmAction> for WmCommandPaletteComponent {
 
         if let Event::Mouse(_) = event {
             let area = self.area.get();
-            let ratatui_area = layout_rect_to_clipped_rect(area);
+            let content_rect = self.dialog_rect(area);
+            let drawn_rect = self.drawn_rect(content_rect);
 
-            if self.dialog.handle_click_outside(event, ratatui_area) {
+            if self
+                .dialog
+                .handle_click_outside_rect(event, layout_rect_to_clipped_rect(drawn_rect))
+            {
                 self.close();
                 return EventResult::Action(TermWmAction::CloseMenu);
             }
 
-            let rect = self.dialog.rect_for(ratatui_area);
-            let content_rect = LayoutRect {
-                x: rect.x as i32,
-                y: rect.y as i32,
-                width: rect.width,
-                height: rect.height,
-            };
-            let adjusted_ctx = ctx.with_screen_area(content_rect);
+            let adjusted_ctx = ctx.with_screen_area(drawn_rect);
             let result = self.palette.handle_events(event, &adjusted_ctx);
 
             match result {
@@ -572,5 +626,178 @@ mod tests {
         assert!(bounds.height > 0);
         assert!(bounds.x >= 0);
         assert!(bounds.y >= 0);
+    }
+
+    fn area_80x24() -> LayoutRect {
+        LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        }
+    }
+
+    fn render_palette(palette: &mut WmCommandPaletteComponent, area: LayoutRect) {
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: area.width,
+            height: area.height,
+        });
+        let mut backend = RatatuiBackend::new_simple(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: area.width,
+                height: area.height,
+            },
+        );
+        let ctx = term_wm_core::components::ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        palette.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    fn sample_items() -> Vec<MenuDisplayItem<TermWmAction>> {
+        vec![
+            MenuDisplayItem::Item(MenuItem {
+                icon: None,
+                label: "Alpha".into(),
+                action: TermWmAction::NewTerminal,
+                disabled: false,
+            }),
+            MenuDisplayItem::Item(MenuItem {
+                icon: None,
+                label: "Beta".into(),
+                action: TermWmAction::CloseWindow(Default::default()),
+                disabled: false,
+            }),
+            MenuDisplayItem::Item(MenuItem {
+                icon: None,
+                label: "Gamma".into(),
+                action: TermWmAction::NewTerminal,
+                disabled: false,
+            }),
+        ]
+    }
+
+    #[test]
+    fn set_items_computes_stable_size_independent_of_filtering() {
+        let mut palette = WmCommandPaletteComponent::new();
+        palette.set_items(sample_items());
+        let full = palette.stable_size;
+        assert_eq!(full.1, 5, "3 items + 2 extra rows");
+        assert!(full.0 >= 30);
+
+        // Filtering down to a single row must not change the footprint.
+        palette.palette.query = "alp".to_string();
+        palette.palette.query_dirty = true;
+        palette.refresh_if_dirty();
+        assert_eq!(palette.palette.display_nodes.len(), 1);
+        assert_eq!(palette.stable_size, full);
+    }
+
+    #[test]
+    fn render_with_anchor_places_palette_below_anchor() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let area = area_80x24();
+        let anchor = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        };
+        palette.set_managed_area(area);
+        palette.set_items(sample_items());
+        palette.show();
+        palette.set_anchor(Some(anchor));
+
+        render_palette(&mut palette, area);
+
+        let bounds = <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette)
+            .expect("bounds after render");
+        assert_eq!(bounds.x, 0, "left-aligned to anchor");
+        assert_eq!(bounds.y, 5, "sits directly below the anchor");
+        // Anchored palettes fill the full footprint.
+        assert_eq!(palette.drawn_rect(bounds), bounds);
+    }
+
+    #[test]
+    fn render_without_anchor_centers_and_rows_only_background() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let area = area_80x24();
+        palette.set_managed_area(area);
+        palette.set_items(sample_items());
+        palette.show();
+
+        render_palette(&mut palette, area);
+
+        let bounds = <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette)
+            .expect("bounds after render");
+        // Centered in 80x24 for a 30x5 footprint.
+        assert_eq!((bounds.x, bounds.y), (25, 9));
+
+        let rows = palette.drawn_rect(bounds);
+        assert!(rows.width <= bounds.width);
+        assert!(rows.height <= bounds.height);
+        assert_eq!(rows.x, bounds.x, "rows top-pinned to content rect");
+        assert_eq!(rows.y, bounds.y, "rows top-pinned to content rect");
+        assert_eq!(
+            rows.height,
+            1 + 3,
+            "search bar + all three rows"
+        );
+    }
+
+    #[test]
+    fn stable_allocation_across_filter_states() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let area = area_80x24();
+        palette.set_managed_area(area);
+        palette.set_items(sample_items());
+        palette.show();
+
+        render_palette(&mut palette, area);
+        let bounds_full = <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette)
+            .expect("bounds after full render");
+        let rows_full = palette.drawn_rect(bounds_full);
+        assert_eq!(rows_full.height, 4);
+
+        // Filter down to one row and re-render.
+        palette.palette.query = "alp".to_string();
+        palette.palette.query_dirty = true;
+        render_palette(&mut palette, area);
+        let bounds_filtered =
+            <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette)
+                .expect("bounds after filtered render");
+        let rows_filtered = palette.drawn_rect(bounds_filtered);
+
+        assert_eq!(
+            bounds_full, bounds_filtered,
+            "content_rect/dialog_bounds must be byte-identical across filter states"
+        );
+        assert!(rows_filtered.height < rows_full.height);
+        assert_eq!(rows_filtered.height, 2, "search bar + one matching row");
+    }
+
+    #[test]
+    fn zero_results_still_shows_search_bar() {
+        let mut palette = WmCommandPaletteComponent::new();
+        let area = area_80x24();
+        palette.set_managed_area(area);
+        palette.set_items(sample_items());
+        palette.show();
+
+        palette.palette.query = "zzz".to_string();
+        palette.palette.query_dirty = true;
+        render_palette(&mut palette, area);
+
+        let bounds = <WmCommandPaletteComponent as Overlay<TermWmAction>>::render_area(&palette)
+            .expect("bounds after render");
+        let rows = palette.drawn_rect(bounds);
+        assert_eq!(palette.palette.display_nodes.len(), 0);
+        assert_eq!(rows.height, 1, "search bar row remains, no underflow");
+        assert_eq!(rows.x, bounds.x);
+        assert_eq!(rows.y, bounds.y);
     }
 }
