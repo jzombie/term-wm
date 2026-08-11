@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.22-alpha] - 2026-08-11
+
+### Added
+
+- **Anchored Command Palette:** when the palette is opened by clicking a chrome element — the top-panel `≡` menu, the bottom-left shortcut, or the Floating Action Button — it now anchors to that trigger as an adjacent popup that auto-flips to the opposite side to stay fully on screen, instead of always centering. Positioning is a reusable, pure primitive (`place_anchored`, alongside `AnchorPlacement`) in the layout engine with strict bounds/clamp post-conditions, shared by the dialog overlay via `rect_for_anchored`. Palette size is also now **stable**: the footprint is computed once from the full unfiltered item list and never bounces while filtering, while keyboard-opened (centered) palettes draw only the search bar + visible rows (Spotlight look) over a dimmed backdrop, top-pinned so only the bottom edge grows and shrinks.
+- **"No results" state for the Command Palette:** a query that filters out every item keeps the search bar in place and shows a dimmed `[no search results]` row below it instead of the palette vanishing. The drawn box floors at two rows (search bar + placeholder) so the zero-result state renders cleanly in both centered and anchored modes.
+- **Command Palette: Ctrl+C clears the search — bound through the main keybindings table:** a new `TermWmAction::ClearCommandPaletteQuery` is registered as **Ctrl+C** in the default `KeyBindings` set (rebindable via `AppBuilder::keybindings`), and the palette looks it up in the shared `WmConfig.keybindings` rather than a hardcoded combo. With a populated search bar, Ctrl+C clears the query (and its cursor position) and restores the full item list without closing the palette; with an empty bar it dismisses the palette, matching Esc. Other Ctrl+letter combinations are unaffected.
+
 ## [0.9.21-alpha] - 2026-08-11
 
 ### Added
