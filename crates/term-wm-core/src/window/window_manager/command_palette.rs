@@ -247,36 +247,45 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
-        // Settings group
+        // Settings groups
         {
-            items.push(MenuDisplayItem::Separator);
-            items.push(mi(
-                mouse_label,
-                Some("◆"),
-                crate::actions::TermWmAction::ToggleMouseCapture,
-            ));
-            items.push(mi(
-                clipboard_label,
-                Some("■"),
-                crate::actions::TermWmAction::ToggleClipboardMode,
-            ));
-            items.push(mi(
-                selection_label,
-                Some("●"),
-                crate::actions::TermWmAction::ToggleWindowSelection,
-            ));
-            items.push(mi(
-                debug_label,
-                Some("≣"),
-                crate::actions::TermWmAction::ToggleDebugWindow,
-            ));
-            items.push(mi(
-                panel_label,
-                Some("*"),
-                crate::actions::TermWmAction::ToggleSystemPanel,
-            ));
+            {
+                items.push(MenuDisplayItem::Separator);
+                items.push(mi(
+                    mouse_label,
+                    Some("◆"),
+                    crate::actions::TermWmAction::ToggleMouseCapture,
+                ));
+                items.push(mi(
+                    clipboard_label,
+                    Some("■"),
+                    crate::actions::TermWmAction::ToggleClipboardMode,
+                ));
+                items.push(mi(
+                    selection_label,
+                    Some("●"),
+                    crate::actions::TermWmAction::ToggleWindowSelection,
+                ));
+            }
 
-            // Help/Exit as last group
+            items.push(MenuDisplayItem::Separator);
+
+            {
+                items.push(mi(
+                    debug_label,
+                    Some("≣"),
+                    crate::actions::TermWmAction::ToggleDebugWindow,
+                ));
+                items.push(mi(
+                    panel_label,
+                    Some("*"),
+                    crate::actions::TermWmAction::ToggleSystemPanel,
+                ));
+            }
+        }
+
+        // Help/Exit as last group
+        {
             items.push(MenuDisplayItem::Separator);
             items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
             items.push(mi(
