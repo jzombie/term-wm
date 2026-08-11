@@ -11,7 +11,7 @@ use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::layout::rect_contains;
 use term_wm_core::window::WindowKey;
-use term_wm_layout_engine::LayoutRect;
+use term_wm_layout_engine::{AnchorPlacement, LayoutRect, place_anchored};
 
 #[derive(Debug, Clone)]
 pub struct DialogOverlayComponent {
@@ -111,6 +111,13 @@ impl DialogOverlayComponent {
     /// by closing the dialog and returning `true` to indicate the event was
     /// consumed.
     pub fn handle_click_outside(&mut self, event: &Event, area: Rect) -> bool {
+        self.handle_click_outside_rect(event, self.rect_for(area))
+    }
+
+    /// Like [`Self::handle_click_outside`] but checks against an explicit
+    /// screen-space rect. Used by overlays whose drawn region is not the
+    /// centered dialog rect (e.g. an anchored palette draws only its rows).
+    pub fn handle_click_outside_rect(&mut self, event: &Event, rect: Rect) -> bool {
         if !self.visible || !self.auto_close_on_outside_click {
             return false;
         }
@@ -123,7 +130,6 @@ impl DialogOverlayComponent {
         if !matches!(mouse.kind, MouseEventKind::Press(_)) {
             return false;
         }
-        let rect = self.rect_for(area);
         let lr = LayoutRect {
             x: rect.x as i32,
             y: rect.y as i32,
@@ -228,6 +234,40 @@ impl DialogOverlayComponent {
             height,
         }
     }
+
+    /// Place the dialog adjacent to `anchor` instead of centering it.
+    ///
+    /// Applies the same size clamp as [`Self::rect_for`] so `place_anchored` is
+    /// handed a size already at most `area`'s; the returned rect always lies
+    /// fully inside `area`.
+    pub fn rect_for_anchored(
+        &self,
+        area: Rect,
+        anchor: LayoutRect,
+        placement: AnchorPlacement,
+    ) -> Rect {
+        let mut width = area.width.min(self.width).max(1);
+        let mut height = area.height.min(self.height).max(1);
+        if area.width >= 24 {
+            width = width.max(24);
+        }
+        if area.height >= 5 {
+            height = height.max(5);
+        }
+        let bounds = LayoutRect {
+            x: i32::from(area.x),
+            y: i32::from(area.y),
+            width: area.width,
+            height: area.height,
+        };
+        let placed = place_anchored(anchor, (width, height), placement, bounds);
+        Rect::new(
+            placed.x as u16,
+            placed.y as u16,
+            placed.width,
+            placed.height,
+        )
+    }
 }
 
 impl Default for DialogOverlayComponent {
@@ -290,6 +330,77 @@ mod tests {
         let handled = dlg.handle_click_outside(&ev, area);
         assert!(handled);
         assert!(!dlg.visible());
+    }
+
+    #[test]
+    fn rect_for_anchored_stays_inside_area() {
+        let dlg = DialogOverlayComponent::new();
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let anchor = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 5,
+        };
+        let r = dlg.rect_for_anchored(area, anchor, AnchorPlacement::BelowRight);
+        assert!(r.x >= area.x);
+        assert!(r.y >= area.y);
+        assert!(r.x + r.width <= area.x + area.width);
+        assert!(r.y + r.height <= area.y + area.height);
+        assert!(r.width >= 24, "min width should apply inside area");
+        assert!(r.height >= 5, "min height should apply inside area");
+    }
+
+    #[test]
+    fn handle_click_outside_rect_uses_explicit_rect() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_auto_close_on_outside_click(true);
+        // Drawn rect occupies only (10,10)-(19,14); a click at (5,5) is
+        // outside that rect and must close even though the centered dialog
+        // rect would contain it.
+        let rect = Rect {
+            x: 10,
+            y: 10,
+            width: 10,
+            height: 5,
+        };
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(term_wm_core::events::MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        });
+        let handled = dlg.handle_click_outside_rect(&ev, rect);
+        assert!(handled);
+        assert!(!dlg.visible());
+    }
+
+    #[test]
+    fn handle_click_outside_rect_inside_does_not_close() {
+        let mut dlg = DialogOverlayComponent::new();
+        dlg.set_visible(true);
+        dlg.set_auto_close_on_outside_click(true);
+        let rect = Rect {
+            x: 10,
+            y: 10,
+            width: 10,
+            height: 5,
+        };
+        let ev = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(term_wm_core::events::MouseButton::Left),
+            column: 14,
+            row: 12,
+            modifiers: term_wm_core::events::KeyModifiers::NONE,
+        });
+        let handled = dlg.handle_click_outside_rect(&ev, rect);
+        assert!(!handled);
+        assert!(dlg.visible());
     }
 
     #[test]

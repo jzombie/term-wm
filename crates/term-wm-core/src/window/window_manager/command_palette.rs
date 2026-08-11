@@ -63,6 +63,14 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             self.overlays.remove(key);
         }
         self.input_mode = WmInputMode::Passthrough;
+        self.pending_palette_anchor = None;
+    }
+
+    /// Consume the anchor rect captured by the current mouse dispatch, if any.
+    /// Returns `None` when the palette is opened via keyboard (no mouse hitbox),
+    /// so the app renders it centered.
+    pub fn take_pending_palette_anchor(&mut self) -> Option<LayoutRect> {
+        self.pending_palette_anchor.take()
     }
 
     pub fn handle_command_palette_event(&mut self, event: &Event) -> Option<TermWmAction> {
