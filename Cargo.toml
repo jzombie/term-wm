@@ -1,24 +1,3 @@
-[package]
-name = "term-wm"
-description = "A cross-platform terminal multiplexer, window manager, Ratatui component library, and runtime."
-keywords = ["window-manager", "multiplexer", "terminal", "tui", "cross-platform"]
-categories = [
-    "command-line-utilities",
-    "emulators",
-    "gui",
-    "concurrency",
-    "network-programming",
-]
-authors.workspace = true
-version.workspace = true
-edition.workspace = true
-repository.workspace = true
-license.workspace = true
-publish.workspace = true
-
-[package.metadata.cargo-udeps.ignore]
-development = ["term-bench", "term-session-client"]
-
 [workspace]
 members = [
     "crates/term-bench",
@@ -30,6 +9,7 @@ members = [
     "crates/term-session-server",
     "crates/term-size-box",
     "crates/term-sys-io",
+    "crates/term-wm",
     "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-crossterm-adapter",
@@ -41,6 +21,7 @@ members = [
     "crates/term-wm-ui-components",
     "crates/term-wm-ui-facade",
 ]
+default-members = ["crates/term-wm"]
 resolver = "2"
 
 [workspace.package]
@@ -97,7 +78,7 @@ term-session-mock = { path = "crates/term-session-mock", version = "0.9.22-alpha
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.9.22-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.9.22-alpha" }
 term-sys-io = { path = "crates/term-sys-io", version = "0.9.22-alpha" }
-term-wm = { path = ".", version = "0.9.22-alpha" }
+term-wm = { path = "crates/term-wm", version = "0.9.22-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.9.22-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.9.22-alpha" }
 term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.9.22-alpha" }
@@ -129,43 +110,3 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming",
 ] }
-
-[dependencies]
-clap = { workspace = true, features = ["derive"] }
-crossbeam-channel = { workspace = true }
-hostname = { workspace = true }
-libc = { workspace = true }
-line-ending = { workspace = true }
-portable-pty = { workspace = true }
-ratatui = { workspace = true }
-term-sys-io = { workspace = true }
-term-wm-console = { workspace = true }
-term-wm-core = { workspace = true }
-term-wm-layout-engine = { workspace = true }
-term-wm-pty-engine = { workspace = true }
-term-wm-render = { workspace = true }
-term-wm-sys-ui-components = { workspace = true }
-term-wm-ui-components = { workspace = true }
-term-wm-ui-facade = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-unicode-width = { workspace = true }
-webbrowser = { workspace = true }
-
-[build-dependencies]
-indoc = { workspace = true }
-
-[dev-dependencies]
-muxio-rpc-service = { workspace = true }
-muxio-tokio-mpsc-adapter = { workspace = true }
-muxio-tokio-rpc-ipc-client = { workspace = true }
-proptest = { workspace = true }
-serial_test = { workspace = true }
-tempfile = { workspace = true }
-term-clipboard = { workspace = true }
-term-session-client = { workspace = true }
-term-session-mock = { workspace = true }
-term-session-muxio-service-definitions = { workspace = true }
-term-session-server = { workspace = true }
-term-wm-render = { workspace = true }
-tokio = { workspace = true }

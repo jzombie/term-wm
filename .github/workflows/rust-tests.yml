@@ -13,6 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  readme_sync_check:
+    name: README sync check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Verify root and crate READMEs are identical
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cmp -s README.md crates/term-wm/README.md; then
+            echo "::error::README.md and crates/term-wm/README.md are out of sync."
+            echo "The crate README (used by the crate docs via include_str!) must stay"
+            echo "identical to the repository README."
+            echo "Fix with: cp README.md crates/term-wm/README.md"
+            exit 1
+          fi
+          echo "Root and crate READMEs are in sync."
+
   test_matrix:
     name: test (OS=${{ matrix.os }}, Features=${{ matrix.name }})
     runs-on: ${{ matrix.os }}

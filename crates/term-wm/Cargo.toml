@@ -1,0 +1,61 @@
+[package]
+name = "term-wm"
+description = "A cross-platform terminal multiplexer, window manager, Ratatui component library, and runtime."
+keywords = ["window-manager", "multiplexer", "terminal", "tui", "cross-platform"]
+categories = [
+    "command-line-utilities",
+    "emulators",
+    "gui",
+    "concurrency",
+    "network-programming",
+]
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+default-run = "term-wm"
+
+[package.metadata.cargo-udeps.ignore]
+development = ["term-bench", "term-session-client"]
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+crossbeam-channel = { workspace = true }
+hostname = { workspace = true }
+libc = { workspace = true }
+line-ending = { workspace = true }
+portable-pty = { workspace = true }
+ratatui = { workspace = true }
+term-sys-io = { workspace = true }
+term-wm-console = { workspace = true }
+term-wm-core = { workspace = true }
+term-wm-layout-engine = { workspace = true }
+term-wm-pty-engine = { workspace = true }
+term-wm-render = { workspace = true }
+term-wm-sys-ui-components = { workspace = true }
+term-wm-ui-components = { workspace = true }
+term-wm-ui-facade = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+unicode-width = { workspace = true }
+webbrowser = { workspace = true }
+
+[build-dependencies]
+indoc = { workspace = true }
+
+[dev-dependencies]
+muxio-rpc-service = { workspace = true }
+muxio-tokio-mpsc-adapter = { workspace = true }
+muxio-tokio-rpc-ipc-client = { workspace = true }
+proptest = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+term-clipboard = { workspace = true }
+term-session-client = { workspace = true }
+term-session-mock = { workspace = true }
+term-session-muxio-service-definitions = { workspace = true }
+term-session-server = { workspace = true }
+term-wm-render = { workspace = true }
+tokio = { workspace = true }
