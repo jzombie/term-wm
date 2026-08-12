@@ -294,6 +294,83 @@ pub fn apply_resize_drag_signed(
     }
 }
 
+/// Clamp a floating window rect into `bounds`, preserving its size.
+///
+/// When `allow_offscreen` is true the window may sit partially off-screen but
+/// must keep at least `min_visible_margin` cells visible so its chrome can
+/// still be grabbed; when false the rect is fully contained. The size is
+/// enlarged to the floating minimums and, when `!allow_offscreen`, capped at
+/// `bounds`' dimensions.
+pub fn clamp_floating_to_bounds(
+    rect: LayoutRect,
+    bounds: LayoutRect,
+    min_visible_margin: u16,
+    allow_offscreen: bool,
+) -> LayoutRect {
+    let min_w = FLOATING_MIN_WIDTH.min(bounds.width.max(1));
+    let min_h = FLOATING_MIN_HEIGHT.min(bounds.height.max(1));
+
+    let width = if allow_offscreen {
+        rect.width.max(min_w)
+    } else {
+        rect.width.max(min_w).min(bounds.width)
+    };
+    let height = if allow_offscreen {
+        rect.height.max(min_h)
+    } else {
+        rect.height.max(min_h).min(bounds.height)
+    };
+
+    let max_x = if allow_offscreen {
+        bounds
+            .x
+            .saturating_add(i32::from(bounds.width))
+            .saturating_sub(i32::from(min_visible_margin.min(width)))
+    } else {
+        bounds
+            .x
+            .saturating_add(i32::from(bounds.width.saturating_sub(width)))
+    };
+
+    let max_y = if allow_offscreen {
+        bounds
+            .y
+            .saturating_add(i32::from(bounds.height))
+            .saturating_sub(i32::from(min_visible_margin.min(height)))
+    } else {
+        bounds
+            .y
+            .saturating_add(i32::from(bounds.height.saturating_sub(height)))
+    };
+
+    let out_x = rect.x.saturating_add(i32::from(rect.width)) <= bounds.x
+        || rect.x >= bounds.x.saturating_add(i32::from(bounds.width));
+    let out_y = rect.y.saturating_add(i32::from(rect.height)) <= bounds.y
+        || rect.y >= bounds.y.saturating_add(i32::from(bounds.height));
+
+    let x = if out_x || !allow_offscreen {
+        rect.x.clamp(bounds.x.min(max_x), max_x)
+    } else {
+        let visible_width = min_visible_margin.min(width);
+        let left_allowed = bounds
+            .x
+            .saturating_sub(i32::from(width.saturating_sub(visible_width)));
+        rect.x.clamp(left_allowed.min(max_x), max_x)
+    };
+
+    let y = if out_y || !allow_offscreen {
+        rect.y.clamp(bounds.y.min(max_y), max_y)
+    } else {
+        let visible_height = min_visible_margin.min(height);
+        let top_allowed = bounds
+            .y
+            .saturating_sub(i32::from(height.saturating_sub(visible_height)));
+        rect.y.clamp(top_allowed.min(max_y), max_y)
+    };
+
+    LayoutRect { x, y, width, height }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +499,100 @@ mod tests {
             apply_resize_drag_signed(0, 0, 80, 24, ResizeEdge::Left, 40, 0, 0, 0, area(), true);
         assert_eq!(result.x, 40);
         assert_eq!(result.width, 40);
+    }
+
+    #[test]
+    fn clamp_floating_keeps_min_margin_when_offscreen_allowed() {
+        // Window dragged fully left off-screen: with allow_offscreen it may
+        // stick out but must keep `min_visible_margin` cells visible.
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let rect = LayoutRect {
+            x: -4,
+            y: 0,
+            width: 6,
+            height: 3,
+        };
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
+        // left edge clamped so 4 cells stay visible: x = -(6 - 4) = -2
+        assert_eq!(clamped.x, -2);
+        assert_eq!(clamped.width, 6);
+    }
+
+    #[test]
+    fn clamp_floating_keeps_min_margin_vertically() {
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let rect = LayoutRect {
+            x: 0,
+            y: -3,
+            width: 6,
+            height: 4,
+        };
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
+        assert!(clamped.y >= -1, "must keep >= 4 visible rows: y={}", clamped.y);
+        assert!(clamped.y + i32::from(clamped.height) >= 4);
+    }
+
+    #[test]
+    fn clamp_floating_contains_when_offscreen_not_allowed() {
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let rect = LayoutRect {
+            x: -4,
+            y: 8,
+            width: 6,
+            height: 3,
+        };
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, false);
+        assert_eq!(clamped.x, 0);
+        assert_eq!(clamped.y, 7); // bounds.height - height
+        assert_eq!(clamped.width, 6);
+        assert_eq!(clamped.height, 3);
+    }
+
+    #[test]
+    fn clamp_floating_enforces_minimum_size() {
+        let bounds = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let rect = LayoutRect {
+            x: 3,
+            y: 3,
+            width: 1,
+            height: 1,
+        };
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
+        assert_eq!(clamped.width, FLOATING_MIN_WIDTH);
+        assert_eq!(clamped.height, FLOATING_MIN_HEIGHT);
+    }
+
+    #[test]
+    fn clamp_floating_zero_size_bounds_does_not_panic() {
+        let bounds = LayoutRect::default();
+        let rect = LayoutRect {
+            x: 2,
+            y: 2,
+            width: 6,
+            height: 4,
+        };
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
+        // No panic; result stays a valid rect even for degenerate bounds.
+        assert!(clamped.width >= 1);
     }
 }
