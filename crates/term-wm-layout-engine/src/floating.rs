@@ -368,7 +368,12 @@ pub fn clamp_floating_to_bounds(
         rect.y.clamp(top_allowed.min(max_y), max_y)
     };
 
-    LayoutRect { x, y, width, height }
+    LayoutRect {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 #[cfg(test)]
@@ -538,7 +543,11 @@ mod tests {
             height: 4,
         };
         let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
-        assert!(clamped.y >= -1, "must keep >= 4 visible rows: y={}", clamped.y);
+        assert!(
+            clamped.y >= -1,
+            "must keep >= 4 visible rows: y={}",
+            clamped.y
+        );
         assert!(clamped.y + i32::from(clamped.height) >= 4);
     }
 

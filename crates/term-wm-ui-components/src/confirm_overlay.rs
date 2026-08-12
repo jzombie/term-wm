@@ -530,7 +530,10 @@ mod tests {
             symbols.contains("[ Return to term-wm ]"),
             "cancel label not rendered"
         );
-        assert!(symbols.contains("[ Exit term-wm ]"), "confirm label not rendered");
+        assert!(
+            symbols.contains("[ Exit term-wm ]"),
+            "confirm label not rendered"
+        );
 
         // Hitboxes must match the custom label widths exactly.
         let cancel_width = o.cancel_rect.get().map(|r| r.width);

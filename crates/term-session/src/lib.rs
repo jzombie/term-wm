@@ -311,17 +311,26 @@ mod tests {
 
     #[test]
     fn format_under_a_minute_shows_seconds() {
-        assert_eq!(format_unix_relative_at(SECS_PER_DAY - 42, SECS_PER_DAY), "42s");
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY - 42, SECS_PER_DAY),
+            "42s"
+        );
     }
 
     #[test]
     fn format_under_an_hour_shows_minutes() {
-        assert_eq!(format_unix_relative_at(SECS_PER_DAY - 3_300, SECS_PER_DAY), "55m");
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY - 3_300, SECS_PER_DAY),
+            "55m"
+        );
     }
 
     #[test]
     fn format_under_a_day_shows_hours() {
-        assert_eq!(format_unix_relative_at(SECS_PER_DAY - 7_200, SECS_PER_DAY), "2h");
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY - 7_200, SECS_PER_DAY),
+            "2h"
+        );
     }
 
     #[test]
@@ -346,7 +355,10 @@ mod tests {
 
     #[test]
     fn format_timestamp_newer_than_now_saturates() {
-        assert_eq!(format_unix_relative_at(SECS_PER_DAY + 10, SECS_PER_DAY), "0s");
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY + 10, SECS_PER_DAY),
+            "0s"
+        );
     }
 
     #[test]

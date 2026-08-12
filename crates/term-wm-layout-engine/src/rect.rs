@@ -398,7 +398,10 @@ mod tests {
         let bounds = r(0, 0, 10, 10);
         let inside = r(2, 2, 4, 4);
         assert_eq!(inside.visible_portion(bounds), inside);
-        assert_eq!(r(50, 50, 1, 1).visible_portion(bounds), LayoutRect::default());
+        assert_eq!(
+            r(50, 50, 1, 1).visible_portion(bounds),
+            LayoutRect::default()
+        );
     }
 
     #[test]

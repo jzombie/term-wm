@@ -6634,7 +6634,10 @@ mod tests {
         // The standalone selection entry point must produce the exact same
         // combined state as the palette toggle to avoid desynchronization.
         wm.toggle_window_selection();
-        assert!(!wm.clipboard_enabled(), "clipboard follows selection toggle");
+        assert!(
+            !wm.clipboard_enabled(),
+            "clipboard follows selection toggle"
+        );
         assert!(!wm.window_selection_enabled());
 
         wm.toggle_window_selection();

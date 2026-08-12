@@ -591,6 +591,9 @@ mod tests {
                 MenuDisplayItem::Item(MenuItem { label, .. }) if label.starts_with("Switch to: ")
             )
         });
-        assert!(!has_switch, "no Switch to entries expected when display order is empty");
+        assert!(
+            !has_switch,
+            "no Switch to entries expected when display order is empty"
+        );
     }
 }
