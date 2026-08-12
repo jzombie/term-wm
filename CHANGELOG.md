@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.23-alpha] - 2026-08-12
+
+### Changed
+
+- **Exit confirmation overlay buttons are now explicit and app-aware:** the `[ Cancel ]` / `[ Exit ]` buttons in the Exit UI overlay are no longer hardcoded. `ConfirmOverlayComponent` now stores configurable, fully pre-formatted labels (defaults unchanged), and the bundled app renders `[ Return to term-wm ]` / `[ Exit term-wm ]` from `AppContext.app_name`. Labels are formatted once when the overlay opens, so the render path stays allocation-free and mouse hitboxes stay exactly aligned with the drawn text.
+- **Command Palette: separator between window controls and the window switcher:** the window-management group now draws a `─` separator between the per-window controls (Send Super / Close / Maximize / Minimize) and the `Switch to:` list. The separator is emitted lazily only when at least one switchable window exists, so focusing a window outside the display order never leaves a dangling trailing separator row.
+- **Command Palette: unified clipboard toggle:** the redundant `Clipboard: Disable` and `Clipboard: Disable Selection` entries are now a single `Clipboard: Enable/Disable` item that controls both OSC 52 copy/paste and mouse text-selection copy together. Both toggle entry points — `ToggleClipboardMode` and the still-available `ToggleWindowSelection` action — keep `clipboard_enabled` and `window_selection_enabled` in sync, so a direct keybinding can never desynchronize the two flags from what the palette shows (the separate underlying flags and config still apply).
+- **Floating-window viewport clamping moved into the layout engine (no functional change):** the per-window math that keeps floating windows from being dragged fully off-screen and re-homes them when the viewport changes now lives as a pure `clamp_floating_to_bounds(rect, bounds, min_visible_margin, allow_offscreen)` in `term-wm-layout-engine` (exported alongside the existing floating-window helpers). The window manager's `clamp_floating_to_bounds` is now an in-place wrapper that iterates windows without allocating intermediate vectors each frame, and the duplicate WM `clamp_rect` / `float_rect_visible` helpers were deleted in favor of the engine's existing `LayoutRect::visible_portion`. The clamping tests moved into the engine with the same coverage.
+
+### Fixed
+
+- **`term-session list` showed old channel ages as military wall-clock time:** when a channel was more than 24 hours old, `format_unix_relative` fell back to rendering the creation timestamp's UTC time-of-day (`created: 18:48:46`) instead of elapsed time, so output silently switched from `2h` to a clock time that was usually wrong. Timestamps are now always rendered as elapsed time — seconds, minutes, hours, then combined days + hours (`2d 5h`) — for any age, with unit tests covering the day boundary, long ages, and timestamps in the future.
+
 ## [0.9.22-alpha] - 2026-08-11
 
 ### Added
