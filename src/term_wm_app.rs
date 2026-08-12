@@ -582,6 +582,11 @@ impl<C: Component<TermWmAction>>
 
     fn open_exit_confirm(&mut self) {
         let mut confirm = ConfirmOverlayComponent::new();
+        let app_name = self.wm.app_ctx().app_name.clone();
+        confirm.set_labels(
+            format!("[ Return to {app_name} ]"),
+            format!("[ Exit {app_name} ]"),
+        );
         confirm.open(
             "Exit App",
             "Exit the application?\nUnsaved changes will be lost.",

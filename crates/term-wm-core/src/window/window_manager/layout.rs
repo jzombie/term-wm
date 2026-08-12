@@ -121,7 +121,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             let area = if self.floating_resize_offscreen {
                 rect
             } else {
-                super::clamp_rect(rect, self.managed_area)
+                rect.visible_portion(self.managed_area)
             };
             crate::chrome::content_rect(
                 area,
@@ -705,7 +705,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub(super) fn visible_rect_from_spec(&self, spec: FloatRectSpec) -> Rect {
-        super::float_rect_visible(spec.resolve_signed(self.managed_area), self.managed_area)
+        spec.resolve_signed(self.managed_area)
+            .visible_portion(self.managed_area)
     }
 
     pub(super) fn visible_region_for_key(&self, key: WindowKey) -> Rect {
@@ -718,104 +719,25 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
     pub(super) fn clamp_floating_to_bounds(&mut self) {
         use crate::constants::MIN_FLOATING_VISIBLE_MARGIN;
-        use crate::layout::floating::FLOATING_MIN_HEIGHT;
-        use crate::layout::floating::FLOATING_MIN_WIDTH;
 
         let bounds = self.managed_area;
         if bounds.width == 0 || bounds.height == 0 {
             return;
         }
-        let mut updates: Vec<(WindowKey, FloatRectSpec)> = Vec::new();
-        let floating_keys: Vec<WindowKey> = self
-            .windows
-            .iter()
-            .filter_map(|(key, window)| window.floating_rect().map(|_| key))
-            .collect();
-        for key in floating_keys {
-            let Some(FloatRectSpec::Absolute(fr)) = self.floating_rect(key) else {
+        let allow_offscreen = self.floating_resize_offscreen;
+        // The per-window clamp math lives in the layout engine; this wrapper
+        // only iterates the WM's floating windows and applies the results.
+        for window in self.windows.values_mut() {
+            let Some(FloatRectSpec::Absolute(fr)) = window.floating_rect() else {
                 continue;
             };
-
-            let rect_left = fr.x;
-            let rect_top = fr.y;
-            let rect_right = fr.x.saturating_add(fr.width as i32);
-            let rect_bottom = fr.y.saturating_add(fr.height as i32);
-            let bounds_left = bounds.x;
-            let bounds_top = bounds.y;
-            let bounds_right = bounds_left.saturating_add(bounds.width as i32);
-            let bounds_bottom = bounds_top.saturating_add(bounds.height as i32);
-
-            let min_w = FLOATING_MIN_WIDTH.min(bounds.width.max(1));
-            let min_h = FLOATING_MIN_HEIGHT.min(bounds.height.max(1));
-
-            let min_visible_margin = MIN_FLOATING_VISIBLE_MARGIN;
-
-            let width = if self.floating_resize_offscreen {
-                fr.width.max(min_w)
-            } else {
-                fr.width.max(min_w).min(bounds.width)
-            };
-            let height = if self.floating_resize_offscreen {
-                fr.height.max(min_h)
-            } else {
-                fr.height.max(min_h).min(bounds.height)
-            };
-
-            let max_x = if self.floating_resize_offscreen {
-                bounds
-                    .x
-                    .saturating_add(i32::from(bounds.width))
-                    .saturating_sub(i32::from(min_visible_margin.min(width)))
-            } else {
-                bounds
-                    .x
-                    .saturating_add(i32::from(bounds.width.saturating_sub(width)))
-            };
-
-            let max_y = if self.floating_resize_offscreen {
-                bounds
-                    .y
-                    .saturating_add(i32::from(bounds.height))
-                    .saturating_sub(i32::from(min_visible_margin.min(height)))
-            } else {
-                bounds
-                    .y
-                    .saturating_add(i32::from(bounds.height.saturating_sub(height)))
-            };
-
-            let out_x = rect_right <= bounds_left || rect_left >= bounds_right;
-            let out_y = rect_bottom <= bounds_top || rect_top >= bounds_bottom;
-
-            let x = if out_x || !self.floating_resize_offscreen {
-                fr.x.clamp(bounds_left, max_x)
-            } else {
-                let left_allowed =
-                    bounds_left.saturating_sub(width as i32 - min_visible_margin.min(width) as i32);
-                let left_allowed = left_allowed.min(max_x);
-                fr.x.clamp(left_allowed, max_x)
-            };
-
-            let y = if out_y || !self.floating_resize_offscreen {
-                fr.y.clamp(bounds_top, max_y)
-            } else {
-                let visible_height = min_visible_margin.min(height) as i32;
-                let top_allowed = bounds_top.saturating_sub(height as i32 - visible_height);
-                let top_allowed = top_allowed.min(max_y);
-                fr.y.clamp(top_allowed, max_y)
-            };
-
-            updates.push((
-                key,
-                FloatRectSpec::Absolute(crate::window::FloatRect {
-                    x,
-                    y,
-                    width,
-                    height,
-                }),
-            ));
-        }
-        for (key, spec) in updates {
-            self.set_floating_rect(key, Some(spec));
+            let clamped = term_wm_layout_engine::clamp_floating_to_bounds(
+                fr,
+                bounds,
+                MIN_FLOATING_VISIBLE_MARGIN,
+                allow_offscreen,
+            );
+            window.set_floating_rect(Some(FloatRectSpec::Absolute(clamped)));
         }
     }
 

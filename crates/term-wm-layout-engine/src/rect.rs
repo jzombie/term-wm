@@ -382,6 +382,29 @@ mod tests {
     }
 
     #[test]
+    fn visible_portion_clips_negative_offset() {
+        // Ported from the former WM `float_rect_visible_clips_negative_offsets`.
+        let bounds = r(0, 0, 80, 24);
+        let visible = r(-5, 3, 20, 6).visible_portion(bounds);
+        assert_eq!(visible.x, 0);
+        assert_eq!(visible.y, 3);
+        assert_eq!(visible.width, 15);
+        assert_eq!(visible.height, 6);
+    }
+
+    #[test]
+    fn visible_portion_returns_default_when_fully_outside() {
+        // Ported from the former WM `clamp_rect_inside_and_outside`.
+        let bounds = r(0, 0, 10, 10);
+        let inside = r(2, 2, 4, 4);
+        assert_eq!(inside.visible_portion(bounds), inside);
+        assert_eq!(
+            r(50, 50, 1, 1).visible_portion(bounds),
+            LayoutRect::default()
+        );
+    }
+
+    #[test]
     fn inset_shrinks_rect() {
         let result = inset(r(10, 10, 100, 50), 5u16, 5u16, 2u16, 2u16);
         assert_eq!(result.x, 15);
