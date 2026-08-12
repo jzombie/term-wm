@@ -198,4 +198,4 @@ See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for deta
 [codeql-page]: https://github.com/jzombie/term-wm/actions/workflows/github-code-scanning/codeql
 [codeql-badge]: https://img.shields.io/github/actions/workflow/status/jzombie/term-wm/github-code-scanning/codeql?style=flat-square
 [coveralls-page]: https://coveralls.io/github/jzombie/term-wm?branch=main
-[coveralls-badge]: https://img.shields.io/coveralls/github/jzombie/term-wm?style=flat-square
+[coveralls-badge]: https://coveralls.io/repos/github/jzombie/term-wm/badge.svg?branch=main&style=flat-square
