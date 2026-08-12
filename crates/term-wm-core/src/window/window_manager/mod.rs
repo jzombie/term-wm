@@ -2315,8 +2315,10 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn toggle_window_selection(&mut self) {
-        let next = !self.window_selection_enabled;
-        self.set_window_selection_enabled(next);
+        // Unified clipboard toggle: selection tracks clipboard state so the
+        // two never desynchronize regardless of which action entry point
+        // (palette or direct keybinding) is used.
+        self.toggle_clipboard_enabled();
     }
 
     pub fn set_window_selection_enabled(&mut self, enabled: bool) {
@@ -2350,6 +2352,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     pub fn toggle_clipboard_enabled(&mut self) {
         let next = !self.clipboard_enabled;
         self.set_clipboard_enabled(next);
+        self.set_window_selection_enabled(next);
     }
 
     fn refresh_capture(&mut self) {
@@ -2859,52 +2862,6 @@ pub struct WmButton {
     pub symbol: &'static str,
 }
 
-fn clamp_rect(area: Rect, bounds: Rect) -> Rect {
-    let x0 = area.x.max(bounds.x);
-    let y0 = area.y.max(bounds.y);
-    let x1 = area
-        .x
-        .saturating_add(i32::from(area.width))
-        .min(bounds.x.saturating_add(i32::from(bounds.width)));
-    let y1 = area
-        .y
-        .saturating_add(i32::from(area.height))
-        .min(bounds.y.saturating_add(i32::from(bounds.height)));
-    if x1 <= x0 || y1 <= y0 {
-        return Rect::default();
-    }
-    Rect {
-        x: x0,
-        y: y0,
-        width: x1.saturating_sub(x0) as u16,
-        height: y1.saturating_sub(y0) as u16,
-    }
-}
-
-fn float_rect_visible(rect: crate::window::FloatRect, bounds: Rect) -> Rect {
-    let bounds_x0 = bounds.x;
-    let bounds_y0 = bounds.y;
-    let bounds_x1 = bounds_x0.saturating_add(i32::from(bounds.width));
-    let bounds_y1 = bounds_y0.saturating_add(i32::from(bounds.height));
-    let rect_x0 = rect.x;
-    let rect_y0 = rect.y;
-    let rect_x1 = rect.x.saturating_add(i32::from(rect.width));
-    let rect_y1 = rect.y.saturating_add(i32::from(rect.height));
-    let x0 = rect_x0.max(bounds_x0);
-    let y0 = rect_y0.max(bounds_y0);
-    let x1 = rect_x1.min(bounds_x1);
-    let y1 = rect_y1.min(bounds_y1);
-    if x1 <= x0 || y1 <= y0 {
-        return Rect::default();
-    }
-    Rect {
-        x: x0,
-        y: y0,
-        width: x1.saturating_sub(x0) as u16,
-        height: y1.saturating_sub(y0) as u16,
-    }
-}
-
 fn map_layout_node(node: &LayoutNode<WindowKey>) -> LayoutNode<WindowKey> {
     match node {
         LayoutNode::Leaf(key) => LayoutNode::leaf(*key),
@@ -2997,55 +2954,6 @@ mod tests {
 
     /// Test fixture: short drag-snap timeout (1 second).
     const SHORT_SNAP_TIMEOUT: Duration = Duration::from_secs(1);
-
-    #[test]
-    fn clamp_rect_inside_and_outside() {
-        let area = Rect {
-            x: 2,
-            y: 2,
-            width: 4,
-            height: 4,
-        };
-        let bounds = Rect {
-            x: 0,
-            y: 0,
-            width: 10,
-            height: 10,
-        };
-        let r = clamp_rect(area, bounds);
-        assert_eq!(r.x, 2);
-        assert_eq!(r.y, 2);
-
-        let area2 = Rect {
-            x: 50,
-            y: 50,
-            width: 1,
-            height: 1,
-        };
-        let r2 = clamp_rect(area2, bounds);
-        assert_eq!(r2, Rect::default());
-    }
-
-    #[test]
-    fn float_rect_visible_clips_negative_offsets() {
-        let bounds = Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        };
-        let rect = crate::window::FloatRect {
-            x: -5,
-            y: 3,
-            width: 20,
-            height: 6,
-        };
-        let visible = float_rect_visible(rect, bounds);
-        assert_eq!(visible.x, 0);
-        assert_eq!(visible.y, 3);
-        assert_eq!(visible.width, 15);
-        assert_eq!(visible.height, 6);
-    }
 
     #[test]
     fn rects_intersect_true_and_false() {
@@ -6684,6 +6592,89 @@ mod tests {
         assert!(
             *disabled,
             "Close menu entry must be disabled for non-closable window"
+        );
+    }
+
+    #[test]
+    fn toggle_clipboard_keeps_selection_in_sync() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert!(wm.clipboard_enabled());
+        assert!(wm.window_selection_enabled());
+
+        wm.toggle_clipboard_enabled();
+        assert!(!wm.clipboard_enabled(), "clipboard toggled off");
+        assert!(
+            !wm.window_selection_enabled(),
+            "selection follows clipboard when toggling"
+        );
+
+        wm.toggle_clipboard_enabled();
+        assert!(wm.clipboard_enabled());
+        assert!(wm.window_selection_enabled());
+    }
+
+    #[test]
+    fn toggle_window_selection_keeps_clipboard_in_sync() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        assert!(wm.clipboard_enabled());
+        assert!(wm.window_selection_enabled());
+
+        // The standalone selection entry point must produce the exact same
+        // combined state as the palette toggle to avoid desynchronization.
+        wm.toggle_window_selection();
+        assert!(
+            !wm.clipboard_enabled(),
+            "clipboard follows selection toggle"
+        );
+        assert!(!wm.window_selection_enabled());
+
+        wm.toggle_window_selection();
+        assert!(wm.clipboard_enabled());
+        assert!(wm.window_selection_enabled());
+    }
+
+    #[test]
+    fn wm_menu_items_has_single_clipboard_toggle() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let items = wm.wm_menu_items();
+        let clipboard_labels: Vec<String> = items
+            .iter()
+            .filter_map(|entry| match entry {
+                MenuDisplayItem::Item(MenuItem {
+                    label,
+                    action: TermWmAction::ToggleClipboardMode,
+                    ..
+                }) => Some(label.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            clipboard_labels.len(),
+            1,
+            "exactly one unified Clipboard toggle expected"
+        );
+        assert!(
+            clipboard_labels[0].starts_with("Clipboard: "),
+            "unified toggle label must start with 'Clipboard: '"
         );
     }
 

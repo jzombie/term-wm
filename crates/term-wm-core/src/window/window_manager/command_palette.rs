@@ -126,11 +126,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         } else {
             "Clipboard: Enable"
         };
-        let selection_label = if self.window_selection_enabled {
-            "Clipboard: Disable Selection"
-        } else {
-            "Clipboard: Enable Selection"
-        };
         let debug_label = if debug_log_visible {
             "System: Disable Debug Log"
         } else {
@@ -220,13 +215,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 }
 
                 // Switch to windows
-                for (key, switch_title) in self.window_titles() {
-                    items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Switch to: {}", switch_title).into(),
-                        icon: Some("→"),
-                        action: crate::actions::TermWmAction::FocusWindow(key),
-                        disabled: key == focused,
-                    }));
+                let switch_titles = self.window_titles();
+                if !switch_titles.is_empty() {
+                    items.push(MenuDisplayItem::Separator);
+                    for (key, switch_title) in switch_titles {
+                        items.push(MenuDisplayItem::Item(MenuItem {
+                            label: format!("Switch to: {}", switch_title).into(),
+                            icon: Some("→"),
+                            action: crate::actions::TermWmAction::FocusWindow(key),
+                            disabled: key == focused,
+                        }));
+                    }
                 }
             }
         }
@@ -268,11 +267,6 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     clipboard_label,
                     Some("■"),
                     crate::actions::TermWmAction::ToggleClipboardMode,
-                ));
-                items.push(mi(
-                    selection_label,
-                    Some("●"),
-                    crate::actions::TermWmAction::ToggleWindowSelection,
                 ));
                 items.push(mi(
                     "Paste",
@@ -549,5 +543,57 @@ mod tests {
         assert!(wm.handle_command_palette_event(&key_esc()).is_none());
         assert_eq!(wm.input_mode(), WmInputMode::CommandPalette);
         assert!(wm.command_palette_visible());
+    }
+
+    #[test]
+    fn wm_menu_items_separates_controls_and_switcher() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        use crate::window::WindowState;
+        let mut wm = make_wm::<TestOverlay>();
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+        wm.set_window_title(key, "alpha");
+
+        let items = wm.wm_menu_items();
+        let switcher_idx = items.iter().position(|entry| {
+            matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem { label, .. }) if label.starts_with("Switch to: ")
+            )
+        });
+        let idx = switcher_idx.expect("Switch to entry present");
+        assert!(
+            matches!(&items[idx - 1], MenuDisplayItem::Separator),
+            "separator must precede the Switch to list"
+        );
+        assert!(
+            matches!(&items[idx - 2], MenuDisplayItem::Item(_)),
+            "window controls must precede the separator"
+        );
+    }
+
+    #[test]
+    fn wm_menu_items_skips_separator_when_no_switch_targets() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut wm = make_wm::<TestOverlay>();
+        // Create a window that is focused but not part of the display order
+        // (never registered/layout-managed), so `window_titles()` is empty
+        // while the WM still has an active focus target. The Switch to list
+        // must be skipped entirely (no dangling separator).
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.focus_window_key(key);
+
+        let items = wm.wm_menu_items();
+        let has_switch = items.iter().any(|entry| {
+            matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem { label, .. }) if label.starts_with("Switch to: ")
+            )
+        });
+        assert!(
+            !has_switch,
+            "no Switch to entries expected when display order is empty"
+        );
     }
 }

@@ -22,6 +22,8 @@ pub struct ConfirmOverlayComponent {
     selected_confirm: bool,
     cancel_rect: Cell<Option<Rect>>,
     confirm_rect: Cell<Option<Rect>>,
+    cancel_label: String,
+    confirm_label: String,
 }
 
 impl Default for ConfirmOverlayComponent {
@@ -33,6 +35,8 @@ impl Default for ConfirmOverlayComponent {
             selected_confirm: false,
             cancel_rect: Cell::new(None),
             confirm_rect: Cell::new(None),
+            cancel_label: "[ Cancel ]".to_string(),
+            confirm_label: "[ Exit ]".to_string(),
         }
     }
 }
@@ -113,8 +117,8 @@ impl Component<TermWmAction> for ConfirmOverlayComponent {
                 cell.set_style(separator_style);
             }
         }
-        let cancel = "[ Cancel ]";
-        let confirm = "[ Exit ]";
+        let cancel = self.cancel_label.as_str();
+        let confirm = self.confirm_label.as_str();
         let selected_style = Style::default()
             .fg(color_to_ratatui(ctx.config().theme.decorator_header_fg))
             .bg(color_to_ratatui(ctx.config().theme.decorator_header_bg))
@@ -206,6 +210,8 @@ impl ConfirmOverlayComponent {
             selected_confirm: false,
             cancel_rect: Cell::new(None),
             confirm_rect: Cell::new(None),
+            cancel_label: "[ Cancel ]".to_string(),
+            confirm_label: "[ Exit ]".to_string(),
         }
     }
 
@@ -216,6 +222,15 @@ impl ConfirmOverlayComponent {
         self.visible = true;
         self.body = body.to_string();
         self.selected_confirm = true;
+    }
+
+    /// Override the button labels. Labels must be fully pre-formatted
+    /// (brackets included, e.g. `"[ Return to term-wm ]"`); they are read as
+    /// `&str` during render so hitbox widths stay exact and no allocation
+    /// happens in the render path.
+    pub fn set_labels(&mut self, cancel: impl Into<String>, confirm: impl Into<String>) {
+        self.cancel_label = cancel.into();
+        self.confirm_label = confirm.into();
     }
 
     pub fn close(&mut self) {
@@ -471,6 +486,60 @@ mod tests {
         let ctx = ComponentContext::new(true);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         o.render(&mut backend, area, &ctx, &mut registry);
+    }
+
+    #[test]
+    fn render_custom_labels() {
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::prelude::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::prelude::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        let mut o = ConfirmOverlayComponent::new();
+        o.set_labels("[ Return to term-wm ]", "[ Exit term-wm ]");
+        o.open("Exit?", "Are you sure?");
+        let ctx = ComponentContext::new(true);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        o.render(&mut backend, area, &ctx, &mut registry);
+
+        let mut symbols = String::new();
+        for y in 0..24 {
+            for x in 0..80 {
+                if let Some(c) = backend.buffer.cell((x, y)) {
+                    symbols.push_str(c.symbol());
+                }
+            }
+        }
+        assert!(
+            symbols.contains("[ Return to term-wm ]"),
+            "cancel label not rendered"
+        );
+        assert!(
+            symbols.contains("[ Exit term-wm ]"),
+            "confirm label not rendered"
+        );
+
+        // Hitboxes must match the custom label widths exactly.
+        let cancel_width = o.cancel_rect.get().map(|r| r.width);
+        let confirm_width = o.confirm_rect.get().map(|r| r.width);
+        assert_eq!(cancel_width, Some("[ Return to term-wm ]".len() as u16));
+        assert_eq!(confirm_width, Some("[ Exit term-wm ]".len() as u16));
     }
 
     #[test]

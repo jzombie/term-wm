@@ -20,27 +20,45 @@ pub fn resolve_channel(cli_channel: Option<String>) -> String {
         .unwrap_or_else(|| DEFAULT_CHANNEL.to_string())
 }
 
+/// Seconds per minute, used by [`format_unix_relative`].
+const SECS_PER_MIN: u64 = 60;
+/// Seconds per hour, used by [`format_unix_relative`].
+const SECS_PER_HOUR: u64 = 3600;
+/// Seconds per day, used by [`format_unix_relative`].
+const SECS_PER_DAY: u64 = 86400;
+
 /// Format a unix timestamp as a relative human string ("2s ago", "5m ago", …),
-/// falling back to an absolute HH:MM:SS for very old timestamps.
+/// always in elapsed units regardless of age ("2d 5h" for ages beyond a day).
 pub fn format_unix_relative(ts: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    format_unix_relative_at(ts, now)
+}
+
+/// Format a unix timestamp relative to an explicit `now` in unix seconds.
+///
+/// Elapsed durations are always rendered in relative units: seconds, minutes,
+/// hours, then combined days + hours. A zero timestamp renders as `-`.
+/// Timestamps newer than `now` saturate to the seconds tier.
+pub fn format_unix_relative_at(ts: u64, now: u64) -> String {
     if ts == 0 {
         return "-".to_string();
     }
     let diff = now.saturating_sub(ts);
-    if diff < 60 {
+    if diff < SECS_PER_MIN {
         format!("{diff}s")
-    } else if diff < 3600 {
-        format!("{}m", diff / 60)
-    } else if diff < 86400 {
-        format!("{}h", diff / 3600)
+    } else if diff < SECS_PER_HOUR {
+        format!("{}m", diff / SECS_PER_MIN)
+    } else if diff < SECS_PER_DAY {
+        format!("{}h", diff / SECS_PER_HOUR)
     } else {
-        let secs = ts % 86400;
-        let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
-        format!("{h:02}:{m:02}:{s:02}")
+        format!(
+            "{}d {}h",
+            diff / SECS_PER_DAY,
+            (diff % SECS_PER_DAY) / SECS_PER_HOUR
+        )
     }
 }
 
@@ -284,5 +302,72 @@ mod tests {
             std::env::remove_var(CHANNEL_ENV_VAR);
         }
         assert_eq!(resolve_channel(None), DEFAULT_CHANNEL);
+    }
+
+    #[test]
+    fn format_zero_timestamp_is_dash() {
+        assert_eq!(format_unix_relative_at(0, SECS_PER_DAY), "-");
+    }
+
+    #[test]
+    fn format_under_a_minute_shows_seconds() {
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY - 42, SECS_PER_DAY),
+            "42s"
+        );
+    }
+
+    #[test]
+    fn format_under_an_hour_shows_minutes() {
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY - 3_300, SECS_PER_DAY),
+            "55m"
+        );
+    }
+
+    #[test]
+    fn format_under_a_day_shows_hours() {
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY - 7_200, SECS_PER_DAY),
+            "2h"
+        );
+    }
+
+    #[test]
+    fn format_older_than_a_day_shows_days_and_hours() {
+        assert_eq!(
+            format_unix_relative_at(10 * SECS_PER_DAY, 11 * SECS_PER_DAY),
+            "1d 0h"
+        );
+        assert_eq!(
+            format_unix_relative_at(10 * SECS_PER_DAY, 11 * SECS_PER_DAY + 3 * SECS_PER_HOUR),
+            "1d 3h"
+        );
+    }
+
+    #[test]
+    fn format_day_boundary_exact() {
+        assert_eq!(
+            format_unix_relative_at(10 * SECS_PER_DAY, 11 * SECS_PER_DAY),
+            "1d 0h"
+        );
+    }
+
+    #[test]
+    fn format_timestamp_newer_than_now_saturates() {
+        assert_eq!(
+            format_unix_relative_at(SECS_PER_DAY + 10, SECS_PER_DAY),
+            "0s"
+        );
+    }
+
+    #[test]
+    fn format_does_not_render_clock_time() {
+        // Regression for the military-time leak: an old timestamp rendered
+        // `ts % 86400` (UTC time-of-day). It must never produce HH:MM:SS.
+        let ts = SECS_PER_DAY * 40 + 18 * SECS_PER_HOUR + 48 * SECS_PER_MIN + 46;
+        let out = format_unix_relative_at(ts, SECS_PER_DAY * 42);
+        assert_eq!(out, "1d 5h");
+        assert!(!out.contains(':'), "clock-time format leaked: {out}");
     }
 }
