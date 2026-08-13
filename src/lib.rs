@@ -1,7 +1,18 @@
 #![doc = include_str!("../README.md")]
 
+extern crate self as term_wm;
+
 pub use term_wm_core::*;
+pub use term_wm_render::RenderBackend;
 pub use term_wm_ui_components::*;
+pub use term_wm_view::view;
+// Root-level re-exports of the core types the generated `view!` code and
+// consumer apps reference (the root `components` module is app-specific and
+// shadows `term_wm_core::components`, so these are hoisted to the root). The
+// remainder are re-exported by promoting the existing `use` imports below.
+pub use term_wm_core::actions::EventResult;
+pub use term_wm_core::component_context::ComponentContext;
+pub use term_wm_core::events::Event;
 pub mod components;
 pub mod logging;
 pub mod prelude;
@@ -16,14 +27,14 @@ use term_wm_console::draw_plan_renderer::{
     render_drop_shadow, render_ghost_preview, render_handles_masked, render_overlays,
     render_panels, render_resize_outline, row_has_content_in_range,
 };
-use term_wm_core::actions::TermWmAction;
-use term_wm_core::components::{Component, Overlay, WmComponent};
-use term_wm_core::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
-use term_wm_core::window::{WindowManager, WindowSurface};
+pub use term_wm_core::actions::TermWmAction;
+pub use term_wm_core::components::{Component, NoopComponent, Overlay, SelectionStatus, WmComponent};
+pub use term_wm_core::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
+pub use term_wm_core::window::{WindowKey, WindowManager, WindowSurface};
 
 /// Default rendering implementation for the window manager.
 /// Shared by all apps so they don't need to reimplement rendering.
-pub fn render_app<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+pub fn render_app<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmAction>>(
     backend: &mut dyn term_wm_render::RenderBackend,
     wm: &mut WindowManager<C, L, O>,
     engine: &mut term_wm_core::engine::CoreEngine,

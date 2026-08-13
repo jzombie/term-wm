@@ -123,3 +123,33 @@ Magic Strings and Numbers
 Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
+
+Declarative `view!` Macro
+- `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) builds a
+  component tree declaratively. It is "dumb": the expansion is fully-monomorphized
+  constructor calls + generated delegate enums — no runtime tree, no reactivity,
+  no reconciliation, no `Box`/`dyn` in the tree.
+- **Per-frame model**: `view!` produces an ephemeral `Component` value evaluated
+  each frame. Ephemeral tags must be stateless (`Label`, `Button`, layout
+  containers). Stateful components (`TerminalComponent`, `ScrollViewComponent`,
+  lists) are app-owned and injected by reference via `{ &mut self.x }`.
+- **Two integration patterns**:
+  - All-owned view (no `&mut` blocks) → `open_window(AppRootComponent::Custom(view!{..}))`.
+  - Borrowed view → the app implements `Component` for its window struct and
+    forwards lifecycle calls to a per-frame `fn view(&mut self) -> impl Component + '_`.
+- `Component<Msg>` has **no `Any` supertrait**; `'static` is required only where
+  components are stored (the `WindowManager`). A blanket
+  `impl Component for &mut C` forwards every method, which is what makes
+  `{ &mut self.x }` children work.
+- Container components (`VerticalStackComponent`, `HStackComponent`,
+  `GridComponent`, `CenterComponent`) MUST: recompute child rects from
+  `ctx.screen_area()` on every call (never cache), rebind each child's context
+  with `with_screen_area` in render AND event paths, route mouse events
+  spatially, and route `Event::Key` to the focused child
+  (`ctx.keyboard_focus_id()`), never broadcast.
+- `desired_height` stretch semantics: `0` means stretch. `HStackComponent`
+  returns `0` if any child stretches; `GridComponent` returns `0` if any row is
+  `Fraction` (or `rows` is empty).
+- Generated `view!` code references the `::term_wm` umbrella crate; consumers
+  must depend on `term-wm` (default crate name) and the container/leaf tags map
+  to the `*Component` types above.

@@ -27,7 +27,7 @@ impl CoreEngine {
     /// Project the current draw plan without causing heap allocation.
     /// Returns a reference to the draw plan struct.
     pub fn project_draw_plan<
-        C: Component<TermWmAction>,
+        C: Component<TermWmAction> + 'static,
         L: WmComponent,
         O: Overlay<TermWmAction>,
     >(
@@ -69,7 +69,7 @@ impl CoreEngine {
     }
 
     /// Generate render regions from current layout state.
-    fn generate_regions<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    fn generate_regions<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmAction>>(
         &mut self,
         _width: u32,
         _height: u32,
@@ -136,7 +136,7 @@ impl CoreEngine {
 /// Extracted as a standalone function so that the geometric circuit-breaker
 /// early return only skips notification layers — not the entire pipeline.
 fn generate_notification_regions<
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent,
     O: Overlay<TermWmAction>,
 >(

@@ -113,7 +113,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// ```
 pub struct TermWmApp<C = NoopComponent>
 where
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
 {
     wm: WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent>,
     debug_key: Option<WindowKey>,
@@ -133,7 +133,7 @@ where
     terminal_counter: usize,
 }
 
-impl<C: Component<TermWmAction>> TermWmApp<C> {
+impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     /// Create a new standalone app with all system chrome (panels, menu).
     ///
     /// This is the generic constructor — works for any `C: Component<TermWmAction>`.
@@ -473,7 +473,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     }
 }
 
-impl<C: Component<TermWmAction>>
+impl<C: Component<TermWmAction> + 'static>
     WindowManagerHost<AppRootComponent<C>, LayerComponent, OverlayComponent> for TermWmApp<C>
 {
     fn wm(&mut self) -> &mut WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent> {

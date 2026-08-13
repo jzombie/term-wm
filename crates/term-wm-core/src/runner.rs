@@ -23,7 +23,7 @@ use crate::window::{WindowKey, WindowManager};
 use std::collections::VecDeque;
 
 pub trait WindowManagerHost<
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent = crate::components::NoopWmComponent,
     O: Overlay<TermWmAction> = crate::components::NoopOverlay,
 >
@@ -79,7 +79,7 @@ pub trait WindowManagerHost<
 /// Single authoritative action dispatcher. Both the component action queue
 /// and the overlay keybinding barrier route through this function.
 fn dispatch_action<
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent,
     O: Overlay<TermWmAction>,
     A: WindowManagerHost<C, L, O>,
@@ -170,7 +170,7 @@ fn dispatch_action<
 }
 
 fn drain_action_queue<
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent,
     O: Overlay<TermWmAction>,
     A: WindowManagerHost<C, L, O>,
@@ -185,7 +185,7 @@ fn drain_action_queue<
 
 fn handle_focused_app_event<C, L, O, A>(event: &Event, app: &mut A) -> bool
 where
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent,
     O: Overlay<TermWmAction>,
     A: WindowManagerHost<C, L, O>,
@@ -281,7 +281,7 @@ pub fn run_event_loop<C, L, Ov, Rt, D, A, FDraw, FMap>(
     mut draw: FDraw,
 ) -> io::Result<()>
 where
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent,
     Ov: Overlay<TermWmAction>,
     Rt: RenderTarget,
@@ -828,7 +828,7 @@ pub fn run_with_defaults<C, L, Ov, Rt, D, A>(
     app: &mut A,
 ) -> io::Result<()>
 where
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent,
     Ov: Overlay<TermWmAction>,
     Rt: RenderTarget,
@@ -870,7 +870,7 @@ fn selection_snapshot_from(
 
 fn update_selection_snapshot<C, L, O, A>(app: &mut A)
 where
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent,
     O: Overlay<TermWmAction>,
     A: WindowManagerHost<C, L, O>,
@@ -2012,11 +2012,11 @@ mod power_calibration_tests {
     }
 
     /// App that quits after exactly one draw.
-    struct QuitOnFirstDraw<C: Component<TermWmAction>> {
+    struct QuitOnFirstDraw<C: Component<TermWmAction> + 'static> {
         wm: WindowManager<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>,
         draws: usize,
     }
-    impl<C: Component<TermWmAction>>
+    impl<C: Component<TermWmAction> + 'static>
         WindowManagerHost<C, crate::components::NoopWmComponent, crate::components::NoopOverlay>
         for QuitOnFirstDraw<C>
     {

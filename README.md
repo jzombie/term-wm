@@ -179,6 +179,29 @@ Floating windows support mouse-driven snapping with a live **ghost preview**. Wh
 
 However, the developer-facing library API is currently unsolidified and subject to rapid breaking changes. Stabilizing the developer API, refining the component lifecycle, and documenting the embedded layout engine will be the primary focus of future architectural iterations. (For a glimpse into the internal component design standards, see [AGENTS.md](./AGENTS.md)).
 
+## Declarative Component Trees with `view!`
+
+`term-wm` ships a "dumb" `view!` macro that builds component trees declaratively — it expands to ordinary, fully-monomorphized component constructors, with no runtime tree, reactivity, or reconciliation:
+
+```ignore
+fn view(&mut self) -> impl Component<TermWmAction> + '_ {
+    view! {
+        <VerticalStack gap=1>
+            <Label text="System Status" />
+            <Button label="Refresh" action={TermWmAction::OpenCommandPalette} />
+            { &mut self.terminal }   // borrow stateful components into the tree
+        </VerticalStack>
+    }
+}
+```
+
+- **Layout tags**: `<VerticalStack>`/`<Column>`, `<HStack>`/`<Row>`, `<Center width height>`, `<Grid cols="200px 1fr" rows="1fr">`.
+- **Built-in tags**: `<Label text>`, `<Button label action|onClick>`.
+- **Escape hatch**: `{ expr }` injects any `Component` value, owned or `&mut`-borrowed — no registry changes needed for your own components.
+- All-owned trees (no `&mut`) can be handed straight to `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
+
+See [`examples/view_demo.rs`](examples/view_demo.rs) for a runnable demo.
+
 ## License
 
 `term-wm` is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0).

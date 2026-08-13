@@ -1,0 +1,20 @@
+[package]
+name = "term-wm-view"
+description = "Declarative view! macro that builds term-wm component trees."
+keywords = ["ui", "macro", "declarative", "tui", "view"]
+categories = ["gui", "command-line-interface"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+rstml = { workspace = true }
+syn = { workspace = true }

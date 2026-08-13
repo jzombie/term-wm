@@ -52,6 +52,52 @@ impl<C: Component<TermWmAction>> VerticalStackComponent<C> {
             height: child_h,
         }
     }
+
+    /// Recompute each child's `(local_rect, screen_rect)` from the parent's
+    /// local area and absolute screen bounds. Never cached — callers derive
+    /// these from `ctx.screen_area()` on every render/event pass.
+    fn child_layouts(
+        &self,
+        local: LayoutRect,
+        screen: LayoutRect,
+        scroll_y: i32,
+    ) -> Vec<(LayoutRect, LayoutRect)> {
+        let mut layouts = Vec::with_capacity(self.children.len());
+        let mut cursor: i32 = 0;
+        for child in &self.children {
+            let desired = child.desired_height(local.width);
+            let child_h = if desired == 0 {
+                let remaining = (i32::from(local.height)).saturating_sub(cursor).max(0) as u16;
+                if remaining == 0 {
+                    break;
+                }
+                remaining
+            } else {
+                desired
+            };
+            layouts.push((
+                LayoutRect {
+                    x: local.x,
+                    y: local.y.saturating_add(cursor),
+                    width: local.width,
+                    height: child_h,
+                },
+                LayoutRect {
+                    x: screen.x,
+                    y: screen.y.saturating_add(cursor).saturating_sub(scroll_y),
+                    width: screen.width,
+                    height: child_h,
+                },
+            ));
+            cursor = cursor
+                .saturating_add(i32::from(child_h))
+                .saturating_add(i32::from(self.gap));
+            if cursor >= i32::from(local.height) {
+                break;
+            }
+        }
+        layouts
+    }
 }
 
 impl<C: Component<TermWmAction>> Default for VerticalStackComponent<C> {
@@ -138,67 +184,19 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackCompon
         event: &Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        let mouse = match event {
-            Event::Mouse(m) => m,
-            _ => return EventResult::Ignored,
-        };
-
-        let parent_area = ctx.screen_area().unwrap_or_default();
-        let scroll_y = ctx
-            .scroll_handle()
-            .map(|h| h.info().offset_y as i32)
-            .unwrap_or(0);
-
-        let m_x = i32::from(mouse.column);
-        let m_y = i32::from(mouse.row);
-        let mut child_virtual_y: i32 = 0;
-
-        for child in &mut self.children {
-            let child_h = child.desired_height(parent_area.width);
-            if child_h == 0 {
-                // Stretch child fills rest — check bounds
-                let remaining = (parent_area.height as i32)
-                    .saturating_sub(child_virtual_y)
-                    .max(0) as u16;
-                if remaining > 0 {
-                    let child_screen =
-                        Self::child_screen_area(parent_area, child_virtual_y, remaining, scroll_y);
-                    if m_x >= child_screen.x
-                        && m_x < child_screen.x + child_screen.width as i32
-                        && m_y >= child_screen.y
-                        && m_y < child_screen.y + child_screen.height as i32
-                    {
-                        let child_ctx = ctx.clone().with_screen_area(child_screen);
-                        let result = child.handle_events(event, &child_ctx);
-                        if !result.is_ignored() {
-                            return result;
-                        }
-                    }
-                }
-                break;
+        match event {
+            Event::Mouse(_) => {
+                let parent_area = ctx.screen_area().unwrap_or_default();
+                let scroll_y = ctx
+                    .scroll_handle()
+                    .map(|h| h.info().offset_y as i32)
+                    .unwrap_or(0);
+                let layouts = self.child_layouts(parent_area, parent_area, scroll_y);
+                crate::helpers::route_mouse_by_rects(&mut self.children, &layouts, event, ctx)
             }
-
-            let child_screen =
-                Self::child_screen_area(parent_area, child_virtual_y, child_h, scroll_y);
-            if m_x >= child_screen.x
-                && m_x < child_screen.x + child_screen.width as i32
-                && m_y >= child_screen.y
-                && m_y < child_screen.y + child_screen.height as i32
-            {
-                let child_ctx = ctx.clone().with_screen_area(child_screen);
-                let result = child.handle_events(event, &child_ctx);
-                if !result.is_ignored() {
-                    return result;
-                }
-            }
-
-            child_virtual_y += child_h as i32 + self.gap as i32;
-            if child_virtual_y >= parent_area.height as i32 {
-                break;
-            }
+            Event::Key(_) => crate::helpers::route_key_to_focused(&mut self.children, event, ctx),
+            _ => crate::helpers::route_broadcast(&mut self.children, event, ctx),
         }
-
-        EventResult::Ignored
     }
 
     fn update(
@@ -539,5 +537,58 @@ mod tests {
         let mut stack = VerticalStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         stack.destroy();
+    }
+
+    struct KeyTracker {
+        hitbox: Option<term_wm_core::hitbox_registry::HitboxId>,
+        key_count: u32,
+    }
+
+    impl KeyTracker {
+        fn with_hitbox() -> Self {
+            Self {
+                hitbox: Some(term_wm_core::hitbox_registry::HitboxId::new()),
+                key_count: 0,
+            }
+        }
+    }
+
+    impl Component<TermWmAction> for KeyTracker {
+        fn hitbox_id(&self) -> Option<term_wm_core::hitbox_registry::HitboxId> {
+            self.hitbox
+        }
+        fn render(
+            &mut self,
+            _b: &mut dyn term_wm_render::RenderBackend,
+            _a: LayoutRect,
+            _c: &ComponentContext,
+            _r: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+        fn handle_events(&mut self, event: &Event, _c: &ComponentContext) -> EventResult<TermWmAction> {
+            if matches!(event, Event::Key(_)) {
+                self.key_count += 1;
+            }
+            EventResult::Ignored
+        }
+    }
+
+    #[test]
+    fn vertical_stack_keys_route_to_focused_child_only() {
+        let mut stack = VerticalStackComponent::<KeyTracker>::new();
+        let a = KeyTracker::with_hitbox();
+        let b = KeyTracker::with_hitbox();
+        let focus = b.hitbox.unwrap();
+        stack.add(a);
+        stack.add(b);
+        let ctx = ComponentContext::new(true).with_keyboard_focus_id(focus);
+        let event = Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        stack.handle_events(&event, &ctx);
+        assert_eq!(stack.children[0].key_count, 0, "non-focused child must not receive keys");
+        assert_eq!(stack.children[1].key_count, 1, "focused child receives the key");
     }
 }
