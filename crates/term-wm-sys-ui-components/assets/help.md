@@ -113,7 +113,10 @@ automatically.
 Notes:
 
 * Selection and right-click paste are available only while **not** in Direct Input Mode.
-  In Direct Input Mode, all mouse events pass through to the running application unfiltered.
+  In Direct Input Mode, all mouse events pass through to the running application unfiltered,
+  clipboard enablement is overridden, and clipboard handling is delegated to the application:
+  it is responsible for its own selection and copy. OSC 52 copy sequences emitted by the
+  application continue to be relayed to the system clipboard.
 * To disable clipboard integration, open the Command Palette (`%SUPER%`) and toggle
   "Clipboard Mode".
 * To enable or disable window text selection via the Command Palette, toggle

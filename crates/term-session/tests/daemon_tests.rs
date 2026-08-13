@@ -883,7 +883,7 @@ async fn cli_kill_requires_force_when_participants() {
     let out = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
         .arg("kill")
-        .arg(&channel)
+        .arg(channel)
         .output()
         .expect("run kill");
     assert!(
@@ -904,7 +904,7 @@ async fn cli_kill_requires_force_when_participants() {
     // `kill --force` succeeds.
     let out = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .args(["kill", &channel, "--force"])
+        .args(["kill", channel, "--force"])
         .output()
         .expect("run kill --force");
     assert!(

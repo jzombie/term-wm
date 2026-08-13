@@ -1773,7 +1773,7 @@ async fn kill_channel_refuses_without_force_when_participants() {
     .unwrap();
 
     // Without force: refused, and the channel must stay fully operational.
-    let err = KillChannel::call(&*client, (channel.clone(), false))
+    let err = KillChannel::call(&*client, (channel.to_string(), false))
         .await
         .expect_err("kill without force while participants are attached must fail");
     assert!(
@@ -1786,7 +1786,7 @@ async fn kill_channel_refuses_without_force_when_participants() {
     let ch = resp
         .channels
         .iter()
-        .find(|c| c.name == channel)
+        .find(|c| c.name == channel.to_string())
         .expect("channel still served after refusal");
     assert!(
         ch.session.as_ref().is_some_and(|s| !s.exited),
@@ -1794,7 +1794,7 @@ async fn kill_channel_refuses_without_force_when_participants() {
     );
 
     // With force: the channel is killed.
-    KillChannel::call(&*client, (channel.clone(), true))
+    KillChannel::call(&*client, (channel.to_string(), true))
         .await
         .unwrap();
     guard.shutdown().await;
