@@ -114,7 +114,12 @@ fn view_macro_box_tag_renders_border_title_and_content() {
     });
 
     let comp = wm.component_for_key_mut(key).expect("window component");
-    let area = LayoutRect { x: 0, y: 0, width: 20, height: 5 };
+    let area = LayoutRect {
+        x: 0,
+        y: 0,
+        width: 20,
+        height: 5,
+    };
     let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 20, 5));
     let mut backend = term_wm_console::RatatuiBackend::new_simple(
         buffer,
@@ -130,7 +135,10 @@ fn view_macro_box_tag_renders_border_title_and_content() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(content.contains("╭─ Section"), "border + title: {content:?}");
+    assert!(
+        content.contains("╭─ Section"),
+        "border + title: {content:?}"
+    );
     assert!(content.contains("hi"), "content should render: {content:?}");
 }
 
@@ -149,7 +157,12 @@ fn view_macro_box_border_false_renders_no_border() {
     });
 
     let comp = wm.component_for_key_mut(key).expect("window component");
-    let area = LayoutRect { x: 0, y: 0, width: 20, height: 5 };
+    let area = LayoutRect {
+        x: 0,
+        y: 0,
+        width: 20,
+        height: 5,
+    };
     let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 20, 5));
     let mut backend = term_wm_console::RatatuiBackend::new_simple(
         buffer,

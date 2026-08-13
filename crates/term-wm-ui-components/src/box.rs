@@ -160,7 +160,13 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for BoxComponent<C> {
             let rect = layout_rect_to_clipped_rect(area);
             let backend = downcast_ratatui(backend);
             let inner_w = area.width.saturating_sub(2);
-            render_row(rect, 0, top_row(&self.title, inner_w), self.border_color, backend);
+            render_row(
+                rect,
+                0,
+                top_row(&self.title, inner_w),
+                self.border_color,
+                backend,
+            );
             for y in 1..area.height.saturating_sub(1) {
                 render_row(
                     rect,
@@ -185,7 +191,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for BoxComponent<C> {
         }
         let inner_screen = self.inner_rect(screen);
         let child_ctx = ctx.clone().with_screen_area(inner_screen);
-        self.content.render(backend, inner_local, &child_ctx, registry);
+        self.content
+            .render(backend, inner_local, &child_ctx, registry);
     }
 
     fn handle_events(
@@ -280,7 +287,12 @@ mod tests {
     };
 
     fn rect(x: i32, y: i32, w: u16, h: u16) -> LayoutRect {
-        LayoutRect { x, y, width: w, height: h }
+        LayoutRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     fn make_backend(w: u16, h: u16) -> term_wm_console::RatatuiBackend {
@@ -289,7 +301,11 @@ mod tests {
     }
 
     fn key_event() -> Event {
-        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE, KeyKind::Press))
+        Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ))
     }
 
     fn mouse(kind: MouseEventKind, col: u16, row: u16) -> Event {
@@ -340,8 +356,11 @@ mod tests {
 
     #[test]
     fn box_render_draws_border_and_title_and_insets_content() {
-        let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() })
-            .with_title("Section");
+        let mut b = BoxComponent::new(SpyChild {
+            height: 1,
+            ..Default::default()
+        })
+        .with_title("Section");
         let mut backend = make_backend(20, 5);
         let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 20, 5));
         let mut registry = HitboxRegistry::new();
@@ -353,7 +372,10 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(content.contains("╭─ Section"), "top border with title: {content:?}");
+        assert!(
+            content.contains("╭─ Section"),
+            "top border with title: {content:?}"
+        );
         assert!(content.contains('│'), "side border: {content:?}");
         assert!(content.contains('╰'), "bottom border: {content:?}");
         // Content inset by 1 (border) on every side.
@@ -362,9 +384,12 @@ mod tests {
 
     #[test]
     fn box_without_border_renders_no_border_and_pads_only() {
-        let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() })
-            .with_border(false)
-            .with_padding(2);
+        let mut b = BoxComponent::new(SpyChild {
+            height: 1,
+            ..Default::default()
+        })
+        .with_border(false)
+        .with_padding(2);
         let mut backend = make_backend(20, 5);
         let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 20, 5));
         let mut registry = HitboxRegistry::new();
@@ -376,53 +401,89 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(!content.contains('╭') && !content.contains('╰') && !content.contains('│'),
-            "no border glyphs: {content:?}");
+        assert!(
+            !content.contains('╭') && !content.contains('╰') && !content.contains('│'),
+            "no border glyphs: {content:?}"
+        );
         assert_eq!(b.content.seen_render, Some(rect(2, 2, 16, 1)));
     }
 
     #[test]
     fn box_desired_height_respects_border_and_padding() {
-        let on = BoxComponent::new(SpyChild { height: 3, ..Default::default() }).with_padding(1);
+        let on = BoxComponent::new(SpyChild {
+            height: 3,
+            ..Default::default()
+        })
+        .with_padding(1);
         assert_eq!(on.desired_height(40), 2 + 2 + 3);
-        let off = BoxComponent::new(SpyChild { height: 3, ..Default::default() })
-            .with_border(false)
-            .with_padding(1);
+        let off = BoxComponent::new(SpyChild {
+            height: 3,
+            ..Default::default()
+        })
+        .with_border(false)
+        .with_padding(1);
         assert_eq!(off.desired_height(40), 2 + 3);
     }
 
     #[test]
     fn box_desired_height_stretch_propagates() {
-        let b = BoxComponent::new(SpyChild { height: 0, ..Default::default() });
+        let b = BoxComponent::new(SpyChild {
+            height: 0,
+            ..Default::default()
+        });
         assert_eq!(b.desired_height(40), 0);
     }
 
     #[test]
     fn box_down_inside_forwards_down_on_border_ignored() {
-        let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() });
+        let mut b = BoxComponent::new(SpyChild {
+            height: 1,
+            ..Default::default()
+        });
         let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 20, 5));
         // Inner rect is (1,1,18,3); Press at (5,2) is inside.
-        assert!(b.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 5, 2), &ctx).is_ignored());
+        assert!(
+            b.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 5, 2), &ctx)
+                .is_ignored()
+        );
         assert_eq!(b.content.seen_events, vec![rect(1, 1, 18, 3)]);
         // Press on the top border (row 0) -> not forwarded.
-        assert!(b.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 5, 0), &ctx).is_ignored());
+        assert!(
+            b.handle_events(&mouse(MouseEventKind::Press(MouseButton::Left), 5, 0), &ctx)
+                .is_ignored()
+        );
         assert_eq!(b.content.seen_events.len(), 1);
     }
 
     #[test]
     fn box_drag_and_up_forward_unconditionally() {
-        let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() });
+        let mut b = BoxComponent::new(SpyChild {
+            height: 1,
+            ..Default::default()
+        });
         let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 20, 5));
         // A Drag or Release anywhere (even on the border) must reach the
         // content so an in-flight drag isn't dropped.
-        assert!(b.handle_events(&mouse(MouseEventKind::Drag(MouseButton::Left), 0, 0), &ctx).is_ignored());
-        assert!(b.handle_events(&mouse(MouseEventKind::Release(MouseButton::Left), 19, 4), &ctx).is_ignored());
+        assert!(
+            b.handle_events(&mouse(MouseEventKind::Drag(MouseButton::Left), 0, 0), &ctx)
+                .is_ignored()
+        );
+        assert!(
+            b.handle_events(
+                &mouse(MouseEventKind::Release(MouseButton::Left), 19, 4),
+                &ctx
+            )
+            .is_ignored()
+        );
         assert_eq!(b.content.seen_events.len(), 2);
     }
 
     #[test]
     fn box_key_forwards() {
-        let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() });
+        let mut b = BoxComponent::new(SpyChild {
+            height: 1,
+            ..Default::default()
+        });
         let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 20, 5));
         assert!(b.handle_events(&key_event(), &ctx).is_ignored());
         assert_eq!(b.content.seen_events.len(), 1);
@@ -433,8 +494,11 @@ mod tests {
         // A wide ASCII title and a multi-byte title must both truncate safely
         // and never exceed the row width.
         for title in ["A very long title that cannot fit in ten columns", "键⌘界"] {
-            let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() })
-                .with_title(title);
+            let mut b = BoxComponent::new(SpyChild {
+                height: 1,
+                ..Default::default()
+            })
+            .with_title(title);
             let mut backend = make_backend(12, 3);
             let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 12, 3));
             let mut registry = HitboxRegistry::new();
@@ -464,13 +528,19 @@ mod tests {
 
     #[test]
     fn box_tiny_area_renders_nothing_without_panicking() {
-        let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() });
+        let mut b = BoxComponent::new(SpyChild {
+            height: 1,
+            ..Default::default()
+        });
         let mut backend = make_backend(1, 1);
         let ctx = ComponentContext::new(true);
         let mut registry = HitboxRegistry::new();
         b.render(&mut backend, rect(0, 0, 1, 1), &ctx, &mut registry);
         // Degenerate inner bounds must skip content rendering without panicking.
-        let mut b = BoxComponent::new(SpyChild { height: 1, ..Default::default() });
+        let mut b = BoxComponent::new(SpyChild {
+            height: 1,
+            ..Default::default()
+        });
         let mut backend = make_backend(2, 2);
         let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 2, 2));
         let mut registry = HitboxRegistry::new();

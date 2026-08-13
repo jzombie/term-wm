@@ -32,19 +32,23 @@ struct PanelContentView {
 }
 
 /// Grid columns from the `<Grid cols="16 1fr">` in `PanelContentView::view`.
-/// The 16-wide label column fits "Debug utilities:" so labels never truncate
-/// when wide; on narrow containers the grid reflows to a single stacked column
-/// (labels above their buttons). Keep in sync with the attribute.
+/// The 16-wide label column fits the section labels when wide; on narrow
+/// containers each grid reflows to a single stacked column (label above its
+/// button) inside its card. Keep in sync with the attribute.
 const PANEL_COLS: [GridConstraint; 2] = [GridConstraint::Fixed(16), GridConstraint::Fraction(1)];
 
-// Fixed content heights for the `<VerticalStack>` in `view()`: the key-monitor
-// row (1) plus the grid's rows — `3 3` when wide, the stacked sum `1+3+1+3`
-// when reflowed. All children are constant-height (labels/buttons truncate,
-// never wrap), so these are exact. `desired_height` MUST report them so
-// `CanvasScrollView` sizes its scrollable canvas; a 0 default would disable
-// scrolling entirely (stranding content below the fold).
-const PANEL_GRID_HEIGHT: u16 = 1 + 3 + 3;
-const PANEL_GRID_HEIGHT_STACKED: u16 = 1 + 1 + 3 + 1 + 3;
+// The box inset the inner grids live in: border (2 rows) + padding (2 rows).
+const PANEL_BOX_INSET: u16 = 2 + 2;
+
+// Fixed content heights for the `<VerticalStack gap=1>` in `view()`: the
+// key-monitor row (1) + two gaps + two `<Box padding=1>` cards, each card =
+// border(2) + padding(2) + its grid — a 3-row grid when wide, a stacked
+// (1+3)-row grid when reflowed. All children are constant-height (labels/
+// buttons truncate, never wrap), so these are exact. `desired_height` MUST
+// report them so `CanvasScrollView` sizes its scrollable canvas; a 0 default
+// would disable scrolling entirely (stranding content below the fold).
+const PANEL_CONTENT_HEIGHT: u16 = 1 + 2 + 2 * (PANEL_BOX_INSET + 3);
+const PANEL_CONTENT_HEIGHT_STACKED: u16 = 1 + 2 + 2 * (PANEL_BOX_INSET + 1 + 3);
 
 impl PanelContentView {
     fn new() -> Self {
@@ -59,14 +63,22 @@ impl PanelContentView {
 
     fn view(&mut self) -> impl Component<TermWmAction> + '_ {
         view! {
-            <VerticalStack>
+            <VerticalStack gap=1>
                 { &mut self.key_monitor }
-                <Grid cols="16 1fr" rows="3 3">
-                    <Label text="Notifications:" />
-                    <Button label=" Send Notification " action={TermWmAction::SendNotification("Hello from System Panel!".to_string())} />
-                    <Label text="Debug utilities:" />
-                    <Button label=" Trigger Panic " action={TermWmAction::Callback(|| panic!("Manual panic from system panel"))} />
-                </Grid>
+
+                <Box title="Notifications" padding=1>
+                    <Grid cols="16 1fr" rows="3">
+                        <Label text="System Toast:" />
+                        <Button label=" Send Notification " action={TermWmAction::SendNotification("Hello from System Panel!".to_string())} />
+                    </Grid>
+                </Box>
+
+                <Box title="Debug Utilities" padding=1>
+                    <Grid cols="16 1fr" rows="3">
+                        <Label text="Diagnostics:" />
+                        <Button label=" Trigger Panic " action={TermWmAction::Callback(|| panic!("Manual panic from system panel"))} />
+                    </Grid>
+                </Box>
             </VerticalStack>
         }
     }
@@ -106,14 +118,17 @@ impl Component<TermWmAction> for PanelContentView {
 
     // Cannot forward to `self.view()` here: `view()` needs `&mut self` (for
     // `{ &mut self.key_monitor }`) but `desired_height` is `&self`. Report the
-    // grid's height using the same reflow rule the grid applies (kept in sync
-    // via `grid_reflows`), so `CanvasScrollView` sizes its scroll canvas
-    // correctly in both the wide and stacked layouts.
+    // content height using the same reflow rule each card's grid applies (kept
+    // in sync via `grid_reflows`), so `CanvasScrollView` sizes its scroll
+    // canvas correctly in both the wide and stacked layouts.
     fn desired_height(&self, width: u16) -> u16 {
-        if grid_reflows(&PANEL_COLS, width) {
-            PANEL_GRID_HEIGHT_STACKED
+        // Each grid lives inside a Box inset by border(2) + padding(2) = 4 on
+        // each side, so the reflow decision must use the grid's actual width.
+        let grid_w = width.saturating_sub(PANEL_BOX_INSET);
+        if grid_reflows(&PANEL_COLS, grid_w) {
+            PANEL_CONTENT_HEIGHT_STACKED
         } else {
-            PANEL_GRID_HEIGHT
+            PANEL_CONTENT_HEIGHT
         }
     }
 }
@@ -379,7 +394,7 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(
-            content.contains("Notifications:"),
+            content.contains("System Toast:"),
             "grid label row should render: {content:?}"
         );
         assert!(
@@ -389,13 +404,18 @@ mod tests {
     }
 
     #[test]
-    fn panel_content_view_desired_height_matches_grid_rows() {
+    fn panel_content_view_desired_height_matches_layout() {
         // SEV-1 regression: CanvasScrollView sizes its scrollable canvas from
         // this value; a 0 default would disable scrolling entirely. The height
         // must be reflow-aware too: stacked on narrow containers, wide on wide.
+        // Wide: key monitor (1) + 2 gaps + 2 boxes of (2 border + 2 padding +
+        // 3-row grid) = 17. Narrow (grids reflow): each card's grid becomes a
+        // 1+3 stack = 8 rows per card, total 19.
         let content = PanelContentView::new();
-        assert_eq!(content.desired_height(40), PANEL_GRID_HEIGHT);
-        assert_eq!(content.desired_height(12), PANEL_GRID_HEIGHT_STACKED);
+        assert_eq!(PANEL_CONTENT_HEIGHT, 17);
+        assert_eq!(PANEL_CONTENT_HEIGHT_STACKED, 19);
+        assert_eq!(content.desired_height(40), PANEL_CONTENT_HEIGHT);
+        assert_eq!(content.desired_height(12), PANEL_CONTENT_HEIGHT_STACKED);
     }
 
     #[test]
@@ -431,15 +451,20 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        // The notifications label must be a full-width row on its own line, not
-        // truncated to a few characters beside a button border.
+        // The section label must be a full-width row on its own line inside its
+        // card, not truncated to a few characters beside a button border; the
+        // card titles render in the box borders.
         assert!(
-            content.contains("Notifications:"),
+            content.contains("System Toast:"),
             "stacked label should render untruncated: {content:?}"
         );
         assert!(
             content.contains("Trigger Panic"),
             "stacked button should render: {content:?}"
+        );
+        assert!(
+            content.contains("Notifications") && content.contains("Debug Utilities"),
+            "box card titles should render: {content:?}"
         );
     }
 
