@@ -9,6 +9,7 @@ use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::component_context::ComponentContext;
 use term_wm_core::components::{Component, SelectionStatus};
 use term_wm_core::events::{Event, KeyCode, KeyEvent};
+use term_wm_core::impl_view_component;
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
 use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
@@ -71,45 +72,11 @@ impl PanelContentView {
     }
 }
 
-impl Component<TermWmAction> for PanelContentView {
-    fn render(
-        &mut self,
-        backend: &mut dyn term_wm_render::RenderBackend,
-        area: LayoutRect,
-        ctx: &ComponentContext,
-        registry: &mut term_wm_core::hitbox_registry::HitboxRegistry,
-    ) {
-        self.view().render(backend, area, ctx, registry);
-    }
-
-    fn handle_events(
-        &mut self,
-        event: &Event,
-        ctx: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
-        self.view().handle_events(event, ctx)
-    }
-
-    fn update(
-        &mut self,
-        action: TermWmAction,
-        ctx: &ComponentContext,
-        actions: &mut VecDeque<(WindowKey, TermWmAction)>,
-    ) {
-        self.view().update(action, ctx, actions);
-    }
-
-    fn destroy(&mut self) {
-        self.view().destroy();
-    }
-
-    // `view` takes `&self` (the tree is all-owned), so the height is computed
-    // dynamically by the containers — no constants, and it stays correct if
-    // the markup changes (cards, gaps, grid reflow, padding).
-    fn desired_height(&self, width: u16) -> u16 {
-        self.view().desired_height(width)
-    }
-}
+// `view(&self)` builds an all-owned tree (the key monitor is cloned via its
+// shared Rc), so `impl_view_component!` forwards the whole lifecycle — and
+// `desired_height` stays fully dynamic (no constants, no drift if the markup
+// changes).
+impl_view_component!(PanelContentView);
 
 impl WmSystemPanelComponent {
     pub fn new() -> Self {

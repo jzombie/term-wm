@@ -166,6 +166,12 @@ Declarative `view!` Macro
   nameable `*ContentView` struct implementing `Component` via a per-frame
   `fn view(&self) -> impl Component + '_`, then wrap it in
   `ScrollViewComponent`/`CanvasScrollView`.
+- **`impl_view_component!`** (`term_wm_core`) generates the forwarding
+  `Component` impl for a `view()`-projecting struct: `impl_view_component!(Ty)`
+  forwards everything including a dynamic `desired_height` (requires
+  `view(&self)` — an all-owned tree); `impl_view_component!(Ty, height = <expr>)`
+  reports a static height for `&mut self` views that can't be built from
+  `desired_height(&self)` (the `&self`-querying methods then use defaults).
 - **Height is dynamic, not constant**: containers (`VerticalStack` sums, `HStack`
   maxes, `Grid` sums/fraction-stretch/reflow, `Box` adds border+padding) query
   their children's `desired_height(width)` — width is propagated so grids reflow
