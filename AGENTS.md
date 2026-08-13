@@ -136,9 +136,14 @@ Declarative `view!` Macro
 - **Durable invariants** (violating these is a bug):
   - `view!` trees are ephemeral values rebuilt per frame; stateful components are
     app-owned and injected by reference (`{ &mut self.x }`). Borrowed views
-    forward lifecycle calls via `impl_view_component!` (`Ty`, or
-    `Ty, height = <expr>` when `view(&mut self)` can't be called from `&self`
-    `desired_height`).
+    forward lifecycle calls via `impl_view_component!` — `Ty` (all-owned `&self`
+    view), `Ty, height = <expr>` (static height, no `&self`-queried selection
+    metadata), or `Ty, child: <field>[, <field>…]` / `Ty, height = <expr>, child:
+    <field>[, …]` which delegate the `&self`-queried metadata (selection, hitbox)
+    to the listed stateful fields (first-active-wins aggregation; `clear_selection`
+    / `set_selection_enabled` fan out; `paste` tries each until one consumes it).
+    The selectable fields must be listed explicitly — `macro_rules!` cannot
+    introspect the struct — analogous to a React `useEffect` deps array.
   - Containers (`VStack`, `HStack`, `Grid`, `Center`) recompute child rects
     from `ctx.screen_area()` on every call (never cache), rebind each child's
     context with `with_screen_area` in BOTH `render` and `handle_events`, route

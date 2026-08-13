@@ -1717,9 +1717,12 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
                                     false
                                 } else {
                                     let focused = *self.focus.current() == *key;
+                                    // Dispatch with the window's full content area
+                                    // (component_context_for -> region(key)), not the
+                                    // captured hitbox rect, so containers subdivide
+                                    // the same geometry as render().
                                     let ctx = self
                                         .component_context_for(focused, *key)
-                                        .with_screen_area(*screen_area)
                                         .with_active_hitbox(*hitbox_id);
                                     if let Some(comp) = self.component_for_key_mut(*key) {
                                         let res = comp.handle_events(&core_event, &ctx);
@@ -1961,9 +1964,12 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
                     self.bring_floating_to_front_key(key);
                 }
                 let focused = *self.focus.current() == key;
+                // Dispatch with the window's full content area (component_context_for
+                // -> region(key)) rather than the hitbox's rect, so containers
+                // subdivide the same geometry they do in render(). The active
+                // hitbox id still identifies the target component.
                 let ctx = self
                     .component_context_for(focused, key)
-                    .with_screen_area(hit_rect)
                     .with_active_hitbox(hitbox_id);
                 if let Some(comp) = self.component_for_key_mut(key) {
                     let result = comp.handle_events(&core_event, &ctx);

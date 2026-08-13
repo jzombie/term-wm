@@ -10,8 +10,9 @@
 //!    can call `self.view().desired_height(width)` — fully dynamic, no consts.
 //! 2. **`&mut self` view with a borrowed stateful child** (`ChartsWindow`,
 //!    like argtuner's `ChartsView`) — `view(&mut self)` injects
-//!    `{ &mut self.pane }`; `desired_height` can't build the view, so a static
-//!    layout reports a const.
+//!    `{ &mut self.pane }` via `impl_view_component!(ChartsWindow, child: pane)`,
+//!    which forwards the lifecycle to the view and delegates `desired_height` +
+//!    selection/hitbox to `self.pane`.
 //!
 //! `view!` is invoked through the umbrella `::term_wm::` path style (argtuner
 //! depends on `term-wm`).
@@ -22,6 +23,7 @@ use term_wm::Component;
 use term_wm::actions::{EventResult, TermWmAction};
 use term_wm::component_context::ComponentContext;
 use term_wm::components::AppRootComponent;
+use term_wm::components::SelectionStatus;
 use term_wm::events::Event;
 use term_wm::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 use term_wm::term_wm_app::TermWmApp;
@@ -110,10 +112,10 @@ impl ChartsWindow {
     }
 }
 
-// `&mut self` view (borrows the stateful pane): `desired_height` can't build
-// the view, so the macro takes a static height expression for the fixed layout
-// (Box border 2 + padding 2 + a 3-row grid).
-impl_view_component!(ChartsWindow, height = 2 + 2 + 3);
+// `&mut self` view (borrows the stateful pane): the `child:` form forwards the
+// lifecycle to the view and delegates `desired_height` + selection/hitbox to
+// `self.pane`.
+impl_view_component!(ChartsWindow, child: pane);
 
 /// Delegate enum, like argtuner's `AppComponent`.
 enum AppComponent {
@@ -208,13 +210,151 @@ fn argtuner_style_consumer_works_with_view_trees() {
             content.contains("╭─ Charts"),
             "Box border + title: {content:?}"
         );
+        let AppRootComponent::Custom(AppComponent::Charts(charts)) = app
+            .wm()
+            .component_for_key_mut(charts_key)
+            .expect("charts window")
+        else {
+            panic!("expected charts window");
+        };
+        assert_eq!(charts.desired_height(30), 3, "delegated height (pane.rows)");
         assert_eq!(
-            app.wm()
-                .component_for_key_mut(charts_key)
-                .unwrap()
-                .desired_height(30),
-            7,
-            "static height (Box 2+2 + pane 3)"
+            charts.selection_status().active,
+            charts.pane.selection_status().active,
+            "selection status forwarded to child"
+        );
+        assert_eq!(
+            charts.selection_text(),
+            charts.pane.selection_text(),
+            "selection text forwarded to child"
         );
     }
+}
+
+/// A mock selectable component for the multi-child aggregation test.
+struct MockSelectable {
+    active: bool,
+    dragging: bool,
+    text: Option<String>,
+    selection_enabled: bool,
+    pasted: Vec<String>,
+}
+
+impl Default for MockSelectable {
+    fn default() -> Self {
+        Self {
+            active: false,
+            dragging: false,
+            text: None,
+            selection_enabled: true,
+            pasted: Vec::new(),
+        }
+    }
+}
+
+impl MockSelectable {
+    fn set_active_selection(&mut self, text: &str) {
+        self.active = true;
+        self.dragging = false;
+        self.text = Some(text.to_string());
+    }
+}
+
+impl Component<TermWmAction> for MockSelectable {
+    fn desired_height(&self, _width: u16) -> u16 {
+        0
+    }
+
+    fn render(
+        &mut self,
+        _b: &mut dyn term_wm::RenderBackend,
+        _a: LayoutRect,
+        _c: &ComponentContext,
+        _r: &mut term_wm::hitbox_registry::HitboxRegistry,
+    ) {
+    }
+
+    fn handle_events(&mut self, _e: &Event, _c: &ComponentContext) -> EventResult<TermWmAction> {
+        EventResult::Ignored
+    }
+
+    fn selection_status(&self) -> SelectionStatus {
+        SelectionStatus {
+            active: self.active,
+            dragging: self.dragging,
+        }
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.text.clone()
+    }
+
+    fn clear_selection(&mut self) {
+        self.active = false;
+        self.dragging = false;
+        self.text = None;
+    }
+
+    fn set_selection_enabled(&mut self, enabled: bool) {
+        self.selection_enabled = enabled;
+    }
+
+    fn paste(&mut self, text: &str) -> bool {
+        self.pasted.push(text.to_string());
+        true
+    }
+}
+
+/// A `&mut self` view with TWO selectable child fields, aggregated via
+/// `impl_view_component!(…, height = 0, child: pane_a, pane_b)`.
+struct MultiSelectWindow {
+    pane_a: MockSelectable,
+    pane_b: MockSelectable,
+}
+
+impl MultiSelectWindow {
+    fn view(&mut self) -> impl Component<TermWmAction> + '_ {
+        term_wm::LabelComponent::new("multi")
+    }
+}
+
+impl_view_component!(MultiSelectWindow, height = 0, child: pane_a, pane_b);
+
+#[test]
+fn test_multi_child_selection_aggregation() {
+    let mut win = MultiSelectWindow {
+        pane_a: MockSelectable::default(),
+        pane_b: MockSelectable::default(),
+    };
+
+    // 1. No active selection anywhere -> aggregated status is inactive.
+    assert!(!win.selection_status().active);
+    assert_eq!(win.selection_text(), None);
+
+    // 2. Activate a selection on pane_b (the SECOND field) -> aggregation
+    //    surfaces pane_b's status + text.
+    win.pane_b.set_active_selection("Selected in B");
+    assert!(win.selection_status().active);
+    assert_eq!(win.selection_text().unwrap(), "Selected in B");
+
+    // 3. Activate pane_a too -> the FIRST active field wins.
+    win.pane_a.set_active_selection("Selected in A");
+    assert!(win.selection_status().active);
+    assert_eq!(win.selection_text().unwrap(), "Selected in A");
+
+    // 4. clear_selection fans out to BOTH children.
+    win.clear_selection();
+    assert!(!win.pane_a.selection_status().active);
+    assert!(!win.pane_b.selection_status().active);
+
+    // 5. set_selection_enabled fans out to both.
+    win.set_selection_enabled(false);
+    assert!(!win.pane_a.selection_enabled);
+    assert!(!win.pane_b.selection_enabled);
+
+    // 6. paste is tried on each child in order until one consumes it
+    //    (pane_a first).
+    assert!(win.paste("hello"));
+    assert_eq!(win.pane_a.pasted, vec!["hello".to_string()]);
+    assert!(win.pane_b.pasted.is_empty());
 }

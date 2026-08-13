@@ -469,8 +469,20 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
             let info = handle.info();
             let child_ctx = ctx.with_viewport(info, Some(handle));
 
+            // Clip in SCREEN coordinates: hitbox registrations are absolute
+            // (`ctx.screen_area()`), but `inner_area` is the local render rect.
+            // Clipping an absolute registration against a local rect culled every
+            // hitbox inside a nested scroll view (e.g. the embedded terminal).
+            let sa = ctx.screen_area().unwrap_or(area);
+            let clip_screen = LayoutRect {
+                x: sa.x.saturating_add(inner_area.x.saturating_sub(area.x)),
+                y: sa.y.saturating_add(inner_area.y.saturating_sub(area.y)),
+                width: inner_area.width,
+                height: inner_area.height,
+            };
+
             // 4. Render Child
-            registry.push_clip(inner_area);
+            registry.push_clip(clip_screen);
             self.content
                 .borrow_mut()
                 .render(backend, inner_area, &child_ctx, registry);
