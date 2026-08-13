@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
+use term_wm::Component;
 use term_wm::config::AppBuilder;
 use term_wm::view;
-use term_wm::Component;
 use term_wm_core::components::NoopOverlay;
 use term_wm_layout_engine::LayoutRect;
 use term_wm_ui_facade::layer_component::LayerComponent;
@@ -35,8 +35,10 @@ fn view_macro_all_owned_window_renders_label_and_button() {
         width: 40,
         height: 10,
     };
-    let mut backend =
-        term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 10));
+    let mut backend = term_wm_console::RatatuiBackend::new_simple(
+        buffer,
+        ratatui::layout::Rect::new(0, 0, 40, 10),
+    );
     let ctx = term_wm::ComponentContext::new(true).with_screen_area(area);
     let mut registry = term_wm::hitbox_registry::HitboxRegistry::new();
     comp.render(&mut backend, area, &ctx, &mut registry);
@@ -47,7 +49,10 @@ fn view_macro_all_owned_window_renders_label_and_button() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(content.contains("Hello view!"), "label should render: {content:?}");
+    assert!(
+        content.contains("Hello view!"),
+        "label should render: {content:?}"
+    );
     assert!(content.contains("Quit"), "button label should render");
 }
 
@@ -76,8 +81,10 @@ fn view_macro_grid_and_center_layout() {
         width: 40,
         height: 10,
     };
-    let mut backend =
-        term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 10));
+    let mut backend = term_wm_console::RatatuiBackend::new_simple(
+        buffer,
+        ratatui::layout::Rect::new(0, 0, 40, 10),
+    );
     let ctx = term_wm::ComponentContext::new(true).with_screen_area(area);
     let mut registry = term_wm::hitbox_registry::HitboxRegistry::new();
     comp.render(&mut backend, area, &ctx, &mut registry);

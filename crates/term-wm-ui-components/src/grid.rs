@@ -149,11 +149,7 @@ impl<C: Component<TermWmAction>> GridComponent<C> {
             // share the remaining vertical space.
             let fixed_total: u16 = self.children.iter().fold(0u16, |acc, c| {
                 let h = c.desired_height(width);
-                if h == 0 {
-                    acc
-                } else {
-                    acc.saturating_add(h)
-                }
+                if h == 0 { acc } else { acc.saturating_add(h) }
             });
             let remaining = (i32::from(height))
                 .saturating_sub(i32::from(fixed_total))
@@ -168,11 +164,7 @@ impl<C: Component<TermWmAction>> GridComponent<C> {
                 .iter()
                 .map(|c| {
                     let h = c.desired_height(width);
-                    if h == 0 {
-                        stretch_h.max(1)
-                    } else {
-                        h.max(1)
-                    }
+                    if h == 0 { stretch_h.max(1) } else { h.max(1) }
                 })
                 .collect()
         } else {
@@ -333,12 +325,20 @@ mod tests {
     use term_wm_core::hitbox_registry::HitboxId;
 
     fn rect(x: i32, y: i32, w: u16, h: u16) -> LayoutRect {
-        LayoutRect { x, y, width: w, height: h }
+        LayoutRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     fn make_backend() -> term_wm_console::RatatuiBackend {
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
-        term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 20))
+        term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::layout::Rect::new(0, 0, 40, 20),
+        )
     }
 
     fn mouse_event(col: u16, row: u16) -> Event {
@@ -351,7 +351,11 @@ mod tests {
     }
 
     fn key_event() -> Event {
-        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE, KeyKind::Press))
+        Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ))
     }
 
     #[derive(Default)]
@@ -411,7 +415,10 @@ mod tests {
     #[test]
     fn resolve_sizes_last_fraction_absorbs_remainder() {
         assert_eq!(
-            resolve_sizes(100, &[GridConstraint::Fraction(1), GridConstraint::Fraction(2)]),
+            resolve_sizes(
+                100,
+                &[GridConstraint::Fraction(1), GridConstraint::Fraction(2)]
+            ),
             vec![33, 67]
         );
     }
@@ -427,7 +434,10 @@ mod tests {
     #[test]
     fn resolve_sizes_fixed_exceeds_dim() {
         assert_eq!(
-            resolve_sizes(50, &[GridConstraint::Fixed(100), GridConstraint::Fraction(1)]),
+            resolve_sizes(
+                50,
+                &[GridConstraint::Fixed(100), GridConstraint::Fraction(1)]
+            ),
             vec![100, 0]
         );
     }
@@ -444,8 +454,8 @@ mod tests {
 
     #[test]
     fn grid_desired_height_empty_rows_stretches() {
-        let g = GridComponent::<SpyChild>::new(Vec::new())
-            .with_cols(vec![GridConstraint::Fraction(1)]);
+        let g =
+            GridComponent::<SpyChild>::new(Vec::new()).with_cols(vec![GridConstraint::Fraction(1)]);
         assert_eq!(g.desired_height(40), 0);
     }
 
@@ -538,9 +548,18 @@ mod tests {
     #[test]
     fn reflowed_grid_reports_sum_of_child_heights() {
         let g = GridComponent::new(vec![
-            SpyChild { height: 1, ..Default::default() },
-            SpyChild { height: 3, ..Default::default() },
-            SpyChild { height: 1, ..Default::default() },
+            SpyChild {
+                height: 1,
+                ..Default::default()
+            },
+            SpyChild {
+                height: 3,
+                ..Default::default()
+            },
+            SpyChild {
+                height: 1,
+                ..Default::default()
+            },
         ])
         .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)])
         .with_rows(vec![GridConstraint::Fixed(3), GridConstraint::Fixed(3)]);
@@ -553,8 +572,14 @@ mod tests {
     #[test]
     fn reflowed_grid_places_one_child_per_full_width_row() {
         let mut g = GridComponent::new(vec![
-            SpyChild { height: 1, ..Default::default() },
-            SpyChild { height: 3, ..Default::default() },
+            SpyChild {
+                height: 1,
+                ..Default::default()
+            },
+            SpyChild {
+                height: 3,
+                ..Default::default()
+            },
         ])
         .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)])
         .with_rows(vec![GridConstraint::Fixed(3), GridConstraint::Fixed(3)]);
@@ -570,8 +595,14 @@ mod tests {
     #[test]
     fn reflowed_grid_stretch_child_propagates_stretch() {
         let g = GridComponent::new(vec![
-            SpyChild { height: 1, ..Default::default() },
-            SpyChild { height: 0, ..Default::default() }, // stretch
+            SpyChild {
+                height: 1,
+                ..Default::default()
+            },
+            SpyChild {
+                height: 0,
+                ..Default::default()
+            }, // stretch
         ])
         .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)]);
         // A stretching child forces the reflowed grid to stretch.
@@ -581,8 +612,14 @@ mod tests {
     #[test]
     fn reflowed_grid_gives_stretch_child_remaining_height() {
         let mut g = GridComponent::new(vec![
-            SpyChild { height: 1, ..Default::default() },
-            SpyChild { height: 0, ..Default::default() }, // stretch
+            SpyChild {
+                height: 1,
+                ..Default::default()
+            },
+            SpyChild {
+                height: 0,
+                ..Default::default()
+            }, // stretch
         ])
         .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)]);
         let mut backend = make_backend();
@@ -599,8 +636,14 @@ mod tests {
         // Containment: a 30-col grid hosted where the (un-rebound) screen area
         // claims 120 cols must still render every cell inside the 30-col area.
         let mut g = GridComponent::new(vec![
-            SpyChild { height: 1, ..Default::default() },
-            SpyChild { height: 3, ..Default::default() },
+            SpyChild {
+                height: 1,
+                ..Default::default()
+            },
+            SpyChild {
+                height: 3,
+                ..Default::default()
+            },
         ])
         .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)]);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(

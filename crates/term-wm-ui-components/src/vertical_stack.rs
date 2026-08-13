@@ -565,7 +565,11 @@ mod tests {
             _r: &mut term_wm_core::hitbox_registry::HitboxRegistry,
         ) {
         }
-        fn handle_events(&mut self, event: &Event, _c: &ComponentContext) -> EventResult<TermWmAction> {
+        fn handle_events(
+            &mut self,
+            event: &Event,
+            _c: &ComponentContext,
+        ) -> EventResult<TermWmAction> {
             if matches!(event, Event::Key(_)) {
                 self.key_count += 1;
             }
@@ -588,7 +592,13 @@ mod tests {
             KeyKind::Press,
         ));
         stack.handle_events(&event, &ctx);
-        assert_eq!(stack.children[0].key_count, 0, "non-focused child must not receive keys");
-        assert_eq!(stack.children[1].key_count, 1, "focused child receives the key");
+        assert_eq!(
+            stack.children[0].key_count, 0,
+            "non-focused child must not receive keys"
+        );
+        assert_eq!(
+            stack.children[1].key_count, 1,
+            "focused child receives the key"
+        );
     }
 }

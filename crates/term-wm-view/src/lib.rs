@@ -40,8 +40,8 @@
 //!   `crate_name` reports.
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
 use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use rstml::node::{Infallible, Node, NodeAttribute, NodeElement};
 use syn::{Expr, Ident, Lit};
@@ -243,7 +243,10 @@ impl Generator {
         match node {
             Node::Block(b) => {
                 let Some(block) = b.try_block() else {
-                    return Err(syn::Error::new_spanned(b, "invalid expression block in view!"));
+                    return Err(syn::Error::new_spanned(
+                        b,
+                        "invalid expression block in view!",
+                    ));
                 };
                 // Emit a single-expression block without its braces to avoid
                 // the `unused_braces` lint at the construction site.
@@ -306,7 +309,10 @@ impl Generator {
     /// a delegate enum for heterogeneous sibling sets.
     ///
     /// Returns `(items, adds, has_children)`.
-    fn children(&mut self, el: &Element) -> syn::Result<(Vec<TokenStream2>, Vec<TokenStream2>, bool)> {
+    fn children(
+        &mut self,
+        el: &Element,
+    ) -> syn::Result<(Vec<TokenStream2>, Vec<TokenStream2>, bool)> {
         let children = meaningful(el.children());
         match children.len() {
             0 => Ok((Vec::new(), Vec::new(), false)),
@@ -329,7 +335,10 @@ impl Generator {
     /// per-child variant constructions. One type param per child, all inferred
     /// at the construction site; no lifetime params — borrowed `&mut C` children
     /// satisfy `Component` via the blanket impl in `term-wm-core`.
-    fn sibling_enum(&mut self, exprs: &[TokenStream2]) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
+    fn sibling_enum(
+        &mut self,
+        exprs: &[TokenStream2],
+    ) -> syn::Result<(TokenStream2, Vec<TokenStream2>)> {
         let name = self.next_name();
         let n = exprs.len();
         let tys: Vec<Ident> = (0..n).map(|i| format_ident!("T{i}")).collect();
@@ -348,27 +357,65 @@ impl Generator {
         let render = variants.iter().map(|v| {
             quote!(Self::#v(x) => Component::<TermWmAction>::render(x, backend, area, ctx, registry))
         });
-        let handle_events = variants.iter().map(|v| quote!(Self::#v(x) => x.handle_events(event, ctx)));
-        let update = variants.iter().map(|v| quote!(Self::#v(x) => x.update(action, ctx, actions)));
+        let handle_events = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.handle_events(event, ctx)));
+        let update = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.update(action, ctx, actions)));
         let destroy = variants.iter().map(|v| quote!(Self::#v(x) => x.destroy()));
-        let desired_height = variants.iter().map(|v| quote!(Self::#v(x) => x.desired_height(width)));
-        let hitbox_id = variants.iter().map(|v| quote!(Self::#v(x) => x.hitbox_id()));
-        let clear_selection = variants.iter().map(|v| quote!(Self::#v(x) => x.clear_selection()));
-        let selection_status = variants.iter().map(|v| quote!(Self::#v(x) => x.selection_status()));
-        let selection_text = variants.iter().map(|v| quote!(Self::#v(x) => x.selection_text()));
-        let take_pending_title = variants.iter().map(|v| quote!(Self::#v(x) => x.take_pending_title()));
-        let take_alternate = variants.iter().map(|v| quote!(Self::#v(x) => x.take_alternate_screen_transition()));
-        let take_teardown = variants.iter().map(|v| quote!(Self::#v(x) => x.take_teardown_parts()));
-        let set_selection = variants.iter().map(|v| quote!(Self::#v(x) => x.set_selection_enabled(enabled)));
-        let paste = variants.iter().map(|v| quote!(Self::#v(x) => x.paste(text)));
+        let desired_height = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.desired_height(width)));
+        let hitbox_id = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.hitbox_id()));
+        let clear_selection = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.clear_selection()));
+        let selection_status = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.selection_status()));
+        let selection_text = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.selection_text()));
+        let take_pending_title = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.take_pending_title()));
+        let take_alternate = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.take_alternate_screen_transition()));
+        let take_teardown = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.take_teardown_parts()));
+        let set_selection = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.set_selection_enabled(enabled)));
+        let paste = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.paste(text)));
         let init = variants.iter().map(|v| quote!(Self::#v(x) => x.init()));
-        let on_mount = variants.iter().map(|v| quote!(Self::#v(x) => x.on_mount(key, app)));
-        let on_mouse_press = variants.iter().map(|v| quote!(Self::#v(x) => x.on_mouse_press(col, row, button, modifiers, ctx)));
-        let on_mouse_release = variants.iter().map(|v| quote!(Self::#v(x) => x.on_mouse_release(col, row, button, modifiers, ctx)));
-        let on_mouse_drag = variants.iter().map(|v| quote!(Self::#v(x) => x.on_mouse_drag(col, row, button, modifiers, ctx)));
-        let on_mouse_scroll = variants.iter().map(|v| quote!(Self::#v(x) => x.on_mouse_scroll(col, row, kind, modifiers, ctx)));
-        let on_mouse_move = variants.iter().map(|v| quote!(Self::#v(x) => x.on_mouse_move(col, row, modifiers, ctx)));
-        let on_key = variants.iter().map(|v| quote!(Self::#v(x) => x.on_key(event, ctx)));
+        let on_mount = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.on_mount(key, app)));
+        let on_mouse_press = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.on_mouse_press(col, row, button, modifiers, ctx)));
+        let on_mouse_release = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.on_mouse_release(col, row, button, modifiers, ctx)));
+        let on_mouse_drag = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.on_mouse_drag(col, row, button, modifiers, ctx)));
+        let on_mouse_scroll = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.on_mouse_scroll(col, row, kind, modifiers, ctx)));
+        let on_mouse_move = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.on_mouse_move(col, row, modifiers, ctx)));
+        let on_key = variants
+            .iter()
+            .map(|v| quote!(Self::#v(x) => x.on_key(event, ctx)));
 
         // Core type paths for the generated impl signatures.
         let window_key = self.core_mod("window", "WindowKey");
@@ -559,17 +606,24 @@ enum ContainerKind {
 /// Parse a `<Grid cols="200px 1fr">` attribute string literal into
 /// `vec![GridConstraint::Fixed(..), GridConstraint::Fraction(..)]` at compile
 /// time.
-fn grid_constraint_attr(paths: &Paths, el: &Element, name: &str) -> syn::Result<Option<TokenStream2>> {
-    let Some(attr) = el.attributes().iter().find(|a| {
-        matches!(a, NodeAttribute::Attribute(kv) if attr_key(&kv.key).as_deref() == Some(name))
-    }) else {
+fn grid_constraint_attr(
+    paths: &Paths,
+    el: &Element,
+    name: &str,
+) -> syn::Result<Option<TokenStream2>> {
+    let Some(attr) = el.attributes().iter().find(
+        |a| matches!(a, NodeAttribute::Attribute(kv) if attr_key(&kv.key).as_deref() == Some(name)),
+    ) else {
         return Ok(None);
     };
     let NodeAttribute::Attribute(kv) = attr else {
         return Ok(None);
     };
     let value = kv.value().ok_or_else(|| {
-        syn::Error::new_spanned(kv, format!("<Grid> `{name}` must be a string like \"200px 1fr\""))
+        syn::Error::new_spanned(
+            kv,
+            format!("<Grid> `{name}` must be a string like \"200px 1fr\""),
+        )
     })?;
     let s = match value {
         Expr::Lit(lit) => match &lit.lit {
@@ -578,18 +632,18 @@ fn grid_constraint_attr(paths: &Paths, el: &Element, name: &str) -> syn::Result<
                 return Err(syn::Error::new_spanned(
                     value,
                     format!("<Grid> `{name}` must be a string literal like \"200px 1fr\""),
-                ))
+                ));
             }
         },
         _ => {
             return Err(syn::Error::new_spanned(
                 value,
                 format!("<Grid> `{name}` must be a string literal like \"200px 1fr\""),
-            ))
+            ));
         }
     };
-    let constraints = parse_grid_constraints(paths, &s)
-        .map_err(|msg| syn::Error::new_spanned(value, msg))?;
+    let constraints =
+        parse_grid_constraints(paths, &s).map_err(|msg| syn::Error::new_spanned(value, msg))?;
     Ok(Some(quote!(vec![#(#constraints),*])))
 }
 

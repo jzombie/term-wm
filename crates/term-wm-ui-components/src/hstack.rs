@@ -4,8 +4,8 @@ use term_wm_core::actions::{EventResult, TermWmAction};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::events::Event;
 use term_wm_core::window::WindowKey;
-use term_wm_layout_engine::Orientation;
 use term_wm_layout_engine::LayoutRect;
+use term_wm_layout_engine::Orientation;
 
 /// A horizontal layout container that slices its area into equal-width
 /// vertical stripes among children.
@@ -41,7 +41,11 @@ impl<C: Component<TermWmAction>> HStackComponent<C> {
     /// Recompute each child's `(local_rect, screen_rect)` from the parent's
     /// local area and absolute screen bounds. Never cached — callers derive
     /// these from `ctx.screen_area()` on every render/event pass.
-    fn child_layouts(&self, local: LayoutRect, screen: LayoutRect) -> Vec<(LayoutRect, LayoutRect)> {
+    fn child_layouts(
+        &self,
+        local: LayoutRect,
+        screen: LayoutRect,
+    ) -> Vec<(LayoutRect, LayoutRect)> {
         let n = self.children.len();
         if n == 0 {
             return Vec::new();
@@ -145,16 +149,28 @@ mod tests {
     use term_wm_core::hitbox_registry::HitboxId;
 
     fn rect(x: i32, y: i32, w: u16, h: u16) -> LayoutRect {
-        LayoutRect { x, y, width: w, height: h }
+        LayoutRect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     fn make_backend() -> term_wm_console::RatatuiBackend {
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
-        term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 20))
+        term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::layout::Rect::new(0, 0, 40, 20),
+        )
     }
 
     fn key_event() -> Event {
-        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE, KeyKind::Press))
+        Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ))
     }
 
     fn mouse_event(col: u16, row: u16) -> Event {
@@ -175,11 +191,21 @@ mod tests {
 
     impl TestChild {
         fn new(h: u16) -> Self {
-            Self { h, hitbox: None, seen_render: None, key_count: 0 }
+            Self {
+                h,
+                hitbox: None,
+                seen_render: None,
+                key_count: 0,
+            }
         }
 
         fn with_hitbox(h: u16) -> Self {
-            Self { h, hitbox: Some(HitboxId::new()), seen_render: None, key_count: 0 }
+            Self {
+                h,
+                hitbox: Some(HitboxId::new()),
+                seen_render: None,
+                key_count: 0,
+            }
         }
     }
 

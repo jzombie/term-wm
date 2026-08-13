@@ -7,9 +7,9 @@
 //!
 //! Run: `cargo run --example view_demo`
 
+use term_wm::components::AppRootComponent;
 use term_wm::prelude::*;
 use term_wm::view;
-use term_wm::components::AppRootComponent;
 
 struct MyWindow {
     terminal: term_wm::ScrollViewComponent<term_wm::TerminalComponent>,
@@ -43,7 +43,11 @@ impl Component<TermWmAction> for MyWindow {
         self.view().render(backend, area, ctx, registry);
     }
 
-    fn handle_events(&mut self, event: &term_wm::Event, ctx: &ComponentContext) -> EventResult<TermWmAction> {
+    fn handle_events(
+        &mut self,
+        event: &term_wm::Event,
+        ctx: &ComponentContext,
+    ) -> EventResult<TermWmAction> {
         self.view().handle_events(event, ctx)
     }
 
@@ -62,8 +66,7 @@ impl Component<TermWmAction> for MyWindow {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut app: TermWmApp<MyWindow> =
-        TermWmApp::new_custom(AppContext::new("view-demo", "0.0.0"));
+    let mut app: TermWmApp<MyWindow> = TermWmApp::new_custom(AppContext::new("view-demo", "0.0.0"));
 
     let pty = term_wm::TerminalComponent::spawn_default(term_wm::default_shell_command())
         .map_err(std::io::Error::other)?;

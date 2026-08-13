@@ -69,7 +69,11 @@ impl CoreEngine {
     }
 
     /// Generate render regions from current layout state.
-    fn generate_regions<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmAction>>(
+    fn generate_regions<
+        C: Component<TermWmAction> + 'static,
+        L: WmComponent,
+        O: Overlay<TermWmAction>,
+    >(
         &mut self,
         _width: u32,
         _height: u32,
