@@ -38,10 +38,10 @@ impl<C: Component<TermWmAction>> CenterComponent<C> {
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> {
     fn desired_height(&self, _width: u16) -> u16 {
-        // Bounds the center's height request so a parent stack allocates the
-        // configured content height (not 0 = stretch, which would consume all
-        // remaining space and drop trailing siblings).
-        self.content_size.1
+        // Stretch (0): a Center must fill its allocated region so it can
+        // *visibly* center its width×height content within it. The parent must
+        // render trailing siblings after a stretch child (VerticalStack does).
+        0
     }
 
     fn render(
@@ -111,10 +111,11 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn center_desired_height_is_content_height() {
+    fn center_desired_height_stretches_to_fill() {
+        // A Center stretches (0) so it fills its allocated region and can
+        // visibly center its width×height content within it.
         let center = CenterComponent::new(DummyComponent, 10, 5);
-        assert_eq!(center.desired_height(40), 5);
+        assert_eq!(center.desired_height(40), 0);
     }
 
     #[test]

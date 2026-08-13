@@ -39,44 +39,46 @@ impl<C: Component<TermWmAction>> VerticalStackComponent<C> {
         self.children.push(child);
     }
 
-    /// Compute a child's absolute screen area given the parent context
-    /// and the child's virtual Y offset within the stack.
-    fn child_screen_area(
-        parent_area: LayoutRect,
-        child_virtual_y: i32,
-        child_h: u16,
-        scroll_y: i32,
-    ) -> LayoutRect {
-        LayoutRect {
-            x: parent_area.x,
-            y: parent_area.y + child_virtual_y - scroll_y,
-            width: parent_area.width,
-            height: child_h,
-        }
-    }
-
     /// Recompute each child's `(local_rect, screen_rect)` from the parent's
     /// local area and absolute screen bounds. Never cached — callers derive
     /// these from `ctx.screen_area()` on every render/event pass.
+    ///
+    /// Fixed (non-zero) children keep their `desired_height`; stretch children
+    /// (`desired_height == 0`) share the remaining space after all fixed
+    /// children and gaps — so a *middle* stretch child still leaves room for
+    /// trailing siblings (e.g. a `Center` between a header and a button).
     fn child_layouts(
         &self,
         local: LayoutRect,
         screen: LayoutRect,
         scroll_y: i32,
     ) -> Vec<(LayoutRect, LayoutRect)> {
-        let mut layouts = Vec::with_capacity(self.children.len());
+        let n = self.children.len();
+        if n == 0 {
+            return Vec::new();
+        }
+        let mut fixed_total: i32 = 0;
+        let mut stretch_count: u16 = 0;
+        for child in &self.children {
+            let h = child.desired_height(local.width);
+            if h == 0 {
+                stretch_count = stretch_count.saturating_add(1);
+            } else {
+                fixed_total = fixed_total.saturating_add(i32::from(h));
+            }
+        }
+        let gaps_total = i32::from(self.gap).saturating_mul(n as i32 - 1);
+        let remaining = (i32::from(local.height))
+            .saturating_sub(fixed_total)
+            .saturating_sub(gaps_total)
+            .max(0) as u16;
+        let stretch_share = remaining.checked_div(stretch_count).map_or(0, |s| s.max(1));
+
+        let mut layouts = Vec::with_capacity(n);
         let mut cursor: i32 = 0;
         for child in &self.children {
             let desired = child.desired_height(local.width);
-            let child_h = if desired == 0 {
-                let remaining = (i32::from(local.height)).saturating_sub(cursor).max(0) as u16;
-                if remaining == 0 {
-                    break;
-                }
-                remaining
-            } else {
-                desired
-            };
+            let child_h = if desired == 0 { stretch_share } else { desired };
             layouts.push((
                 LayoutRect {
                     x: local.x,
@@ -110,9 +112,9 @@ impl<C: Component<TermWmAction>> Default for VerticalStackComponent<C> {
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackComponent<C> {
     fn desired_height(&self, width: u16) -> u16 {
-        // Sum of all children's desired heights + gaps. Width is propagated so
-        // width-dependent children (grids that reflow, wrapping text) measure
-        // the same way they render.
+        // Width is propagated so width-dependent children (grids that reflow,
+        // wrapping text) measure the same way they render. A stretching child
+        // (0) makes the whole stack stretch so the child gets room.
         let mut h: u16 = 0;
         for child in &self.children {
             h = h.saturating_add(child.desired_height(width));
@@ -134,52 +136,16 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackCompon
             return;
         }
 
-        let parent_screen = ctx.screen_area().unwrap_or_default();
+        let parent_screen = ctx.screen_area().unwrap_or(area);
         let scroll_y = ctx
             .scroll_handle()
             .map(|h| h.info().offset_y as i32)
             .unwrap_or(0);
 
-        let mut child_virtual_y: i32 = 0;
-
-        for child in &mut self.children {
-            let child_h = child.desired_height(area.width);
-            if child_h == 0 {
-                // Stretch to fill remaining space
-                let remaining = (area.height as i32).saturating_sub(child_virtual_y).max(0) as u16;
-                if remaining == 0 {
-                    break;
-                }
-
-                let child_local = LayoutRect {
-                    x: area.x,
-                    y: area.y + child_virtual_y,
-                    width: area.width,
-                    height: remaining,
-                };
-                let child_screen =
-                    Self::child_screen_area(parent_screen, child_virtual_y, remaining, scroll_y);
-                let child_ctx = ctx.clone().with_screen_area(child_screen);
-                child.render(backend, child_local, &child_ctx, registry);
-                break;
-            }
-
-            let child_local = LayoutRect {
-                x: area.x,
-                y: area.y + child_virtual_y,
-                width: area.width,
-                height: child_h,
-            };
-            let child_screen =
-                Self::child_screen_area(parent_screen, child_virtual_y, child_h, scroll_y);
-            let child_ctx = ctx.clone().with_screen_area(child_screen);
-            child.render(backend, child_local, &child_ctx, registry);
-
-            child_virtual_y += child_h as i32 + self.gap as i32;
-
-            if child_virtual_y >= area.height as i32 {
-                break;
-            }
+        let layouts = self.child_layouts(area, parent_screen, scroll_y);
+        for (child, (local, screen)) in self.children.iter_mut().zip(layouts.iter()) {
+            let child_ctx = ctx.clone().with_screen_area(*screen);
+            child.render(backend, *local, &child_ctx, registry);
         }
     }
 
@@ -604,5 +570,86 @@ mod tests {
             stack.children[1].key_count, 1,
             "focused child receives the key"
         );
+    }
+
+    struct SpyChild {
+        height: u16,
+        seen_render: Option<LayoutRect>,
+    }
+
+    impl SpyChild {
+        fn with_height(h: u16) -> Self {
+            Self {
+                height: h,
+                seen_render: None,
+            }
+        }
+    }
+
+    impl Component<TermWmAction> for SpyChild {
+        fn desired_height(&self, _width: u16) -> u16 {
+            self.height
+        }
+        fn render(
+            &mut self,
+            _b: &mut dyn term_wm_render::RenderBackend,
+            _a: LayoutRect,
+            ctx: &ComponentContext,
+            _r: &mut term_wm_core::hitbox_registry::HitboxRegistry,
+        ) {
+            self.seen_render = ctx.screen_area();
+        }
+        fn handle_events(
+            &mut self,
+            _e: &Event,
+            _c: &ComponentContext,
+        ) -> EventResult<TermWmAction> {
+            EventResult::Ignored
+        }
+    }
+
+    #[test]
+    fn vertical_stack_middle_stretch_still_renders_trailing_children() {
+        let mut stack = VerticalStackComponent::<SpyChild>::new().with_gap(1);
+        let a = SpyChild::with_height(1);
+        let b = SpyChild::with_height(0); // stretch
+        let c = SpyChild::with_height(3);
+        stack.add(a);
+        stack.add(b);
+        stack.add(c);
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 12));
+        let mut backend =
+            term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 12));
+        let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 12,
+        });
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        stack.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 12,
+            },
+            &ctx,
+            &mut registry,
+        );
+        // fixed total 1+3=4, gaps 2, remaining 12-6=6 -> stretch child takes rows 2..8,
+        // trailing button at rows 9..12.
+        assert_eq!(stack.children[0].seen_render, Some(LayoutRect { x: 0, y: 0, width: 40, height: 1 }));
+        assert_eq!(stack.children[1].seen_render, Some(LayoutRect { x: 0, y: 2, width: 40, height: 6 }));
+        assert_eq!(stack.children[2].seen_render, Some(LayoutRect { x: 0, y: 9, width: 40, height: 3 }));
+    }
+
+    #[test]
+    fn vertical_stack_desired_height_zero_when_child_stretches() {
+        let mut stack = VerticalStackComponent::<SpyChild>::new();
+        stack.add(SpyChild::with_height(1));
+        stack.add(SpyChild::with_height(0));
+        assert_eq!(stack.desired_height(40), 0);
     }
 }

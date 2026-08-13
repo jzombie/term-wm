@@ -21,12 +21,14 @@ impl MyWindow {
     fn view(&mut self) -> impl Component<TermWmAction> + '_ {
         view! {
             <VerticalStack gap=1>
-                <Label text="term-wm view! demo — quit with the button below or Ctrl+Q" />
+                <Label text="term-wm view! macro prototype" />
                 <Center width=80 height=12>
                     <Box>
                     <Grid cols="1fr 2fr" rows="1fr">
                         <Label text="left cell" />
-                        { &mut self.terminal }
+                        <Box title="Embedded terminal">
+                            { &mut self.terminal }
+                        </Box>
                     </Grid>
                     </Box>
                 </Center>
@@ -67,7 +69,7 @@ fn main() -> std::io::Result<()> {
         if let Some(AppRootComponent::Custom(MyWindow { terminal, .. })) =
             app.wm().component_for_key_mut(key)
         {
-            ctx.wire_terminal(&mut *terminal.content.borrow_mut(), key);
+            ctx.wire_terminal(&mut terminal.content.borrow_mut(), key);
         }
     })
 }
