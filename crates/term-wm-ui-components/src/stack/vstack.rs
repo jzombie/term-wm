@@ -620,8 +620,10 @@ mod tests {
         stack.add(b);
         stack.add(c);
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 12));
-        let mut backend =
-            term_wm_console::RatatuiBackend::new_simple(buffer, ratatui::layout::Rect::new(0, 0, 40, 12));
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            buffer,
+            ratatui::layout::Rect::new(0, 0, 40, 12),
+        );
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
             y: 0,
@@ -642,9 +644,33 @@ mod tests {
         );
         // fixed total 1+3=4, gaps 2, remaining 12-6=6 -> stretch child takes rows 2..8,
         // trailing button at rows 9..12.
-        assert_eq!(stack.children[0].seen_render, Some(LayoutRect { x: 0, y: 0, width: 40, height: 1 }));
-        assert_eq!(stack.children[1].seen_render, Some(LayoutRect { x: 0, y: 2, width: 40, height: 6 }));
-        assert_eq!(stack.children[2].seen_render, Some(LayoutRect { x: 0, y: 9, width: 40, height: 3 }));
+        assert_eq!(
+            stack.children[0].seen_render,
+            Some(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 1
+            })
+        );
+        assert_eq!(
+            stack.children[1].seen_render,
+            Some(LayoutRect {
+                x: 0,
+                y: 2,
+                width: 40,
+                height: 6
+            })
+        );
+        assert_eq!(
+            stack.children[2].seen_render,
+            Some(LayoutRect {
+                x: 0,
+                y: 9,
+                width: 40,
+                height: 3
+            })
+        );
     }
 
     #[test]
