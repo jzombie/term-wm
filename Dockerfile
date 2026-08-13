@@ -4,7 +4,11 @@
 #   docker build -t term-wm .
 #
 # Run (the TUI needs a TTY):
+#
+#   # bare — two default shell windows
 #   docker run -it term-wm
+#
+#   # or, one window per --run command
 #   docker run -it term-wm --run bash --run htop
 
 # --- Build stage ---
