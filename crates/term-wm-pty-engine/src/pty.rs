@@ -1154,6 +1154,13 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     // handle — no debounce, so the tail payload is never dropped.
                     // The handle is lazy-initialised on the first sequence so the
                     // reader loop's startup is never blocked on arboard's handshake.
+                    //
+                    // TODO: OSC 52 interception currently runs unconditionally —
+                    // including in Direct Input Mode, where mouse-managed clipboard
+                    // handling is otherwise delegated to the running app. Decide
+                    // whether (and how) to gate this relay (also considering the
+                    // nested term-session client relay) and file a GitHub issue to
+                    // track it.
                     if let Some(text) = osc52.push(&buf[..n], &prev_tail) {
                         if clipboard.is_none() {
                             clipboard = Some(Clipboard::new());

@@ -16,8 +16,8 @@ use term_wm_core::component_context::{ScrollHandle, ScrollViewport};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::utils::linkifier::LinkifiedText;
 use term_wm_core::utils::selectable_text::{
-    LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
-    handle_selection_mouse,
+    DEFAULT_WORD_EXTRA_CHARS, LogicalPosition, SelectionController, SelectionHost, SelectionRange,
+    SelectionViewport, find_word_bounds, handle_selection_mouse,
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
@@ -32,6 +32,10 @@ pub struct TextRendererComponent {
     viewport_cache: Cell<ScrollViewport>,
     content_width: Cell<usize>,
     content_height: Cell<usize>,
+    /// Characters treated as word characters in addition to alphanumeric +
+    /// underscore, for double-click word selection. Default (empty) treats
+    /// hyphens and other punctuation as word boundaries.
+    word_extra_chars: String,
 }
 
 impl fmt::Debug for TextRendererComponent {
@@ -287,6 +291,7 @@ impl TextRendererComponent {
             viewport_cache: Cell::new(ScrollViewport::default()),
             content_width: Cell::new(0),
             content_height: Cell::new(0),
+            word_extra_chars: DEFAULT_WORD_EXTRA_CHARS.to_string(),
         }
     }
 
@@ -317,6 +322,13 @@ impl TextRendererComponent {
         if !enabled {
             self.selection.borrow_mut().clear();
         }
+    }
+
+    /// Configure extra characters treated as word characters for double-click
+    /// word selection, in addition to alphanumeric + underscore. Default is
+    /// empty, so punctuation like `-` acts as a word boundary.
+    pub fn set_word_extra_chars(&mut self, chars: &str) {
+        self.word_extra_chars = chars.to_string();
     }
 
     pub fn jump_to_logical_line(&mut self, line_idx: usize, area: Rect) {
@@ -493,6 +505,63 @@ impl TextRendererComponent {
         }
 
         Some(out)
+    }
+
+    /// Extract the per-cell character stream of the display row `row`, on
+    /// demand. In non-wrap mode `row` indexes directly into `self.text.lines`;
+    /// in wrap mode the source line containing `row` is located via the same
+    /// visual-height accumulation `render()` uses, then rendered alone into a
+    /// one-row scratch buffer. No persistent grid is cached.
+    fn row_chars(&self, row: usize, width: usize) -> Option<Vec<Option<char>>> {
+        if self.text.lines.is_empty() || width == 0 {
+            return None;
+        }
+        if !self.wrap {
+            let line = self.text.lines.get(row)?;
+            let chars: Vec<Option<char>> = line
+                .spans
+                .iter()
+                .flat_map(|span| span.content.chars().map(Some))
+                .collect();
+            return if chars.is_empty() { None } else { Some(chars) };
+        }
+        let mut offset = row;
+        for line in &self.text.lines {
+            let vh = actual_wrapped_height(line, width as u16);
+            if offset >= vh {
+                offset -= vh;
+                continue;
+            }
+            let rect = ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: width.min(u16::MAX as usize) as u16,
+                height: 1,
+            };
+            let mut buffer = ratatui::buffer::Buffer::empty(rect);
+            let text = ratatui::text::Text::from(vec![line.clone()]);
+            ratatui::widgets::Paragraph::new(text)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .scroll((offset as u16, 0))
+                .render(rect, &mut buffer);
+            let chars: Vec<Option<char>> = (0..width)
+                .map(|col| {
+                    let ch = buffer
+                        .cell((col as u16, 0))
+                        .and_then(|c| c.symbol().chars().next());
+                    ch.or_else(|| {
+                        // Empty cell (wide-char continuation): repeat the
+                        // lead cell's char so wide glyphs read as one word.
+                        (col > 0)
+                            .then(|| buffer.cell((col.saturating_sub(1) as u16, 0)))
+                            .flatten()
+                            .and_then(|c| c.symbol().chars().next())
+                    })
+                })
+                .collect();
+            return Some(chars);
+        }
+        None
     }
 
     fn build_hit_test_palette(&self) -> Option<HitTestPalette> {
@@ -680,6 +749,20 @@ impl SelectionViewport for TextRendererComponent {
             state.offset_y.saturating_add(local_y as usize),
             state.offset_x.saturating_add(local_x as usize),
         ))
+    }
+
+    fn word_range_at(&mut self, pos: LogicalPosition) -> Option<SelectionRange> {
+        let width = self.content_width.get().max(1);
+        let chars = self.row_chars(pos.row, width)?;
+        let index = pos.column.min(chars.len().saturating_sub(1));
+        let (start, end) = find_word_bounds(&chars, index, &self.word_extra_chars);
+        if start == end {
+            return None;
+        }
+        Some(SelectionRange {
+            start: LogicalPosition::new(pos.row, start),
+            end: LogicalPosition::new(pos.row, end),
+        })
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
@@ -1082,6 +1165,195 @@ mod tests {
     fn actual_wrapped_height_single_short_line() {
         let line = Line::from("hello");
         assert_eq!(actual_wrapped_height(&line, 67), 1);
+    }
+
+    // --- Double-click word selection tests ---
+
+    fn render_once(renderer: &mut TextRendererComponent, area: LayoutRect) {
+        let rect = ratatui::prelude::Rect {
+            x: area.x as u16,
+            y: area.y as u16,
+            width: area.width,
+            height: area.height,
+        };
+        let buffer = Buffer::empty(rect);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+        renderer.render(
+            &mut backend,
+            area,
+            &ComponentContext::new(true),
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+    }
+
+    fn press(renderer: &mut TextRendererComponent, ctx: &ComponentContext, x: u16, y: u16) {
+        renderer.on_mouse_press(x, y, MouseButton::Left, KeyModifiers::NONE, ctx);
+    }
+
+    fn release(renderer: &mut TextRendererComponent, ctx: &ComponentContext, x: u16, y: u16) {
+        renderer.on_mouse_release(x, y, MouseButton::Left, KeyModifiers::NONE, ctx);
+    }
+
+    fn drag(renderer: &mut TextRendererComponent, ctx: &ComponentContext, x: u16, y: u16) {
+        renderer.on_mouse_drag(x, y, MouseButton::Left, KeyModifiers::NONE, ctx);
+    }
+
+    fn double_click(renderer: &mut TextRendererComponent, ctx: &ComponentContext, x: u16, y: u16) {
+        press(renderer, ctx, x, y);
+        release(renderer, ctx, x, y);
+        press(renderer, ctx, x, y);
+        release(renderer, ctx, x, y);
+    }
+
+    #[test]
+    fn double_click_selects_word() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_text(Text::from(vec![Line::from("Hello World foo bar")]));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        render_once(&mut renderer, area);
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        double_click(&mut renderer, &ctx, 1, 0);
+        assert_eq!(
+            renderer.selection_text(),
+            Some("Hello".to_string()),
+            "double-click must select the full word"
+        );
+    }
+
+    #[test]
+    fn double_click_on_whitespace_noop() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_text(Text::from(vec![Line::from("Hello World")]));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        render_once(&mut renderer, area);
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        double_click(&mut renderer, &ctx, 5, 0);
+        assert_eq!(
+            renderer.selection_text(),
+            None,
+            "whitespace double-click selects nothing"
+        );
+    }
+
+    #[test]
+    fn word_drag_extends_right() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_text(Text::from(vec![Line::from("Hello World foo bar")]));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        render_once(&mut renderer, area);
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        // Double-click "World" (cols 6..11), then drag right onto "bar".
+        press(&mut renderer, &ctx, 6, 0);
+        release(&mut renderer, &ctx, 6, 0);
+        press(&mut renderer, &ctx, 6, 0);
+        drag(&mut renderer, &ctx, 17, 0);
+        release(&mut renderer, &ctx, 17, 0);
+        assert_eq!(renderer.selection_text(), Some("World foo bar".to_string()));
+    }
+
+    #[test]
+    fn word_drag_extends_left() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_text(Text::from(vec![Line::from("Hello World")]));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        render_once(&mut renderer, area);
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        // Double-click "World" (cols 6..11), then drag left into "Hello".
+        press(&mut renderer, &ctx, 6, 0);
+        release(&mut renderer, &ctx, 6, 0);
+        press(&mut renderer, &ctx, 6, 0);
+        drag(&mut renderer, &ctx, 3, 0);
+        release(&mut renderer, &ctx, 3, 0);
+        assert_eq!(renderer.selection_text(), Some("Hello World".to_string()));
+    }
+
+    #[test]
+    fn word_mode_respects_wrap_rows() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_wrap(true);
+        renderer.set_text(Text::from(vec![
+            Line::from("Hello World"),
+            Line::from("foo bar baz"),
+        ]));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        render_once(&mut renderer, area);
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        // Second display row is a distinct source line in wrap mode.
+        double_click(&mut renderer, &ctx, 5, 1);
+        assert_eq!(renderer.selection_text(), Some("bar".to_string()));
+    }
+
+    #[test]
+    fn double_click_selects_word_with_dashes_as_boundary() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_text(Text::from(vec![Line::from("foo-bar baz")]));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        render_once(&mut renderer, area);
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        double_click(&mut renderer, &ctx, 5, 0);
+        assert_eq!(
+            renderer.selection_text(),
+            Some("bar".to_string()),
+            "kebab-case must split on '-' by default"
+        );
+    }
+
+    #[test]
+    fn double_click_selects_kebab_case_when_configured() {
+        let mut renderer = TextRendererComponent::new();
+        renderer.set_selection_enabled(true);
+        renderer.set_text(Text::from(vec![Line::from("foo-bar baz")]));
+        renderer.set_word_extra_chars("-");
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        render_once(&mut renderer, area);
+        let ctx = ComponentContext::new(true).with_screen_area(area);
+        double_click(&mut renderer, &ctx, 5, 0);
+        assert_eq!(
+            renderer.selection_text(),
+            Some("foo-bar".to_string()),
+            "with '-' configured, kebab-case selects as one word"
+        );
     }
 }
 
