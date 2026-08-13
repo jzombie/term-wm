@@ -6,7 +6,7 @@
 //! (`Label`, `Button`) are constructed declaratively. The terminal is wired
 //! into the live event loop via `TermWmApp::run_with_setup`.
 //!
-//! Run: `cargo run --example view_demo`
+//! Run: `cargo run --example view_macro_prototype`
 
 use term_wm::components::AppRootComponent;
 use term_wm::prelude::*;
