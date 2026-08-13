@@ -1,6 +1,7 @@
 pub use crate::actions::TermWmAction;
 pub use crate::components::AppRootComponent;
 pub use crate::term_wm_app::TermWmApp;
+pub use crate::view;
 pub use crate::window::{WindowKey, WindowManager};
 pub use crate::wm_config::WmConfig;
 pub use term_wm_core::AppContext;

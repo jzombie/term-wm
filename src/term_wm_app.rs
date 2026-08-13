@@ -113,7 +113,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// ```
 pub struct TermWmApp<C = NoopComponent>
 where
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
 {
     wm: WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent>,
     debug_key: Option<WindowKey>,
@@ -133,7 +133,36 @@ where
     terminal_counter: usize,
 }
 
-impl<C: Component<TermWmAction>> TermWmApp<C> {
+/// Opaque launch context handed to [`TermWmApp::run_with_setup`].
+///
+/// Consumers wire PTY-backed widgets (terminals) hosted inside
+/// `Custom`/`view!` windows here, without touching the engine's internal event
+/// channel (`UnifiedEvent` / `Sender` stay private to this crate).
+pub struct AppSetupContext<'a> {
+    tx: &'a Sender<UnifiedEvent>,
+}
+
+impl AppSetupContext<'_> {
+    /// Wire a terminal's PTY status events (wakeup / exit / direct-input
+    /// transitions) into the live event loop. Call after `open_window` so the
+    /// closure can capture the known `WindowKey`.
+    pub fn wire_terminal(&self, terminal: &mut TerminalComponent, key: WindowKey) {
+        let tx = self.tx.clone();
+        terminal.set_pty_callback(move |status| match status {
+            PtyStatus::Wakeup => {
+                let _ = tx.send(UnifiedEvent::PtyWakeup(key));
+            }
+            PtyStatus::Exited => {
+                let _ = tx.send(UnifiedEvent::AppExited(key));
+            }
+            PtyStatus::DirectInputChanged(mode) => {
+                let _ = tx.send(UnifiedEvent::DirectInputChanged(key, mode));
+            }
+        });
+    }
+}
+
+impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     /// Create a new standalone app with all system chrome (panels, menu).
     ///
     /// This is the generic constructor — works for any `C: Component<TermWmAction>`.
@@ -429,7 +458,21 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     /// Run with default console I/O (enters/exits terminal automatically).
     ///
     /// Calls `run_with` → `run_with_defaults` → `run_event_loop`.
-    pub fn run(mut self) -> io::Result<()> {
+    pub fn run(self) -> io::Result<()> {
+        self.run_with_setup(|_, _| {})
+    }
+
+    /// Run the app, invoking `setup` with the launch context after the live
+    /// event channel is created but before the loop starts.
+    ///
+    /// Use this to wire PTY callbacks for terminals hosted inside
+    /// `Custom`/`view!` windows — `run()`'s built-in re-wiring only reaches
+    /// `CoreWmComponent::Terminal` windows. The context keeps the engine's
+    /// event plumbing encapsulated; call [`AppSetupContext::wire_terminal`].
+    pub fn run_with_setup<F>(mut self, setup: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut TermWmApp<C>, &AppSetupContext<'_>),
+    {
         let mut output = ConsoleRenderTarget::new()?;
         output.enter()?;
         // Drive the loop with the unified event source so terminal (PTY) output
@@ -446,6 +489,10 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
         // re-wire them to this live source or their PTY output would never wake
         // the loop.
         self.rewire_terminal_callbacks(&tx);
+        // Give the consumer a chance to wire `Custom`-window terminals (which
+        // `rewire_terminal_callbacks` cannot reach).
+        let ctx = AppSetupContext { tx: &tx };
+        setup(&mut self, &ctx);
         let result = self.run_with(&mut output, &mut input);
         output.exit()?;
         result
@@ -473,7 +520,7 @@ impl<C: Component<TermWmAction>> TermWmApp<C> {
     }
 }
 
-impl<C: Component<TermWmAction>>
+impl<C: Component<TermWmAction> + 'static>
     WindowManagerHost<AppRootComponent<C>, LayerComponent, OverlayComponent> for TermWmApp<C>
 {
     fn wm(&mut self) -> &mut WindowManager<AppRootComponent<C>, LayerComponent, OverlayComponent> {

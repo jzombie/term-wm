@@ -294,7 +294,7 @@ impl MonocleMode {
 }
 
 pub struct WindowManager<
-    C: Component<TermWmAction>,
+    C: Component<TermWmAction> + 'static,
     L: WmComponent = crate::components::NoopWmComponent,
     O: Overlay<TermWmAction> = crate::components::NoopOverlay,
 > {
@@ -436,7 +436,10 @@ pub(crate) struct TapSwapState {
     pub target_key: Option<WindowKey>,
 }
 
-impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> WindowManager<C, L, O> {
+impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmAction>>
+    WindowManager<C, L, O>
+{
+    /// Create a new, empty [`WindowManager`] with the given configuration.
     /// Allocate a new window entry in the SlotMap and return its key.
     /// The window starts with default state (no title, not floating, etc.).
     pub fn create_window(&mut self, component: C) -> WindowKey {

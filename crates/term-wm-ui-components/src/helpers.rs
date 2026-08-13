@@ -1,6 +1,9 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use term_wm_core::actions::{EventResult, TermWmAction};
+use term_wm_core::components::{Component, ComponentContext};
+use term_wm_core::events::Event;
 use term_wm_layout_engine::LayoutRect;
 use unicode_width::UnicodeWidthChar;
 
@@ -266,6 +269,81 @@ pub fn linkified_to_text(
         })
         .collect();
     (ratatui::text::Text::from(lines), linkified.link_map)
+}
+
+/// Route an `Event::Key` to the child holding keyboard focus (the child whose
+/// `hitbox_id()` matches `ctx.keyboard_focus_id()`), falling back to the first
+/// child that claims the event when no child matches (focused ephemeral leaves
+/// have no hitbox id). Never broadcasts to every child, so multiple
+/// input-consuming children cannot starve each other.
+pub fn route_key_to_focused<C: Component<TermWmAction>>(
+    children: &mut [C],
+    event: &Event,
+    ctx: &ComponentContext,
+) -> EventResult<TermWmAction> {
+    if let Some(focus) = ctx.keyboard_focus_id() {
+        for child in children.iter_mut() {
+            if child.hitbox_id() == Some(focus) {
+                return child.handle_events(event, ctx);
+            }
+        }
+    }
+    for child in children.iter_mut() {
+        let result = child.handle_events(event, ctx);
+        if !result.is_ignored() {
+            return result;
+        }
+    }
+    EventResult::Ignored
+}
+
+/// Broadcast a non-mouse, non-key event (paste, focus gained/lost, resize) to
+/// all children; the first non-ignored result wins.
+pub fn route_broadcast<C: Component<TermWmAction>>(
+    children: &mut [C],
+    event: &Event,
+    ctx: &ComponentContext,
+) -> EventResult<TermWmAction> {
+    for child in children.iter_mut() {
+        let result = child.handle_events(event, ctx);
+        if !result.is_ignored() {
+            return result;
+        }
+    }
+    EventResult::Ignored
+}
+
+/// Route a mouse event to the child whose screen rect contains the cursor.
+/// Each candidate child receives a context rebound to its own screen rect so
+/// hitbox registration and mouse localization are relative to the child.
+///
+/// `rects` must be the per-child `(local_rect, screen_rect)` pairs recomputed
+/// by the caller from `ctx.screen_area()` on every call (never cached).
+pub fn route_mouse_by_rects<C: Component<TermWmAction>>(
+    children: &mut [C],
+    rects: &[(LayoutRect, LayoutRect)],
+    event: &Event,
+    ctx: &ComponentContext,
+) -> EventResult<TermWmAction> {
+    let Event::Mouse(mouse) = event else {
+        return EventResult::Ignored;
+    };
+    let m_x = i32::from(mouse.column);
+    let m_y = i32::from(mouse.row);
+    for (child, (_, screen)) in children.iter_mut().zip(rects.iter()) {
+        if m_x >= screen.x
+            && m_x < screen.x.saturating_add(i32::from(screen.width))
+            && m_y >= screen.y
+            && m_y < screen.y.saturating_add(i32::from(screen.height))
+        {
+            let child_ctx = ctx.clone().with_screen_area(*screen);
+            let result = child.handle_events(event, &child_ctx);
+            if !result.is_ignored() {
+                return result;
+            }
+        }
+    }
+    EventResult::Ignored
 }
 
 #[cfg(test)]

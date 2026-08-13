@@ -23,6 +23,8 @@ pub fn button_x_pos(outer_right: u16, borders_enabled: bool, button_index: usize
         .saturating_sub(HEADER_BUTTON_GAP * button_index as u16)
 }
 
+// TODO: This hardcodes metrics regarding physical window chrome layout that is not
+// a core concern.
 pub const LEFT_BORDER_WIDTH: u16 = 1;
 pub const RIGHT_BORDER_WIDTH: u16 = 1;
 pub const TOP_BORDER_HEIGHT: u16 = 1;

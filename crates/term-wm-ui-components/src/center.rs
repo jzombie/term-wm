@@ -37,6 +37,13 @@ impl<C: Component<TermWmAction>> CenterComponent<C> {
 }
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> {
+    fn desired_height(&self, _width: u16) -> u16 {
+        // Stretch (0): a Center must fill its allocated region so it can
+        // *visibly* center its width×height content within it. The parent must
+        // render trailing siblings after a stretch child (VStack does).
+        0
+    }
+
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -101,6 +108,14 @@ mod tests {
         ) -> EventResult<TermWmAction> {
             EventResult::Ignored
         }
+    }
+
+    #[test]
+    fn center_desired_height_stretches_to_fill() {
+        // A Center stretches (0) so it fills its allocated region and can
+        // visibly center its width×height content within it.
+        let center = CenterComponent::new(DummyComponent, 10, 5);
+        assert_eq!(center.desired_height(40), 0);
     }
 
     #[test]
