@@ -18,7 +18,7 @@ use term_wm_view::view;
 
 /// A scrolling 2-column grid of system-panel utilities, declared with `view!`.
 ///
-/// The grid content is a nameable [`PanelContentView`] wrapped in the existing
+/// The grid content is a nameable `PanelContentView` wrapped in the existing
 /// scrolling containers — the "scrollable view content" pattern for `view!`.
 pub struct WmSystemPanelComponent {
     scroll_view: ScrollViewComponent<CanvasScrollView<PanelContentView>>,

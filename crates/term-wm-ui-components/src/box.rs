@@ -18,7 +18,7 @@ use crate::helpers::{color_to_ratatui, downcast_ratatui, layout_rect_to_clipped_
 /// top-left) and optional padding around a single content component.
 ///
 /// `border: false` renders as a transparent group wrapper (padding only). The
-/// border color is a [`Color`](term_wm_core::theme::Color), converted to the
+/// border color is a [`Color`], converted to the
 /// renderer's color at draw time so consumers never import the renderer.
 ///
 /// `desired_height` returns `0` (stretch) when the content stretches — a

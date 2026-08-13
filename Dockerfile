@@ -32,6 +32,7 @@ RUN cargo build --release --bin term-wm
 
 # --- Runtime stage ---
 FROM alpine:3.24
+
 # Layer 1: the window manager binary.
 COPY --from=build /src/term-wm/target/release/term-wm /bin/term-wm
 
