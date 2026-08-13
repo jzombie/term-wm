@@ -14,6 +14,25 @@ use crate::constants::{
     TEXT_SELECTION_DRAG_IDLE_TIMEOUT_HORIZONTAL, TEXT_SELECTION_DRAG_IDLE_TIMEOUT_VERTICAL,
 };
 use crate::events::{MouseButton, MouseEvent, MouseEventKind};
+
+/// Maximum interval between two presses to be considered a double click.
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
+/// Maximum logical-cell Manhattan distance between two presses for them to be
+/// treated as clicks on the same position (mouse jitter tolerance).
+const DOUBLE_CLICK_MOVE_TOLERANCE: usize = 4;
+
+/// The granularity at which a selection snaps as it is extended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SelectionGranularity {
+    /// Cell-level selection (default single-click drag).
+    #[default]
+    Cell,
+    /// Word-level snapping, entered on double-click.
+    Word,
+    /// Line-level snapping, reserved for a future triple-click gesture.
+    Line,
+}
+
 /// Logical coordinates inside a text surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LogicalPosition {
@@ -74,6 +93,40 @@ impl Ord for LogicalPosition {
     }
 }
 
+/// Word characters beyond the standard `\w` set (alphanumeric + underscore).
+/// Empty by default, so punctuation like `-` is a word *boundary*: double
+/// clicking `--force` selects `force`, and `foo-bar` selects `bar`.
+pub const DEFAULT_WORD_EXTRA_CHARS: &str = "";
+
+/// True when the cell's character is a word character: alphanumeric or
+/// underscore by default, plus any characters in `extra_chars`. `None`
+/// (empty/continuation cell) is never a word character.
+pub fn is_word_char(c: Option<char>, extra_chars: &str) -> bool {
+    matches!(
+        c,
+        Some(ch) if ch.is_alphanumeric() || ch == '_' || extra_chars.contains(ch)
+    )
+}
+
+/// End-exclusive word bounds around `index` within a per-cell character
+/// stream, treating `extra_chars` as word characters. Returns an empty range
+/// when `index` is out of range (clamped to the slice length) or the cell at
+/// `index` is not a word character.
+pub fn find_word_bounds(cells: &[Option<char>], index: usize, extra_chars: &str) -> (usize, usize) {
+    if cells.is_empty() || index >= cells.len() || !is_word_char(cells[index], extra_chars) {
+        return (index.min(cells.len()), index.min(cells.len()));
+    }
+    let mut start = index;
+    while start > 0 && is_word_char(cells[start.saturating_sub(1)], extra_chars) {
+        start = start.saturating_sub(1);
+    }
+    let mut end = index;
+    while end < cells.len() && is_word_char(cells[end], extra_chars) {
+        end = end.saturating_add(1);
+    }
+    (start, end)
+}
+
 /// Host components implement this to let the controller map pixels to content
 /// coordinates and fetch the selected text payload.
 pub trait SelectableSurface {
@@ -119,6 +172,13 @@ pub trait SelectionViewport {
     fn selection_content_size(&self) -> (usize, usize) {
         (0, 0)
     }
+
+    /// Word bounds around `pos`, end-exclusive and confined to a single row.
+    /// Returns `Some` only when `pos` is on a word character; hosts that do
+    /// not support word selection may keep the default `None`.
+    fn word_range_at(&mut self, _pos: LogicalPosition) -> Option<SelectionRange> {
+        None
+    }
 }
 
 /// Hosts that store their own `SelectionController` implement this so shared
@@ -142,6 +202,19 @@ struct SelectionState {
     pointer: Option<(u16, u16)>,
     last_pointer_event: Option<Instant>,
     button_down: bool,
+    /// Snapping granularity of the current/gesture selection.
+    granularity: SelectionGranularity,
+    /// Timestamp and position of the most recent press, used for click
+    /// counting.
+    last_click_at: Option<Instant>,
+    last_click_pos: Option<LogicalPosition>,
+    /// Consecutive press count within the double-click window/tolerance.
+    click_count: u8,
+    /// Immutable origin word bounds captured on double-click. `anchor`/`cursor`
+    /// are the live range; these two stay fixed so reversing a word drag can
+    /// contract the selection back to the original word.
+    word_anchor_start: Option<LogicalPosition>,
+    word_anchor_end: Option<LogicalPosition>,
 }
 
 impl Default for SelectionState {
@@ -153,6 +226,12 @@ impl Default for SelectionState {
             pointer: None,
             last_pointer_event: None,
             button_down: false,
+            granularity: SelectionGranularity::Cell,
+            last_click_at: None,
+            last_click_pos: None,
+            click_count: 0,
+            word_anchor_start: None,
+            word_anchor_end: None,
         }
     }
 }
@@ -182,6 +261,7 @@ impl SelectionController {
         self.state.anchor = Some(pos);
         self.state.cursor = Some(pos);
         self.state.button_down = true;
+        self.state.granularity = SelectionGranularity::Cell;
         self.touch_pointer_clock();
     }
 
@@ -191,6 +271,7 @@ impl SelectionController {
         self.state.cursor = Some(pos);
         self.state.phase = Phase::Dragging;
         self.state.button_down = true;
+        self.state.granularity = SelectionGranularity::Cell;
         self.touch_pointer_clock();
     }
 
@@ -201,6 +282,7 @@ impl SelectionController {
         self.state.phase = Phase::Dragging;
         self.touch_pointer_clock();
         self.state.button_down = true;
+        self.state.granularity = SelectionGranularity::Cell;
     }
 
     /// Update the current drag cursor.
@@ -219,6 +301,7 @@ impl SelectionController {
         self.state.phase = Phase::Idle;
         self.clear_pointer();
         self.state.button_down = false;
+        self.state.granularity = SelectionGranularity::Cell;
         let range = self.selection_range();
         if range.is_some_and(|r| r.is_non_empty()) {
             range
@@ -243,6 +326,84 @@ impl SelectionController {
         match (self.state.anchor, self.state.cursor) {
             (Some(start), Some(end)) => Some(SelectionRange { start, end }),
             _ => None,
+        }
+    }
+
+    /// The current snapping granularity of the active selection.
+    pub fn granularity(&self) -> SelectionGranularity {
+        self.state.granularity
+    }
+
+    /// The current selection anchor.
+    pub fn anchor(&self) -> Option<LogicalPosition> {
+        self.state.anchor
+    }
+
+    /// Record a press at `pos` and return the consecutive click count (1, 2,
+    /// 3, …). The count resets to 1 when the double-click window, move
+    /// tolerance, or the "button not down" precondition fails. Time is
+    /// injectable for deterministic tests.
+    pub fn note_click_at(&mut self, pos: LogicalPosition, now: Instant) -> u8 {
+        let within_window = self
+            .state
+            .last_click_at
+            .is_some_and(|t| now.duration_since(t) <= DOUBLE_CLICK_WINDOW);
+        let within_tol = self.state.last_click_pos.is_some_and(|p| {
+            p.row
+                .abs_diff(pos.row)
+                .saturating_add(p.column.abs_diff(pos.column))
+                <= DOUBLE_CLICK_MOVE_TOLERANCE
+        });
+        let ready = !self.state.button_down && self.state.phase != Phase::Dragging;
+        let count = if within_window && within_tol && ready {
+            self.state.click_count.saturating_add(1)
+        } else {
+            1
+        };
+        self.state.click_count = count;
+        self.state.last_click_at = Some(now);
+        self.state.last_click_pos = Some(pos);
+        count
+    }
+
+    /// Record a press at `pos` with the current time.
+    pub fn note_click(&mut self, pos: LogicalPosition) -> u8 {
+        self.note_click_at(pos, Instant::now())
+    }
+
+    /// Enter word-granularity selection for `range`, storing its bounds as
+    /// immutable origin so subsequent drags can never drift them.
+    pub fn begin_word_selection(&mut self, range: SelectionRange) {
+        self.state.anchor = Some(range.start);
+        self.state.cursor = Some(range.end);
+        self.state.word_anchor_start = Some(range.start);
+        self.state.word_anchor_end = Some(range.end);
+        self.state.phase = Phase::Dragging;
+        self.state.button_down = true;
+        self.state.granularity = SelectionGranularity::Word;
+        self.touch_pointer_clock();
+    }
+
+    /// Extend a word-granularity selection toward `pos`, snapping to the word
+    /// containing `pos` (`word`) when present, else to the raw `pos` over
+    /// whitespace/punctuation. The origin word `[word_anchor_start,
+    /// word_anchor_end]` is always strictly enclosed by the resulting range.
+    pub fn update_word_drag(&mut self, pos: LogicalPosition, word: Option<SelectionRange>) {
+        if self.state.phase != Phase::Dragging {
+            return;
+        }
+        let Some(anchor_start) = self.state.word_anchor_start else {
+            return;
+        };
+        let Some(anchor_end) = self.state.word_anchor_end else {
+            return;
+        };
+        if pos < anchor_start {
+            self.state.anchor = Some(word.map(|w| w.start).unwrap_or(pos));
+            self.state.cursor = Some(anchor_end);
+        } else {
+            self.state.anchor = Some(anchor_start);
+            self.state.cursor = Some(word.map(|w| w.end).unwrap_or(pos));
         }
     }
 
@@ -308,9 +469,23 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             if rect_contains(area, mouse.column, mouse.row)
                 && let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row)
             {
-                let selection = host.selection_controller();
-                selection.set_pointer(mouse.column, mouse.row);
-                selection.prepare_drag(pos);
+                // The count is computed in a scoped block so the `&mut` borrow
+                // of `host` ends before `word_range_at` / `prepare_drag` run.
+                let count = {
+                    let selection = host.selection_controller();
+                    selection.set_pointer(mouse.column, mouse.row);
+                    selection.note_click(pos)
+                };
+                // Exact double click (count == 2) selects the full word;
+                // higher-order clicks (triple etc.) fall through to a fresh
+                // cell drag so future line-granularity gestures stay free.
+                if count == 2
+                    && let Some(word) = host.word_range_at(pos)
+                {
+                    host.selection_controller().begin_word_selection(word);
+                    return true;
+                }
+                host.selection_controller().prepare_drag(pos);
                 return true;
             }
             false
@@ -334,7 +509,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             }
             auto_scroll_selection(host, area, mouse.column, mouse.row);
             if let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row) {
-                host.selection_controller().update_drag(pos);
+                update_drag_for_position(host, pos);
             }
             true
         }
@@ -373,7 +548,7 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                 }
                 auto_scroll_selection(host, area, mouse.column, mouse.row);
                 if let Some(pos) = host.logical_position_from_point(area, mouse.column, mouse.row) {
-                    host.selection_controller().update_drag(pos);
+                    update_drag_for_position(host, pos);
                 }
                 return true;
             }
@@ -384,6 +559,19 @@ pub fn handle_selection_mouse<H: SelectionHost>(
             true
         }
         _ => false,
+    }
+}
+
+/// Update the selection cursor toward `pos`, honoring the active granularity.
+/// In word mode the cursor snaps to the word at `pos` (or to the raw `pos`
+/// over whitespace/punctuation) with no cell-level fallback, so the origin
+/// word stays fully enclosed while dragging.
+fn update_drag_for_position<H: SelectionHost>(host: &mut H, pos: LogicalPosition) {
+    if host.selection_controller().granularity() == SelectionGranularity::Word {
+        let word = host.word_range_at(pos);
+        host.selection_controller().update_word_drag(pos, word);
+    } else {
+        host.selection_controller().update_drag(pos);
     }
 }
 
@@ -537,7 +725,7 @@ fn maintain_selection_drag_active<H: SelectionHost>(host: &mut H, area: Rect) ->
 
     let mut changed = auto_scroll_selection(host, area, column, row);
     if let Some(pos) = host.logical_position_from_point(area, column, row) {
-        host.selection_controller().update_drag(pos);
+        update_drag_for_position(host, pos);
         changed = true;
     }
     changed
@@ -597,6 +785,8 @@ mod tests {
         viewport: Rect,
         h_scroll: Vec<isize>,
         v_scroll: Vec<isize>,
+        content: Vec<String>,
+        word_extra_chars: &'static str,
     }
 
     impl TestHost {
@@ -606,7 +796,19 @@ mod tests {
                 viewport,
                 h_scroll: Vec::new(),
                 v_scroll: Vec::new(),
+                content: Vec::new(),
+                word_extra_chars: DEFAULT_WORD_EXTRA_CHARS,
             }
+        }
+
+        fn with_content(mut self, lines: &[&str]) -> Self {
+            self.content = lines.iter().map(|s| s.to_string()).collect();
+            self
+        }
+
+        fn with_word_extra_chars(mut self, chars: &'static str) -> Self {
+            self.word_extra_chars = chars;
+            self
         }
 
         fn controller(&self) -> &SelectionController {
@@ -643,6 +845,19 @@ mod tests {
             let col = column.saturating_sub(area.x as u16) as usize;
             let row = row.saturating_sub(area.y as u16) as usize;
             Some(LogicalPosition::new(row, col))
+        }
+
+        fn word_range_at(&mut self, pos: LogicalPosition) -> Option<SelectionRange> {
+            let row: Vec<Option<char>> = self.content.get(pos.row)?.chars().map(Some).collect();
+            let index = pos.column.min(row.len().saturating_sub(1));
+            let (start, end) = find_word_bounds(&row, index, self.word_extra_chars);
+            if start == end {
+                return None;
+            }
+            Some(SelectionRange {
+                start: LogicalPosition::new(pos.row, start),
+                end: LogicalPosition::new(pos.row, end),
+            })
         }
 
         fn scroll_selection_vertical(&mut self, delta: isize) {
@@ -871,5 +1086,615 @@ mod tests {
         assert!(host.controller().button_down());
         assert!(!host.h_scroll.is_empty());
         assert_eq!(host.h_scroll[0], 6);
+    }
+
+    // --- Word-granularity selection tests ---
+
+    #[test]
+    fn is_word_char_classifies_cells() {
+        assert!(is_word_char(Some('a'), ""));
+        assert!(is_word_char(Some('Z'), ""));
+        assert!(is_word_char(Some('5'), ""));
+        assert!(is_word_char(Some('_'), ""));
+        assert!(!is_word_char(Some(' '), ""));
+        assert!(!is_word_char(Some('.'), ""));
+        assert!(!is_word_char(Some('/'), ""));
+        assert!(!is_word_char(None, ""));
+        // Hyphens are boundaries by default, word chars when configured.
+        assert!(!is_word_char(Some('-'), DEFAULT_WORD_EXTRA_CHARS));
+        assert!(is_word_char(Some('-'), "-"));
+    }
+
+    #[test]
+    fn find_word_bounds_finds_contiguous_word() {
+        let cells: Vec<Option<char>> = "Hello World".chars().map(Some).collect();
+        assert_eq!(find_word_bounds(&cells, 1, ""), (0, 5));
+        assert_eq!(find_word_bounds(&cells, 3, ""), (0, 5));
+        assert_eq!(find_word_bounds(&cells, 6, ""), (6, 11));
+        assert_eq!(
+            find_word_bounds(&cells, 5, ""),
+            (5, 5),
+            "space is not a word"
+        );
+        assert_eq!(
+            find_word_bounds(&cells, 99, ""),
+            (11, 11),
+            "out-of-range index clamps to the row length"
+        );
+        assert_eq!(find_word_bounds(&cells, 0, ""), (0, 5));
+    }
+
+    #[test]
+    fn find_word_bounds_handles_underscore_and_punctuation() {
+        let cells: Vec<Option<char>> = "foo_bar baz.qux".chars().map(Some).collect();
+        assert_eq!(
+            find_word_bounds(&cells, 2, ""),
+            (0, 7),
+            "underscore joins the word"
+        );
+        assert_eq!(find_word_bounds(&cells, 8, ""), (8, 11));
+        assert_eq!(
+            find_word_bounds(&cells, 11, ""),
+            (11, 11),
+            "punctuation is not a word"
+        );
+        assert_eq!(find_word_bounds(&cells, 12, ""), (12, 15));
+    }
+
+    #[test]
+    fn find_word_bounds_hyphen_is_boundary_by_default_and_configurable() {
+        // Default: hyphen splits words (kebab-case, CLI flags).
+        let kebab: Vec<Option<char>> = "foo-bar".chars().map(Some).collect();
+        assert_eq!(
+            find_word_bounds(&kebab, 4, DEFAULT_WORD_EXTRA_CHARS),
+            (4, 7),
+            "bar"
+        );
+        assert_eq!(
+            find_word_bounds(&kebab, 0, DEFAULT_WORD_EXTRA_CHARS),
+            (0, 3),
+            "foo"
+        );
+        assert_eq!(
+            find_word_bounds(&kebab, 3, DEFAULT_WORD_EXTRA_CHARS),
+            (3, 3),
+            "the dash itself"
+        );
+        let flag: Vec<Option<char>> = "--verbose".chars().map(Some).collect();
+        assert_eq!(
+            find_word_bounds(&flag, 5, DEFAULT_WORD_EXTRA_CHARS),
+            (2, 9),
+            "--verbose selects verbose by default"
+        );
+        let art: Vec<Option<char>> = "state-of-the-art".chars().map(Some).collect();
+        assert_eq!(
+            find_word_bounds(&art, 9, DEFAULT_WORD_EXTRA_CHARS),
+            (9, 12),
+            "the"
+        );
+
+        // Configured with "-": hyphens join the word.
+        assert_eq!(find_word_bounds(&kebab, 4, "-"), (0, 7), "foo-bar");
+        assert_eq!(find_word_bounds(&flag, 5, "-"), (0, 9), "--verbose");
+        assert_eq!(find_word_bounds(&art, 9, "-"), (0, 16), "state-of-the-art");
+        // snake_case is identical under both settings.
+        let snake: Vec<Option<char>> = "foo_bar".chars().map(Some).collect();
+        assert_eq!(
+            find_word_bounds(&snake, 5, DEFAULT_WORD_EXTRA_CHARS),
+            (0, 7)
+        );
+        assert_eq!(find_word_bounds(&snake, 5, "-"), (0, 7));
+    }
+
+    #[test]
+    fn find_word_bounds_empty_and_single_char() {
+        let empty: Vec<Option<char>> = Vec::new();
+        assert_eq!(find_word_bounds(&empty, 0, ""), (0, 0));
+        let single: Vec<Option<char>> = vec![Some('x')];
+        assert_eq!(find_word_bounds(&single, 0, ""), (0, 1));
+    }
+
+    #[test]
+    fn note_click_counts_double_click_within_window() {
+        let mut controller = SelectionController::new();
+        let t0 = Instant::now();
+        assert_eq!(controller.note_click_at(LogicalPosition::new(0, 0), t0), 1);
+        assert_eq!(
+            controller.note_click_at(LogicalPosition::new(0, 0), t0 + Duration::from_millis(10)),
+            2
+        );
+    }
+
+    #[test]
+    fn note_click_resets_after_window() {
+        let mut controller = SelectionController::new();
+        let t0 = Instant::now();
+        controller.note_click_at(LogicalPosition::new(0, 0), t0);
+        assert_eq!(
+            controller.note_click_at(LogicalPosition::new(0, 0), t0 + Duration::from_millis(501)),
+            1
+        );
+    }
+
+    #[test]
+    fn note_click_resets_on_move_tolerance() {
+        let mut controller = SelectionController::new();
+        let t0 = Instant::now();
+        controller.note_click_at(LogicalPosition::new(0, 0), t0);
+        // 5 cells away exceeds DOUBLE_CLICK_MOVE_TOLERANCE (4).
+        assert_eq!(
+            controller.note_click_at(LogicalPosition::new(0, 5), t0 + Duration::from_millis(10)),
+            1
+        );
+    }
+
+    #[test]
+    fn note_click_resets_while_button_down() {
+        let mut controller = SelectionController::new();
+        let t0 = Instant::now();
+        controller.note_click_at(LogicalPosition::new(0, 0), t0);
+        controller.set_button_down(true);
+        assert_eq!(
+            controller.note_click_at(LogicalPosition::new(0, 0), t0 + Duration::from_millis(10)),
+            1,
+            "a press while the button is already down is a drag, not a click"
+        );
+    }
+
+    #[test]
+    fn begin_word_selection_sets_word_granularity_and_dragging() {
+        let mut controller = SelectionController::new();
+        controller.begin_word_selection(SelectionRange {
+            start: LogicalPosition::new(0, 0),
+            end: LogicalPosition::new(0, 5),
+        });
+        assert_eq!(controller.granularity(), SelectionGranularity::Word);
+        assert!(controller.is_dragging());
+        assert!(controller.button_down());
+    }
+
+    #[test]
+    fn update_word_drag_extends_right() {
+        let mut controller = SelectionController::new();
+        controller.begin_word_selection(SelectionRange {
+            start: LogicalPosition::new(0, 5),
+            end: LogicalPosition::new(0, 10),
+        });
+        controller.update_word_drag(
+            LogicalPosition::new(0, 15),
+            Some(SelectionRange {
+                start: LogicalPosition::new(0, 14),
+                end: LogicalPosition::new(0, 17),
+            }),
+        );
+        let range = controller.selection_range().unwrap().normalized();
+        assert_eq!(
+            range.start,
+            LogicalPosition::new(0, 5),
+            "anchor start preserved"
+        );
+        assert_eq!(
+            range.end,
+            LogicalPosition::new(0, 17),
+            "cursor snaps to word end"
+        );
+    }
+
+    #[test]
+    fn update_word_drag_extends_left() {
+        let mut controller = SelectionController::new();
+        controller.begin_word_selection(SelectionRange {
+            start: LogicalPosition::new(0, 5),
+            end: LogicalPosition::new(0, 10),
+        });
+        controller.update_word_drag(
+            LogicalPosition::new(0, 2),
+            Some(SelectionRange {
+                start: LogicalPosition::new(0, 0),
+                end: LogicalPosition::new(0, 4),
+            }),
+        );
+        let range = controller.selection_range().unwrap().normalized();
+        assert_eq!(
+            range.start,
+            LogicalPosition::new(0, 0),
+            "cursor snaps to word start"
+        );
+        assert_eq!(range.end, LogicalPosition::new(0, 10), "anchor end pinned");
+    }
+
+    #[test]
+    fn update_word_drag_contracts_on_reverse() {
+        let mut controller = SelectionController::new();
+        controller.begin_word_selection(SelectionRange {
+            start: LogicalPosition::new(0, 5),
+            end: LogicalPosition::new(0, 10),
+        });
+        // Drag left to an earlier word.
+        controller.update_word_drag(
+            LogicalPosition::new(0, 2),
+            Some(SelectionRange {
+                start: LogicalPosition::new(0, 0),
+                end: LogicalPosition::new(0, 4),
+            }),
+        );
+        // Reverse back into the anchor word: the range must contract to the
+        // original word — origin bounds are immutable.
+        controller.update_word_drag(
+            LogicalPosition::new(0, 8),
+            Some(SelectionRange {
+                start: LogicalPosition::new(0, 5),
+                end: LogicalPosition::new(0, 10),
+            }),
+        );
+        let range = controller.selection_range().unwrap().normalized();
+        assert_eq!(
+            range,
+            SelectionRange {
+                start: LogicalPosition::new(0, 5),
+                end: LogicalPosition::new(0, 10),
+            }
+        );
+    }
+
+    #[test]
+    fn update_word_drag_across_whitespace_preserves_anchor_word() {
+        let mut controller = SelectionController::new();
+        controller.begin_word_selection(SelectionRange {
+            start: LogicalPosition::new(0, 5),
+            end: LogicalPosition::new(0, 10),
+        });
+        // Drag left over whitespace: raw pos becomes the boundary, but the
+        // anchor word [5, 10] stays fully enclosed.
+        controller.update_word_drag(LogicalPosition::new(0, 3), None);
+        let range = controller.selection_range().unwrap().normalized();
+        assert_eq!(range.start, LogicalPosition::new(0, 3));
+        assert_eq!(range.end, LogicalPosition::new(0, 10));
+        // Drag right over whitespace past the anchor end.
+        controller.update_word_drag(LogicalPosition::new(0, 15), None);
+        let range = controller.selection_range().unwrap().normalized();
+        assert_eq!(range.start, LogicalPosition::new(0, 5));
+        assert_eq!(range.end, LogicalPosition::new(0, 15));
+    }
+
+    #[test]
+    fn word_mode_exits_on_release_then_single_click() {
+        let mut controller = SelectionController::new();
+        controller.begin_word_selection(SelectionRange {
+            start: LogicalPosition::new(0, 0),
+            end: LogicalPosition::new(0, 5),
+        });
+        assert_eq!(controller.granularity(), SelectionGranularity::Word);
+        let _ = controller.finish_drag();
+        assert_eq!(controller.granularity(), SelectionGranularity::Cell);
+        controller.prepare_drag(LogicalPosition::new(0, 3));
+        assert_eq!(controller.granularity(), SelectionGranularity::Cell);
+    }
+
+    #[test]
+    fn handle_selection_mouse_double_click_selects_word() {
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        })
+        .with_content(&["Hello World foo bar"]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(1, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(1, 0, MouseEventKind::Release(MouseButton::Left)),
+            area,
+        );
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(1, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        assert_eq!(host.controller().granularity(), SelectionGranularity::Word);
+        let range = host.controller().selection_range().unwrap().normalized();
+        assert_eq!(
+            range,
+            SelectionRange {
+                start: LogicalPosition::new(0, 0),
+                end: LogicalPosition::new(0, 5),
+            },
+            "double-click on 'Hello' selects the full word"
+        );
+        // Release finalizes and clears word mode but keeps the selection.
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(1, 0, MouseEventKind::Release(MouseButton::Left)),
+            area,
+        );
+        assert_eq!(host.controller().granularity(), SelectionGranularity::Cell);
+        assert!(host.controller().has_selection());
+    }
+
+    #[test]
+    fn double_click_on_whitespace_falls_through_to_cell_drag() {
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        })
+        .with_content(&["Hello World"]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        for _ in 0..2 {
+            assert!(handle_selection_mouse(
+                &mut host,
+                true,
+                &mouse(5, 0, MouseEventKind::Press(MouseButton::Left)),
+                area,
+            ));
+            handle_selection_mouse(
+                &mut host,
+                true,
+                &mouse(5, 0, MouseEventKind::Release(MouseButton::Left)),
+                area,
+            );
+        }
+        assert_eq!(
+            host.controller().granularity(),
+            SelectionGranularity::Cell,
+            "whitespace double-click must not enter word mode"
+        );
+        assert!(!host.controller().has_selection());
+    }
+
+    #[test]
+    fn triple_click_falls_through_to_cell_drag() {
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        })
+        .with_content(&["Hello World"]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        // Two clicks → word selected on the second press.
+        for _ in 0..2 {
+            assert!(handle_selection_mouse(
+                &mut host,
+                true,
+                &mouse(1, 0, MouseEventKind::Press(MouseButton::Left)),
+                area,
+            ));
+            handle_selection_mouse(
+                &mut host,
+                true,
+                &mouse(1, 0, MouseEventKind::Release(MouseButton::Left)),
+                area,
+            );
+        }
+        // Third rapid click: count == 3 must not re-trigger word selection; it
+        // falls through to a fresh cell drag.
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(1, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        assert_eq!(host.controller().granularity(), SelectionGranularity::Cell);
+        assert!(
+            !host.controller().has_selection(),
+            "fresh cell drag has no selection yet"
+        );
+    }
+
+    #[test]
+    fn word_mode_drag_updates_word_by_word() {
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        })
+        .with_content(&["Hello World foo bar"]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        // Double-click "World" (cols 6..11).
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(6, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        );
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(6, 0, MouseEventKind::Release(MouseButton::Left)),
+            area,
+        );
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(6, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        // Drag right onto "bar" (cols 16..19).
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(17, 0, MouseEventKind::Drag(MouseButton::Left)),
+            area,
+        ));
+        let range = host.controller().selection_range().unwrap().normalized();
+        assert_eq!(range.start, LogicalPosition::new(0, 6));
+        assert_eq!(range.end, LogicalPosition::new(0, 19), "snaps to 'bar' end");
+        // Drag back into the anchor word contracts the range.
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(8, 0, MouseEventKind::Drag(MouseButton::Left)),
+            area,
+        ));
+        let range = host.controller().selection_range().unwrap().normalized();
+        assert_eq!(
+            range,
+            SelectionRange {
+                start: LogicalPosition::new(0, 6),
+                end: LogicalPosition::new(0, 11),
+            }
+        );
+    }
+
+    #[test]
+    fn maintain_selection_drag_uses_word_bounds() {
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        })
+        .with_content(&["Hello World foo bar"]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        // Double-click "World" (cols 6..11).
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(6, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        );
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(6, 0, MouseEventKind::Release(MouseButton::Left)),
+            area,
+        );
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(6, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        // Render-time drag continuation: pointer parked over "bar".
+        host.selection_controller().set_pointer(17, 0);
+        assert!(maintain_selection_drag(&mut host, area));
+        let range = host.controller().selection_range().unwrap().normalized();
+        assert_eq!(range.end, LogicalPosition::new(0, 19), "word-snapped end");
+    }
+
+    #[test]
+    fn double_click_hyphen_is_boundary_by_default() {
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        })
+        .with_content(&["foo-bar baz"]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(5, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(5, 0, MouseEventKind::Release(MouseButton::Left)),
+            area,
+        );
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(5, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        let range = host.controller().selection_range().unwrap().normalized();
+        assert_eq!(
+            range,
+            SelectionRange {
+                start: LogicalPosition::new(0, 4),
+                end: LogicalPosition::new(0, 7),
+            },
+            "kebab-case selects 'bar' only by default"
+        );
+    }
+
+    #[test]
+    fn double_click_hyphen_joins_word_when_configured() {
+        let mut host = TestHost::new(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        })
+        .with_content(&["foo-bar baz"])
+        .with_word_extra_chars("-");
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        };
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(5, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(5, 0, MouseEventKind::Release(MouseButton::Left)),
+            area,
+        );
+        assert!(handle_selection_mouse(
+            &mut host,
+            true,
+            &mouse(5, 0, MouseEventKind::Press(MouseButton::Left)),
+            area,
+        ));
+        let range = host.controller().selection_range().unwrap().normalized();
+        assert_eq!(
+            range,
+            SelectionRange {
+                start: LogicalPosition::new(0, 0),
+                end: LogicalPosition::new(0, 7),
+            },
+            "with extra chars configured, 'foo-bar' selects as one word"
+        );
     }
 }

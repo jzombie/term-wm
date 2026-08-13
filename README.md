@@ -82,6 +82,8 @@ In Direct Input Mode, the following keybindings **are not-effective**, and are c
 
 > **Clipboard split-brain:** `term-wm` keeps an *internal* clipboard alongside your OS clipboard. In most setups they stay in sync, but where the OS clipboard is unreachable — e.g. inside a terminal that doesn't support OSC 52, or over SSH — the two can diverge. **Paste** is one unified action: it reads the OS clipboard when available and otherwise falls back to the internal copy, so you never have to pick between them. It is bound to mouse right-click, and if a Direct Input Mode app is consuming right-click, **Paste** is also available from the Command Palette.
 
+> **Clipboard enablement in Direct Input Mode:** While a window is in Direct Input Mode, `term-wm`'s mouse-managed clipboard integration — click-and-drag selection copy and right-click paste — is overridden: mouse events are forwarded to the running application unfiltered, and clipboard handling within that application is the application's responsibility. Application-initiated copy continues to work, as OSC 52 copy sequences emitted by the running application are still intercepted and relayed to the system clipboard.
+
 ## System Requirements & Compatibility
 
 `term-wm` is designed to be highly resilient, running anywhere a standard terminal environment is available, but relies on modern terminal standards for its optimal presentation.

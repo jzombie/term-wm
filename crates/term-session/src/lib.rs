@@ -96,9 +96,14 @@ pub fn list_channels() -> io::Result<ListChannelsResponse> {
 }
 
 /// Kill a channel's session and detach all its sockets.
-pub fn kill_channel(channel: &str) -> io::Result<()> {
-    with_gateway(|client| async move { KillChannel::call(&*client, channel.to_string()).await })?
-        .map_err(|e| io::Error::other(format!("kill channel: {e}")))
+///
+/// The gateway refuses while any participant is attached to the channel unless
+/// `force` is true (see `RPC_ERROR_LIVE_PARTICIPANTS`).
+pub fn kill_channel(channel: &str, force: bool) -> io::Result<()> {
+    with_gateway(|client| async move {
+        KillChannel::call(&*client, (channel.to_string(), force)).await
+    })?
+    .map_err(|e| io::Error::other(format!("kill channel: {e}")))
 }
 
 /// Detach a single client socket from a channel by `conn_id`.

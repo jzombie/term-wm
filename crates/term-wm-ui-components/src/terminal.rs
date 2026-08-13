@@ -18,8 +18,8 @@ use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::utils::linkifier::{LinkHandler, LinkOverlay, Linkifier, OverlaySignature};
 use term_wm_core::utils::selectable_text::{
-    LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
-    handle_selection_mouse, maintain_selection_drag,
+    DEFAULT_WORD_EXTRA_CHARS, LogicalPosition, SelectionController, SelectionHost, SelectionRange,
+    SelectionViewport, find_word_bounds, handle_selection_mouse, maintain_selection_drag,
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
@@ -61,6 +61,10 @@ pub struct TerminalComponent {
     last_mode_suppressed_scroll: Cell<bool>,
     reported_alt_screen: Cell<bool>,
     window_key: Option<term_wm_core::window::WindowKey>,
+    /// Characters treated as word characters in addition to alphanumeric +
+    /// underscore, for double-click word selection. Default (empty) treats
+    /// hyphens and other punctuation as word boundaries.
+    word_extra_chars: String,
 }
 
 impl Component<TermWmAction> for TerminalComponent {
@@ -392,6 +396,7 @@ impl TerminalComponent {
             last_mode_suppressed_scroll: Cell::new(false),
             reported_alt_screen: Cell::new(false),
             window_key: None,
+            word_extra_chars: DEFAULT_WORD_EXTRA_CHARS.to_string(),
         }
     }
 
@@ -417,6 +422,7 @@ impl TerminalComponent {
             last_mode_suppressed_scroll: Cell::new(false),
             reported_alt_screen: Cell::new(false),
             window_key: None,
+            word_extra_chars: DEFAULT_WORD_EXTRA_CHARS.to_string(),
         };
         Ok(comp)
     }
@@ -591,6 +597,7 @@ impl TerminalComponent {
                 pane: &self.pane,
                 viewport_width: area.width,
                 viewport_height: area.height,
+                word_extra_chars: &self.word_extra_chars,
             };
             maintain_selection_drag(&mut dh, screen_area);
         }
@@ -799,6 +806,68 @@ impl<'a> Drop for ScrollbackGuard<'a> {
     }
 }
 
+/// Resolve the word bounds around `pos` in the pane's rendered grid. Mirrors
+/// `selection_text_for_range` scrollback pagination: `max_scrollback` is read
+/// before locking the parser, and `ScrollbackGuard` restores the parser's
+/// scrollback on drop.
+fn word_range_at_in_pane(
+    pane: &RefCell<Box<dyn Pane>>,
+    pos: LogicalPosition,
+    extra_chars: &str,
+) -> Option<SelectionRange> {
+    let mut pane = pane.borrow_mut();
+    let max_scrollback = pane.max_scrollback();
+    let parser_arc = pane.shared_parser();
+    let mut parser = parser_arc.lock().unwrap();
+    let screen = parser.screen_mut();
+
+    let (viewport_rows, cols) = screen.size();
+    if viewport_rows == 0 || cols == 0 {
+        return None;
+    }
+
+    let guard = ScrollbackGuard::new(screen);
+    guard.screen.set_scrollback(max_scrollback);
+    let vt100_max_scrollback = guard.screen.scrollback();
+    let vt100_total_lines = vt100_max_scrollback + viewport_rows as usize;
+    let offset_from_pane_to_vt100 = max_scrollback.saturating_sub(vt100_max_scrollback);
+
+    let vt100_row = pos.row.saturating_sub(offset_from_pane_to_vt100);
+    if vt100_row >= vt100_total_lines {
+        return None;
+    }
+    let viewport_start = vt100_row.min(vt100_max_scrollback);
+    let offset = vt100_max_scrollback.saturating_sub(viewport_start);
+    guard.screen.set_scrollback(offset);
+    let viewport_row = (vt100_row - viewport_start) as u16;
+    if viewport_row >= viewport_rows {
+        return None;
+    }
+
+    // Per-cell character stream; wide-continuation cells repeat the lead char
+    // so wide glyphs count as word characters across both cells.
+    let mut cells: Vec<Option<char>> = Vec::with_capacity(cols as usize);
+    for col in 0..cols {
+        match guard.screen.cell(viewport_row, col) {
+            Some(c) if c.is_wide_continuation() => cells.push(cells.last().copied().flatten()),
+            Some(c) => cells.push(c.contents().chars().next()),
+            None => cells.push(None),
+        }
+    }
+    if cells.is_empty() {
+        return None;
+    }
+    let index = pos.column.min(cells.len().saturating_sub(1));
+    let (start, end) = find_word_bounds(&cells, index, extra_chars);
+    if start == end {
+        return None;
+    }
+    Some(SelectionRange {
+        start: LogicalPosition::new(pos.row, start),
+        end: LogicalPosition::new(pos.row, end),
+    })
+}
+
 impl SelectionViewport for TerminalComponent {
     fn selection_viewport(&self, area: LayoutRect) -> LayoutRect {
         area
@@ -811,6 +880,10 @@ impl SelectionViewport for TerminalComponent {
         row: u16,
     ) -> Option<LogicalPosition> {
         TerminalComponent::logical_position_from_point(self, area, column, row)
+    }
+
+    fn word_range_at(&mut self, pos: LogicalPosition) -> Option<SelectionRange> {
+        word_range_at_in_pane(&self.pane, pos, &self.word_extra_chars)
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
@@ -997,6 +1070,13 @@ impl TerminalComponent {
         self.pane.get_mut().set_status_callback(cb);
     }
 
+    /// Configure extra characters treated as word characters for double-click
+    /// word selection, in addition to alphanumeric + underscore. Default is
+    /// empty, so punctuation like `-` acts as a word boundary.
+    pub fn set_word_extra_chars(&mut self, chars: &str) {
+        self.word_extra_chars = chars.to_string();
+    }
+
     fn link_at_position(&self, area: LayoutRect, mouse: &MouseEvent) -> Option<String> {
         let (local_x, local_y) = localize_coordinate(area, mouse.column, mouse.row)?;
         self.link_overlay
@@ -1035,6 +1115,7 @@ struct RenderDragHost<'a> {
     pane: &'a RefCell<Box<dyn Pane>>,
     viewport_width: u16,
     viewport_height: u16,
+    word_extra_chars: &'a str,
 }
 
 impl SelectionViewport for RenderDragHost<'_> {
@@ -1073,6 +1154,10 @@ impl SelectionViewport for RenderDragHost<'_> {
             row_base.saturating_add(local_row as usize),
             local_col as usize,
         ))
+    }
+
+    fn word_range_at(&mut self, pos: LogicalPosition) -> Option<SelectionRange> {
+        word_range_at_in_pane(self.pane, pos, self.word_extra_chars)
     }
 
     fn scroll_selection_vertical(&mut self, delta: isize) {
@@ -3213,6 +3298,252 @@ mod tests {
         assert!(
             count < 2,
             "marker must not be duplicated (got {count} occurrences, expected 0 or 1)"
+        );
+    }
+
+    // --- Double-click word selection tests ---
+
+    fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> Event {
+        use term_wm_core::events::{KeyModifiers, MouseEvent};
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn double_click(term: &mut TerminalComponent, ctx: &ComponentContext, col: u16, row: u16) {
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), col, row),
+            ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), col, row),
+            ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), col, row),
+            ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), col, row),
+            ctx,
+        );
+    }
+
+    fn screen_ctx() -> ComponentContext {
+        ComponentContext::new(true).with_screen_area(LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        })
+    }
+
+    #[test]
+    fn double_click_selects_word() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = screen_ctx();
+        double_click(&mut term, &ctx, 1, 0);
+        assert_eq!(
+            term.selection_text(),
+            Some("Hello".to_string()),
+            "double-click must select the full word"
+        );
+    }
+
+    #[test]
+    fn double_click_underscore_word() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "hello_world foo bar");
+        let ctx = screen_ctx();
+        double_click(&mut term, &ctx, 1, 0);
+        assert_eq!(
+            term.selection_text(),
+            Some("hello_world".to_string()),
+            "underscore joins the word"
+        );
+    }
+
+    #[test]
+    fn double_click_on_whitespace_noop() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = screen_ctx();
+        double_click(&mut term, &ctx, 5, 0);
+        assert_eq!(
+            term.selection_text(),
+            None,
+            "whitespace double-click selects nothing"
+        );
+    }
+
+    #[test]
+    fn word_drag_extends_right() {
+        use term_wm_core::events::{MouseButton, MouseEventKind};
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World foo bar");
+        let ctx = screen_ctx();
+        // Double-click "World" (cols 6..11).
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        // Drag right onto "bar" (cols 16..19).
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Drag(MouseButton::Left), 17, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 17, 0),
+            &ctx,
+        );
+        assert_eq!(
+            term.selection_text(),
+            Some("World foo bar".to_string()),
+            "word drag right selects through the target word"
+        );
+    }
+
+    #[test]
+    fn word_drag_extends_left() {
+        use term_wm_core::events::{MouseButton, MouseEventKind};
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = screen_ctx();
+        // Double-click "World" (cols 6..11).
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        // Drag left into "Hello" (cols 0..5).
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Drag(MouseButton::Left), 3, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 3, 0),
+            &ctx,
+        );
+        assert_eq!(
+            term.selection_text(),
+            Some("Hello World".to_string()),
+            "word drag left selects back through the anchor word's start"
+        );
+    }
+
+    #[test]
+    fn double_click_wide_chars() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello 世界 World");
+        let ctx = screen_ctx();
+        // 世's lead cell is at column 6.
+        double_click(&mut term, &ctx, 6, 0);
+        let text = term.selection_text();
+        assert!(
+            text.is_some(),
+            "wide-char double-click should select a word"
+        );
+        assert!(
+            text.as_ref().unwrap().contains("世界"),
+            "word should include both CJK chars, got: {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn double_click_selects_word_in_scrollback() {
+        let max_sb = 30;
+        let width = 80u16;
+        let height = 24u16;
+        let text: String = (1..=50)
+            .map(|i| format!("line {:02} data", i))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let mut pane = TestPane::new(max_sb);
+        pane.set_parser_size(height, width);
+        pane.write_to_parser(text.as_bytes());
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        term.selection_enabled = true;
+        // Scroll up 10 rows so the viewport shows scrollback; content row 22
+        // ("line 23 data") is then viewport row 2.
+        term.pane.borrow_mut().set_scrollback(10);
+        let ctx = screen_ctx();
+        double_click(&mut term, &ctx, 1, 2);
+        assert_eq!(
+            term.selection_text(),
+            Some("line".to_string()),
+            "double-click in a scrolled-up row selects the word"
+        );
+    }
+
+    #[test]
+    fn double_click_in_direct_mode_skips_selection() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
+        let ctx = ComponentContext::new(true)
+            .with_screen_area(LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            })
+            .with_direct_mode(true);
+        double_click(&mut term, &ctx, 1, 0);
+        assert_eq!(
+            term.selection_text(),
+            None,
+            "mouse-captured (Direct Input Mode) apps must keep selection disabled"
+        );
+    }
+
+    #[test]
+    fn double_click_selects_word_with_dashes_as_boundary() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "foo-bar baz");
+        let ctx = screen_ctx();
+        // 'bar' starts at column 4; the dash at column 3 is a boundary.
+        double_click(&mut term, &ctx, 5, 0);
+        assert_eq!(
+            term.selection_text(),
+            Some("bar".to_string()),
+            "kebab-case must split on '-' by default"
+        );
+    }
+
+    #[test]
+    fn double_click_selects_flag_word_not_dashes() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "--verbose");
+        let ctx = screen_ctx();
+        // 'verbose' starts at column 2; the leading dashes are boundaries.
+        double_click(&mut term, &ctx, 4, 0);
+        assert_eq!(
+            term.selection_text(),
+            Some("verbose".to_string()),
+            "--verbose must select 'verbose', not the dashes"
+        );
+    }
+
+    #[test]
+    fn double_click_selects_kebab_case_when_configured() {
+        let (mut term, _rb) = make_term_with_content(80, 24, 2000, "foo-bar baz");
+        term.set_word_extra_chars("-");
+        let ctx = screen_ctx();
+        double_click(&mut term, &ctx, 5, 0);
+        assert_eq!(
+            term.selection_text(),
+            Some("foo-bar".to_string()),
+            "with '-' configured, kebab-case selects as one word"
         );
     }
 }

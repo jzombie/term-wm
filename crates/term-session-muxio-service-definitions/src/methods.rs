@@ -14,6 +14,7 @@ pub const RPC_ERROR_UNATTACHED: &str =
 pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
 pub const RPC_ERROR_LIVE_SESSIONS: &str =
     "gateway: live session(s) running; use `term-session stop --force` to stop anyway";
+pub const RPC_ERROR_LIVE_PARTICIPANTS: &str = "gateway: live participant(s) attached to channel; use `term-session kill <channel> --force` to kill anyway";
 
 // ── Attach ──────────────────────────────────────────────────────────
 
@@ -371,6 +372,7 @@ impl RpcMethodPrebuffered for ListChannels {
 #[derive(Encode, Decode)]
 struct KillChannelRequest {
     pub channel: String,
+    pub force: bool,
 }
 
 pub struct KillChannel;
@@ -378,17 +380,20 @@ pub struct KillChannel;
 impl RpcMethodPrebuffered for KillChannel {
     const METHOD_ID: u64 = rpc_method_id!("session.kill_channel");
 
-    type Input = String;
+    type Input = (String, bool);
     type Output = ();
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&KillChannelRequest { channel: input }))
+        Ok(bitcode::encode(&KillChannelRequest {
+            channel: input.0,
+            force: input.1,
+        }))
     }
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
         let r = bitcode::decode::<KillChannelRequest>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok(r.channel)
+        Ok((r.channel, r.force))
     }
 
     fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
