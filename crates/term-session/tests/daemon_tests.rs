@@ -912,6 +912,14 @@ async fn cli_kill_requires_force_when_participants() {
         "kill --force failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+
+    // `kill` stops the channel's session, not the daemon — shut it down via a
+    // fresh connection (the original client was evicted by the kill) so the
+    // child process reaps and the test does not hang.
+    let stop_client = wait_connectable(&gateway).await;
+    ShutdownGateway::call(&*stop_client, true)
+        .await
+        .expect("daemon shutdown");
     let _ = child.wait();
 }
 /// stderr instead of being silently swallowed by the stderr→tracing redirect
