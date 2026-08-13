@@ -172,6 +172,17 @@ Declarative `view!` Macro
   `view(&self)` — an all-owned tree); `impl_view_component!(Ty, height = <expr>)`
   reports a static height for `&mut self` views that can't be built from
   `desired_height(&self)` (the `&self`-querying methods then use defaults).
+- **Wiring a terminal inside a `view!` window**: `TermWmApp::run()` auto-wires
+  PTY status callbacks only for `CoreWmComponent::Terminal` windows. A
+  `TerminalComponent` hosted in an `AppRootComponent::Custom`/`view!` window
+  must be wired explicitly: set the window's `DirectInputTracker`
+  (`wm.set_window_tracker(key, tracker)` from `pty.direct_input_tracker()`) so
+  the WM detects direct mode, and call
+  `TermWmApp::run_with_setup(|app, ctx| … ctx.wire_terminal(&mut *terminal.content.borrow_mut(), key))`
+  — the opaque `AppSetupContext::wire_terminal` maps `PtyStatus` →
+  `UnifiedEvent` internally (consumers never touch the engine event channel).
+  An un-wired PTY logs `status_cb is NONE` on direct-mode transitions — that is
+  intentional (it is a broken event pipeline).
 - **Height is dynamic, not constant**: containers (`VerticalStack` sums, `HStack`
   maxes, `Grid` sums/fraction-stretch/reflow, `Box` adds border+padding) query
   their children's `desired_height(width)` — width is propagated so grids reflow

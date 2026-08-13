@@ -37,6 +37,13 @@ impl<C: Component<TermWmAction>> CenterComponent<C> {
 }
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> {
+    fn desired_height(&self, _width: u16) -> u16 {
+        // Bounds the center's height request so a parent stack allocates the
+        // configured content height (not 0 = stretch, which would consume all
+        // remaining space and drop trailing siblings).
+        self.content_size.1
+    }
+
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -101,6 +108,13 @@ mod tests {
         ) -> EventResult<TermWmAction> {
             EventResult::Ignored
         }
+    }
+
+    #[test]
+    #[test]
+    fn center_desired_height_is_content_height() {
+        let center = CenterComponent::new(DummyComponent, 10, 5);
+        assert_eq!(center.desired_height(40), 5);
     }
 
     #[test]
