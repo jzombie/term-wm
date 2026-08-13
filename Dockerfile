@@ -28,11 +28,13 @@ RUN cargo build --release --bin term-wm
 
 # --- Runtime stage ---
 FROM alpine:3.24
-# The window manager spawns a shell in every window; install bash (the default
-# shell fallback) and set SHELL so spawned panes use it. htop ships as a
-# convenient `--run htop` demo command.
-RUN apk add --no-cache bash htop
+# Layer 1: the window manager binary.
 COPY --from=build /src/term-wm/target/release/term-wm /bin/term-wm
+
+# Layer 2: apps installed into the image. Add/remove tools (htop, git, ...)
+# here without touching the WM layer above.
+# bash is the default shell fallback, used for spawned panes.
+RUN apk add --no-cache bash htop
 
 # Spawned shells start in this working directory.
 WORKDIR /root
