@@ -202,7 +202,7 @@ impl MyWindow {
 
 Layout tags (`VerticalStack`, `HStack`, `Grid`, `Center`, `Box`) and stateless leaves (`Label`, `Button`) are constructed declaratively; a `{ expr }` escape hatch injects any `Component` value, owned or `&mut`-borrowed (`{ &mut self.terminal }` for stateful components such as a terminal). All-owned trees (no `&mut`) go straight into `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
 
-`view!` and its tag set are still an evolving draft — treat [`examples/view_demo.rs`](examples/view_demo.rs) as the canonical runnable reference (it wires a live terminal into a `view!` tree), and the System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built the same way.
+`view!` and its tag set are still an evolving draft — treat [`examples/view_macro_prototype.rs`](examples/view_macro_prototype.rs) as the canonical runnable reference (it wires a live terminal into a `view!` tree), and the System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built the same way.
 
 ## License
 

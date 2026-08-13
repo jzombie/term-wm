@@ -131,7 +131,7 @@ Declarative `view!` Macro
   no runtime tree, no reactivity, no reconciliation, no `Box`/`dyn`. A `{ expr }`
   escape hatch injects any `Component`, owned or `&mut`-borrowed.
 - **Draft design**: the macro, its tags, and their props are still evolving.
-  Treat `examples/view_demo.rs` and `crates/term-wm-view` as the current source
+  Treat `examples/view_macro_prototype.rs` and `crates/term-wm-view` as the current source
   of truth for the tag set and behavior rather than this file.
 - **Durable invariants** (violating these is a bug):
   - `view!` trees are ephemeral values rebuilt per frame; stateful components are
