@@ -10,8 +10,9 @@
 //!    can call `self.view().desired_height(width)` — fully dynamic, no consts.
 //! 2. **`&mut self` view with a borrowed stateful child** (`ChartsWindow`,
 //!    like argtuner's `ChartsView`) — `view(&mut self)` injects
-//!    `{ &mut self.pane }`; `desired_height` can't build the view, so a static
-//!    layout reports a const.
+//!    `{ &mut self.pane }` via `impl_view_component!(ChartsWindow, child: pane)`,
+//!    which forwards the lifecycle to the view and delegates `desired_height` +
+//!    selection/hitbox to `self.pane`.
 //!
 //! `view!` is invoked through the umbrella `::term_wm::` path style (argtuner
 //! depends on `term-wm`).
@@ -110,10 +111,10 @@ impl ChartsWindow {
     }
 }
 
-// `&mut self` view (borrows the stateful pane): `desired_height` can't build
-// the view, so the macro takes a static height expression for the fixed layout
-// (Box border 2 + padding 2 + a 3-row grid).
-impl_view_component!(ChartsWindow, height = 2 + 2 + 3);
+// `&mut self` view (borrows the stateful pane): the `child:` form forwards the
+// lifecycle to the view and delegates `desired_height` + selection/hitbox to
+// `self.pane`.
+impl_view_component!(ChartsWindow, child: pane);
 
 /// Delegate enum, like argtuner's `AppComponent`.
 enum AppComponent {
@@ -208,13 +209,23 @@ fn argtuner_style_consumer_works_with_view_trees() {
             content.contains("╭─ Charts"),
             "Box border + title: {content:?}"
         );
+        let AppRootComponent::Custom(AppComponent::Charts(charts)) = app
+            .wm()
+            .component_for_key_mut(charts_key)
+            .expect("charts window")
+        else {
+            panic!("expected charts window");
+        };
+        assert_eq!(charts.desired_height(30), 3, "delegated height (pane.rows)");
         assert_eq!(
-            app.wm()
-                .component_for_key_mut(charts_key)
-                .unwrap()
-                .desired_height(30),
-            7,
-            "static height (Box 2+2 + pane 3)"
+            charts.selection_status().active,
+            charts.pane.selection_status().active,
+            "selection status forwarded to child"
+        );
+        assert_eq!(
+            charts.selection_text(),
+            charts.pane.selection_text(),
+            "selection text forwarded to child"
         );
     }
 }
