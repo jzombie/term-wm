@@ -19,7 +19,7 @@ impl MyWindow {
     fn view(&mut self) -> impl Component<TermWmAction> + '_ {
         view! {
             <VerticalStack gap=1>
-                <Label text="term-wm view! demo — quit with the button below or Ctrl+Q" />
+                <Label text="term-wm view! demo — just a prototype. Probably not stable." />
                 <Center width=80 height=12>
                     <Grid cols="1fr 2fr" rows="1fr">
                         <Label text="left cell" />
