@@ -201,25 +201,27 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for BoxComponent<C> {
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
         match event {
-            // Only a press starts an interaction, so the border/padding eats
-            // those; drags, releases, moves and scrolls must always reach the
-            // content so an in-flight drag survives crossing the border.
-            Event::Mouse(m) if matches!(m.kind, MouseEventKind::Press(_)) => {
+            Event::Mouse(m) => {
                 let screen = ctx.screen_area().unwrap_or_default();
                 let inner = self.inner_rect(screen);
                 let m_x = i32::from(m.column);
                 let m_y = i32::from(m.row);
-                if m_x >= inner.x
-                    && m_x < inner.x.saturating_add(i32::from(inner.width))
-                    && m_y >= inner.y
-                    && m_y < inner.y.saturating_add(i32::from(inner.height))
+                // Only a press starts an interaction, so the border/padding eats
+                // presses on it; drags, releases, moves and scrolls must always
+                // reach the content so an in-flight drag survives crossing the
+                // border. All mouse events use the inner-rect context so the
+                // content sees the SAME geometry in press and non-press events.
+                if matches!(m.kind, MouseEventKind::Press(_))
+                    && !(m_x >= inner.x
+                        && m_x < inner.x.saturating_add(i32::from(inner.width))
+                        && m_y >= inner.y
+                        && m_y < inner.y.saturating_add(i32::from(inner.height)))
                 {
-                    let child_ctx = ctx.clone().with_screen_area(inner);
-                    return self.content.handle_events(event, &child_ctx);
+                    return EventResult::Ignored;
                 }
-                EventResult::Ignored
+                self.content.handle_events(event, &ctx.clone().with_screen_area(inner))
             }
-            // Keys are focus-based; other mouse events forward unconditionally.
+            // Keys are focus-based; no geometry involved.
             _ => self.content.handle_events(event, ctx),
         }
     }
