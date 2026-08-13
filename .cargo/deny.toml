@@ -2,14 +2,22 @@
 # RUSTSEC-2026-0192: ttf-parser is unmaintained but still a transitive dep of
 # resvg/usvg (used for SVG rasterization in term-wm-ui-components).
 # No safe upgrade available until resvg updates its font crate dependency.
-# RUSTSEC-2026-0192: ttf-parser is unmaintained but still a transitive dep of
-# resvg/usvg (used for SVG rasterization in term-wm-ui-components).
-# No safe upgrade available until resvg updates its font crate dependency.
-#
 # RUSTSEC-2026-0206: rustybuzz is unmaintained — same root cause as above.
-# Both are transitive deps of resvg/usvg 0.47.0 (latest).
+# Both are transitive deps of resvg/usvg (latest).
 # Tracked at: https://github.com/linebender/resvg
-ignore = ["RUSTSEC-2026-0192", "RUSTSEC-2026-0206"]
+#
+# RUSTSEC-2026-0173: proc-macro-error2 is unmaintained but only a transitive,
+# build-time dependency of rstml (the JSX/RSX parser behind term-wm-view's
+# `view!` macro) via syn_derive. It exists solely to format proc-macro
+# diagnostics — no runtime surface — and has no safe upgrade. rstml 0.13 is
+# the maintained, standard RSX parser (used by dioxus), so we keep it and
+# accept this advisory. Upstream:
+# https://github.com/GnomedDev/proc-macro-error-2
+ignore = [
+  "RUSTSEC-2026-0192",
+  "RUSTSEC-2026-0206",
+  "RUSTSEC-2026-0173",
+]
 
 [licenses]
 allow = [
