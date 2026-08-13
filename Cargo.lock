@@ -3369,6 +3369,7 @@ dependencies = [
  "term-wm-layout-engine",
  "term-wm-render",
  "term-wm-ui-components",
+ "term-wm-view",
  "tracing",
  "unicode-width",
  "webbrowser",
@@ -3414,6 +3415,7 @@ dependencies = [
 name = "term-wm-view"
 version = "0.9.24-alpha"
 dependencies = [
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "rstml",

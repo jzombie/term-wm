@@ -1,3 +1,5 @@
+extern crate self as term_wm_ui_components;
+
 pub mod ascii_image;
 pub mod button;
 pub mod canvas_scroll_view;

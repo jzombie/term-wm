@@ -153,3 +153,22 @@ Declarative `view!` Macro
 - Generated `view!` code references the `::term_wm` umbrella crate; consumers
   must depend on `term-wm` (default crate name) and the container/leaf tags map
   to the `*Component` types above.
+- **Path resolution (`proc_macro_crate`)**: generated code uses `::term_wm::`
+  paths when the consumer depends on (or is) the umbrella crate, otherwise
+  falls back to `::term_wm_ui_components::` / `::term_wm_core::` /
+  `::term_wm_render::` paths so leaf crates (e.g. `term-wm-sys-ui-components`,
+  which cannot depend on the umbrella) can invoke `view!` without circular
+  dependencies. Renamed dependencies are honored via `crate_name`. The leaf
+  crates that may invoke `view!` themselves carry `extern crate self as …;`
+  aliases (see `term-wm-ui-components`).
+- **Scrollable view content**: `view!` trees are anonymous ephemeral values, so
+  they cannot be stored as `ScrollViewComponent` content directly. Compose a
+  nameable `*ContentView` struct implementing `Component` via a per-frame
+  `fn view(&mut self) -> impl Component + '_`, then wrap it in
+  `ScrollViewComponent`/`CanvasScrollView`. Because `view()` needs `&mut self`
+  but `desired_height` is `&self`, the content struct reports its scroll height
+  from a named const that stays in sync with the grid rows (a `0` default would
+  disable scrolling).
+- `desired_height` stretch semantics: `0` means stretch. `HStackComponent`
+  returns `0` if any child stretches; `GridComponent` returns `0` if any row is
+  `Fraction` (or `rows` is empty).

@@ -25,19 +25,75 @@
 //!    (owned, or `&mut C` via the blanket impl) — no registry needed for
 //!    third-party or fallible components.
 //!
-//! Path resolution: generated code references the `::term_wm` umbrella crate
-//! (itself re-exporting `term_wm_core::*` + `term_wm_ui_components::*` and
-//! `RenderBackend`), so consumers need `term-wm` as a direct dependency and
-//! must not rename it.
+//! # Path resolution
+//!
+//! Generated code resolves the component/core/render crates via
+//! [`proc_macro_crate`], so it works from both the umbrella and the leaf
+//! crates without circular dependencies:
+//! - Consumers that depend on the `term-wm` umbrella (or the crate itself)
+//!   get `::term_wm::` paths (the umbrella re-exports `term_wm_core::*` +
+//!   `term_wm_ui_components::*` and `RenderBackend`).
+//! - Leaf consumers (e.g. `term-wm-sys-ui-components`, which the umbrella
+//!   depends on and therefore cannot re-depend on it) get
+//!   `::term_wm_ui_components::`, `::term_wm_core::` and
+//!   `::term_wm_render::` paths. Renamed dependencies are honored via the name
+//!   `crate_name` reports.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
+use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use rstml::node::{Infallible, Node, NodeAttribute, NodeElement};
 use syn::{Expr, Ident, Lit};
 
 /// rstml parses `<VerticalStack>` elements as `NodeElement<Infallible>`.
 type Element = NodeElement<Infallible>;
+
+/// Qualified-crate prefixes for the generated code.
+struct Paths {
+    /// Component types (`Label`, `Button`, containers, `GridConstraint`).
+    comp: TokenStream2,
+    /// Core types (`Component`, `TermWmAction`, `Rect`, …).
+    core: TokenStream2,
+    /// The `RenderBackend` path (`::term_wm::RenderBackend` or
+    /// `::term_wm_render::RenderBackend`).
+    backend: TokenStream2,
+}
+
+/// Resolve the crate path for a package, honoring renames and self-aliases.
+fn crate_path(pkg: &str) -> TokenStream2 {
+    let canonical = format_ident!("{}", pkg.replace('-', "_"));
+    match crate_name(pkg) {
+        Ok(FoundCrate::Itself) => quote!(::#canonical::),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = format_ident!("{name}");
+            quote!(::#ident::)
+        }
+        // Not a dependency here — use the canonical name; if it is genuinely
+        // absent the compiler reports a clear unresolved-crate error.
+        Err(_) => quote!(::#canonical::),
+    }
+}
+
+/// Pick umbrella vs. leaf paths once per expansion.
+fn detect_paths() -> Paths {
+    if crate_name("term-wm").is_ok() {
+        let prefix = crate_path("term-wm");
+        return Paths {
+            comp: prefix.clone(),
+            core: prefix.clone(),
+            backend: quote!(#prefix RenderBackend),
+        };
+    }
+    let ui = crate_path("term-wm-ui-components");
+    let core = crate_path("term-wm-core");
+    let render = crate_path("term-wm-render");
+    Paths {
+        comp: ui,
+        core,
+        backend: quote!(#render RenderBackend),
+    }
+}
 
 /// Declaratively build a term-wm component tree. See the crate docs.
 #[proc_macro]
@@ -51,13 +107,21 @@ pub fn view(input: TokenStream) -> TokenStream {
 
 /// Accumulates block-scoped generated items (`enum __ViewN` + `impl`) and the
 /// unique-name counter.
-#[derive(Default)]
 struct Generator {
     items: Vec<TokenStream2>,
     counter: usize,
+    paths: Paths,
 }
 
 impl Generator {
+    fn new(paths: Paths) -> Self {
+        Self {
+            items: Vec::new(),
+            counter: 0,
+            paths,
+        }
+    }
+
     fn next_name(&mut self) -> Ident {
         let n = self.counter;
         self.counter += 1;
@@ -67,10 +131,32 @@ impl Generator {
     fn push_items(&mut self, mut items: Vec<TokenStream2>) {
         self.items.append(&mut items);
     }
+
+    /// `::<comp>::<Name>` for a component type.
+    fn comp(&self, name: &str) -> TokenStream2 {
+        let ident = format_ident!("{name}");
+        let prefix = &self.paths.comp;
+        quote!(#prefix #ident)
+    }
+
+    /// `::<core>::<module>::<Name>` for a core type.
+    fn core_mod(&self, module: &str, name: &str) -> TokenStream2 {
+        let module = format_ident!("{module}");
+        let ident = format_ident!("{name}");
+        let prefix = &self.paths.core;
+        quote!(#prefix #module::#ident)
+    }
+
+    /// `::<core>::<Name>` for a core-root type (`Rect`).
+    fn core_root(&self, name: &str) -> TokenStream2 {
+        let ident = format_ident!("{name}");
+        let prefix = &self.paths.core;
+        quote!(#prefix #ident)
+    }
 }
 
 fn expand(tokens: TokenStream2) -> syn::Result<TokenStream2> {
-    let mut g = Generator::default();
+    let mut g = Generator::new(detect_paths());
     let nodes = rstml::parse2(tokens.clone())?;
     if nodes.len() != 1 {
         return Err(syn::Error::new_spanned(
@@ -80,9 +166,10 @@ fn expand(tokens: TokenStream2) -> syn::Result<TokenStream2> {
     }
     let root = g.node(&nodes[0])?;
     let items = &g.items;
+    let core = &g.paths.core;
     Ok(quote! {{
-        use ::term_wm::Component;
-        use ::term_wm::TermWmAction;
+        use #core components::Component;
+        use #core actions::TermWmAction;
         #(#items)*
         #root
     }})
@@ -183,8 +270,9 @@ impl Generator {
             "Grid" => self.grid_container(el),
             "Label" => {
                 let text = required_attr_expr(el, "text")?;
+                let label = self.comp("LabelComponent");
                 Ok(quote! {
-                    ::term_wm::LabelComponent::new(#text)
+                    #label::new(#text)
                 })
             }
             "Button" => {
@@ -199,8 +287,9 @@ impl Generator {
                             "<Button> requires an `action` (or `onClick`) attribute",
                         )
                     })?;
+                let button = self.comp("ButtonComponent");
                 Ok(quote! {
-                    ::term_wm::ButtonComponent::new(#label, #action)
+                    #button::new(#label, #action)
                 })
             }
             other => Err(syn::Error::new_spanned(
@@ -281,76 +370,92 @@ impl Generator {
         let on_mouse_move = variants.iter().map(|v| quote!(Self::#v(x) => x.on_mouse_move(col, row, modifiers, ctx)));
         let on_key = variants.iter().map(|v| quote!(Self::#v(x) => x.on_key(event, ctx)));
 
+        // Core type paths for the generated impl signatures.
+        let window_key = self.core_mod("window", "WindowKey");
+        let app_context = self.core_mod("app_context", "AppContext");
+        let hitbox_id_ty = self.core_mod("hitbox_registry", "HitboxId");
+        let hitbox_registry_ty = self.core_mod("hitbox_registry", "HitboxRegistry");
+        let event_ty = self.core_mod("events", "Event");
+        let mouse_button_ty = self.core_mod("events", "MouseButton");
+        let key_modifiers_ty = self.core_mod("events", "KeyModifiers");
+        let mouse_event_kind_ty = self.core_mod("events", "MouseEventKind");
+        let ctx_ty = self.core_mod("component_context", "ComponentContext");
+        let event_result_ty = self.core_mod("actions", "EventResult");
+        let term_wm_action_ty = self.core_mod("actions", "TermWmAction");
+        let selection_status_ty = self.core_mod("components", "SelectionStatus");
+        let rect_ty = self.core_root("Rect");
+        let backend_ty = &self.paths.backend;
+
         let impl_def = quote! {
             impl<#(#bounds),*> Component<TermWmAction> for #name<#(#tys),*> {
                 fn init(&mut self) { match self { #(#init),* } }
-                fn on_mount(&mut self, key: ::term_wm::WindowKey, app: &::term_wm::AppContext) {
+                fn on_mount(&mut self, key: #window_key, app: &#app_context) {
                     match self { #(#on_mount),* }
                 }
-                fn hitbox_id(&self) -> Option<::term_wm::HitboxId> {
+                fn hitbox_id(&self) -> Option<#hitbox_id_ty> {
                     match self { #(#hitbox_id),* }
                 }
                 fn handle_events(
                     &mut self,
-                    event: &::term_wm::Event,
-                    ctx: &::term_wm::ComponentContext,
-                ) -> ::term_wm::actions::EventResult<::term_wm::actions::TermWmAction> {
+                    event: &#event_ty,
+                    ctx: &#ctx_ty,
+                ) -> #event_result_ty<#term_wm_action_ty> {
                     match self { #(#handle_events),* }
                 }
                 fn on_mouse_press(
-                    &mut self, col: u16, row: u16, button: ::term_wm::events::MouseButton,
-                    modifiers: ::term_wm::events::KeyModifiers, ctx: &::term_wm::ComponentContext,
-                ) -> ::term_wm::actions::EventResult<::term_wm::actions::TermWmAction> {
+                    &mut self, col: u16, row: u16, button: #mouse_button_ty,
+                    modifiers: #key_modifiers_ty, ctx: &#ctx_ty,
+                ) -> #event_result_ty<#term_wm_action_ty> {
                     match self { #(#on_mouse_press),* }
                 }
                 fn on_mouse_release(
-                    &mut self, col: u16, row: u16, button: ::term_wm::events::MouseButton,
-                    modifiers: ::term_wm::events::KeyModifiers, ctx: &::term_wm::ComponentContext,
-                ) -> ::term_wm::actions::EventResult<::term_wm::actions::TermWmAction> {
+                    &mut self, col: u16, row: u16, button: #mouse_button_ty,
+                    modifiers: #key_modifiers_ty, ctx: &#ctx_ty,
+                ) -> #event_result_ty<#term_wm_action_ty> {
                     match self { #(#on_mouse_release),* }
                 }
                 fn on_mouse_drag(
-                    &mut self, col: u16, row: u16, button: ::term_wm::events::MouseButton,
-                    modifiers: ::term_wm::events::KeyModifiers, ctx: &::term_wm::ComponentContext,
-                ) -> ::term_wm::actions::EventResult<::term_wm::actions::TermWmAction> {
+                    &mut self, col: u16, row: u16, button: #mouse_button_ty,
+                    modifiers: #key_modifiers_ty, ctx: &#ctx_ty,
+                ) -> #event_result_ty<#term_wm_action_ty> {
                     match self { #(#on_mouse_drag),* }
                 }
                 fn on_mouse_scroll(
-                    &mut self, col: u16, row: u16, kind: ::term_wm::events::MouseEventKind,
-                    modifiers: ::term_wm::events::KeyModifiers, ctx: &::term_wm::ComponentContext,
-                ) -> ::term_wm::actions::EventResult<::term_wm::actions::TermWmAction> {
+                    &mut self, col: u16, row: u16, kind: #mouse_event_kind_ty,
+                    modifiers: #key_modifiers_ty, ctx: &#ctx_ty,
+                ) -> #event_result_ty<#term_wm_action_ty> {
                     match self { #(#on_mouse_scroll),* }
                 }
                 fn on_mouse_move(
-                    &mut self, col: u16, row: u16, modifiers: ::term_wm::events::KeyModifiers,
-                    ctx: &::term_wm::ComponentContext,
-                ) -> ::term_wm::actions::EventResult<::term_wm::actions::TermWmAction> {
+                    &mut self, col: u16, row: u16, modifiers: #key_modifiers_ty,
+                    ctx: &#ctx_ty,
+                ) -> #event_result_ty<#term_wm_action_ty> {
                     match self { #(#on_mouse_move),* }
                 }
                 fn on_key(
-                    &mut self, event: &::term_wm::Event, ctx: &::term_wm::ComponentContext,
-                ) -> ::term_wm::actions::EventResult<::term_wm::actions::TermWmAction> {
+                    &mut self, event: &#event_ty, ctx: &#ctx_ty,
+                ) -> #event_result_ty<#term_wm_action_ty> {
                     match self { #(#on_key),* }
                 }
                 fn update(
-                    &mut self, action: ::term_wm::actions::TermWmAction,
-                    ctx: &::term_wm::ComponentContext,
+                    &mut self, action: #term_wm_action_ty,
+                    ctx: &#ctx_ty,
                     actions: &mut ::std::collections::VecDeque<(
-                        ::term_wm::WindowKey, ::term_wm::actions::TermWmAction,
+                        #window_key, #term_wm_action_ty,
                     )>,
                 ) {
                     match self { #(#update),* }
                 }
                 fn render(
-                    &mut self, backend: &mut dyn ::term_wm::RenderBackend, area: ::term_wm::Rect,
-                    ctx: &::term_wm::ComponentContext,
-                    registry: &mut ::term_wm::HitboxRegistry,
+                    &mut self, backend: &mut dyn #backend_ty, area: #rect_ty,
+                    ctx: &#ctx_ty,
+                    registry: &mut #hitbox_registry_ty,
                 ) {
                     match self { #(#render),* }
                 }
                 fn destroy(&mut self) { match self { #(#destroy),* } }
                 fn clear_selection(&mut self) { match self { #(#clear_selection),* } }
-                fn selection_status(&self) -> ::term_wm::SelectionStatus {
+                fn selection_status(&self) -> #selection_status_ty {
                     match self { #(#selection_status),* }
                 }
                 fn selection_text(&self) -> Option<String> { match self { #(#selection_text),* } }
@@ -377,12 +482,13 @@ impl Generator {
 
     fn stack_container(&mut self, el: &Element, kind: ContainerKind) -> syn::Result<TokenStream2> {
         let ctor = match kind {
-            ContainerKind::Vertical => quote!(::term_wm::VerticalStackComponent),
-            ContainerKind::Horizontal => quote!(::term_wm::HStackComponent),
+            ContainerKind::Vertical => self.comp("VerticalStackComponent"),
+            ContainerKind::Horizontal => self.comp("HStackComponent"),
         };
         let gap = attr_expr(el, "gap").cloned();
         let (items, adds, has_children) = self.children(el)?;
         self.push_items(items);
+        let noop = self.core_mod("components", "NoopComponent");
 
         let init = match &gap {
             Some(g) => quote!(#ctor::new().with_gap(#g)),
@@ -396,8 +502,8 @@ impl Generator {
             }})
         } else {
             let init = match &gap {
-                Some(g) => quote!(#ctor::<::term_wm::NoopComponent>::new().with_gap(#g)),
-                None => quote!(#ctor::<::term_wm::NoopComponent>::new()),
+                Some(g) => quote!(#ctor::<#noop>::new().with_gap(#g)),
+                None => quote!(#ctor::<#noop>::new()),
             };
             Ok(init)
         }
@@ -414,21 +520,24 @@ impl Generator {
             ));
         }
         let child = self.node(children[0])?;
+        let center = self.comp("CenterComponent");
         Ok(quote! {
-            ::term_wm::CenterComponent::new(#child, #width, #height)
+            #center::new(#child, #width, #height)
         })
     }
 
     fn grid_container(&mut self, el: &Element) -> syn::Result<TokenStream2> {
-        let cols = grid_constraint_attr(el, "cols")?;
-        let rows = grid_constraint_attr(el, "rows")?;
+        let cols = grid_constraint_attr(&self.paths, el, "cols")?;
+        let rows = grid_constraint_attr(&self.paths, el, "rows")?;
         let (items, adds, has_children) = self.children(el)?;
         self.push_items(items);
+        let grid = self.comp("GridComponent");
+        let noop = self.core_mod("components", "NoopComponent");
 
         let base = if has_children {
-            quote!(::term_wm::GridComponent::new(vec![#(#adds),*]))
+            quote!(#grid::new(vec![#(#adds),*]))
         } else {
-            quote!(::term_wm::GridComponent::<::term_wm::NoopComponent>::new(Vec::new()))
+            quote!(#grid::<#noop>::new(Vec::new()))
         };
         let base = match cols {
             Some(c) => quote!(#base.with_cols(#c)),
@@ -450,7 +559,7 @@ enum ContainerKind {
 /// Parse a `<Grid cols="200px 1fr">` attribute string literal into
 /// `vec![GridConstraint::Fixed(..), GridConstraint::Fraction(..)]` at compile
 /// time.
-fn grid_constraint_attr(el: &Element, name: &str) -> syn::Result<Option<TokenStream2>> {
+fn grid_constraint_attr(paths: &Paths, el: &Element, name: &str) -> syn::Result<Option<TokenStream2>> {
     let Some(attr) = el.attributes().iter().find(|a| {
         matches!(a, NodeAttribute::Attribute(kv) if attr_key(&kv.key).as_deref() == Some(name))
     }) else {
@@ -479,28 +588,36 @@ fn grid_constraint_attr(el: &Element, name: &str) -> syn::Result<Option<TokenStr
             ))
         }
     };
-    let constraints = parse_grid_constraints(&s)
+    let constraints = parse_grid_constraints(paths, &s)
         .map_err(|msg| syn::Error::new_spanned(value, msg))?;
     Ok(Some(quote!(vec![#(#constraints),*])))
 }
 
 /// Parse `"200px 1fr"` into `GridConstraint` construction expressions.
-fn parse_grid_constraints(s: &str) -> Result<Vec<TokenStream2>, String> {
+fn parse_grid_constraints(paths: &Paths, s: &str) -> Result<Vec<TokenStream2>, String> {
+    let constraint = |name: &str, n: u16| {
+        let ident = format_ident!("{name}");
+        let prefix = &paths.comp;
+        quote!(#prefix GridConstraint::#ident(#n))
+    };
     s.split_whitespace()
         .map(|tok| {
             if let Some(px) = tok.strip_suffix("px") {
                 let n: u16 = px
                     .parse()
                     .map_err(|_| format!("invalid fixed size '{tok}' (expected like '200px')"))?;
-                Ok(quote!(::term_wm::GridConstraint::Fixed(#n)))
+                Ok(constraint("Fixed", n))
             } else if let Some(fr) = tok.strip_suffix("fr") {
                 let n: u16 = fr
                     .parse()
                     .map_err(|_| format!("invalid fraction '{tok}' (expected like '1fr')"))?;
-                Ok(quote!(::term_wm::GridConstraint::Fraction(#n)))
+                Ok(constraint("Fraction", n))
+            } else if let Ok(n) = tok.parse::<u16>() {
+                // A bare number is shorthand for a fixed (`px`) size.
+                Ok(constraint("Fixed", n))
             } else {
                 Err(format!(
-                    "invalid grid constraint '{tok}' (expected 'Npx' or 'Nfr')"
+                    "invalid grid constraint '{tok}' (expected 'Npx', 'N' or 'Nfr')"
                 ))
             }
         })
@@ -513,13 +630,23 @@ mod tests {
 
     #[test]
     fn grid_constraints_parse_fixed_and_fraction() {
-        let toks = parse_grid_constraints("200px 1fr").unwrap();
+        let paths = Paths {
+            comp: quote!(::term_wm::),
+            core: quote!(::term_wm::),
+            backend: quote!(::term_wm::RenderBackend),
+        };
+        let toks = parse_grid_constraints(&paths, "200px 1fr").unwrap();
         assert_eq!(toks.len(), 2);
     }
 
     #[test]
     fn grid_constraints_reject_bad_token() {
-        assert!(parse_grid_constraints("200px nonsense").is_err());
-        assert!(parse_grid_constraints("").unwrap().is_empty());
+        let paths = Paths {
+            comp: quote!(::term_wm::),
+            core: quote!(::term_wm::),
+            backend: quote!(::term_wm::RenderBackend),
+        };
+        assert!(parse_grid_constraints(&paths, "200px nonsense").is_err());
+        assert!(parse_grid_constraints(&paths, "").unwrap().is_empty());
     }
 }
