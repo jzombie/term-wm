@@ -1,5 +1,3 @@
-// TODO: Rename to VStackComponent (closer to hstack semantics as well)
-
 use std::collections::VecDeque;
 
 use term_wm_core::actions::{EventResult, TermWmAction};
@@ -11,18 +9,18 @@ use term_wm_layout_engine::LayoutRect;
 /// A vertical layout container that slices its area among children.
 ///
 /// Each child gets a horizontal stripe of the full width, with height
-/// determined by `child.desired_height()`. If a child returns 0, it
-/// stretches to fill remaining space (only the last stretch child is
-/// effective).
+/// determined by `child.desired_height()`. Stretch children (`desired_height
+/// == 0`) share the remaining space after all fixed children and gaps, so a
+/// *middle* stretch child still leaves room for trailing siblings.
 ///
 /// Event routing computes each child's absolute screen position,
 /// accounting for scroll offset from the parent context.
-pub struct VerticalStackComponent<C: Component<TermWmAction>> {
+pub struct VStackComponent<C: Component<TermWmAction>> {
     children: Vec<C>,
     gap: u16,
 }
 
-impl<C: Component<TermWmAction>> VerticalStackComponent<C> {
+impl<C: Component<TermWmAction>> VStackComponent<C> {
     pub fn new() -> Self {
         Self {
             children: Vec::new(),
@@ -104,13 +102,13 @@ impl<C: Component<TermWmAction>> VerticalStackComponent<C> {
     }
 }
 
-impl<C: Component<TermWmAction>> Default for VerticalStackComponent<C> {
+impl<C: Component<TermWmAction>> Default for VStackComponent<C> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackComponent<C> {
+impl<C: Component<TermWmAction>> Component<TermWmAction> for VStackComponent<C> {
     fn desired_height(&self, width: u16) -> u16 {
         // Width is propagated so width-dependent children (grids that reflow,
         // wrapping text) measure the same way they render. A stretching child
@@ -230,29 +228,29 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_new_default() {
-        let stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_new_default() {
+        let stack = VStackComponent::<FixedHeight>::new();
         assert_eq!(stack.children.len(), 0);
         assert_eq!(stack.gap, 0);
     }
 
     #[test]
-    fn vertical_stack_with_gap() {
-        let stack = VerticalStackComponent::<FixedHeight>::new().with_gap(2);
+    fn vstack_with_gap() {
+        let stack = VStackComponent::<FixedHeight>::new().with_gap(2);
         assert_eq!(stack.gap, 2);
     }
 
     #[test]
-    fn vertical_stack_add_child() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_add_child() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         stack.add(FixedHeight::new(5));
         assert_eq!(stack.children.len(), 2);
     }
 
     #[test]
-    fn vertical_stack_desired_height_sums_children() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new().with_gap(1);
+    fn vstack_desired_height_sums_children() {
+        let mut stack = VStackComponent::<FixedHeight>::new().with_gap(1);
         stack.add(FixedHeight::new(3));
         stack.add(FixedHeight::new(5));
         // 3 + 5 + 1 gap = 9
@@ -260,20 +258,20 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_desired_height_empty() {
-        let stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_desired_height_empty() {
+        let stack = VStackComponent::<FixedHeight>::new();
         assert_eq!(stack.desired_height(40), 0);
     }
 
     #[test]
-    fn vertical_stack_default_trait() {
-        let stack = VerticalStackComponent::<FixedHeight>::default();
+    fn vstack_default_trait() {
+        let stack = VStackComponent::<FixedHeight>::default();
         assert_eq!(stack.children.len(), 0);
     }
 
     #[test]
-    fn vertical_stack_render_skips_zero_area() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_render_skips_zero_area() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
         let mut backend = term_wm_console::RatatuiBackend::new_simple(
@@ -309,8 +307,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_render_normal() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new().with_gap(1);
+    fn vstack_render_normal() {
+        let mut stack = VStackComponent::<FixedHeight>::new().with_gap(1);
         stack.add(FixedHeight::new(3));
         stack.add(FixedHeight::new(5));
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
@@ -339,8 +337,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_render_stretch_child() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_render_stretch_child() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         stack.add(FixedHeight::new(0)); // height 0 = stretch
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 20));
@@ -369,8 +367,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_render_stretch_child_no_remaining() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new().with_gap(100);
+    fn vstack_render_stretch_child_no_remaining() {
+        let mut stack = VStackComponent::<FixedHeight>::new().with_gap(100);
         stack.add(FixedHeight::new(100)); // exceeds area
         stack.add(FixedHeight::new(0));
         let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 40, 10));
@@ -399,8 +397,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_handle_events_ignores_non_mouse() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_handle_events_ignores_non_mouse() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(5));
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
@@ -417,8 +415,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_handle_events_mouse_outside_ignored() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_handle_events_mouse_outside_ignored() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(5));
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
             x: 0,
@@ -436,8 +434,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_handle_events_stretch_child_outside() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_handle_events_stretch_child_outside() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         stack.add(FixedHeight::new(0));
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
@@ -456,8 +454,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_handle_events_stretch_child_exceeds_area() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new().with_gap(100);
+    fn vstack_handle_events_stretch_child_exceeds_area() {
+        let mut stack = VStackComponent::<FixedHeight>::new().with_gap(100);
         stack.add(FixedHeight::new(100));
         stack.add(FixedHeight::new(0));
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
@@ -477,8 +475,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_handle_events_child_breaks_when_exceeds_area() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new().with_gap(100);
+    fn vstack_handle_events_child_breaks_when_exceeds_area() {
+        let mut stack = VStackComponent::<FixedHeight>::new().with_gap(100);
         stack.add(FixedHeight::new(100));
         stack.add(FixedHeight::new(5));
         let ctx = ComponentContext::new(true).with_screen_area(LayoutRect {
@@ -498,8 +496,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_update_propagates_to_children() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_update_propagates_to_children() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         let ctx = ComponentContext::new(true);
         let mut actions = VecDeque::new();
@@ -507,8 +505,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_destroy_propagates() {
-        let mut stack = VerticalStackComponent::<FixedHeight>::new();
+    fn vstack_destroy_propagates() {
+        let mut stack = VStackComponent::<FixedHeight>::new();
         stack.add(FixedHeight::new(3));
         stack.destroy();
     }
@@ -552,8 +550,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_keys_route_to_focused_child_only() {
-        let mut stack = VerticalStackComponent::<KeyTracker>::new();
+    fn vstack_keys_route_to_focused_child_only() {
+        let mut stack = VStackComponent::<KeyTracker>::new();
         let a = KeyTracker::with_hitbox();
         let b = KeyTracker::with_hitbox();
         let focus = b.hitbox.unwrap();
@@ -613,8 +611,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_middle_stretch_still_renders_trailing_children() {
-        let mut stack = VerticalStackComponent::<SpyChild>::new().with_gap(1);
+    fn vstack_middle_stretch_still_renders_trailing_children() {
+        let mut stack = VStackComponent::<SpyChild>::new().with_gap(1);
         let a = SpyChild::with_height(1);
         let b = SpyChild::with_height(0); // stretch
         let c = SpyChild::with_height(3);
@@ -650,8 +648,8 @@ mod tests {
     }
 
     #[test]
-    fn vertical_stack_desired_height_zero_when_child_stretches() {
-        let mut stack = VerticalStackComponent::<SpyChild>::new();
+    fn vstack_desired_height_zero_when_child_stretches() {
+        let mut stack = VStackComponent::<SpyChild>::new();
         stack.add(SpyChild::with_height(1));
         stack.add(SpyChild::with_height(0));
         assert_eq!(stack.desired_height(40), 0);

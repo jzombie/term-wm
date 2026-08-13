@@ -8,16 +8,16 @@
 //!
 //! ```text
 //! view! {
-//!     <VerticalStack gap=1>
+//!     <VStack gap=1>
 //!         <Label text="Status" />
 //!         <Button label="Refresh" action={TermWmAction::OpenCommandPalette} />
 //!         { &mut self.terminal }                       // borrowed component
-//!     </VerticalStack>
+//!     </VStack>
 //! }
 //! ```
 //!
 //! Tiers:
-//! 1. **Layout-primitive tags**: `<VerticalStack>`/`<Column>`, `<HStack>`/`<Row>`,
+//! 1. **Layout-primitive tags**: `<VStack>`/`<Column>`, `<HStack>`/`<Row>`,
 //!    `<Center width height>`, `<Grid cols rows>` (constraint strings parsed at
 //!    compile time into `GridConstraint`s).
 //! 2. **Built-in component tags**: `<Label text>`, `<Button label action|onClick>`.
@@ -46,7 +46,7 @@ use quote::{format_ident, quote};
 use rstml::node::{Infallible, Node, NodeAttribute, NodeElement};
 use syn::{Expr, Ident, Lit};
 
-/// rstml parses `<VerticalStack>` elements as `NodeElement<Infallible>`.
+/// rstml parses `<VStack>` elements as `NodeElement<Infallible>`.
 type Element = NodeElement<Infallible>;
 
 /// Qualified-crate prefixes for the generated code.
@@ -161,7 +161,7 @@ fn expand(tokens: TokenStream2) -> syn::Result<TokenStream2> {
     if nodes.len() != 1 {
         return Err(syn::Error::new_spanned(
             tokens,
-            "view! requires exactly one root element — wrap multiple nodes in a container like <VerticalStack>",
+            "view! requires exactly one root element — wrap multiple nodes in a container like <VStack>",
         ));
     }
     let root = g.node(&nodes[0])?;
@@ -198,7 +198,7 @@ fn tag_ident(el: &Element) -> syn::Result<Ident> {
             .ok_or_else(|| syn::Error::new_spanned(el.name(), "empty tag name")),
         _ => Err(syn::Error::new_spanned(
             el.name(),
-            "tag names must be plain identifiers (e.g. <VerticalStack>)",
+            "tag names must be plain identifiers (e.g. <VStack>)",
         )),
     }
 }
@@ -267,7 +267,7 @@ impl Generator {
     fn element(&mut self, el: &Element) -> syn::Result<TokenStream2> {
         let tag = tag_ident(el)?;
         match tag.to_string().as_str() {
-            "VerticalStack" | "Column" => self.stack_container(el, ContainerKind::Vertical),
+            "VStack" | "Column" => self.stack_container(el, ContainerKind::Vertical),
             "HStack" | "Row" => self.stack_container(el, ContainerKind::Horizontal),
             "Center" => self.center_container(el),
             "Grid" => self.grid_container(el),
@@ -299,7 +299,7 @@ impl Generator {
             other => Err(syn::Error::new_spanned(
                 el.name(),
                 format!(
-                    "unknown tag <{other}>; available tags: VerticalStack, Column, HStack, Row, \
+                    "unknown tag <{other}>; available tags: VStack, Column, HStack, Row, \
                      Center, Grid, Label, Button. Use {{ expr }} to inject an arbitrary component."
                 ),
             )),
@@ -530,7 +530,7 @@ impl Generator {
 
     fn stack_container(&mut self, el: &Element, kind: ContainerKind) -> syn::Result<TokenStream2> {
         let ctor = match kind {
-            ContainerKind::Vertical => self.comp("VerticalStackComponent"),
+            ContainerKind::Vertical => self.comp("VStackComponent"),
             ContainerKind::Horizontal => self.comp("HStackComponent"),
         };
         let gap = attr_expr(el, "gap").cloned();
@@ -600,7 +600,7 @@ impl Generator {
 
     /// A div-like bordered card: `<Box title=.. padding=.. border=.. border_color=..>`.
     /// Children become the box content (0 → `NoopComponent`, 1 → the child,
-    /// ≥2 → a `VerticalStack`), wrapped in `BoxComponent` with optional props.
+    /// ≥2 → a `VStack`), wrapped in `BoxComponent` with optional props.
     fn box_container(&mut self, el: &Element) -> syn::Result<TokenStream2> {
         let title = attr_expr(el, "title").cloned().map(strip_block);
         let padding = attr_expr(el, "padding").cloned().map(strip_block);
@@ -614,7 +614,7 @@ impl Generator {
 
         let boxc = self.comp("BoxComponent");
         let noop = self.core_mod("components", "NoopComponent");
-        let vstack = self.comp("VerticalStackComponent");
+        let vstack = self.comp("VStackComponent");
 
         let content = if !has_children {
             quote!(#noop)

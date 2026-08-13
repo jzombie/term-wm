@@ -21,10 +21,10 @@ fn view_macro_all_owned_window_renders_label_and_button() {
         .expect("test build");
 
     let key = wm.open_window(view! {
-        <VerticalStack gap=1>
+        <VStack gap=1>
             <Label text="Hello view!" />
             <Button label="Quit" action={term_wm::TermWmAction::Quit} />
-        </VerticalStack>
+        </VStack>
     });
 
     let comp = wm.component_for_key_mut(key).expect("window component");
