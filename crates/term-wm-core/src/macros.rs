@@ -256,158 +256,50 @@ macro_rules! impl_overlay_delegate {
 /// structs whose content is a `view!` tree (the `*ContentView` pattern), to
 /// avoid hand-writing the forwarding boilerplate.
 ///
-/// Three forms:
-/// - `impl_view_component!(Ty)` — forwards `desired_height` (and the `&self`
-///   queries `hitbox_id`/`selection_status`/`selection_text`) to the view, so
-///   height stays fully dynamic. Requires `view()` to take `&self` (an
-///   all-owned tree — children are stateless or cheaply cloned, sharing state
-///   via `Rc<RefCell<_>>`).
-/// - `impl_view_component!(Ty, height = <expr>)` — reports a static height
-///   expression for `&mut self` views that cannot be built from
-///   `desired_height(&self)` (the `&self`-querying methods then use defaults).
-/// - `impl_view_component!(Ty, child: <field>)` — for `&mut self` views that
-///   borrow a single stateful child field (e.g.
-///   `view! { <Box>{ &mut self.<field> }</Box> }`). Forwards the mutable
-///   lifecycle to `self.view()` and delegates the `&self`-queryable metadata —
-///   `desired_height`, `hitbox_id`, `selection_status`/`selection_text`,
-///   `clear_selection`, `set_selection_enabled`, `paste` — to `self.<field>`.
-///   `desired_height` reports the *child's* height (not the composed tree's
-///   chrome); correct for full-window roots. This form is fully `$crate`-
-///   qualified, so no `Component` trait import is required at the call site.
+/// Four forms:
+/// - `impl_view_component!(Ty)` — all-owned `&self` view. Forwards the whole
+///   lifecycle (incl. `desired_height`, `hitbox_id`, selection metadata) to
+///   `self.view()`. Requires `view()` to take `&self` (children are stateless or
+///   cheaply cloned, sharing state via `Rc<RefCell<_>>`); a borrowed
+///   `view(&mut self)` fails to compile here, which is the intended contract.
+/// - `impl_view_component!(Ty, height = <expr>)` — `&mut self` view with a
+///   static height. The `&self`-queryable metadata (`hitbox_id`, selection) use
+///   defaults (`None` / `SelectionStatus::default()`); the mutable lifecycle
+///   still forwards to `self.view()`.
+/// - `impl_view_component!(Ty, child: <field>)` — `&mut self` view that borrows
+///   one or more stateful child fields (comma-separated:
+///   `child: terminal, log`). Forwards the mutable lifecycle to `self.view()`
+///   and delegates the `&self`-queryable metadata to the child fields:
+///   `desired_height` to the first field (or `height = <expr>` if given),
+///   `selection_status`/`selection_text`/`hitbox_id` to the first field with an
+///   active selection / non-`None` hitbox, `clear_selection` and
+///   `set_selection_enabled` to every field, and `paste` to the first field
+///   that consumes the payload.
+/// - `impl_view_component!(Ty, height = <expr>, child: <field>, …)` — static
+///   height + child-field metadata delegation (see previous form).
+///
+/// This is a single TT-muncher implementation: the four entry-point arms below
+/// only normalize the syntax; the `@impl` body defines every lifecycle method
+/// once, and small `@desired_height` / `@metadata_methods` rules parameterize
+/// the two things that vary (height source and selection/hitbox source).
 #[macro_export]
 macro_rules! impl_view_component {
-    ($ty:ty) => {
-        impl $crate::components::Component<$crate::actions::TermWmAction> for $ty {
-            fn render(
-                &mut self,
-                backend: &mut dyn term_wm_render::RenderBackend,
-                area: $crate::Rect,
-                ctx: &$crate::component_context::ComponentContext,
-                registry: &mut $crate::hitbox_registry::HitboxRegistry,
-            ) {
-                self.view().render(backend, area, ctx, registry);
-            }
-            fn handle_events(
-                &mut self,
-                event: &$crate::events::Event,
-                ctx: &$crate::component_context::ComponentContext,
-            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
-                self.view().handle_events(event, ctx)
-            }
-            fn update(
-                &mut self,
-                action: $crate::actions::TermWmAction,
-                ctx: &$crate::component_context::ComponentContext,
-                actions: &mut ::std::collections::VecDeque<(
-                    $crate::window::WindowKey,
-                    $crate::actions::TermWmAction,
-                )>,
-            ) {
-                self.view().update(action, ctx, actions);
-            }
-            fn destroy(&mut self) {
-                self.view().destroy();
-            }
-            fn desired_height(&self, width: u16) -> u16 {
-                self.view().desired_height(width)
-            }
-            fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
-                self.view().hitbox_id()
-            }
-            fn clear_selection(&mut self) {
-                self.view().clear_selection();
-            }
-            fn selection_status(&self) -> $crate::components::SelectionStatus {
-                self.view().selection_status()
-            }
-            fn selection_text(&self) -> Option<String> {
-                self.view().selection_text()
-            }
-            fn take_pending_title(&mut self) -> Option<String> {
-                self.view().take_pending_title()
-            }
-            fn take_alternate_screen_transition(&mut self) -> Option<bool> {
-                self.view().take_alternate_screen_transition()
-            }
-            fn take_teardown_parts(
-                &mut self,
-            ) -> Option<(
-                Box<dyn ::std::any::Any + Send + Sync>,
-                ::std::thread::JoinHandle<()>,
-            )> {
-                self.view().take_teardown_parts()
-            }
-            fn set_selection_enabled(&mut self, enabled: bool) {
-                self.view().set_selection_enabled(enabled);
-            }
-            fn paste(&mut self, text: &str) -> bool {
-                self.view().paste(text)
-            }
-        }
+    // --- Normalized syntax entry points -------------------------------------
+    ($ty:ty, height = $h:expr, child: $first:ident $(, $rest:ident)* $(,)?) => {
+        $crate::impl_view_component!(@impl $ty, height = static $h, meta = child, head = $first, children = [$first $(, $rest)*]);
     };
-    ($ty:ty, height = $h:expr) => {
-        impl $crate::components::Component<$crate::actions::TermWmAction> for $ty {
-            fn render(
-                &mut self,
-                backend: &mut dyn term_wm_render::RenderBackend,
-                area: $crate::Rect,
-                ctx: &$crate::component_context::ComponentContext,
-                registry: &mut $crate::hitbox_registry::HitboxRegistry,
-            ) {
-                self.view().render(backend, area, ctx, registry);
-            }
-            fn handle_events(
-                &mut self,
-                event: &$crate::events::Event,
-                ctx: &$crate::component_context::ComponentContext,
-            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
-                self.view().handle_events(event, ctx)
-            }
-            fn update(
-                &mut self,
-                action: $crate::actions::TermWmAction,
-                ctx: &$crate::component_context::ComponentContext,
-                actions: &mut ::std::collections::VecDeque<(
-                    $crate::window::WindowKey,
-                    $crate::actions::TermWmAction,
-                )>,
-            ) {
-                self.view().update(action, ctx, actions);
-            }
-            fn destroy(&mut self) {
-                self.view().destroy();
-            }
-            // `view()` needs `&mut self`, so `desired_height(&self)` can't build
-            // it; a static layout reports a fixed height expression.
-            fn desired_height(&self, _width: u16) -> u16 {
-                $h
-            }
-            fn clear_selection(&mut self) {
-                self.view().clear_selection();
-            }
-            fn take_pending_title(&mut self) -> Option<String> {
-                self.view().take_pending_title()
-            }
-            fn take_alternate_screen_transition(&mut self) -> Option<bool> {
-                self.view().take_alternate_screen_transition()
-            }
-            fn take_teardown_parts(
-                &mut self,
-            ) -> Option<(
-                Box<dyn ::std::any::Any + Send + Sync>,
-                ::std::thread::JoinHandle<()>,
-            )> {
-                self.view().take_teardown_parts()
-            }
-            fn set_selection_enabled(&mut self, enabled: bool) {
-                self.view().set_selection_enabled(enabled);
-            }
-            fn paste(&mut self, text: &str) -> bool {
-                self.view().paste(text)
-            }
-        }
+    ($ty:ty, child: $first:ident $(, $rest:ident)* $(,)?) => {
+        $crate::impl_view_component!(@impl $ty, height = child, meta = child, head = $first, children = [$first $(, $rest)*]);
     };
-    ($ty:ty, child: $child:ident) => {
+    ($ty:ty, height = $h:expr $(,)?) => {
+        $crate::impl_view_component!(@impl $ty, height = static $h, meta = none, head = none, children = []);
+    };
+    ($ty:ty $(,)?) => {
+        $crate::impl_view_component!(@impl $ty, height = view, meta = view, head = none, children = []);
+    };
+
+    // --- Single implementation body -----------------------------------------
+    (@impl $ty:ty, height = $h_kind:tt $($h_expr:expr)?, meta = $m_kind:tt, head = $head:tt, children = [$($child:ident),*]) => {
         impl $crate::components::Component<$crate::actions::TermWmAction> for $ty {
             fn render(
                 &mut self,
@@ -444,19 +336,7 @@ macro_rules! impl_view_component {
                 $crate::components::Component::destroy(&mut view);
             }
             fn desired_height(&self, width: u16) -> u16 {
-                $crate::components::Component::desired_height(&self.$child, width)
-            }
-            fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
-                $crate::components::Component::hitbox_id(&self.$child)
-            }
-            fn clear_selection(&mut self) {
-                $crate::components::Component::clear_selection(&mut self.$child);
-            }
-            fn selection_status(&self) -> $crate::components::SelectionStatus {
-                $crate::components::Component::selection_status(&self.$child)
-            }
-            fn selection_text(&self) -> Option<String> {
-                $crate::components::Component::selection_text(&self.$child)
+                $crate::impl_view_component!(@desired_height self, width, $h_kind $($h_expr)?, head = $head)
             }
             fn take_pending_title(&mut self) -> Option<String> {
                 let mut view = self.view();
@@ -475,87 +355,114 @@ macro_rules! impl_view_component {
                 let mut view = self.view();
                 $crate::components::Component::take_teardown_parts(&mut view)
             }
-            fn set_selection_enabled(&mut self, enabled: bool) {
-                $crate::components::Component::set_selection_enabled(&mut self.$child, enabled);
-            }
-            fn paste(&mut self, text: &str) -> bool {
-                $crate::components::Component::paste(&mut self.$child, text)
-            }
+            $crate::impl_view_component!(@metadata_methods $m_kind, head = $head, children = [$($child),*]);
         }
     };
-    ($ty:ty, height = $h:expr, child: $child:ident) => {
-        impl $crate::components::Component<$crate::actions::TermWmAction> for $ty {
-            // A `&mut self` view with a static height (like `height = <expr>`)
-            // that ALSO delegates the `&self`-queryable selection/hitbox metadata
-            // to a stateful child field (like `child:`). Needed for e.g. a
-            // terminal hosted deep inside a `view!` tree: `height = <expr>` can't
-            // forward selection (it can't call `view()` from `&self`), so the WM's
-            // copy-on-selection-release snapshot would never see the terminal.
-            fn render(
-                &mut self,
-                backend: &mut dyn term_wm_render::RenderBackend,
-                area: $crate::Rect,
-                ctx: &$crate::component_context::ComponentContext,
-                registry: &mut $crate::hitbox_registry::HitboxRegistry,
-            ) {
-                self.view().render(backend, area, ctx, registry);
-            }
-            fn handle_events(
-                &mut self,
-                event: &$crate::events::Event,
-                ctx: &$crate::component_context::ComponentContext,
-            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
-                self.view().handle_events(event, ctx)
-            }
-            fn update(
-                &mut self,
-                action: $crate::actions::TermWmAction,
-                ctx: &$crate::component_context::ComponentContext,
-                actions: &mut ::std::collections::VecDeque<(
-                    $crate::window::WindowKey,
-                    $crate::actions::TermWmAction,
-                )>,
-            ) {
-                self.view().update(action, ctx, actions);
-            }
-            fn destroy(&mut self) {
-                self.view().destroy();
-            }
-            fn desired_height(&self, _width: u16) -> u16 {
-                $h
-            }
-            fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
-                $crate::components::Component::hitbox_id(&self.$child)
-            }
-            fn clear_selection(&mut self) {
+
+    // --- Helper: desired_height source --------------------------------------
+    (@desired_height $self:ident, $w:ident, view, head = none) => {
+        $crate::components::Component::desired_height(&$self.view(), $w)
+    };
+    (@desired_height $self:ident, $w:ident, static $h:expr, head = $head:tt) => {
+        $h
+    };
+    (@desired_height $self:ident, $w:ident, child, head = $head:ident) => {
+        $crate::components::Component::desired_height(&$self.$head, $w)
+    };
+
+    // --- Helper: selection / hitbox metadata source -------------------------
+    (@metadata_methods view, head = none, children = []) => {
+        fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
+            $crate::components::Component::hitbox_id(&self.view())
+        }
+        fn selection_status(&self) -> $crate::components::SelectionStatus {
+            $crate::components::Component::selection_status(&self.view())
+        }
+        fn selection_text(&self) -> Option<String> {
+            $crate::components::Component::selection_text(&self.view())
+        }
+        fn clear_selection(&mut self) {
+            let mut view = self.view();
+            $crate::components::Component::clear_selection(&mut view);
+        }
+        fn set_selection_enabled(&mut self, enabled: bool) {
+            let mut view = self.view();
+            $crate::components::Component::set_selection_enabled(&mut view, enabled);
+        }
+        fn paste(&mut self, text: &str) -> bool {
+            let mut view = self.view();
+            $crate::components::Component::paste(&mut view, text)
+        }
+    };
+
+    (@metadata_methods none, head = none, children = []) => {
+        fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
+            None
+        }
+        fn selection_status(&self) -> $crate::components::SelectionStatus {
+            $crate::components::SelectionStatus::default()
+        }
+        fn selection_text(&self) -> Option<String> {
+            None
+        }
+        fn clear_selection(&mut self) {
+            let mut view = self.view();
+            $crate::components::Component::clear_selection(&mut view);
+        }
+        fn set_selection_enabled(&mut self, enabled: bool) {
+            let mut view = self.view();
+            $crate::components::Component::set_selection_enabled(&mut view, enabled);
+        }
+        fn paste(&mut self, text: &str) -> bool {
+            let mut view = self.view();
+            $crate::components::Component::paste(&mut view, text)
+        }
+    };
+
+    (@metadata_methods child, head = $head:ident, children = [$($child:ident),+]) => {
+        fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
+            $(
+                if let Some(hid) = $crate::components::Component::hitbox_id(&self.$child) {
+                    return Some(hid);
+                }
+            )+
+            None
+        }
+        fn selection_status(&self) -> $crate::components::SelectionStatus {
+            $(
+                let status = $crate::components::Component::selection_status(&self.$child);
+                if status.active {
+                    return status;
+                }
+            )+
+            $crate::components::SelectionStatus::default()
+        }
+        fn selection_text(&self) -> Option<String> {
+            $(
+                let status = $crate::components::Component::selection_status(&self.$child);
+                if status.active {
+                    return $crate::components::Component::selection_text(&self.$child);
+                }
+            )+
+            None
+        }
+        fn clear_selection(&mut self) {
+            $(
                 $crate::components::Component::clear_selection(&mut self.$child);
-            }
-            fn selection_status(&self) -> $crate::components::SelectionStatus {
-                $crate::components::Component::selection_status(&self.$child)
-            }
-            fn selection_text(&self) -> Option<String> {
-                $crate::components::Component::selection_text(&self.$child)
-            }
-            fn take_pending_title(&mut self) -> Option<String> {
-                self.view().take_pending_title()
-            }
-            fn take_alternate_screen_transition(&mut self) -> Option<bool> {
-                self.view().take_alternate_screen_transition()
-            }
-            fn take_teardown_parts(
-                &mut self,
-            ) -> Option<(
-                Box<dyn ::std::any::Any + Send + Sync>,
-                ::std::thread::JoinHandle<()>,
-            )> {
-                self.view().take_teardown_parts()
-            }
-            fn set_selection_enabled(&mut self, enabled: bool) {
+            )+
+        }
+        fn set_selection_enabled(&mut self, enabled: bool) {
+            $(
                 $crate::components::Component::set_selection_enabled(&mut self.$child, enabled);
-            }
-            fn paste(&mut self, text: &str) -> bool {
-                $crate::components::Component::paste(&mut self.$child, text)
-            }
+            )+
+        }
+        fn paste(&mut self, text: &str) -> bool {
+            $(
+                if $crate::components::Component::paste(&mut self.$child, text) {
+                    return true;
+                }
+            )+
+            false
         }
     };
 }
