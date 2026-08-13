@@ -3,7 +3,7 @@
 //! Expands to fully-monomorphized Rust that a developer could hand-write:
 //! container constructors, leaf component constructors, and generated delegate
 //! enums for heterogeneous sibling sets. The result is a value implementing
-//! [`Component`] — there is no runtime tree, no reactivity, no reconciliation,
+//! [`Component`](term_wm_core::components::Component) — there is no runtime tree, no reactivity, no reconciliation,
 //! no `Box`/`dyn`.
 //!
 //! ```text

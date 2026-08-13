@@ -3420,6 +3420,7 @@ dependencies = [
  "quote",
  "rstml",
  "syn 3.0.3",
+ "term-wm-core",
 ]
 
 [[package]]

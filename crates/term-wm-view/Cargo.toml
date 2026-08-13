@@ -19,3 +19,4 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 rstml = { workspace = true }
 syn = { workspace = true }
+term-wm-core = { workspace = true }
