@@ -274,11 +274,7 @@ impl Component<TermWmAction> for MockSelectable {
     ) {
     }
 
-    fn handle_events(
-        &mut self,
-        _e: &Event,
-        _c: &ComponentContext,
-    ) -> EventResult<TermWmAction> {
+    fn handle_events(&mut self, _e: &Event, _c: &ComponentContext) -> EventResult<TermWmAction> {
         EventResult::Ignored
     }
 
