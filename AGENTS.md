@@ -125,97 +125,29 @@ Notes for Automation/Agents
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
 
 Declarative `view!` Macro
-- `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) builds a
-  component tree declaratively. It is "dumb": the expansion is fully-monomorphized
-  constructor calls + generated delegate enums — no runtime tree, no reactivity,
-  no reconciliation, no `Box`/`dyn` in the tree.
-- **Per-frame model**: `view!` produces an ephemeral `Component` value evaluated
-  each frame. Ephemeral tags must be stateless (`Label`, `Button`, layout
-  containers). Stateful components (`TerminalComponent`, `ScrollViewComponent`,
-  lists) are app-owned and injected by reference via `{ &mut self.x }`.
-- **Two integration patterns**:
-  - All-owned view (no `&mut` blocks) → `open_window(AppRootComponent::Custom(view!{..}))`.
-  - Borrowed view → the app implements `Component` for its window struct and
-    forwards lifecycle calls to a per-frame `fn view(&mut self) -> impl Component + '_`.
-- `Component<Msg>` has **no `Any` supertrait**; `'static` is required only where
-  components are stored (the `WindowManager`). A blanket
-  `impl Component for &mut C` forwards every method, which is what makes
-  `{ &mut self.x }` children work.
-- Container components (`VerticalStackComponent`, `HStackComponent`,
-  `GridComponent`, `CenterComponent`) MUST: recompute child rects from
-  `ctx.screen_area()` on every call (never cache), rebind each child's context
-  with `with_screen_area` in render AND event paths, route mouse events
-  spatially, and route `Event::Key` to the focused child
-  (`ctx.keyboard_focus_id()`), never broadcast.
-- `desired_height` stretch semantics: `0` means stretch. `HStackComponent`
-  returns `0` if any child stretches; `GridComponent` returns `0` if any row is
-  `Fraction` (or `rows` is empty).
-- Generated `view!` code references the `::term_wm` umbrella crate; consumers
-  must depend on `term-wm` (default crate name) and the container/leaf tags map
-  to the `*Component` types above.
-- **Path resolution (`proc_macro_crate`)**: generated code uses `::term_wm::`
-  paths when the consumer depends on (or is) the umbrella crate, otherwise
-  falls back to `::term_wm_ui_components::` / `::term_wm_core::` /
-  `::term_wm_render::` paths so leaf crates (e.g. `term-wm-sys-ui-components`,
-  which cannot depend on the umbrella) can invoke `view!` without circular
-  dependencies. Renamed dependencies are honored via `crate_name`. The leaf
-  crates that may invoke `view!` themselves carry `extern crate self as …;`
-  aliases (see `term-wm-ui-components`).
-- **Scrollable view content**: `view!` trees are anonymous ephemeral values, so
-  they cannot be stored as `ScrollViewComponent` content directly. Compose a
-  nameable `*ContentView` struct implementing `Component` via a per-frame
-  `fn view(&self) -> impl Component + '_`, then wrap it in
-  `ScrollViewComponent`/`CanvasScrollView`.
-- **`impl_view_component!`** (`term_wm_core`) generates the forwarding
-  `Component` impl for a `view()`-projecting struct: `impl_view_component!(Ty)`
-  forwards everything including a dynamic `desired_height` (requires
-  `view(&self)` — an all-owned tree); `impl_view_component!(Ty, height = <expr>)`
-  reports a static height for `&mut self` views that can't be built from
-  `desired_height(&self)` (the `&self`-querying methods then use defaults).
-- **Wiring a terminal inside a `view!` window**: `TermWmApp::run()` auto-wires
-  PTY status callbacks only for `CoreWmComponent::Terminal` windows. A
-  `TerminalComponent` hosted in an `AppRootComponent::Custom`/`view!` window
-  must be wired explicitly: set the window's `DirectInputTracker`
-  (`wm.set_window_tracker(key, tracker)` from `pty.direct_input_tracker()`) so
-  the WM detects direct mode, and call
-  `TermWmApp::run_with_setup(|app, ctx| … ctx.wire_terminal(&mut *terminal.content.borrow_mut(), key))`
-  — the opaque `AppSetupContext::wire_terminal` maps `PtyStatus` →
-  `UnifiedEvent` internally (consumers never touch the engine event channel).
-  An un-wired PTY logs `status_cb is NONE` on direct-mode transitions — that is
-  intentional (it is a broken event pipeline).
-- **Height is dynamic, not constant**: containers (`VerticalStack` sums, `HStack`
-  maxes, `Grid` sums/fraction-stretch/reflow, `Box` adds border+padding) query
-  their children's `desired_height(width)` — width is propagated so grids reflow
-  correctly. An all-owned `view!` tree reports its height via
-  `.desired_height(width)` directly; a `*ContentView` whose `view()` takes
-  `&self` (children are all-owned, or cheap to clone when they share state via
-  `Rc<RefCell<_>>` — e.g. the System Panel's key monitor) can also call
-  `self.view().desired_height(width)`. A named const is only needed when a view
-  *must* borrow `&mut self` children (so `view()` can't be called from the
-  `&self` `desired_height`) AND the layout is static; a `Cell<u16>` cache is a
-  trap with `CanvasScrollView` (it measures `desired_height` before the first
-  render, so an empty cache stalls at 0 and nothing ever renders).
-- `desired_height` stretch semantics: `0` means stretch. `HStackComponent`
-  returns `0` if any child stretches; `GridComponent` returns `0` if any row is
-  `Fraction` (or `rows` is empty).
-- **Grid reflow**: a multi-column `GridComponent` reflows to a single stacked
-  column when the available width can't fit the columns' minimums
-  (`FRACTION_COL_MIN_WIDTH` per `Fraction` column; `grid_reflows` is the shared
-  predicate). Reflowed rows are one per child, sized by each child's
-  `desired_height` (stretch children share the remaining height; a stretch
-  child makes the reflowed grid's `desired_height` `0`). Containers hosting a
-  grid (e.g. the System Panel) must report the same reflow-aware height so the
-  scroll canvas matches.
-- **Box tag**: `<Box>`/`<Div>` maps to `BoxComponent` — a div-like bordered
-  card with `title`/`padding`/`border` (bool)/`border_color` props. `border`
-  colors are `term_wm_core::theme::Color` (converted via
-  `helpers::color_to_ratatui`), so macro consumers never import the renderer.
-  Only a mouse *press* inside the inner rect is routed to content; drags and
-  releases forward unconditionally so they survive crossing the border. Its
-  module is `mod r#box;` (`box` is a reserved keyword).
-- **Render/event width contract**: containers must rebind each child's context
-  (`ctx.with_screen_area(child_rect)`) in BOTH `render` and `handle_events`, so
-  `GridComponent::render` (area-based geometry) and its `handle_events`
-  (screen-area hit-testing) make the same layout decisions. `render` must never
-  derive geometry from `ctx.screen_area()` — `area` is the allocated local
-  bounds.
+- `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) is a
+  declarative shorthand for building component trees. It is "dumb": the expansion
+  is ordinary, fully-monomorphized constructor calls + generated delegate enums —
+  no runtime tree, no reactivity, no reconciliation, no `Box`/`dyn`. A `{ expr }`
+  escape hatch injects any `Component`, owned or `&mut`-borrowed.
+- **Draft design**: the macro, its tags, and their props are still evolving.
+  Treat `examples/view_demo.rs` and `crates/term-wm-view` as the current source
+  of truth for the tag set and behavior rather than this file.
+- **Durable invariants** (violating these is a bug):
+  - `view!` trees are ephemeral values rebuilt per frame; stateful components are
+    app-owned and injected by reference (`{ &mut self.x }`). Borrowed views
+    forward lifecycle calls via `impl_view_component!` (`Ty`, or
+    `Ty, height = <expr>` when `view(&mut self)` can't be called from `&self`
+    `desired_height`).
+  - Containers (`VerticalStack`, `HStack`, `Grid`, `Center`) recompute child rects
+    from `ctx.screen_area()` on every call (never cache), rebind each child's
+    context with `with_screen_area` in BOTH `render` and `handle_events`, route
+    mouse events spatially, and route `Event::Key` to `ctx.keyboard_focus_id()` —
+    never broadcast.
+  - `desired_height` stretch semantics: `0` means stretch.
+  - A terminal inside an `AppRootComponent::Custom`/`view!` window is not
+    auto-wired (only `CoreWmComponent::Terminal` windows are): set the window's
+    `DirectInputTracker` (`wm.set_window_tracker(key, pty.direct_input_tracker())`)
+    and wire it via `TermWmApp::run_with_setup(|app, ctx| ctx.wire_terminal(&mut terminal.content.borrow_mut(), key))`.
+    An un-wired PTY logs `status_cb is NONE` on direct-mode transitions — that is
+    the broken-event-pipeline signal.

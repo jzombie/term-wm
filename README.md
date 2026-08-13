@@ -183,26 +183,26 @@ However, the developer-facing library API is currently unsolidified and subject 
 
 `term-wm` ships a "dumb" `view!` macro that builds component trees declaratively — it expands to ordinary, fully-monomorphized component constructors, with no runtime tree, reactivity, or reconciliation:
 
-```rust,ignore
-fn view(&mut self) -> impl Component<TermWmAction> + '_ {
-    view! {
-        <VerticalStack gap=1>
-            <Label text="System Status" />
-            <Button label="Refresh" action={TermWmAction::OpenCommandPalette} />
-            { &mut self.terminal }   // borrow stateful components into the tree
-        </VerticalStack>
+```rust,no_run
+use term_wm::prelude::*;
+
+struct MyWindow;
+
+impl MyWindow {
+    fn view(&mut self) -> impl Component<TermWmAction> + '_ {
+        view! {
+            <VerticalStack gap=1>
+                <Label text="System Status" />
+                <Button label="Refresh" action={TermWmAction::Quit} />
+            </VerticalStack>
+        }
     }
 }
 ```
 
-- **Layout tags**: `<VerticalStack>`/`<Column>`, `<HStack>`/`<Row>`, `<Center width height>`, `<Grid cols="200px 1fr" rows="1fr">` (bare numbers are fixed sizes), and `<Box title padding border border_color>` — a div-like bordered card around its children (`border={false}` makes it a transparent group). A multi-column `<Grid>` adapts: it reflows to a single stacked column when the window is too narrow for its columns, so labels and controls stack instead of colliding.
-- **Built-in tags**: `<Label text>`, `<Button label action|onClick>`.
-- **Escape hatch**: `{ expr }` injects any `Component` value, owned or `&mut`-borrowed — no registry changes needed for your own components.
-- All-owned trees (no `&mut`) can be handed straight to `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
-- **Path resolution**: the macro emits `::term_wm::` paths for consumers of the umbrella crate and falls back to `::term_wm_ui_components::`/`::term_wm_core::`/`::term_wm_render::` paths in leaf crates (which cannot depend on the umbrella) — so the framework itself builds its internal components (e.g. the System Panel) with `view!`.
-- **Scrollable content**: `view!` trees are anonymous and ephemeral, so wrap a nameable `*ContentView` struct (whose per-frame `view()` returns the `view!` tree) in `ScrollViewComponent`/`CanvasScrollView`. Heights are computed dynamically by the containers — no constants needed.
+Layout tags (`VerticalStack`, `HStack`, `Grid`, `Center`, `Box`) and stateless leaves (`Label`, `Button`) are constructed declaratively; a `{ expr }` escape hatch injects any `Component` value, owned or `&mut`-borrowed (`{ &mut self.terminal }` for stateful components such as a terminal). All-owned trees (no `&mut`) go straight into `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
 
-The System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built this way. See [`examples/view_demo.rs`](examples/view_demo.rs) for a runnable demo.
+`view!` and its tag set are still an evolving draft — treat [`examples/view_demo.rs`](examples/view_demo.rs) as the canonical runnable reference (it wires a live terminal into a `view!` tree), and the System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built the same way.
 
 ## License
 

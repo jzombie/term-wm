@@ -117,7 +117,11 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackCompon
         // (0) makes the whole stack stretch so the child gets room.
         let mut h: u16 = 0;
         for child in &self.children {
-            h = h.saturating_add(child.desired_height(width));
+            let child_h = child.desired_height(width);
+            if child_h == 0 {
+                return 0;
+            }
+            h = h.saturating_add(child_h);
         }
         if !self.children.is_empty() {
             h = h.saturating_add(self.gap.saturating_mul(self.children.len() as u16 - 1));
