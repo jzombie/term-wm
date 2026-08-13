@@ -219,7 +219,8 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for BoxComponent<C> {
                 {
                     return EventResult::Ignored;
                 }
-                self.content.handle_events(event, &ctx.clone().with_screen_area(inner))
+                self.content
+                    .handle_events(event, &ctx.clone().with_screen_area(inner))
             }
             // Keys are focus-based; no geometry involved.
             _ => self.content.handle_events(event, ctx),

@@ -215,7 +215,12 @@ fn setup_probe(consume_left_press: bool) -> Harness {
     };
     let buf = ratatui::buffer::Buffer::empty(rect);
     let mut backend = RatatuiBackend::new_simple(buf, rect);
-    render_app(&mut backend, &mut wm, &mut CoreEngine::new(), &mut DrawPlanRenderer::new());
+    render_app(
+        &mut backend,
+        &mut wm,
+        &mut CoreEngine::new(),
+        &mut DrawPlanRenderer::new(),
+    );
 
     Harness {
         wm,
@@ -242,7 +247,10 @@ fn trace_embedded_terminal_mouse() {
     } = h;
     let r = *render_area.borrow().as_ref().expect("probe must render");
     println!("=== PROBE render_area = {r:?} (screen)");
-    println!("=== WM region(key) = {:?} (the event-dispatch screen_area base)", wm.region(key));
+    println!(
+        "=== WM region(key) = {:?} (the event-dispatch screen_area base)",
+        wm.region(key)
+    );
     println!("=== managed_area = {:?}", wm.managed_area());
 
     use term_wm_layout_engine::{CoordSpace, MousePosition};
@@ -253,20 +261,42 @@ fn trace_embedded_terminal_mouse() {
     };
     let reg = wm.hitbox_registry_mut();
     println!("=== registry len = {}", reg.len());
-    println!("=== hitboxes under CONTENT ({},{}):", r.x + i32::from(r.width / 2), r.y + i32::from(r.height / 2));
+    println!(
+        "=== hitboxes under CONTENT ({},{}):",
+        r.x + i32::from(r.width / 2),
+        r.y + i32::from(r.height / 2)
+    );
     for (id, owner, a) in reg.hit_test_all(pos(
         (r.x + i32::from(r.width / 2)) as i16,
         (r.y + i32::from(r.height / 2)) as i16,
     )) {
-        println!("    id={id:?} owner={owner:?} area={a:?}{}", if id == probe_hitbox { "  <-- PROBE" } else { "" });
+        println!(
+            "    id={id:?} owner={owner:?} area={a:?}{}",
+            if id == probe_hitbox {
+                "  <-- PROBE"
+            } else {
+                ""
+            }
+        );
     }
     let sb_x = r.x + i32::from(r.width) - 1;
     println!("=== hitboxes under SCROLLBAR column ({}):", sb_x);
-    for (id, owner, a) in reg.hit_test_all(pos(sb_x as i16, (r.y + i32::from(r.height / 2)) as i16)) {
-        println!("    id={id:?} owner={owner:?} area={a:?}{}", if id == probe_hitbox { "  <-- PROBE" } else { "" });
+    for (id, owner, a) in reg.hit_test_all(pos(sb_x as i16, (r.y + i32::from(r.height / 2)) as i16))
+    {
+        println!(
+            "    id={id:?} owner={owner:?} area={a:?}{}",
+            if id == probe_hitbox {
+                "  <-- PROBE"
+            } else {
+                ""
+            }
+        );
     }
     let probe_registered = reg
-        .hit_test_all(pos((r.x + i32::from(r.width / 2)) as i16, (r.y + i32::from(r.height / 2)) as i16))
+        .hit_test_all(pos(
+            (r.x + i32::from(r.width / 2)) as i16,
+            (r.y + i32::from(r.height / 2)) as i16,
+        ))
         .any(|(id, _, _)| id == probe_hitbox);
     println!("=== PROBE hitbox registered (under content) = {probe_registered}");
     let _ = reg;
@@ -274,7 +304,11 @@ fn trace_embedded_terminal_mouse() {
     // 1. Press in the middle of the terminal content (selection).
     let cx = (r.x + i32::from(r.width / 2)) as u16;
     let cy = (r.y + i32::from(r.height / 2)) as u16;
-    wm.dispatch_mouse(&make_mouse(MouseEventKind::Press(MouseButton::Left), cx, cy));
+    wm.dispatch_mouse(&make_mouse(
+        MouseEventKind::Press(MouseButton::Left),
+        cx,
+        cy,
+    ));
     let after_content = log.borrow().len();
     println!("=== after CONTENT press at ({cx},{cy}) -> {after_content} events");
     for l in log.borrow().iter() {
@@ -283,23 +317,42 @@ fn trace_embedded_terminal_mouse() {
 
     // 2. Press on the scrollbar column (rightmost column of the terminal area).
     let sb_col = sb_x as u16;
-    let res_press = wm.dispatch_mouse(&make_mouse(MouseEventKind::Press(MouseButton::Left), sb_col, cy));
+    let res_press = wm.dispatch_mouse(&make_mouse(
+        MouseEventKind::Press(MouseButton::Left),
+        sb_col,
+        cy,
+    ));
     let after_sb = log.borrow().len();
-    println!("=== after SCROLLBAR press at ({sb_col},{cy}) -> {after_sb} events (dispatch: {res_press:?})");
+    println!(
+        "=== after SCROLLBAR press at ({sb_col},{cy}) -> {after_sb} events (dispatch: {res_press:?})"
+    );
     for l in log.borrow().iter() {
         println!("{l}");
     }
 
     // 3. A drag on the scrollbar column must scroll (not reach the probe).
     let before_off = handle.info().offset_y;
-    let res_drag = wm.dispatch_mouse(&make_mouse(MouseEventKind::Drag(MouseButton::Left), sb_col, (cy + 2).min(r.y as u16 + r.height)));
+    let res_drag = wm.dispatch_mouse(&make_mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        sb_col,
+        (cy + 2).min(r.y as u16 + r.height),
+    ));
     let after_drag = log.borrow().len();
     let after_off = handle.info().offset_y;
-    println!("=== after SCROLLBAR DRAG -> events={after_drag} offset {before_off} -> {after_off} (dispatch: {res_drag:?})");
-    wm.dispatch_mouse(&make_mouse(MouseEventKind::Release(MouseButton::Left), sb_col, cy));
+    println!(
+        "=== after SCROLLBAR DRAG -> events={after_drag} offset {before_off} -> {after_off} (dispatch: {res_drag:?})"
+    );
+    wm.dispatch_mouse(&make_mouse(
+        MouseEventKind::Release(MouseButton::Left),
+        sb_col,
+        cy,
+    ));
 
     // Diagnostic summary: the leaf's event screen_area must equal its render rect.
-    println!("=== DIAGNOSIS: render_area={r:?} | event screen_areas={:?}", *event_areas.borrow());
+    println!(
+        "=== DIAGNOSIS: render_area={r:?} | event screen_areas={:?}",
+        *event_areas.borrow()
+    );
     assert!(
         probe_registered,
         "the probe's own hitbox must be registered under its content (it was culled by the scroll view's clip?)"
@@ -344,17 +397,29 @@ fn selection_gesture_routes_through_capture() {
     let cy = (r.y + i32::from(r.height / 2)) as u16;
     let dy = (cy + 2).min((r.y + i32::from(r.height) - 1) as u16);
 
-    let res_press = wm.dispatch_mouse(&make_mouse(MouseEventKind::Press(MouseButton::Left), cx, cy));
+    let res_press = wm.dispatch_mouse(&make_mouse(
+        MouseEventKind::Press(MouseButton::Left),
+        cx,
+        cy,
+    ));
     let res_drag = wm.dispatch_mouse(&make_mouse(MouseEventKind::Drag(MouseButton::Left), cx, dy));
-    let res_release =
-        wm.dispatch_mouse(&make_mouse(MouseEventKind::Release(MouseButton::Left), cx, dy));
+    let res_release = wm.dispatch_mouse(&make_mouse(
+        MouseEventKind::Release(MouseButton::Left),
+        cx,
+        dy,
+    ));
 
-    println!("=== selection gesture: press={res_press:?} drag={res_drag:?} release={res_release:?}");
+    println!(
+        "=== selection gesture: press={res_press:?} drag={res_drag:?} release={res_release:?}"
+    );
     for l in log.borrow().iter() {
         println!("{l}");
     }
 
-    assert!(res_press.is_consumed(), "selection press must be consumed (WM captures): {res_press:?}");
+    assert!(
+        res_press.is_consumed(),
+        "selection press must be consumed (WM captures): {res_press:?}"
+    );
     assert_eq!(
         log.borrow().len(),
         3,
@@ -416,7 +481,9 @@ fn window_root_reports_embedded_terminal_selection() {
     // The window root must surface the embedded terminal's selection + text.
     let status = wm.component_for_key_mut(key).unwrap().selection_status();
     let sel_text = wm.component_for_key_mut(key).unwrap().selection_text();
-    println!("=== window-root selection_status={status:?} selection_text={sel_text:?} (render rect {r:?})");
+    println!(
+        "=== window-root selection_status={status:?} selection_text={sel_text:?} (render rect {r:?})"
+    );
     assert!(
         status.active,
         "window root must report the embedded terminal's active selection"
