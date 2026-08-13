@@ -164,11 +164,20 @@ Declarative `view!` Macro
 - **Scrollable view content**: `view!` trees are anonymous ephemeral values, so
   they cannot be stored as `ScrollViewComponent` content directly. Compose a
   nameable `*ContentView` struct implementing `Component` via a per-frame
-  `fn view(&mut self) -> impl Component + '_`, then wrap it in
-  `ScrollViewComponent`/`CanvasScrollView`. Because `view()` needs `&mut self`
-  but `desired_height` is `&self`, the content struct reports its scroll height
-  from a named const that stays in sync with the grid rows (a `0` default would
-  disable scrolling).
+  `fn view(&self) -> impl Component + '_`, then wrap it in
+  `ScrollViewComponent`/`CanvasScrollView`.
+- **Height is dynamic, not constant**: containers (`VerticalStack` sums, `HStack`
+  maxes, `Grid` sums/fraction-stretch/reflow, `Box` adds border+padding) query
+  their children's `desired_height(width)` — width is propagated so grids reflow
+  correctly. An all-owned `view!` tree reports its height via
+  `.desired_height(width)` directly; a `*ContentView` whose `view()` takes
+  `&self` (children are all-owned, or cheap to clone when they share state via
+  `Rc<RefCell<_>>` — e.g. the System Panel's key monitor) can also call
+  `self.view().desired_height(width)`. A named const is only needed when a view
+  *must* borrow `&mut self` children (so `view()` can't be called from the
+  `&self` `desired_height`) AND the layout is static; a `Cell<u16>` cache is a
+  trap with `CanvasScrollView` (it measures `desired_height` before the first
+  render, so an empty cache stalls at 0 and nothing ever renders).
 - `desired_height` stretch semantics: `0` means stretch. `HStackComponent`
   returns `0` if any child stretches; `GridComponent` returns `0` if any row is
   `Fraction` (or `rows` is empty).

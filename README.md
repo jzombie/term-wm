@@ -200,7 +200,7 @@ fn view(&mut self) -> impl Component<TermWmAction> + '_ {
 - **Escape hatch**: `{ expr }` injects any `Component` value, owned or `&mut`-borrowed — no registry changes needed for your own components.
 - All-owned trees (no `&mut`) can be handed straight to `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
 - **Path resolution**: the macro emits `::term_wm::` paths for consumers of the umbrella crate and falls back to `::term_wm_ui_components::`/`::term_wm_core::`/`::term_wm_render::` paths in leaf crates (which cannot depend on the umbrella) — so the framework itself builds its internal components (e.g. the System Panel) with `view!`.
-- **Scrollable content**: `view!` trees are anonymous and ephemeral, so wrap a nameable `*ContentView` struct (whose per-frame `view()` returns the `view!` tree) in `ScrollViewComponent`/`CanvasScrollView`; the content struct reports its height via `desired_height` so scrolling works.
+- **Scrollable content**: `view!` trees are anonymous and ephemeral, so wrap a nameable `*ContentView` struct (whose per-frame `view()` returns the `view!` tree) in `ScrollViewComponent`/`CanvasScrollView`. Heights are computed dynamically by the containers — no constants needed.
 
 The System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built this way. See [`examples/view_demo.rs`](examples/view_demo.rs) for a runnable demo.
 

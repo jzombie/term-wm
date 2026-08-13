@@ -109,11 +109,13 @@ impl<C: Component<TermWmAction>> Default for VerticalStackComponent<C> {
 }
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for VerticalStackComponent<C> {
-    fn desired_height(&self, _width: u16) -> u16 {
-        // Sum of all children's desired heights + gaps
+    fn desired_height(&self, width: u16) -> u16 {
+        // Sum of all children's desired heights + gaps. Width is propagated so
+        // width-dependent children (grids that reflow, wrapping text) measure
+        // the same way they render.
         let mut h: u16 = 0;
         for child in &self.children {
-            h = h.saturating_add(child.desired_height(0));
+            h = h.saturating_add(child.desired_height(width));
         }
         if !self.children.is_empty() {
             h = h.saturating_add(self.gap.saturating_mul(self.children.len() as u16 - 1));

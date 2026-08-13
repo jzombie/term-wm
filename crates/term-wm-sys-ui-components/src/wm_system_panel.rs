@@ -11,7 +11,6 @@ use term_wm_core::components::{Component, SelectionStatus};
 use term_wm_core::events::{Event, KeyCode, KeyEvent};
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
-use term_wm_ui_components::grid::{GridConstraint, grid_reflows};
 use term_wm_ui_components::helpers::{downcast_ratatui, layout_rect_to_clipped_rect};
 use term_wm_ui_components::{CanvasScrollView, CanvasSizingPolicy, ScrollViewComponent};
 use term_wm_view::view;
@@ -24,31 +23,19 @@ pub struct WmSystemPanelComponent {
     scroll_view: ScrollViewComponent<CanvasScrollView<PanelContentView>>,
 }
 
-/// The panel's scroll content: a per-frame `view!` grid. Nameable so it can be
+/// The panel's scroll content: a per-frame `view!` tree. Nameable so it can be
 /// the concrete content type of the scroll view (a `view!` tree itself is an
 /// anonymous ephemeral type).
+///
+/// `view(&self)` (not `&mut self`): the key monitor's state lives in a shared
+/// `Rc<RefCell<_>>`, so the view clones it instead of borrowing `self`
+/// mutably. That makes the whole tree all-owned, which lets
+/// `desired_height(&self)` call `self.view().desired_height(width)` directly —
+/// height is computed dynamically by the containers (boxes add border+padding,
+/// grids reflow, stacks sum gaps), with no hand-maintained constants.
 struct PanelContentView {
     key_monitor: KeyMonitorComponent,
 }
-
-/// Grid columns from the `<Grid cols="16 1fr">` in `PanelContentView::view`.
-/// The 16-wide label column fits the section labels when wide; on narrow
-/// containers each grid reflows to a single stacked column (label above its
-/// button) inside its card. Keep in sync with the attribute.
-const PANEL_COLS: [GridConstraint; 2] = [GridConstraint::Fixed(16), GridConstraint::Fraction(1)];
-
-// The box inset the inner grids live in: border (2 rows) + padding (2 rows).
-const PANEL_BOX_INSET: u16 = 2 + 2;
-
-// Fixed content heights for the `<VerticalStack gap=1>` in `view()`: the
-// key-monitor row (1) + two gaps + two `<Box padding=1>` cards, each card =
-// border(2) + padding(2) + its grid — a 3-row grid when wide, a stacked
-// (1+3)-row grid when reflowed. All children are constant-height (labels/
-// buttons truncate, never wrap), so these are exact. `desired_height` MUST
-// report them so `CanvasScrollView` sizes its scrollable canvas; a 0 default
-// would disable scrolling entirely (stranding content below the fold).
-const PANEL_CONTENT_HEIGHT: u16 = 1 + 2 + 2 * (PANEL_BOX_INSET + 3);
-const PANEL_CONTENT_HEIGHT_STACKED: u16 = 1 + 2 + 2 * (PANEL_BOX_INSET + 1 + 3);
 
 impl PanelContentView {
     fn new() -> Self {
@@ -61,10 +48,10 @@ impl PanelContentView {
         self.key_monitor = KeyMonitorComponent::new(state);
     }
 
-    fn view(&mut self) -> impl Component<TermWmAction> + '_ {
+    fn view(&self) -> impl Component<TermWmAction> + '_ {
         view! {
             <VerticalStack gap=1>
-                { &mut self.key_monitor }
+                { self.key_monitor.clone() }
 
                 <Box title="Notifications" padding=1>
                     <Grid cols="16 1fr" rows="3">
@@ -116,20 +103,11 @@ impl Component<TermWmAction> for PanelContentView {
         self.view().destroy();
     }
 
-    // Cannot forward to `self.view()` here: `view()` needs `&mut self` (for
-    // `{ &mut self.key_monitor }`) but `desired_height` is `&self`. Report the
-    // content height using the same reflow rule each card's grid applies (kept
-    // in sync via `grid_reflows`), so `CanvasScrollView` sizes its scroll
-    // canvas correctly in both the wide and stacked layouts.
+    // `view` takes `&self` (the tree is all-owned), so the height is computed
+    // dynamically by the containers — no constants, and it stays correct if
+    // the markup changes (cards, gaps, grid reflow, padding).
     fn desired_height(&self, width: u16) -> u16 {
-        // Each grid lives inside a Box inset by border(2) + padding(2) = 4 on
-        // each side, so the reflow decision must use the grid's actual width.
-        let grid_w = width.saturating_sub(PANEL_BOX_INSET);
-        if grid_reflows(&PANEL_COLS, grid_w) {
-            PANEL_CONTENT_HEIGHT_STACKED
-        } else {
-            PANEL_CONTENT_HEIGHT
-        }
+        self.view().desired_height(width)
     }
 }
 
@@ -404,18 +382,16 @@ mod tests {
     }
 
     #[test]
-    fn panel_content_view_desired_height_matches_layout() {
-        // SEV-1 regression: CanvasScrollView sizes its scrollable canvas from
-        // this value; a 0 default would disable scrolling entirely. The height
-        // must be reflow-aware too: stacked on narrow containers, wide on wide.
-        // Wide: key monitor (1) + 2 gaps + 2 boxes of (2 border + 2 padding +
-        // 3-row grid) = 17. Narrow (grids reflow): each card's grid becomes a
-        // 1+3 stack = 8 rows per card, total 19.
+    fn panel_content_view_desired_height_is_dynamic() {
+        // CanvasScrollView sizes its scrollable canvas from this value; a 0
+        // default would disable scrolling. `view(&self)` builds the tree
+        // all-owned (key monitor cloned via its shared Rc), so the height is
+        // computed by the containers themselves — no constants. Assert it
+        // matches the actual layout: wide = key monitor (1) + 2 gaps + two
+        // 7-row cards = 17; narrow (grids reflow) = 19.
         let content = PanelContentView::new();
-        assert_eq!(PANEL_CONTENT_HEIGHT, 17);
-        assert_eq!(PANEL_CONTENT_HEIGHT_STACKED, 19);
-        assert_eq!(content.desired_height(40), PANEL_CONTENT_HEIGHT);
-        assert_eq!(content.desired_height(12), PANEL_CONTENT_HEIGHT_STACKED);
+        assert_eq!(content.desired_height(40), 17);
+        assert_eq!(content.desired_height(12), 19);
     }
 
     #[test]
