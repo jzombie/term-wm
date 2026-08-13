@@ -183,7 +183,7 @@ However, the developer-facing library API is currently unsolidified and subject 
 
 `term-wm` ships a "dumb" `view!` macro that builds component trees declaratively — it expands to ordinary, fully-monomorphized component constructors, with no runtime tree, reactivity, or reconciliation:
 
-```ignore
+```rust,ignore
 fn view(&mut self) -> impl Component<TermWmAction> + '_ {
     view! {
         <VerticalStack gap=1>
@@ -195,7 +195,7 @@ fn view(&mut self) -> impl Component<TermWmAction> + '_ {
 }
 ```
 
-- **Layout tags**: `<VerticalStack>`/`<Column>`, `<HStack>`/`<Row>`, `<Center width height>`, `<Grid cols="200px 1fr" rows="1fr">` (bare numbers are fixed sizes). A multi-column `<Grid>` adapts: it reflows to a single stacked column when the window is too narrow for its columns, so labels and controls stack instead of colliding.
+- **Layout tags**: `<VerticalStack>`/`<Column>`, `<HStack>`/`<Row>`, `<Center width height>`, `<Grid cols="200px 1fr" rows="1fr">` (bare numbers are fixed sizes), and `<Box title padding border border_color>` — a div-like bordered card around its children (`border={false}` makes it a transparent group). A multi-column `<Grid>` adapts: it reflows to a single stacked column when the window is too narrow for its columns, so labels and controls stack instead of colliding.
 - **Built-in tags**: `<Label text>`, `<Button label action|onClick>`.
 - **Escape hatch**: `{ expr }` injects any `Component` value, owned or `&mut`-borrowed — no registry changes needed for your own components.
 - All-owned trees (no `&mut`) can be handed straight to `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.

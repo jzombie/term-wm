@@ -180,6 +180,13 @@ Declarative `view!` Macro
   child makes the reflowed grid's `desired_height` `0`). Containers hosting a
   grid (e.g. the System Panel) must report the same reflow-aware height so the
   scroll canvas matches.
+- **Box tag**: `<Box>`/`<Div>` maps to `BoxComponent` — a div-like bordered
+  card with `title`/`padding`/`border` (bool)/`border_color` props. `border`
+  colors are `term_wm_core::theme::Color` (converted via
+  `helpers::color_to_ratatui`), so macro consumers never import the renderer.
+  Only a mouse *press* inside the inner rect is routed to content; drags and
+  releases forward unconditionally so they survive crossing the border. Its
+  module is `mod r#box;` (`box` is a reserved keyword).
 - **Render/event width contract**: containers must rebind each child's context
   (`ctx.with_screen_area(child_rect)`) in BOTH `render` and `handle_events`, so
   `GridComponent::render` (area-based geometry) and its `handle_events`

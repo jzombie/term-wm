@@ -98,3 +98,76 @@ fn view_macro_grid_and_center_layout() {
     assert!(content.contains('L'), "left grid cell should render");
     assert!(content.contains('R'), "right grid cell should render");
 }
+
+#[test]
+fn view_macro_box_tag_renders_border_title_and_content() {
+    let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
+    let mut wm = AppBuilder::<LayerComponent>::new()
+        .app_ctx(ctx)
+        .build::<_, NoopOverlay>()
+        .expect("test build");
+
+    let key = wm.open_window(view! {
+        <Box title="Section" padding=1>
+            <Label text="hi" />
+        </Box>
+    });
+
+    let comp = wm.component_for_key_mut(key).expect("window component");
+    let area = LayoutRect { x: 0, y: 0, width: 20, height: 5 };
+    let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 20, 5));
+    let mut backend = term_wm_console::RatatuiBackend::new_simple(
+        buffer,
+        ratatui::layout::Rect::new(0, 0, 20, 5),
+    );
+    let ctx = term_wm::ComponentContext::new(true).with_screen_area(area);
+    let mut registry = term_wm::hitbox_registry::HitboxRegistry::new();
+    comp.render(&mut backend, area, &ctx, &mut registry);
+
+    let content: String = backend
+        .buffer
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(content.contains("╭─ Section"), "border + title: {content:?}");
+    assert!(content.contains("hi"), "content should render: {content:?}");
+}
+
+#[test]
+fn view_macro_box_border_false_renders_no_border() {
+    let ctx = Arc::new(term_wm::AppContext::new("test", "0.0.0"));
+    let mut wm = AppBuilder::<LayerComponent>::new()
+        .app_ctx(ctx)
+        .build::<_, NoopOverlay>()
+        .expect("test build");
+
+    let key = wm.open_window(view! {
+        <Box border={false} padding=1>
+            <Label text="hi" />
+        </Box>
+    });
+
+    let comp = wm.component_for_key_mut(key).expect("window component");
+    let area = LayoutRect { x: 0, y: 0, width: 20, height: 5 };
+    let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 20, 5));
+    let mut backend = term_wm_console::RatatuiBackend::new_simple(
+        buffer,
+        ratatui::layout::Rect::new(0, 0, 20, 5),
+    );
+    let ctx = term_wm::ComponentContext::new(true).with_screen_area(area);
+    let mut registry = term_wm::hitbox_registry::HitboxRegistry::new();
+    comp.render(&mut backend, area, &ctx, &mut registry);
+
+    let content: String = backend
+        .buffer
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        !content.contains('╭') && !content.contains('╰') && !content.contains('│'),
+        "no border glyphs: {content:?}"
+    );
+    assert!(content.contains("hi"), "content should render: {content:?}");
+}

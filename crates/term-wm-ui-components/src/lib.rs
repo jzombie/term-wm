@@ -14,6 +14,9 @@ pub mod label;
 pub mod list;
 pub mod markdown_viewer;
 pub mod menu;
+// `box` is a reserved keyword, so the module uses a raw identifier (loads
+// `src/box.rs`); consumers only ever see the re-exported `BoxComponent`.
+mod r#box;
 pub mod scroll_view;
 
 pub mod svg_image;
@@ -24,6 +27,7 @@ pub mod toggle_list;
 pub mod vertical_stack;
 
 pub use ascii_image::AsciiImageComponent;
+pub use r#box::BoxComponent;
 pub use button::ButtonComponent;
 pub use canvas_scroll_view::{CanvasScrollView, CanvasSizingPolicy};
 pub use center::CenterComponent;

@@ -271,6 +271,7 @@ impl Generator {
             "HStack" | "Row" => self.stack_container(el, ContainerKind::Horizontal),
             "Center" => self.center_container(el),
             "Grid" => self.grid_container(el),
+            "Box" | "Div" => self.box_container(el),
             "Label" => {
                 let text = required_attr_expr(el, "text")?;
                 let label = self.comp("LabelComponent");
@@ -594,6 +595,52 @@ impl Generator {
             Some(r) => quote!(#base.with_rows(#r)),
             None => base,
         };
+        Ok(base)
+    }
+
+    /// A div-like bordered card: `<Box title=.. padding=.. border=.. border_color=..>`.
+    /// Children become the box content (0 → `NoopComponent`, 1 → the child,
+    /// ≥2 → a `VerticalStack`), wrapped in `BoxComponent` with optional props.
+    fn box_container(&mut self, el: &Element) -> syn::Result<TokenStream2> {
+        let title = attr_expr(el, "title").cloned().map(strip_block);
+        let padding = attr_expr(el, "padding").cloned().map(strip_block);
+        let border = attr_expr(el, "border").cloned().map(strip_block);
+        let border_color = attr_expr(el, "border_color")
+            .or_else(|| attr_expr(el, "color"))
+            .cloned()
+            .map(strip_block);
+        let (items, adds, has_children) = self.children(el)?;
+        self.push_items(items);
+
+        let boxc = self.comp("BoxComponent");
+        let noop = self.core_mod("components", "NoopComponent");
+        let vstack = self.comp("VerticalStackComponent");
+
+        let content = if !has_children {
+            quote!(#noop)
+        } else if adds.len() == 1 {
+            quote!(#(#adds)*)
+        } else {
+            quote! {{
+                let mut __stack = #vstack::new();
+                #(__stack.add(#adds);)*
+                __stack
+            }}
+        };
+
+        let mut base = quote!(#boxc::new(#content));
+        if let Some(t) = title {
+            base = quote!(#base.with_title(#t));
+        }
+        if let Some(p) = padding {
+            base = quote!(#base.with_padding(#p));
+        }
+        if let Some(b) = border {
+            base = quote!(#base.with_border(#b));
+        }
+        if let Some(c) = border_color {
+            base = quote!(#base.with_border_color(#c));
+        }
         Ok(base)
     }
 }
