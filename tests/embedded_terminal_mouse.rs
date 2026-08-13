@@ -25,7 +25,7 @@ use term_wm::hitbox_registry::{ComponentOwner, HitboxId, HitboxRegistry};
 use term_wm::layout::tiling::{LayoutNode, TilingLayout};
 use term_wm::render_app;
 use term_wm::view;
-use term_wm::window::WindowManager;
+use term_wm::window::{WindowKey, WindowManager};
 use term_wm::wm_config::WmConfig;
 use term_wm_console::RatatuiBackend;
 use term_wm_console::draw_plan_renderer::DrawPlanRenderer;
@@ -42,10 +42,14 @@ const AREA: term_wm_core::Rect = term_wm_core::Rect {
 
 /// Mirrors `TerminalComponent`: registers a hitbox over its screen area and
 /// reports a large scrollable content size so the scroll view shows a scrollbar.
+/// With `consume_left_press` it returns `Consumed` on a left press (like the
+/// terminal's `handle_selection_mouse`), so the WM captures the gesture.
 struct ProbeLeaf {
     log: Rc<RefCell<Vec<String>>>,
     render_area: Rc<RefCell<Option<LayoutRect>>>,
     event_area: Rc<RefCell<Option<LayoutRect>>>,
+    event_areas: Rc<RefCell<Vec<LayoutRect>>>,
+    consume_left_press: bool,
     hitbox: HitboxId,
 }
 
@@ -86,7 +90,20 @@ impl Component<TermWmAction> for ProbeLeaf {
         self.log
             .borrow_mut()
             .push(format!("  {desc} screen_area={:?}", ctx.screen_area()));
-        *self.event_area.borrow_mut() = ctx.screen_area();
+        let sa = ctx.screen_area();
+        *self.event_area.borrow_mut() = sa;
+        if let Some(sa) = sa {
+            self.event_areas.borrow_mut().push(sa);
+        }
+        if self.consume_left_press
+            && matches!(
+                event,
+                Event::Mouse(m)
+                    if matches!(m.kind, MouseEventKind::Press(MouseButton::Left))
+            )
+        {
+            return EventResult::Consumed;
+        }
         EventResult::Ignored
     }
 }
@@ -129,8 +146,18 @@ fn make_mouse(kind: MouseEventKind, col: u16, row: u16) -> WmEvent {
     core_event_to_wm(&event).expect("valid mouse event")
 }
 
-#[test]
-fn trace_embedded_terminal_mouse() {
+struct Harness {
+    wm: WindowManager<AppRootComponent<DemoWindow>>,
+    key: WindowKey,
+    probe_hitbox: HitboxId,
+    log: Rc<RefCell<Vec<String>>>,
+    render_area: Rc<RefCell<Option<LayoutRect>>>,
+    event_areas: Rc<RefCell<Vec<LayoutRect>>>,
+    handle: term_wm::component_context::ScrollHandle,
+}
+
+/// Build the demo window and render it through the real pipeline.
+fn setup_probe(consume_left_press: bool) -> Harness {
     let config = WmConfig {
         chrome_enabled: false,
         ..Default::default()
@@ -147,11 +174,14 @@ fn trace_embedded_terminal_mouse() {
     let log = Rc::new(RefCell::new(Vec::new()));
     let render_area = Rc::new(RefCell::new(None));
     let event_area = Rc::new(RefCell::new(None));
+    let event_areas = Rc::new(RefCell::new(Vec::new()));
     let probe_hitbox = HitboxId::new();
     let probe = ProbeLeaf {
         log: log.clone(),
         render_area: render_area.clone(),
-        event_area: event_area.clone(),
+        event_area,
+        event_areas: event_areas.clone(),
+        consume_left_press,
         hitbox: probe_hitbox,
     };
     let scroll = term_wm::ScrollViewComponent::new(probe);
@@ -171,6 +201,29 @@ fn trace_embedded_terminal_mouse() {
     let mut backend = RatatuiBackend::new_simple(buf, rect);
     render_app(&mut backend, &mut wm, &mut CoreEngine::new(), &mut DrawPlanRenderer::new());
 
+    Harness {
+        wm,
+        key,
+        probe_hitbox,
+        log,
+        render_area,
+        event_areas,
+        handle,
+    }
+}
+
+#[test]
+fn trace_embedded_terminal_mouse() {
+    let mut h = setup_probe(false);
+    let Harness {
+        ref mut wm,
+        key,
+        probe_hitbox,
+        ref log,
+        ref render_area,
+        ref event_areas,
+        ref handle,
+    } = h;
     let r = *render_area.borrow().as_ref().expect("probe must render");
     println!("=== PROBE render_area = {r:?} (screen)");
     println!("=== WM region(key) = {:?} (the event-dispatch screen_area base)", wm.region(key));
@@ -223,14 +276,14 @@ fn trace_embedded_terminal_mouse() {
 
     // 3. A drag on the scrollbar column must scroll (not reach the probe).
     let before_off = handle.info().offset_y;
-    let res_drag = wm.dispatch_mouse(&make_mouse(MouseEventKind::Drag(MouseButton::Left), sb_col, (cy + 2).min(r.y as u16 + r.height as u16)));
+    let res_drag = wm.dispatch_mouse(&make_mouse(MouseEventKind::Drag(MouseButton::Left), sb_col, (cy + 2).min(r.y as u16 + r.height)));
     let after_drag = log.borrow().len();
     let after_off = handle.info().offset_y;
     println!("=== after SCROLLBAR DRAG -> events={after_drag} offset {before_off} -> {after_off} (dispatch: {res_drag:?})");
     wm.dispatch_mouse(&make_mouse(MouseEventKind::Release(MouseButton::Left), sb_col, cy));
 
     // Diagnostic summary: the leaf's event screen_area must equal its render rect.
-    println!("=== DIAGNOSIS: render_area={r:?} | event screen_area={:?}", *event_area.borrow());
+    println!("=== DIAGNOSIS: render_area={r:?} | event screen_areas={:?}", *event_areas.borrow());
     assert!(
         probe_registered,
         "the probe's own hitbox must be registered under its content (it was culled by the scroll view's clip?)"
@@ -240,7 +293,7 @@ fn trace_embedded_terminal_mouse() {
         "content press must reach the probe (selection) — got 0 events"
     );
     assert_eq!(
-        *event_area.borrow(),
+        event_areas.borrow().first().copied(),
         Some(r),
         "leaf event screen_area must equal its render rect (geometry parity)"
     );
@@ -252,4 +305,56 @@ fn trace_embedded_terminal_mouse() {
         after_off > before_off,
         "scrollbar drag must scroll (offset {before_off} -> {after_off})"
     );
+}
+
+#[test]
+fn selection_gesture_routes_through_capture() {
+    // The terminal's text selection is a gesture: a left Press starts a drag
+    // (handle_selection_mouse returns Consumed -> the WM captures), then Drag
+    // extends it and Release finishes it. Simulate that gesture on the content
+    // and assert every event reaches the leaf with geometry parity (its
+    // screen_area equals the render rect at each step).
+    let mut h = setup_probe(true);
+    let Harness {
+        ref mut wm,
+        ref log,
+        ref render_area,
+        ref event_areas,
+        ..
+    } = h;
+    let r = *render_area.borrow().as_ref().expect("probe must render");
+
+    let cx = (r.x + i32::from(r.width / 2)) as u16;
+    let cy = (r.y + i32::from(r.height / 2)) as u16;
+    let dy = (cy + 2).min((r.y + i32::from(r.height) - 1) as u16);
+
+    let res_press = wm.dispatch_mouse(&make_mouse(MouseEventKind::Press(MouseButton::Left), cx, cy));
+    let res_drag = wm.dispatch_mouse(&make_mouse(MouseEventKind::Drag(MouseButton::Left), cx, dy));
+    let res_release =
+        wm.dispatch_mouse(&make_mouse(MouseEventKind::Release(MouseButton::Left), cx, dy));
+
+    println!("=== selection gesture: press={res_press:?} drag={res_drag:?} release={res_release:?}");
+    for l in log.borrow().iter() {
+        println!("{l}");
+    }
+
+    assert!(res_press.is_consumed(), "selection press must be consumed (WM captures): {res_press:?}");
+    assert_eq!(
+        log.borrow().len(),
+        3,
+        "press + drag + release must all reach the leaf (selection gesture) — got {:?}",
+        log.borrow().len()
+    );
+    let areas = event_areas.borrow();
+    assert_eq!(
+        areas.len(),
+        3,
+        "each gesture event must record a screen_area"
+    );
+    for (i, a) in areas.iter().enumerate() {
+        assert_eq!(
+            *a, r,
+            "gesture event {i} screen_area must equal the render rect (geometry parity)"
+        );
+    }
 }
