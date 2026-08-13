@@ -4,9 +4,8 @@
 #   docker build -t term-wm .
 #
 # Run (the TUI needs a TTY):
-#   docker run -it --rm term-wm
-#   docker run -it --rm term-wm -n 4
-#   docker run -it --rm term-wm --run htop
+#   docker run -it term-wm
+#   docker run -it term-wm -- htop
 
 # --- Build stage ---
 FROM rust:1.97-alpine3.24 AS build
