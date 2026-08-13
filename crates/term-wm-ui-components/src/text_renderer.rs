@@ -16,8 +16,8 @@ use term_wm_core::component_context::{ScrollHandle, ScrollViewport};
 use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::utils::linkifier::LinkifiedText;
 use term_wm_core::utils::selectable_text::{
-    LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
-    find_word_bounds, handle_selection_mouse, DEFAULT_WORD_EXTRA_CHARS,
+    DEFAULT_WORD_EXTRA_CHARS, LogicalPosition, SelectionController, SelectionHost, SelectionRange,
+    SelectionViewport, find_word_bounds, handle_selection_mouse,
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
@@ -1240,7 +1240,11 @@ mod tests {
         render_once(&mut renderer, area);
         let ctx = ComponentContext::new(true).with_screen_area(area);
         double_click(&mut renderer, &ctx, 5, 0);
-        assert_eq!(renderer.selection_text(), None, "whitespace double-click selects nothing");
+        assert_eq!(
+            renderer.selection_text(),
+            None,
+            "whitespace double-click selects nothing"
+        );
     }
 
     #[test]
@@ -1262,10 +1266,7 @@ mod tests {
         press(&mut renderer, &ctx, 6, 0);
         drag(&mut renderer, &ctx, 17, 0);
         release(&mut renderer, &ctx, 17, 0);
-        assert_eq!(
-            renderer.selection_text(),
-            Some("World foo bar".to_string())
-        );
+        assert_eq!(renderer.selection_text(), Some("World foo bar".to_string()));
     }
 
     #[test]

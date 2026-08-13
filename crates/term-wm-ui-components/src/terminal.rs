@@ -18,8 +18,8 @@ use term_wm_core::components::{Component, ComponentContext, SelectionStatus};
 use term_wm_core::hitbox_registry::HitboxId;
 use term_wm_core::utils::linkifier::{LinkHandler, LinkOverlay, Linkifier, OverlaySignature};
 use term_wm_core::utils::selectable_text::{
-    LogicalPosition, SelectionController, SelectionHost, SelectionRange, SelectionViewport,
-    find_word_bounds, handle_selection_mouse, maintain_selection_drag, DEFAULT_WORD_EXTRA_CHARS,
+    DEFAULT_WORD_EXTRA_CHARS, LogicalPosition, SelectionController, SelectionHost, SelectionRange,
+    SelectionViewport, find_word_bounds, handle_selection_mouse, maintain_selection_drag,
 };
 use term_wm_core::window::WindowKey;
 use term_wm_layout_engine::LayoutRect;
@@ -3314,10 +3314,22 @@ mod tests {
     }
 
     fn double_click(term: &mut TerminalComponent, ctx: &ComponentContext, col: u16, row: u16) {
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Press(MouseButton::Left), col, row), ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Release(MouseButton::Left), col, row), ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Press(MouseButton::Left), col, row), ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Release(MouseButton::Left), col, row), ctx);
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), col, row),
+            ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), col, row),
+            ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), col, row),
+            ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), col, row),
+            ctx,
+        );
     }
 
     fn screen_ctx() -> ComponentContext {
@@ -3358,7 +3370,11 @@ mod tests {
         let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let ctx = screen_ctx();
         double_click(&mut term, &ctx, 5, 0);
-        assert_eq!(term.selection_text(), None, "whitespace double-click selects nothing");
+        assert_eq!(
+            term.selection_text(),
+            None,
+            "whitespace double-click selects nothing"
+        );
     }
 
     #[test]
@@ -3367,12 +3383,27 @@ mod tests {
         let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World foo bar");
         let ctx = screen_ctx();
         // Double-click "World" (cols 6..11).
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0), &ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Release(MouseButton::Left), 6, 0), &ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0), &ctx);
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
         // Drag right onto "bar" (cols 16..19).
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Drag(MouseButton::Left), 17, 0), &ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Release(MouseButton::Left), 17, 0), &ctx);
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Drag(MouseButton::Left), 17, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 17, 0),
+            &ctx,
+        );
         assert_eq!(
             term.selection_text(),
             Some("World foo bar".to_string()),
@@ -3386,12 +3417,27 @@ mod tests {
         let (mut term, _rb) = make_term_with_content(80, 24, 2000, "Hello World");
         let ctx = screen_ctx();
         // Double-click "World" (cols 6..11).
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0), &ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Release(MouseButton::Left), 6, 0), &ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0), &ctx);
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 6, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Press(MouseButton::Left), 6, 0),
+            &ctx,
+        );
         // Drag left into "Hello" (cols 0..5).
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Drag(MouseButton::Left), 3, 0), &ctx);
-        let _ = term.handle_events(&mouse_event(MouseEventKind::Release(MouseButton::Left), 3, 0), &ctx);
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Drag(MouseButton::Left), 3, 0),
+            &ctx,
+        );
+        let _ = term.handle_events(
+            &mouse_event(MouseEventKind::Release(MouseButton::Left), 3, 0),
+            &ctx,
+        );
         assert_eq!(
             term.selection_text(),
             Some("Hello World".to_string()),
@@ -3406,7 +3452,10 @@ mod tests {
         // 世's lead cell is at column 6.
         double_click(&mut term, &ctx, 6, 0);
         let text = term.selection_text();
-        assert!(text.is_some(), "wide-char double-click should select a word");
+        assert!(
+            text.is_some(),
+            "wide-char double-click should select a word"
+        );
         assert!(
             text.as_ref().unwrap().contains("世界"),
             "word should include both CJK chars, got: {:?}",

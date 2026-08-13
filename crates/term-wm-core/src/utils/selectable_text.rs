@@ -112,11 +112,7 @@ pub fn is_word_char(c: Option<char>, extra_chars: &str) -> bool {
 /// stream, treating `extra_chars` as word characters. Returns an empty range
 /// when `index` is out of range (clamped to the slice length) or the cell at
 /// `index` is not a word character.
-pub fn find_word_bounds(
-    cells: &[Option<char>],
-    index: usize,
-    extra_chars: &str,
-) -> (usize, usize) {
+pub fn find_word_bounds(cells: &[Option<char>], index: usize, extra_chars: &str) -> (usize, usize) {
     if cells.is_empty() || index >= cells.len() || !is_word_char(cells[index], extra_chars) {
         return (index.min(cells.len()), index.min(cells.len()));
     }
@@ -483,7 +479,9 @@ pub fn handle_selection_mouse<H: SelectionHost>(
                 // Exact double click (count == 2) selects the full word;
                 // higher-order clicks (triple etc.) fall through to a fresh
                 // cell drag so future line-granularity gestures stay free.
-                if count == 2 && let Some(word) = host.word_range_at(pos) {
+                if count == 2
+                    && let Some(word) = host.word_range_at(pos)
+                {
                     host.selection_controller().begin_word_selection(word);
                     return true;
                 }
@@ -850,12 +848,7 @@ mod tests {
         }
 
         fn word_range_at(&mut self, pos: LogicalPosition) -> Option<SelectionRange> {
-            let row: Vec<Option<char>> = self
-                .content
-                .get(pos.row)?
-                .chars()
-                .map(Some)
-                .collect();
+            let row: Vec<Option<char>> = self.content.get(pos.row)?.chars().map(Some).collect();
             let index = pos.column.min(row.len().saturating_sub(1));
             let (start, end) = find_word_bounds(&row, index, self.word_extra_chars);
             if start == end {
@@ -1118,7 +1111,11 @@ mod tests {
         assert_eq!(find_word_bounds(&cells, 1, ""), (0, 5));
         assert_eq!(find_word_bounds(&cells, 3, ""), (0, 5));
         assert_eq!(find_word_bounds(&cells, 6, ""), (6, 11));
-        assert_eq!(find_word_bounds(&cells, 5, ""), (5, 5), "space is not a word");
+        assert_eq!(
+            find_word_bounds(&cells, 5, ""),
+            (5, 5),
+            "space is not a word"
+        );
         assert_eq!(
             find_word_bounds(&cells, 99, ""),
             (11, 11),
@@ -1130,9 +1127,17 @@ mod tests {
     #[test]
     fn find_word_bounds_handles_underscore_and_punctuation() {
         let cells: Vec<Option<char>> = "foo_bar baz.qux".chars().map(Some).collect();
-        assert_eq!(find_word_bounds(&cells, 2, ""), (0, 7), "underscore joins the word");
+        assert_eq!(
+            find_word_bounds(&cells, 2, ""),
+            (0, 7),
+            "underscore joins the word"
+        );
         assert_eq!(find_word_bounds(&cells, 8, ""), (8, 11));
-        assert_eq!(find_word_bounds(&cells, 11, ""), (11, 11), "punctuation is not a word");
+        assert_eq!(
+            find_word_bounds(&cells, 11, ""),
+            (11, 11),
+            "punctuation is not a word"
+        );
         assert_eq!(find_word_bounds(&cells, 12, ""), (12, 15));
     }
 
@@ -1140,9 +1145,21 @@ mod tests {
     fn find_word_bounds_hyphen_is_boundary_by_default_and_configurable() {
         // Default: hyphen splits words (kebab-case, CLI flags).
         let kebab: Vec<Option<char>> = "foo-bar".chars().map(Some).collect();
-        assert_eq!(find_word_bounds(&kebab, 4, DEFAULT_WORD_EXTRA_CHARS), (4, 7), "bar");
-        assert_eq!(find_word_bounds(&kebab, 0, DEFAULT_WORD_EXTRA_CHARS), (0, 3), "foo");
-        assert_eq!(find_word_bounds(&kebab, 3, DEFAULT_WORD_EXTRA_CHARS), (3, 3), "the dash itself");
+        assert_eq!(
+            find_word_bounds(&kebab, 4, DEFAULT_WORD_EXTRA_CHARS),
+            (4, 7),
+            "bar"
+        );
+        assert_eq!(
+            find_word_bounds(&kebab, 0, DEFAULT_WORD_EXTRA_CHARS),
+            (0, 3),
+            "foo"
+        );
+        assert_eq!(
+            find_word_bounds(&kebab, 3, DEFAULT_WORD_EXTRA_CHARS),
+            (3, 3),
+            "the dash itself"
+        );
         let flag: Vec<Option<char>> = "--verbose".chars().map(Some).collect();
         assert_eq!(
             find_word_bounds(&flag, 5, DEFAULT_WORD_EXTRA_CHARS),
@@ -1150,7 +1167,11 @@ mod tests {
             "--verbose selects verbose by default"
         );
         let art: Vec<Option<char>> = "state-of-the-art".chars().map(Some).collect();
-        assert_eq!(find_word_bounds(&art, 9, DEFAULT_WORD_EXTRA_CHARS), (9, 12), "the");
+        assert_eq!(
+            find_word_bounds(&art, 9, DEFAULT_WORD_EXTRA_CHARS),
+            (9, 12),
+            "the"
+        );
 
         // Configured with "-": hyphens join the word.
         assert_eq!(find_word_bounds(&kebab, 4, "-"), (0, 7), "foo-bar");
@@ -1158,7 +1179,10 @@ mod tests {
         assert_eq!(find_word_bounds(&art, 9, "-"), (0, 16), "state-of-the-art");
         // snake_case is identical under both settings.
         let snake: Vec<Option<char>> = "foo_bar".chars().map(Some).collect();
-        assert_eq!(find_word_bounds(&snake, 5, DEFAULT_WORD_EXTRA_CHARS), (0, 7));
+        assert_eq!(
+            find_word_bounds(&snake, 5, DEFAULT_WORD_EXTRA_CHARS),
+            (0, 7)
+        );
         assert_eq!(find_word_bounds(&snake, 5, "-"), (0, 7));
     }
 
@@ -1244,8 +1268,16 @@ mod tests {
             }),
         );
         let range = controller.selection_range().unwrap().normalized();
-        assert_eq!(range.start, LogicalPosition::new(0, 5), "anchor start preserved");
-        assert_eq!(range.end, LogicalPosition::new(0, 17), "cursor snaps to word end");
+        assert_eq!(
+            range.start,
+            LogicalPosition::new(0, 5),
+            "anchor start preserved"
+        );
+        assert_eq!(
+            range.end,
+            LogicalPosition::new(0, 17),
+            "cursor snaps to word end"
+        );
     }
 
     #[test]
@@ -1263,7 +1295,11 @@ mod tests {
             }),
         );
         let range = controller.selection_range().unwrap().normalized();
-        assert_eq!(range.start, LogicalPosition::new(0, 0), "cursor snaps to word start");
+        assert_eq!(
+            range.start,
+            LogicalPosition::new(0, 0),
+            "cursor snaps to word start"
+        );
         assert_eq!(range.end, LogicalPosition::new(0, 10), "anchor end pinned");
     }
 
@@ -1465,7 +1501,10 @@ mod tests {
             area,
         ));
         assert_eq!(host.controller().granularity(), SelectionGranularity::Cell);
-        assert!(!host.controller().has_selection(), "fresh cell drag has no selection yet");
+        assert!(
+            !host.controller().has_selection(),
+            "fresh cell drag has no selection yet"
+        );
     }
 
     #[test]

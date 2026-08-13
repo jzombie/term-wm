@@ -14,8 +14,7 @@ pub const RPC_ERROR_UNATTACHED: &str =
 pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
 pub const RPC_ERROR_LIVE_SESSIONS: &str =
     "gateway: live session(s) running; use `term-session stop --force` to stop anyway";
-pub const RPC_ERROR_LIVE_PARTICIPANTS: &str =
-    "gateway: live participant(s) attached to channel; use `term-session kill <channel> --force` to kill anyway";
+pub const RPC_ERROR_LIVE_PARTICIPANTS: &str = "gateway: live participant(s) attached to channel; use `term-session kill <channel> --force` to kill anyway";
 
 // ── Attach ──────────────────────────────────────────────────────────
 
