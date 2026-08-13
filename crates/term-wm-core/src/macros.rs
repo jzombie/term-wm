@@ -483,4 +483,79 @@ macro_rules! impl_view_component {
             }
         }
     };
+    ($ty:ty, height = $h:expr, child: $child:ident) => {
+        impl $crate::components::Component<$crate::actions::TermWmAction> for $ty {
+            // A `&mut self` view with a static height (like `height = <expr>`)
+            // that ALSO delegates the `&self`-queryable selection/hitbox metadata
+            // to a stateful child field (like `child:`). Needed for e.g. a
+            // terminal hosted deep inside a `view!` tree: `height = <expr>` can't
+            // forward selection (it can't call `view()` from `&self`), so the WM's
+            // copy-on-selection-release snapshot would never see the terminal.
+            fn render(
+                &mut self,
+                backend: &mut dyn term_wm_render::RenderBackend,
+                area: $crate::Rect,
+                ctx: &$crate::component_context::ComponentContext,
+                registry: &mut $crate::hitbox_registry::HitboxRegistry,
+            ) {
+                self.view().render(backend, area, ctx, registry);
+            }
+            fn handle_events(
+                &mut self,
+                event: &$crate::events::Event,
+                ctx: &$crate::component_context::ComponentContext,
+            ) -> $crate::actions::EventResult<$crate::actions::TermWmAction> {
+                self.view().handle_events(event, ctx)
+            }
+            fn update(
+                &mut self,
+                action: $crate::actions::TermWmAction,
+                ctx: &$crate::component_context::ComponentContext,
+                actions: &mut ::std::collections::VecDeque<(
+                    $crate::window::WindowKey,
+                    $crate::actions::TermWmAction,
+                )>,
+            ) {
+                self.view().update(action, ctx, actions);
+            }
+            fn destroy(&mut self) {
+                self.view().destroy();
+            }
+            fn desired_height(&self, _width: u16) -> u16 {
+                $h
+            }
+            fn hitbox_id(&self) -> Option<$crate::hitbox_registry::HitboxId> {
+                $crate::components::Component::hitbox_id(&self.$child)
+            }
+            fn clear_selection(&mut self) {
+                $crate::components::Component::clear_selection(&mut self.$child);
+            }
+            fn selection_status(&self) -> $crate::components::SelectionStatus {
+                $crate::components::Component::selection_status(&self.$child)
+            }
+            fn selection_text(&self) -> Option<String> {
+                $crate::components::Component::selection_text(&self.$child)
+            }
+            fn take_pending_title(&mut self) -> Option<String> {
+                self.view().take_pending_title()
+            }
+            fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+                self.view().take_alternate_screen_transition()
+            }
+            fn take_teardown_parts(
+                &mut self,
+            ) -> Option<(
+                Box<dyn ::std::any::Any + Send + Sync>,
+                ::std::thread::JoinHandle<()>,
+            )> {
+                self.view().take_teardown_parts()
+            }
+            fn set_selection_enabled(&mut self, enabled: bool) {
+                $crate::components::Component::set_selection_enabled(&mut self.$child, enabled);
+            }
+            fn paste(&mut self, text: &str) -> bool {
+                $crate::components::Component::paste(&mut self.$child, text)
+            }
+        }
+    };
 }

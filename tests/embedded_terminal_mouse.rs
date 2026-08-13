@@ -18,6 +18,7 @@ use term_wm::Component;
 use term_wm::actions::{EventResult, TermWmAction};
 use term_wm::component_context::ComponentContext;
 use term_wm::components::AppRootComponent;
+use term_wm::components::SelectionStatus;
 use term_wm::events::Event;
 use term_wm::events::core_event_to_wm;
 use term_wm::events::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind, WmEvent};
@@ -50,12 +51,22 @@ struct ProbeLeaf {
     event_area: Rc<RefCell<Option<LayoutRect>>>,
     event_areas: Rc<RefCell<Vec<LayoutRect>>>,
     consume_left_press: bool,
+    selection: Rc<RefCell<SelectionStatus>>,
+    text: Rc<RefCell<Option<String>>>,
     hitbox: HitboxId,
 }
 
 impl Component<TermWmAction> for ProbeLeaf {
     fn hitbox_id(&self) -> Option<HitboxId> {
         Some(self.hitbox)
+    }
+
+    fn selection_status(&self) -> SelectionStatus {
+        *self.selection.borrow()
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.text.borrow().clone()
     }
 
     fn render(
@@ -134,7 +145,7 @@ impl DemoWindow {
     }
 }
 
-impl_view_component!(DemoWindow, height = 0);
+impl_view_component!(DemoWindow, height = 0, child: scroll);
 
 fn make_mouse(kind: MouseEventKind, col: u16, row: u16) -> WmEvent {
     let event = Event::Mouse(MouseEvent {
@@ -182,6 +193,11 @@ fn setup_probe(consume_left_press: bool) -> Harness {
         event_area,
         event_areas: event_areas.clone(),
         consume_left_press,
+        selection: Rc::new(RefCell::new(SelectionStatus {
+            active: false,
+            dragging: false,
+        })),
+        text: Rc::new(RefCell::new(None)),
         hitbox: probe_hitbox,
     };
     let scroll = term_wm::ScrollViewComponent::new(probe);
@@ -357,4 +373,57 @@ fn selection_gesture_routes_through_capture() {
             "gesture event {i} screen_area must equal the render rect (geometry parity)"
         );
     }
+}
+
+#[test]
+fn window_root_reports_embedded_terminal_selection() {
+    // The WM's copy-on-selection-release path (`update_selection_snapshot`)
+    // reads the FOCUSED WINDOW's `selection_status()`/`selection_text()`. With
+    // `impl_view_component!(DemoWindow, height = 0, child: scroll)`, that
+    // metadata must come from the embedded terminal (the scroll view), not the
+    // default (no selection). Set a selection on the probe and assert the window
+    // root reports it.
+    let mut h = setup_probe(true);
+    let Harness {
+        ref mut wm,
+        key,
+        ref render_area,
+        ref event_areas,
+        ..
+    } = h;
+    let r = *render_area.borrow().as_ref().expect("probe must render");
+    let _ = event_areas;
+
+    // Reach into the probe to simulate a completed selection.
+    let (sel, text) = {
+        let AppRootComponent::Custom(DemoWindow { scroll }) = wm
+            .component_for_key_mut(key)
+            .expect("window root component")
+        else {
+            panic!("expected custom window");
+        };
+        let content = scroll.content.borrow();
+        let sel = content.selection.clone();
+        let text = content.text.clone();
+        (sel, text)
+    };
+    *sel.borrow_mut() = SelectionStatus {
+        active: true,
+        dragging: false,
+    };
+    *text.borrow_mut() = Some("selected text".to_string());
+
+    // The window root must surface the embedded terminal's selection + text.
+    let status = wm.component_for_key_mut(key).unwrap().selection_status();
+    let sel_text = wm.component_for_key_mut(key).unwrap().selection_text();
+    println!("=== window-root selection_status={status:?} selection_text={sel_text:?} (render rect {r:?})");
+    assert!(
+        status.active,
+        "window root must report the embedded terminal's active selection"
+    );
+    assert_eq!(
+        sel_text.as_deref(),
+        Some("selected text"),
+        "window root must report the embedded terminal's selection text"
+    );
 }

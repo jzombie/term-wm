@@ -39,8 +39,11 @@ impl MyWindow {
 }
 
 // `view(&mut self)` injects `{ &mut self.terminal }`, so `desired_height(&self)`
-// can't build the view; a window root stretches (`0`).
-impl_view_component!(MyWindow, height = 0);
+// can't build the view; a window root stretches (`0`). The `child: terminal`
+// form additionally delegates selection/hitbox metadata to the embedded
+// terminal's scroll view, so the WM's copy-on-selection-release snapshot sees
+// the terminal's text selection.
+impl_view_component!(MyWindow, height = 0, child: terminal);
 
 fn main() -> std::io::Result<()> {
     let mut app: TermWmApp<MyWindow> = TermWmApp::new_custom(AppContext::new("view-demo", "0.0.0"));
