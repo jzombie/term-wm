@@ -140,6 +140,7 @@ where
 /// channel (`UnifiedEvent` / `Sender` stay private to this crate).
 pub struct AppSetupContext<'a> {
     tx: &'a Sender<UnifiedEvent>,
+    clipboard_enabled: bool,
 }
 
 impl AppSetupContext<'_> {
@@ -148,6 +149,10 @@ impl AppSetupContext<'_> {
     /// closure can capture the known `WindowKey`.
     pub fn wire_terminal(&self, terminal: &mut TerminalComponent, key: WindowKey) {
         let tx = self.tx.clone();
+        // Match the spawn path (spawn_terminal_window): a terminal hosted in a
+        // Custom/view! window must have text selection enabled too, or clicks
+        // fall through `handle_selection_mouse` (gated on selection_enabled).
+        terminal.set_selection_enabled(self.clipboard_enabled);
         terminal.set_pty_callback(move |status| match status {
             PtyStatus::Wakeup => {
                 let _ = tx.send(UnifiedEvent::PtyWakeup(key));
@@ -491,7 +496,10 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         self.rewire_terminal_callbacks(&tx);
         // Give the consumer a chance to wire `Custom`-window terminals (which
         // `rewire_terminal_callbacks` cannot reach).
-        let ctx = AppSetupContext { tx: &tx };
+        let ctx = AppSetupContext {
+            tx: &tx,
+            clipboard_enabled: self.wm.clipboard_enabled(),
+        };
         setup(&mut self, &ctx);
         let result = self.run_with(&mut output, &mut input);
         output.exit()?;
