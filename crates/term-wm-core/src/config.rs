@@ -128,7 +128,7 @@ impl<L: WmComponent> AppBuilder<L> {
     }
 
     /// Build a [`WindowManager`] from the accumulated configuration.
-    pub fn build<C: Component<TermWmAction>, O: Overlay<TermWmAction>>(
+    pub fn build<C: Component<TermWmAction> + 'static, O: Overlay<TermWmAction>>(
         self,
     ) -> Result<WindowManager<C, L, O>, ConfigError> {
         use crate::window::{ComponentTag, LayerManager, ZPlane};

@@ -123,3 +123,36 @@ Magic Strings and Numbers
 Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
+
+Declarative `view!` Macro
+- `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) is a
+  declarative shorthand for building component trees. It is "dumb": the expansion
+  is ordinary, fully-monomorphized constructor calls + generated delegate enums —
+  no runtime tree, no reactivity, no reconciliation, no `Box`/`dyn`. A `{ expr }`
+  escape hatch injects any `Component`, owned or `&mut`-borrowed.
+- **Draft design**: the macro, its tags, and their props are still evolving.
+  Treat `examples/view_macro_prototype.rs` and `crates/term-wm-view` as the current source
+  of truth for the tag set and behavior rather than this file.
+- **Durable invariants** (violating these is a bug):
+  - `view!` trees are ephemeral values rebuilt per frame; stateful components are
+    app-owned and injected by reference (`{ &mut self.x }`). Borrowed views
+    forward lifecycle calls via `impl_view_component!` — `Ty` (all-owned `&self`
+    view), `Ty, height = <expr>` (static height, no `&self`-queried selection
+    metadata), or `Ty, child: <field>[, <field>…]` / `Ty, height = <expr>, child:
+    <field>[, …]` which delegate the `&self`-queried metadata (selection, hitbox)
+    to the listed stateful fields (first-active-wins aggregation; `clear_selection`
+    / `set_selection_enabled` fan out; `paste` tries each until one consumes it).
+    The selectable fields must be listed explicitly — `macro_rules!` cannot
+    introspect the struct — analogous to a React `useEffect` deps array.
+  - Containers (`VStack`, `HStack`, `Grid`, `Center`) recompute child rects
+    from `ctx.screen_area()` on every call (never cache), rebind each child's
+    context with `with_screen_area` in BOTH `render` and `handle_events`, route
+    mouse events spatially, and route `Event::Key` to `ctx.keyboard_focus_id()` —
+    never broadcast.
+  - `desired_height` stretch semantics: `0` means stretch.
+  - A terminal inside an `AppRootComponent::Custom`/`view!` window is not
+    auto-wired (only `CoreWmComponent::Terminal` windows are): set the window's
+    `DirectInputTracker` (`wm.set_window_tracker(key, pty.direct_input_tracker())`)
+    and wire it via `TermWmApp::run_with_setup(|app, ctx| ctx.wire_terminal(&mut terminal.content.borrow_mut(), key))`.
+    An un-wired PTY logs `status_cb is NONE` on direct-mode transitions — that is
+    the broken-event-pipeline signal.

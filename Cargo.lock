@@ -694,6 +694,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
+name = "derive-where"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d08b3a0bcc0d079199cd476b2cae8435016ec11d1c0986c6901c5ac223041534"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2269,12 +2280,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-error-attr2"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
+name = "proc-macro-error2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
+dependencies = [
+ "proc-macro-error-attr2",
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proc-macro2-diagnostics2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af971f0c4f5eb79d0fe381e9b5a1e315ae8a3df58fa512666471e19b9e1f824d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+ "version_check",
+ "yansi",
 ]
 
 [[package]]
@@ -2603,6 +2648,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "rstml"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c008ffc8b9cd3238289f5d25b3d9b00fc63445c9cdf766995b3c8bbe43612f6"
+dependencies = [
+ "derive-where",
+ "proc-macro2",
+ "proc-macro2-diagnostics2",
+ "quote",
+ "syn 3.0.3",
+ "syn_derive",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3006,6 +3066,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "syn_derive"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdb066a04799e45f5d582e8fc6ec8e6d6896040d00898eb4e6a835196815b219"
+dependencies = [
+ "proc-macro-error2",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3031,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3041,7 +3113,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3054,7 +3126,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3073,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3102,7 +3174,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3111,7 +3183,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3121,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3142,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3150,7 +3222,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "libc",
  "tracing",
@@ -3158,7 +3230,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3188,6 +3260,7 @@ dependencies = [
  "term-wm-sys-ui-components",
  "term-wm-ui-components",
  "term-wm-ui-facade",
+ "term-wm-view",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3197,7 +3270,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3216,7 +3289,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3239,7 +3312,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3249,21 +3322,21 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "term-wm-layout-engine",
 ]
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3283,11 +3356,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3296,6 +3369,7 @@ dependencies = [
  "term-wm-layout-engine",
  "term-wm-render",
  "term-wm-ui-components",
+ "term-wm-view",
  "tracing",
  "unicode-width",
  "webbrowser",
@@ -3303,7 +3377,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -3329,12 +3403,24 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.9.24-alpha"
+version = "0.9.25-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
  "term-wm-sys-ui-components",
  "term-wm-ui-components",
+]
+
+[[package]]
+name = "term-wm-view"
+version = "0.9.25-alpha"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "rstml",
+ "syn 3.0.3",
+ "term-wm-core",
 ]
 
 [[package]]
@@ -4291,6 +4377,12 @@ name = "xxhash-rust"
 version = "0.8.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aee1b19627c7c60102ab80d3a9cbe18de90bfe03bfa6c3715447681f0e8c8af6"
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yoke"

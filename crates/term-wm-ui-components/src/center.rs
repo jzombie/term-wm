@@ -37,6 +37,13 @@ impl<C: Component<TermWmAction>> CenterComponent<C> {
 }
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> {
+    fn desired_height(&self, _width: u16) -> u16 {
+        // Stretch (0): a Center must fill its allocated region so it can
+        // *visibly* center its width×height content within it. The parent must
+        // render trailing siblings after a stretch child (VStack does).
+        0
+    }
+
     fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -51,7 +58,19 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> 
             width: inner.width,
             height: inner.height,
         };
-        self.content.render(backend, inner_lr, ctx, registry);
+        // The content's screen_area must be the CENTERED rect in screen
+        // coordinates (ctx.screen_area is absolute; `area` is local), so the
+        // child's hitbox registration and event geometry align with its render
+        // bounds. Passing `ctx` unchanged here corrupted the whole subtree.
+        let sa = ctx.screen_area().unwrap_or(area);
+        let child_screen = LayoutRect {
+            x: sa.x.saturating_add(inner_lr.x.saturating_sub(area.x)),
+            y: sa.y.saturating_add(inner_lr.y.saturating_sub(area.y)),
+            width: inner_lr.width,
+            height: inner_lr.height,
+        };
+        let child_ctx = ctx.clone().with_screen_area(child_screen);
+        self.content.render(backend, inner_lr, &child_ctx, registry);
     }
 
     fn handle_events(
@@ -59,7 +78,16 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> 
         event: &Event,
         ctx: &ComponentContext,
     ) -> EventResult<TermWmAction> {
-        self.content.handle_events(event, ctx)
+        let sa = ctx.screen_area().unwrap_or_default();
+        let inner = self.inner_rect(layout_rect_to_clipped_rect(sa));
+        let inner_lr = LayoutRect {
+            x: inner.x as i32,
+            y: inner.y as i32,
+            width: inner.width,
+            height: inner.height,
+        };
+        let child_ctx = ctx.clone().with_screen_area(inner_lr);
+        self.content.handle_events(event, &child_ctx)
     }
 
     fn update(
@@ -101,6 +129,14 @@ mod tests {
         ) -> EventResult<TermWmAction> {
             EventResult::Ignored
         }
+    }
+
+    #[test]
+    fn center_desired_height_stretches_to_fill() {
+        // A Center stretches (0) so it fills its allocated region and can
+        // visibly center its width×height content within it.
+        let center = CenterComponent::new(DummyComponent, 10, 5);
+        assert_eq!(center.desired_height(40), 0);
     }
 
     #[test]

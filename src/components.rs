@@ -1,7 +1,10 @@
 pub use term_wm_core::components::NoopComponent;
 
 use term_wm_core::actions::TermWmAction;
-use term_wm_core::components::Component;
+// Re-exported (not just imported) so `::term_wm::components::Component` and
+// `::term_wm::components::SelectionStatus` resolve for the umbrella path style
+// of the `view!` macro (the module shadows `term_wm_core::components`).
+pub use term_wm_core::components::{Component, SelectionStatus};
 use term_wm_core::impl_component_delegate;
 use term_wm_ui_facade::core_component::CoreWmComponent;
 

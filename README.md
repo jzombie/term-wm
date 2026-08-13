@@ -179,6 +179,31 @@ Floating windows support mouse-driven snapping with a live **ghost preview**. Wh
 
 However, the developer-facing library API is currently unsolidified and subject to rapid breaking changes. Stabilizing the developer API, refining the component lifecycle, and documenting the embedded layout engine will be the primary focus of future architectural iterations. (For a glimpse into the internal component design standards, see [AGENTS.md](./AGENTS.md)).
 
+## Declarative Component Trees with `view!`
+
+`term-wm` ships a "dumb" `view!` macro that builds component trees declaratively — it expands to ordinary, fully-monomorphized component constructors, with no runtime tree, reactivity, or reconciliation:
+
+```rust,no_run
+use term_wm::prelude::*;
+
+struct MyWindow;
+
+impl MyWindow {
+    fn view(&mut self) -> impl Component<TermWmAction> + '_ {
+        view! {
+            <VStack gap=1>
+                <Label text="System Status" />
+                <Button label="Refresh" action={TermWmAction::Quit} />
+            </VStack>
+        }
+    }
+}
+```
+
+Layout tags (`VStack`, `HStack`, `Grid`, `Center`, `Box`) and stateless leaves (`Label`, `Button`) are constructed declaratively; a `{ expr }` escape hatch injects any `Component` value, owned or `&mut`-borrowed (`{ &mut self.terminal }` for stateful components such as a terminal). All-owned trees (no `&mut`) go straight into `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
+
+`view!` and its tag set are still an evolving draft — treat [`examples/view_macro_prototype.rs`](examples/view_macro_prototype.rs) as the canonical runnable reference (it wires a live terminal into a `view!` tree), and the System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built the same way.
+
 ## License
 
 `term-wm` is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0).
