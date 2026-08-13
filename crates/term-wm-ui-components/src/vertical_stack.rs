@@ -1,3 +1,5 @@
+// TODO: Rename to VStackComponent (closer to hstack semantics as well)
+
 use std::collections::VecDeque;
 
 use term_wm_core::actions::{EventResult, TermWmAction};
