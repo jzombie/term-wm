@@ -30,7 +30,9 @@ pub use center::CenterComponent;
 pub use command_palette::CommandPaletteComponent;
 pub use confirm_overlay::ConfirmOverlayComponent;
 pub use dialog_overlay::DialogOverlayComponent;
-pub use grid::{GridComponent, GridConstraint, resolve_sizes};
+pub use grid::{
+    FRACTION_COL_MIN_WIDTH, GridComponent, GridConstraint, grid_reflows, resolve_sizes,
+};
 pub use hstack::HStackComponent;
 pub use label::LabelComponent;
 pub use list::ListComponent;

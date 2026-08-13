@@ -53,6 +53,29 @@ pub fn resolve_sizes(dim: u16, constraints: &[GridConstraint]) -> Vec<u16> {
     sizes
 }
 
+/// The minimum width a `Fraction` column is allotted before a multi-column
+/// grid reflows to a single stacked column. Prevents columns from collapsing
+/// into unreadable slivers on narrow containers.
+pub const FRACTION_COL_MIN_WIDTH: u16 = 10;
+
+/// Minimum total width a constraint list needs to keep multiple columns.
+fn min_total_width(cols: &[GridConstraint]) -> u16 {
+    cols.iter()
+        .map(|c| match c {
+            GridConstraint::Fixed(n) => *n,
+            GridConstraint::Fraction(_) => FRACTION_COL_MIN_WIDTH,
+        })
+        .fold(0u16, u16::saturating_add)
+}
+
+/// Whether a multi-column grid must reflow to a single stacked column because
+/// the available width cannot accommodate the configured columns' minimums.
+/// Shared by `GridComponent` and its consumers (e.g. a scroll-content wrapper
+/// that must report the same adaptive height).
+pub fn grid_reflows(cols: &[GridConstraint], width: u16) -> bool {
+    cols.len() > 1 && width < min_total_width(cols)
+}
+
 /// A row-major grid container.
 ///
 /// Column widths and row heights come from [`GridConstraint`] lists; children
@@ -106,12 +129,55 @@ impl<C: Component<TermWmAction>> GridComponent<C> {
         vec![GridConstraint::Fraction(1); nrows]
     }
 
-    fn col_widths(&self, width: u16) -> Vec<u16> {
-        resolve_sizes(width, &self.effective_cols())
+    fn reflows(&self, width: u16) -> bool {
+        grid_reflows(&self.effective_cols(), width)
     }
 
-    fn row_heights(&self, height: u16) -> Vec<u16> {
-        resolve_sizes(height, &self.effective_rows())
+    fn col_widths(&self, width: u16) -> Vec<u16> {
+        if self.reflows(width) {
+            // Reflowed to a single stacked column: full width.
+            vec![width]
+        } else {
+            resolve_sizes(width, &self.effective_cols())
+        }
+    }
+
+    fn row_heights(&self, width: u16, height: u16) -> Vec<u16> {
+        if self.reflows(width) {
+            // Reflowed to a single stacked column. Non-stretch children keep
+            // their own desired_height; stretch children (`desired_height == 0`)
+            // share the remaining vertical space.
+            let fixed_total: u16 = self.children.iter().fold(0u16, |acc, c| {
+                let h = c.desired_height(width);
+                if h == 0 {
+                    acc
+                } else {
+                    acc.saturating_add(h)
+                }
+            });
+            let remaining = (i32::from(height))
+                .saturating_sub(i32::from(fixed_total))
+                .max(0) as u16;
+            let n_stretch = self
+                .children
+                .iter()
+                .filter(|c| c.desired_height(width) == 0)
+                .count() as u16;
+            let stretch_h = remaining.checked_div(n_stretch).unwrap_or(0);
+            self.children
+                .iter()
+                .map(|c| {
+                    let h = c.desired_height(width);
+                    if h == 0 {
+                        stretch_h.max(1)
+                    } else {
+                        h.max(1)
+                    }
+                })
+                .collect()
+        } else {
+            resolve_sizes(height, &self.effective_rows())
+        }
     }
 }
 
@@ -152,7 +218,20 @@ impl<C: Component<TermWmAction>> Default for GridComponent<C> {
 }
 
 impl<C: Component<TermWmAction>> Component<TermWmAction> for GridComponent<C> {
-    fn desired_height(&self, _width: u16) -> u16 {
+    fn desired_height(&self, width: u16) -> u16 {
+        if self.reflows(width) {
+            // Reflowed to a stacked column: a stretching child (0) propagates
+            // stretch up; otherwise the height is the sum of the children's
+            // own desired_heights (matches the reflowed row layout).
+            if self.children.iter().any(|c| c.desired_height(width) == 0) {
+                return 0;
+            }
+            return self
+                .children
+                .iter()
+                .map(|c| c.desired_height(width))
+                .fold(0u16, u16::saturating_add);
+        }
         let mut fixed_sum: u16 = 0;
         for row in &self.effective_rows() {
             match row {
@@ -177,7 +256,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for GridComponent<C> {
         let dx = parent_screen.x.saturating_sub(area.x);
         let dy = parent_screen.y.saturating_sub(area.y);
         let col_widths = self.col_widths(area.width);
-        let row_heights = self.row_heights(area.height);
+        let row_heights = self.row_heights(area.width, area.height);
         walk_cells(area, &col_widths, &row_heights, |idx, cell| {
             if let Some(child) = self.children.get_mut(idx) {
                 let screen = LayoutRect {
@@ -207,7 +286,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for GridComponent<C> {
                 let m_y = i32::from(mouse.row);
                 let mut result = EventResult::Ignored;
                 let col_widths = self.col_widths(parent_screen.width);
-                let row_heights = self.row_heights(parent_screen.height);
+                let row_heights = self.row_heights(parent_screen.width, parent_screen.height);
                 walk_cells(parent_screen, &col_widths, &row_heights, |idx, cell| {
                     if result.is_ignored()
                         && m_x >= cell.x
@@ -440,5 +519,103 @@ mod tests {
         g.handle_events(&key_event(), &ctx);
         assert_eq!(g.children[0].key_count, 0);
         assert_eq!(g.children[1].key_count, 1);
+    }
+
+    #[test]
+    fn grid_reflows_truth_table() {
+        // Single column never reflows.
+        assert!(!grid_reflows(&[GridConstraint::Fraction(1)], 5));
+        // Fixed + Fraction needs 14 + 10 = 24 columns.
+        let two = [GridConstraint::Fixed(14), GridConstraint::Fraction(1)];
+        assert!(grid_reflows(&two, 23));
+        assert!(!grid_reflows(&two, 24));
+        // All-Fixed columns are exact.
+        let fixed = [GridConstraint::Fixed(3), GridConstraint::Fixed(5)];
+        assert!(grid_reflows(&fixed, 7));
+        assert!(!grid_reflows(&fixed, 8));
+    }
+
+    #[test]
+    fn reflowed_grid_reports_sum_of_child_heights() {
+        let g = GridComponent::new(vec![
+            SpyChild { height: 1, ..Default::default() },
+            SpyChild { height: 3, ..Default::default() },
+            SpyChild { height: 1, ..Default::default() },
+        ])
+        .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)])
+        .with_rows(vec![GridConstraint::Fixed(3), GridConstraint::Fixed(3)]);
+        // Narrow (below 24) => reflowed stack: 1 + 3 + 1 = 5.
+        assert_eq!(g.desired_height(20), 5);
+        // Wide (>= 24) => non-reflowed rows "3 3" = 6.
+        assert_eq!(g.desired_height(30), 6);
+    }
+
+    #[test]
+    fn reflowed_grid_places_one_child_per_full_width_row() {
+        let mut g = GridComponent::new(vec![
+            SpyChild { height: 1, ..Default::default() },
+            SpyChild { height: 3, ..Default::default() },
+        ])
+        .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)])
+        .with_rows(vec![GridConstraint::Fixed(3), GridConstraint::Fixed(3)]);
+        let mut backend = make_backend();
+        let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 20, 10));
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        g.render(&mut backend, rect(0, 0, 20, 10), &ctx, &mut registry);
+        // Reflowed: full-width rows at y=0 and y=1.
+        assert_eq!(g.children[0].seen_render, Some(rect(0, 0, 20, 1)));
+        assert_eq!(g.children[1].seen_render, Some(rect(0, 1, 20, 3)));
+    }
+
+    #[test]
+    fn reflowed_grid_stretch_child_propagates_stretch() {
+        let g = GridComponent::new(vec![
+            SpyChild { height: 1, ..Default::default() },
+            SpyChild { height: 0, ..Default::default() }, // stretch
+        ])
+        .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)]);
+        // A stretching child forces the reflowed grid to stretch.
+        assert_eq!(g.desired_height(20), 0);
+    }
+
+    #[test]
+    fn reflowed_grid_gives_stretch_child_remaining_height() {
+        let mut g = GridComponent::new(vec![
+            SpyChild { height: 1, ..Default::default() },
+            SpyChild { height: 0, ..Default::default() }, // stretch
+        ])
+        .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)]);
+        let mut backend = make_backend();
+        let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 20, 9));
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        g.render(&mut backend, rect(0, 0, 20, 9), &ctx, &mut registry);
+        // Fixed child (1) first, stretch child gets the remaining 8.
+        assert_eq!(g.children[0].seen_render, Some(rect(0, 0, 20, 1)));
+        assert_eq!(g.children[1].seen_render, Some(rect(0, 1, 20, 8)));
+    }
+
+    #[test]
+    fn render_geometry_stays_within_local_area() {
+        // Containment: a 30-col grid hosted where the (un-rebound) screen area
+        // claims 120 cols must still render every cell inside the 30-col area.
+        let mut g = GridComponent::new(vec![
+            SpyChild { height: 1, ..Default::default() },
+            SpyChild { height: 3, ..Default::default() },
+        ])
+        .with_cols(vec![GridConstraint::Fixed(14), GridConstraint::Fraction(1)]);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(
+            ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 30, 10)),
+            ratatui::layout::Rect::new(0, 0, 30, 10),
+        );
+        let ctx = ComponentContext::new(true).with_screen_area(rect(0, 0, 120, 10));
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        g.render(&mut backend, rect(0, 0, 30, 10), &ctx, &mut registry);
+        for c in &g.children {
+            let r = c.seen_render.expect("child rendered");
+            assert!(
+                r.x >= 0 && r.x + i32::from(r.width) <= 30,
+                "cell {r:?} must stay within the 30-col local area"
+            );
+        }
     }
 }

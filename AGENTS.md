@@ -172,3 +172,17 @@ Declarative `view!` Macro
 - `desired_height` stretch semantics: `0` means stretch. `HStackComponent`
   returns `0` if any child stretches; `GridComponent` returns `0` if any row is
   `Fraction` (or `rows` is empty).
+- **Grid reflow**: a multi-column `GridComponent` reflows to a single stacked
+  column when the available width can't fit the columns' minimums
+  (`FRACTION_COL_MIN_WIDTH` per `Fraction` column; `grid_reflows` is the shared
+  predicate). Reflowed rows are one per child, sized by each child's
+  `desired_height` (stretch children share the remaining height; a stretch
+  child makes the reflowed grid's `desired_height` `0`). Containers hosting a
+  grid (e.g. the System Panel) must report the same reflow-aware height so the
+  scroll canvas matches.
+- **Render/event width contract**: containers must rebind each child's context
+  (`ctx.with_screen_area(child_rect)`) in BOTH `render` and `handle_events`, so
+  `GridComponent::render` (area-based geometry) and its `handle_events`
+  (screen-area hit-testing) make the same layout decisions. `render` must never
+  derive geometry from `ctx.screen_area()` — `area` is the allocated local
+  bounds.
