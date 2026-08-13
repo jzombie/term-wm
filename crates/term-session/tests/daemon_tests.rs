@@ -855,7 +855,65 @@ async fn cli_stop_requires_force_when_live_sessions() {
     let _ = child.wait();
 }
 
-/// Regression: a connection/handshake failure must surface on the client's
+#[tokio::test]
+async fn cli_kill_requires_force_when_participants() {
+    let gateway = unique_gateway("kill_force");
+    let channel = "test/kill_force";
+    let (mut child, _marker) = spawn_daemon(&gateway, false);
+
+    let client = wait_connectable(&gateway).await;
+    attach_to(&client, channel, "cli").await;
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: Some(vec![
+                mock_bin().to_string_lossy().to_string(),
+                "sleep".into(),
+                "60000".into(),
+            ]),
+            cols: 80u16,
+            rows: 24u16,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // `kill` without --force: refused, non-zero exit, channel keeps running.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("kill")
+        .arg(&channel)
+        .output()
+        .expect("run kill");
+    assert!(
+        !out.status.success(),
+        "kill must refuse while participants are attached"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("participant"),
+        "refusal message should mention participants, got: {stderr}"
+    );
+
+    // Gateway still reachable after the refusal.
+    ListChannels::call(&*client, ())
+        .await
+        .expect("gateway alive");
+
+    // `kill --force` succeeds.
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["kill", &channel, "--force"])
+        .output()
+        .expect("run kill --force");
+    assert!(
+        out.status.success(),
+        "kill --force failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = child.wait();
+}
 /// stderr instead of being silently swallowed by the stderr→tracing redirect
 /// (see `redirect_fd_to_tracing` in `term-session-client`). The gateway is
 /// "occupied" by a socket that accepts and immediately feeds garbage + closes

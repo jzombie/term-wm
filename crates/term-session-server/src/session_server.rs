@@ -12,10 +12,10 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_LIVE_SESSIONS,
-    RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
-    WriteInput,
+    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_LIVE_PARTICIPANTS,
+    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn,
+    SpawnRequest, SpawnResponse, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -1116,7 +1116,7 @@ pub async fn run_gateway(
                 if state.is_shutting_down.load(Ordering::SeqCst) {
                     return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-                let channel_str = KillChannel::decode_request(&payload)?;
+                let (channel_str, force) = KillChannel::decode_request(&payload)?;
                 let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
                 // 1) Snapshot the target connections under `conns.write`, then release.
                 let target_conns: Vec<usize> = {
@@ -1127,9 +1127,20 @@ pub async fn run_gateway(
                         .map(|(conn_id, _)| *conn_id)
                         .collect()
                 };
-                // 2) Lock the channel: signal the session tree and evict every socket.
+                // 2) Lock the channel once: refuse an accidental kill while
+                //    participants are attached unless the caller forced it,
+                //    then signal the session tree and evict every socket.
+                //    Holding the lock through check + teardown serializes
+                //    against concurrent Attach/Spawn, so a participant cannot
+                //    slip in between the verification and the eviction.
                 if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
                     let mut guard = ch.lock().await;
+                    let n = guard.clients.len();
+                    if !force && n > 0 {
+                        return Err(rpc_err(&format!(
+                            "{RPC_ERROR_LIVE_PARTICIPANTS} ({n} participant(s) attached)"
+                        )));
+                    }
                     guard.request_session_kill(SIGTERM);
                     guard.finalize_subscribers();
                     for conn_id in &target_conns {

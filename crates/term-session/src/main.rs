@@ -56,6 +56,10 @@ enum Command {
     Kill {
         /// Channel name to kill.
         channel: String,
+        /// Kill even if participants are attached (otherwise the gateway
+        /// refuses while any client is connected).
+        #[arg(long)]
+        force: bool,
         /// Explicitly name the operation (already the default).
         #[arg(long)]
         kill_session: bool,
@@ -133,8 +137,9 @@ fn run() -> io::Result<()> {
         Some(Command::List) => list(),
         Some(Command::Kill {
             channel,
+            force,
             kill_session: _,
-        }) => kill(&channel),
+        }) => kill(&channel, force),
         Some(Command::KillClient { channel, client_id }) => {
             term_session::kill_client(&channel, client_id)?;
             println!("Detached client {client_id} from channel {channel}");
@@ -223,8 +228,8 @@ fn list() -> io::Result<()> {
     Ok(())
 }
 
-fn kill(channel: &str) -> io::Result<()> {
-    term_session::kill_channel(channel)?;
+fn kill(channel: &str, force: bool) -> io::Result<()> {
+    term_session::kill_channel(channel, force)?;
     println!("Killed channel {channel}");
     Ok(())
 }

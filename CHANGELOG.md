@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **`term-session kill` now requires `--force` when participants are attached:** killing a channel whose session has connected clients is refused with a clear error unless `--force` is passed, matching the existing `term-session stop --force` semantics. The refusal leaves the channel and its session fully operational.
+- **Double-click to select a full word:** double-clicking a word in a terminal (or text-viewer) window selects the whole word, and dragging after the double-click extends the selection word-by-word (matching mainstream terminal emulators). Active only while the window manager owns the mouse — applications that capture the mouse in Direct Input Mode continue to receive events unfiltered.
+- **Documented clipboard behavior in Direct Input Mode:** `README.md` and the in-app help overlay now state that mouse-managed clipboard features (click-and-drag selection copy, right-click paste) are overridden while an application holds Direct Input Mode and that clipboard handling is the application's responsibility; OSC 52 copy sequences emitted by the application continue to be relayed.
+
 ## [0.9.23-alpha] - 2026-08-12
 
 ### Changed

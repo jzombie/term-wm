@@ -925,7 +925,7 @@ async fn kill_channel_terminates_process_tree() {
         "grandchild {grandchild_pid} should be alive before KillChannel"
     );
 
-    KillChannel::call(&*client, "test/kill_tree".to_string())
+    KillChannel::call(&*client, ("test/kill_tree".to_string(), true))
         .await
         .unwrap();
 
@@ -993,7 +993,7 @@ async fn kill_channel_kills_only_that_channel() {
 
     let (_, mut reader_b) = b.open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0).await.unwrap();
 
-    KillChannel::call(&*a, "test/kill_a".to_string())
+    KillChannel::call(&*a, ("test/kill_a".to_string(), true))
         .await
         .unwrap();
 
@@ -1034,7 +1034,7 @@ async fn kill_channel_respawns_with_stored_cmd() {
     .await
     .unwrap();
 
-    KillChannel::call(&*c, "test/kill_respawn".to_string())
+    KillChannel::call(&*c, ("test/kill_respawn".to_string(), true))
         .await
         .unwrap();
 
@@ -1750,4 +1750,64 @@ async fn shutdown_without_force_succeeds_when_no_live_sessions() {
     // No sessions were ever spawned: stop must succeed without --force.
     ShutdownGateway::call(&*client, false).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn kill_channel_refuses_without_force_when_participants() {
+    let mock = get_mock_bin();
+    let guard = spawn_gateway().await;
+    let channel = test_channel("test/kill_force");
+    let client = connect_client_with_retry(guard.socket()).await;
+    attach_client(&client, &channel).await;
+    Spawn::call(
+        &*client,
+        SpawnRequest {
+            cmd: Some(vec![mock, "sleep".into(), "60000".into()]),
+            cols: TEST_COLS,
+            rows: TEST_ROWS,
+            cwd: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Without force: refused, and the channel must stay fully operational.
+    let err = KillChannel::call(&*client, (channel.clone(), false))
+        .await
+        .expect_err("kill without force while participants are attached must fail");
+    assert!(
+        err.to_string().contains("participant"),
+        "refusal message should mention participants, got: {err}"
+    );
+
+    // Still reachable after the refusal, session still alive.
+    let resp = list_channels(&client).await;
+    let ch = resp
+        .channels
+        .iter()
+        .find(|c| c.name == channel)
+        .expect("channel still served after refusal");
+    assert!(
+        ch.session.as_ref().is_some_and(|s| !s.exited),
+        "session must survive a refused kill"
+    );
+
+    // With force: the channel is killed.
+    KillChannel::call(&*client, (channel.clone(), true))
+        .await
+        .unwrap();
+    guard.shutdown().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn kill_channel_without_force_succeeds_when_no_participants() {
+    let guard = spawn_gateway().await;
+    let client = connect_client_with_retry(guard.socket()).await;
+    // A non-existent channel has no participants: kill succeeds without force.
+    KillChannel::call(&*client, ("test/nonexistent".to_string(), false))
+        .await
+        .unwrap();
+    guard.shutdown().await;
 }
