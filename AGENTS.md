@@ -139,7 +139,7 @@ Declarative `view!` Macro
     forward lifecycle calls via `impl_view_component!` (`Ty`, or
     `Ty, height = <expr>` when `view(&mut self)` can't be called from `&self`
     `desired_height`).
-  - Containers (`VerticalStack`, `HStack`, `Grid`, `Center`) recompute child rects
+  - Containers (`VStack`, `HStack`, `Grid`, `Center`) recompute child rects
     from `ctx.screen_area()` on every call (never cache), rebind each child's
     context with `with_screen_area` in BOTH `render` and `handle_events`, route
     mouse events spatially, and route `Event::Key` to `ctx.keyboard_focus_id()` —

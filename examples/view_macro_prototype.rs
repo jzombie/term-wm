@@ -2,7 +2,7 @@
 //!
 //! `MyWindow` hosts a real terminal: the stateful `ScrollViewComponent` is held
 //! by the app and injected into the per-frame view by `{ &mut self.terminal }`.
-//! Layout tags (`VerticalStack`, `Grid`, `Center`, `Box`) and stateless leaves
+//! Layout tags (`VStack`, `Grid`, `Center`, `Box`) and stateless leaves
 //! (`Label`, `Button`) are constructed declaratively. The terminal is wired
 //! into the live event loop via `TermWmApp::run_with_setup`.
 //!
@@ -20,7 +20,7 @@ struct MyWindow {
 impl MyWindow {
     fn view(&mut self) -> impl Component<TermWmAction> + '_ {
         view! {
-            <VerticalStack gap=1>
+            <VStack gap=1>
                 <Label text="term-wm view! macro prototype" />
                 <Center width=80 height=12>
                     <Box>
@@ -33,7 +33,7 @@ impl MyWindow {
                     </Box>
                 </Center>
                 <Button label=" Quit " action={TermWmAction::Quit} />
-            </VerticalStack>
+            </VStack>
         }
     }
 }

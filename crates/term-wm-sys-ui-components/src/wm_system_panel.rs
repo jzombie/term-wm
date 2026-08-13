@@ -51,7 +51,7 @@ impl PanelContentView {
 
     fn view(&self) -> impl Component<TermWmAction> + '_ {
         view! {
-            <VerticalStack gap=1>
+            <VStack gap=1>
                 { self.key_monitor.clone() }
 
                 <Box title="Notifications" padding=1>
@@ -67,7 +67,7 @@ impl PanelContentView {
                         <Button label=" Trigger Panic " action={TermWmAction::Callback(|| panic!("Manual panic from system panel"))} />
                     </Grid>
                 </Box>
-            </VerticalStack>
+            </VStack>
         }
     }
 }

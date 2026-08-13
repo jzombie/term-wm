@@ -40,7 +40,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> 
     fn desired_height(&self, _width: u16) -> u16 {
         // Stretch (0): a Center must fill its allocated region so it can
         // *visibly* center its width×height content within it. The parent must
-        // render trailing siblings after a stretch child (VerticalStack does).
+        // render trailing siblings after a stretch child (VStack does).
         0
     }
 
