@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.26-alpha] - 2026-08-15
+
+### Changed
+
+- **Dependency bump:** `thiserror` updated 2.0.19 → 2.0.20 (Dependabot, #254).
+
+### Fixed
+
+- **Terminal mouse text-selection alignment in Monocle mode (#255):** in monocle the focused window is rendered culled to the full managed area (`apply_monocle_culling`), but mouse dispatch was localizing coordinates against the window's un-culled tiling rect from the region map. For a window created while monocle was already active — stacked at the bottom/right of the tiling tree and focused — text selection was offset vertically (and/or horizontally) from the cursor; the Help overlay was unaffected because overlays dispatch against the exact hitbox rect. Window geometry is now resolved through a single monocle-override predicate composed with each accessor (`full_region_for_key`, `visible_region_for_key`, `region_for_key`): in monocle the focused window reports the full `managed_area` (matching the draw-plan culling), which also fixes PTY mouse-forwarding coordinates and hit-testing for a focused floating window. The override is derived at query time, so focus switches apply immediately without a layout re-registration, and non-monocle behavior is unchanged.
+
 ## [0.9.25-alpha] - 2026-08-13
 
 ### Added

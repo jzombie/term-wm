@@ -1,9 +1,10 @@
-//! Probe: can an argtuner-style TUI use the new `view!` types?
-//!
-//! Mirrors `rust-argtuner/src/cli/tui/mod.rs`: a `TermWmApp<AppComponent>`
-//! where `AppComponent` is a delegate enum (via `impl_component_delegate!`)
-//! holding one concrete component per window, opened as `Custom` windows. This
-//! exercises the two realistic integration styles:
+//! Probe: exercise the `impl_view_component!` integration styles in the
+//! window-host shape used by `rust-argtuner/src/cli/tui/mod.rs`: a
+//! `TermWmApp<AppComponent>` where `AppComponent` is a delegate enum (via
+//! `impl_component_delegate!`) holding one window struct per pane, opened as
+//! `Custom` windows. argtuner's own panes return their stateful child directly
+//! from `view()` and rely on the `child:` delegation form; this probe also
+//! covers the all-owned `&self` style. The two styles:
 //!
 //! 1. **All-owned `&self` view** (`DashboardWindow`) — `view(&self)` builds a
 //!    `<Box>`/`<Grid>` tree (stateless children), so `desired_height(&self)`

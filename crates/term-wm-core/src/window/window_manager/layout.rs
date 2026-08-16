@@ -111,26 +111,35 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         Some(Event::Mouse(mouse.to_clamped_origin(content_x, content_y)))
     }
 
+    /// Monocle renders the focused window culled to the full managed area
+    /// (CoreEngine::project_draw_plan -> apply_monocle_culling). Guarded so a
+    /// stale/unknown focus key can't inherit full-screen bounds.
+    #[inline]
+    fn monocle_region_override(&self, key: WindowKey) -> Option<Rect> {
+        (self.is_monocle() && key == self.focused_window() && self.windows.contains_key(key))
+            .then_some(self.managed_area)
+    }
+
     pub fn full_region_for_key(&self, key: WindowKey) -> Rect {
-        self.regions.get(key).unwrap_or_default()
+        self.monocle_region_override(key)
+            .unwrap_or_else(|| self.regions.get(key).unwrap_or_default())
     }
 
     pub(super) fn region_for_key(&self, key: WindowKey) -> Rect {
-        let rect = self.regions.get(key).unwrap_or_default();
-        if self.config.chrome_enabled {
-            let area = if self.floating_resize_offscreen {
-                rect
-            } else {
-                rect.visible_portion(self.managed_area)
-            };
-            crate::chrome::content_rect(
-                area,
-                self.window_borders_enabled(key),
-                self.window_header_enabled(key),
-            )
-        } else {
-            rect
+        let rect = self.full_region_for_key(key);
+        if !self.config.chrome_enabled {
+            return rect;
         }
+        let area = if self.floating_resize_offscreen {
+            rect
+        } else {
+            rect.visible_portion(self.managed_area)
+        };
+        crate::chrome::content_rect(
+            area,
+            self.window_borders_enabled(key),
+            self.window_header_enabled(key),
+        )
     }
 
     pub fn set_regions_from_layout(&mut self, layout: &LayoutNode<WindowKey>, area: Rect) {
@@ -710,11 +719,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub(super) fn visible_region_for_key(&self, key: WindowKey) -> Rect {
-        if let Some(spec) = self.floating_rect(key) {
-            self.visible_rect_from_spec(spec)
-        } else {
-            self.full_region_for_key(key)
-        }
+        self.monocle_region_override(key)
+            .or_else(|| {
+                self.floating_rect(key)
+                    .map(|spec| self.visible_rect_from_spec(spec))
+            })
+            .unwrap_or_else(|| self.regions.get(key).unwrap_or_default())
     }
 
     pub(super) fn clamp_floating_to_bounds(&mut self) {
