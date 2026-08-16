@@ -2,13 +2,13 @@
 
 extern crate self as term_wm;
 
+pub use term_wm_core::actions::EventResult;
+pub use term_wm_core::component_context::ComponentContext;
+pub use term_wm_core::events::Event;
 pub use term_wm_core::*;
 pub use term_wm_render::RenderBackend;
 pub use term_wm_ui_components::*;
 pub use term_wm_view::view;
-pub use term_wm_core::actions::EventResult;
-pub use term_wm_core::component_context::ComponentContext;
-pub use term_wm_core::events::Event;
 pub mod components;
 pub mod logging;
 pub mod prelude;
