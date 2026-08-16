@@ -1187,6 +1187,81 @@ mod drag_snap_pipeline {
     }
 
     #[test]
+    fn tiled_window_with_void_above_below_has_resize_handles() {
+        // Issue #258: a tiled window adjacent to empty Void space must expose
+        // a resize handle through the full render pipeline, and dragging it
+        // must resize the window.
+        let config = WmConfig {
+            chrome_enabled: false,
+            ..Default::default()
+        };
+        let mut wm = WindowManager::<NoopComponent>::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let k0 = wm.create_window(NoopComponent);
+        let split = LayoutNode::Split {
+            direction: Direction::Vertical,
+            children: vec![LayoutNode::Leaf(k0), LayoutNode::Void(77)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+
+        let mut engine = CoreEngine::new();
+        let mut renderer = DrawPlanRenderer::new();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // The window/void boundary must expose exactly one resize handle.
+        let handles = wm.tiling_handles();
+        assert_eq!(
+            handles.len(),
+            1,
+            "leaf+void split must expose a resize handle"
+        );
+
+        let gap = &handles[0].rect;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
+        let height_before = wm.region(k0).height;
+
+        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), gap_col, gap_row);
+        assert!(
+            wm.dispatch_mouse(&down).is_consumed(),
+            "Press on void-adjacent handle must be consumed"
+        );
+        let drag = make_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            gap_col,
+            gap_row + 3,
+        );
+        assert!(
+            wm.dispatch_mouse(&drag).is_consumed(),
+            "Drag on void-adjacent handle must be consumed"
+        );
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            gap_col,
+            gap_row + 3,
+        );
+        wm.dispatch_mouse(&up);
+
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let height_after = wm.region(k0).height;
+        assert!(
+            height_after > height_before,
+            "window must grow when void-adjacent handle is dragged down: {} -> {}",
+            height_before,
+            height_after
+        );
+    }
+
+    #[test]
     fn close_all_windows_then_tile_new_does_not_phantom() {
         // Regression: closing all windows left a Void in the tree.
         // Opening a new window via tile_window would call split_root on Void,

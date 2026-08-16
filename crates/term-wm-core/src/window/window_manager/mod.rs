@@ -7073,6 +7073,217 @@ mod tests {
     }
 
     #[test]
+    fn split_handle_present_next_to_void() {
+        // Issue #258: a tiled window snapped against empty Void space must
+        // still expose a resize handle along the boundary.
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 1);
+        let split = LayoutNode::Split {
+            direction: Direction::Vertical,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Void(99)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let handles = wm.tiling_handles();
+        assert_eq!(
+            handles.len(),
+            1,
+            "leaf+void split must expose a resize handle"
+        );
+        let gap = handles[0].rect;
+        assert_eq!(
+            handles[0].direction,
+            Direction::Vertical,
+            "window/void boundary must be a vertical split"
+        );
+        // Window occupies the top half; gap sits at the boundary row.
+        assert_eq!(gap.y, 11, "gap must sit at the window/void boundary");
+        assert_eq!(gap.width, 80);
+        assert_eq!(gap.height, 1);
+    }
+
+    #[test]
+    fn split_handle_drag_resizes_window_against_void() {
+        // Dragging the void-adjacent handle must resize the tiled window,
+        // growing/shrinking the empty void space.
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 1);
+        let split = LayoutNode::Split {
+            direction: Direction::Vertical,
+            children: vec![LayoutNode::Leaf(keys[0]), LayoutNode::Void(99)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        use crate::chrome::ChromeTarget;
+        use crate::hitbox_registry::ComponentOwner;
+        let handles = wm.tiling_handles().to_vec();
+        for handle in &handles {
+            wm.hitbox_registry.register(
+                handle.hitbox_id,
+                ComponentOwner::Chrome(ChromeTarget::SplitHandle(handle.hitbox_id)),
+                handle.rect,
+            );
+        }
+        let gap = handles[0].rect;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
+
+        use crate::events::{Event, MouseEvent, MouseEventKind};
+        let down = crate::events::core_event_to_wm(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Press(MouseButton::Left),
+            column: gap_col,
+            row: gap_row,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+        wm.dispatch_mouse(&down);
+        assert!(
+            matches!(wm.mouse_capture, Some(MouseCaptureState::LayoutHandle)),
+            "Down on void-adjacent handle must set LayoutHandle capture"
+        );
+
+        let height_before = wm.region(keys[0]).height;
+        let drag = crate::events::core_event_to_wm(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: gap_col,
+            row: gap_row + 3,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+        wm.dispatch_mouse(&drag);
+        let up = crate::events::core_event_to_wm(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Release(MouseButton::Left),
+            column: gap_col,
+            row: gap_row + 3,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap();
+        wm.dispatch_mouse(&up);
+
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let height_after = wm.region(keys[0]).height;
+        assert!(
+            height_after > height_before,
+            "window must grow when void-adjacent handle is dragged down: {} -> {}",
+            height_before,
+            height_after
+        );
+    }
+
+    #[test]
+    fn split_handle_present_for_bottom_quadrant() {
+        // Issue #258 Scenario 1: a window tiled into the bottom-left quadrant
+        // must expose a top resize handle (the gap between the Void above it
+        // and the window itself).
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let keys = make_keys(&mut wm, 2);
+        let bottom_left = LayoutNode::Split {
+            direction: Direction::Vertical,
+            children: vec![LayoutNode::Void(98), LayoutNode::Leaf(keys[0])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![bottom_left, LayoutNode::Leaf(keys[1])],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        let handles = wm.tiling_handles();
+        assert_eq!(handles.len(), 2, "two splits must expose two handles");
+        let top_handle = handles
+            .iter()
+            .find(|h| h.direction == Direction::Vertical && h.rect.x < (80 / 2))
+            .expect("bottom-left window must have a top resize handle");
+        assert_eq!(
+            top_handle.rect.y, 11,
+            "top resize handle must sit at the void/window boundary"
+        );
+        // The window itself occupies the bottom-left quadrant.
+        let r = wm.region(keys[0]);
+        assert!(r.y > 11, "window must be below the void boundary");
+        assert!(r.x < (80 / 2), "window must be in the left column");
+    }
+
+    #[test]
+    fn split_handle_suppressed_between_dual_voids() {
+        // A split between two empty Void regions must never expose a phantom
+        // resize handle.
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::app_context::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let split = LayoutNode::Split {
+            direction: Direction::Horizontal,
+            children: vec![LayoutNode::Void(1), LayoutNode::Void(2)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        });
+        assert!(
+            wm.tiling_handles().is_empty(),
+            "no handle may exist between two empty voids"
+        );
+    }
+
+    #[test]
     fn layout_handle_down_sets_capture_state() {
         use crate::events::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let (mut wm, _keys, gap_col, gap_row) = setup_tiling_with_gap();
