@@ -6,10 +6,6 @@ pub use term_wm_core::*;
 pub use term_wm_render::RenderBackend;
 pub use term_wm_ui_components::*;
 pub use term_wm_view::view;
-// Root-level re-exports of the core types the generated `view!` code and
-// consumer apps reference (the root `components` module is app-specific and
-// shadows `term_wm_core::components`, so these are hoisted to the root). The
-// remainder are re-exported by promoting the existing `use` imports below.
 pub use term_wm_core::actions::EventResult;
 pub use term_wm_core::component_context::ComponentContext;
 pub use term_wm_core::events::Event;
@@ -61,6 +57,44 @@ pub fn render_app<
         height: ratatui_backend.area.height,
     };
 
+    let (draw_plan, all_titles, num_windows, total) = build_frame_state(wm, engine, area);
+    register_chrome_hitboxes(wm);
+    render_window_regions(backend, wm, renderer, draw_plan, &all_titles, total);
+    render_empty_state(backend, wm, area);
+    render_panels(backend, wm);
+    update_bottom_content_flag(backend, wm);
+    render_fab(backend, wm, area);
+    render_tiling_chrome(backend, wm, area);
+    render_notification_toasts(backend, renderer, draw_plan);
+    render_overlay_drop_shadows(backend, wm, area, num_windows, total);
+    render_overlays(backend, wm);
+    render_notification_hitboxes(backend, wm, draw_plan);
+
+    // Cursor overlay — MUST be last (highest Z-order) so it paints over
+    // all previously rendered content including overlays and chrome.
+    if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
+        render_cursor_overlay(&mut rb.buffer, wm, &wm.config().theme);
+    }
+}
+
+// ── render_app section helpers (private, #[inline]) ──────────────
+
+#[inline]
+fn build_frame_state<'a, C, L, O>(
+    wm: &mut WindowManager<C, L, O>,
+    engine: &'a mut term_wm_core::engine::CoreEngine,
+    area: term_wm_layout_engine::LayoutRect,
+) -> (
+    &'a term_wm_core::draw_plan::DrawPlan,
+    std::collections::BTreeMap<WindowKey, String>,
+    usize,
+    usize,
+)
+where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Initialize monocle state on every render pass (not just resize).
     // This ensures the very first frame evaluates terminal width against
     // the monocle threshold without waiting for a resize event.
@@ -81,6 +115,16 @@ pub fn render_app<
     let num_windows = draw_plan.len();
     let total = num_windows + wm.overlays().len();
 
+    (draw_plan, all_titles, num_windows, total)
+}
+
+#[inline]
+fn register_chrome_hitboxes<C, L, O>(wm: &mut WindowManager<C, L, O>)
+where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Register panel hitboxes BEFORE the window loop (lowest Z-order)
     let top_panel_owner = wm
         .semantic_registry
@@ -98,13 +142,26 @@ pub fn render_app<
     if !wm.is_monocle() {
         wm.register_layout_handle_hitboxes();
     }
+}
 
+#[inline]
+fn render_window_regions<C, L, O>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+    renderer: &mut DrawPlanRenderer,
+    draw_plan: &term_wm_core::draw_plan::DrawPlan,
+    all_titles: &std::collections::BTreeMap<WindowKey, String>,
+    total: usize,
+) where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Take the renderer's persistent scratch buffer — resized per window,
     // returned to the renderer after the loop.  No Buffer::empty allocations
     // in steady state.
     let mut scratch_buf = renderer.take_scratch();
     let plan_regions = draw_plan.regions();
-    let num_windows = plan_regions.len();
     for (i, region) in plan_regions.iter().enumerate() {
         // Skip hidden regions (used for monocle mode culling)
         if region.hidden {
@@ -139,7 +196,7 @@ pub fn render_app<
                 };
                 let focused = wm.focused_window() == *key;
                 let draw_shadow = floating && wm.config().shadow_enabled;
-                let z_depth = WindowManager::<C>::compute_z_depth(i, total);
+                let z_depth = WindowManager::<C, L, O>::compute_z_depth(i, total);
                 let surface = WindowSurface {
                     full,
                     inner,
@@ -216,7 +273,18 @@ pub fn render_app<
         }
     }
     renderer.put_scratch(scratch_buf);
+}
 
+#[inline]
+fn render_empty_state<C, L, O>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+    area: term_wm_layout_engine::LayoutRect,
+) where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Render empty state if no mapped windows — clickable link opens command palette
     if wm.mapped_windows().is_empty() {
         use ratatui::style::{Modifier, Style};
@@ -265,10 +333,17 @@ pub fn render_app<
             );
         }
     }
+}
 
-    // Render panels AFTER windows
-    render_panels(backend, wm);
-
+#[inline]
+fn update_bottom_content_flag<C, L, O>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+) where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Detect whether the app draws content under the FAB's footprint on its
     // bottom row, so the layout pass can reserve the FAB's row next frame in
     // cramped monocle. Runs before the FAB draws (no self-trigger; the buffer is
@@ -308,7 +383,18 @@ pub fn render_app<
     } else {
         wm.set_bottom_content_flag(false);
     }
+}
 
+#[inline]
+fn render_fab<C, L, O>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+    area: term_wm_layout_engine::LayoutRect,
+) where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Render FAB only in cramped monocle mode.
     // Hidden when command palette is open; the bottom panel overlay fills the row.
     let fab_layer_id = wm
@@ -326,7 +412,18 @@ pub fn render_app<
         fab.render(backend, area, &fab_ctx, &mut local_hb);
         wm.hitbox_registry_mut().merge(local_hb);
     }
+}
 
+#[inline]
+fn render_tiling_chrome<C, L, O>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+    area: term_wm_layout_engine::LayoutRect,
+) where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Render tiling split handles
     {
         use term_wm_console::RatatuiBackend;
@@ -518,43 +615,67 @@ pub fn render_app<
             }
         }
     }
+}
 
+#[inline]
+fn render_notification_toasts(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    renderer: &DrawPlanRenderer,
+    draw_plan: &term_wm_core::draw_plan::DrawPlan,
+) {
     // Render notification toasts (after tiling handles, before overlays)
-    {
-        for region in draw_plan.regions() {
-            if let term_wm_core::draw_plan::RegionType::Notification(msg) = &region.region_type {
-                let area =
-                    term_wm_ui_components::helpers::layout_rect_to_clipped_rect(region.bounds);
-                renderer.render_notification(backend, area, msg);
-            }
+    for region in draw_plan.regions() {
+        if let term_wm_core::draw_plan::RegionType::Notification(msg) = &region.region_type {
+            let area = term_wm_ui_components::helpers::layout_rect_to_clipped_rect(region.bounds);
+            renderer.render_notification(backend, area, msg);
         }
     }
+}
 
+#[inline]
+fn render_overlay_drop_shadows<C, L, O>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &WindowManager<C, L, O>,
+    area: term_wm_layout_engine::LayoutRect,
+    num_windows: usize,
+    total: usize,
+) where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Render overlay drop shadows before overlays themselves
-    {
-        use term_wm_console::RatatuiBackend;
-        if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
-            let theme = wm.config().theme;
-            let mut tmp_mask = std::mem::take(&mut rb.mask_buffer);
-            let buf_len = rb.buffer.content.len();
-            if tmp_mask.len() < buf_len {
-                tmp_mask.resize(buf_len, 0);
-            }
-            for (rect, z) in overlay_shadow_data(wm, area, num_windows, total) {
-                render_drop_shadow(
-                    &mut rb.buffer,
-                    &mut tmp_mask[..buf_len],
-                    rect,
-                    1.0 - z,
-                    &theme,
-                );
-            }
-            rb.mask_buffer = tmp_mask;
+    use term_wm_console::RatatuiBackend;
+    if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
+        let theme = wm.config().theme;
+        let mut tmp_mask = std::mem::take(&mut rb.mask_buffer);
+        let buf_len = rb.buffer.content.len();
+        if tmp_mask.len() < buf_len {
+            tmp_mask.resize(buf_len, 0);
         }
+        for (rect, z) in overlay_shadow_data(wm, area, num_windows, total) {
+            render_drop_shadow(
+                &mut rb.buffer,
+                &mut tmp_mask[..buf_len],
+                rect,
+                1.0 - z,
+                &theme,
+            );
+        }
+        rb.mask_buffer = tmp_mask;
     }
-    // Render overlays (command menu, help, exit confirm)
-    render_overlays(backend, wm);
+}
 
+#[inline]
+fn render_notification_hitboxes<C, L, O>(
+    backend: &mut dyn term_wm_render::RenderBackend,
+    wm: &mut WindowManager<C, L, O>,
+    draw_plan: &term_wm_core::draw_plan::DrawPlan,
+) where
+    C: Component<TermWmAction> + 'static,
+    L: WmComponent,
+    O: Overlay<TermWmAction>,
+{
     // Register notification hitboxes — swallows mouse events over toast area
     let notif_layer_id = wm
         .semantic_registry
@@ -573,11 +694,5 @@ pub fn render_app<
             }
         }
         wm.hitbox_registry_mut().merge(local_hb);
-    }
-
-    // Cursor overlay — MUST be last (highest Z-order) so it paints over
-    // all previously rendered content including overlays and chrome.
-    if let Some(rb) = backend.as_any_mut().downcast_mut::<RatatuiBackend>() {
-        render_cursor_overlay(&mut rb.buffer, wm, &wm.config().theme);
     }
 }
