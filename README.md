@@ -167,7 +167,7 @@ To force native text selection inside an app that captured the mouse, hold **Shi
 
 ## Window Snapping with Preview
 
-Floating windows support mouse-driven snapping with a live **ghost preview**. While dragging a window by its title bar, hovering over a snap target shows a dashed outline with a shaded fill and a label describing the pending action.
+Floating windows support mouse-driven snapping with a live **ghost preview**. While dragging a window by its title bar, hovering over a snap target shows a dashed outline and a label describing the pending action.
 
 * **Snap targets:** screen edges (`snap to edge`), screen corners (`snap to corner`), and the top edge (`maximize`).
 * **Auto-snap countdown:** if the pointer leaves the screen area while a snap target is active, the window snaps automatically after a short countdown (default **2 seconds**, configurable via `drag_snap_timeout`). Releasing the button over the target also snaps immediately.

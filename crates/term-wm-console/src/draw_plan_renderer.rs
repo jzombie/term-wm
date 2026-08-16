@@ -1804,7 +1804,7 @@ pub fn render_resize_outline(
     }
 }
 
-/// Render a ghost preview rectangle with dashed borders and a light shade fill.
+/// Render a ghost preview rectangle with dashed borders (outline only).
 /// Used during drag operations to show where a window will land when released.
 pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &Theme) {
     use ratatui::style::Modifier;
@@ -1865,22 +1865,6 @@ pub fn render_ghost_preview(buf: &mut Buffer, preview_rect: LayoutRect, theme: &
                 cell.set_symbol("│");
                 cell.set_fg(fg_color);
                 cell.modifier.insert(Modifier::DIM);
-            }
-        }
-    }
-
-    // Interior shade fill — LICM-hoisted BCE row-slice iterator
-    if clip.width > 2 && clip.height > 2 {
-        let preview_bg = theme.accent.to_ratatui();
-        let buf_w = buf.area.width as usize;
-        let rel_x_start = (left + 1) as usize - buf.area.x as usize;
-        let rel_x_end = right as usize - buf.area.x as usize;
-        for y in (top + 1) as usize..bottom as usize {
-            let rel_y = y - buf.area.y as usize;
-            let row_start = rel_y * buf_w;
-            let row_slice = &mut buf.content[row_start + rel_x_start..row_start + rel_x_end];
-            for cell in row_slice.iter_mut() {
-                cell.set_bg(preview_bg);
             }
         }
     }
