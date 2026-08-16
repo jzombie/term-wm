@@ -764,7 +764,11 @@ mod drag_snap_pipeline {
         assert_eq!(snap_rect.x, AREA.x, "top-half ghost x");
         assert_eq!(snap_rect.y, AREA.y, "top-half ghost y");
         assert_eq!(snap_rect.width, AREA.width, "top-half ghost width");
-        assert_eq!(snap_rect.height, AREA.height / 2 - 1, "top-half ghost height");
+        assert_eq!(
+            snap_rect.height,
+            AREA.height / 2 - 1,
+            "top-half ghost height"
+        );
 
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), mid_x, 0);
         wm.dispatch_mouse(&up);

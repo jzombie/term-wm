@@ -8479,18 +8479,23 @@ mod tests {
 
         // Window frame is at row 0 (area.y), cursor on the top border row → snap.
         wm.update_snap_preview(key, 40, 0, &mut detach);
-        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Edge(InsertPosition::Top)));
+        assert_eq!(
+            wm.snap_preview,
+            Some(SnapPreviewState::Edge(InsertPosition::Top))
+        );
 
         // Same cursor row but window NOT at top (floating rect moved down) → no snap.
         let (mut wm2, key2) = wm_at_top_for_snap();
         wm2.set_floating_rect(
             key2,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: 20,
-                y: 5,
-                width: 30,
-                height: 12,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 20,
+                    y: 5,
+                    width: 30,
+                    height: 12,
+                },
+            )),
         );
         wm2.update_snap_preview(key2, 40, 0, &mut detach);
         assert_no_snap(&wm2);
@@ -8508,12 +8513,14 @@ mod tests {
         };
         wm.set_floating_rect(
             key,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: 20,
-                y: 0,
-                width: 30,
-                height: 12,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 20,
+                    y: 0,
+                    width: 30,
+                    height: 12,
+                },
+            )),
         );
         let mut detach = None;
 
@@ -8531,12 +8538,14 @@ mod tests {
         };
         wm2.set_floating_rect(
             key2,
-            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
-                x: 20,
-                y: 5,
-                width: 30,
-                height: 12,
-            })),
+            Some(crate::window::FloatRectSpec::Absolute(
+                crate::window::FloatRect {
+                    x: 20,
+                    y: 5,
+                    width: 30,
+                    height: 12,
+                },
+            )),
         );
         wm2.update_snap_preview(key2, 40, 0, &mut detach);
         assert_no_snap(&wm2);
@@ -8550,7 +8559,10 @@ mod tests {
         // area.y == 0 (panel hidden): row 0 is the top border → top-half snap,
         // never maximize (mouse_y < 0 is impossible for u16).
         wm.update_snap_preview(key, 40, 0, &mut detach);
-        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Edge(InsertPosition::Top)));
+        assert_eq!(
+            wm.snap_preview,
+            Some(SnapPreviewState::Edge(InsertPosition::Top))
+        );
     }
 
     #[test]
@@ -8566,7 +8578,10 @@ mod tests {
         // Near the left edge the side edge-snap still fires (mid-height, clear
         // of the top corner threshold).
         wm.update_snap_preview(key, 1, 12, &mut detach);
-        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Edge(InsertPosition::Left)));
+        assert_eq!(
+            wm.snap_preview,
+            Some(SnapPreviewState::Edge(InsertPosition::Left))
+        );
     }
 
     #[test]
@@ -8576,7 +8591,10 @@ mod tests {
 
         // Corner detection is cursor-based and unaffected by the window rect gate.
         wm.update_snap_preview(key, 0, 0, &mut detach);
-        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Corner(InsertPosition::TopLeft)));
+        assert_eq!(
+            wm.snap_preview,
+            Some(SnapPreviewState::Corner(InsertPosition::TopLeft))
+        );
     }
 
     #[test]
@@ -8608,7 +8626,10 @@ mod tests {
                 height: 12,
             },
         );
-        assert!(wm.floating_rect(key).is_none(), "precondition: not floating");
+        assert!(
+            wm.floating_rect(key).is_none(),
+            "precondition: not floating"
+        );
 
         let mut detach = None;
         wm.update_snap_preview(key, 40, 0, &mut detach);
