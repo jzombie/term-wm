@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- **False top-half snap / maximize previews while dragging a window:** top drag gestures were decided purely from the cursor position — `mouse_y == 0` maximized and `detect_edge_snap` returned `Top` whenever the cursor was within 3 cells of the top edge — so dragging a top-anchored window sideways instantly offered a top snap, and a mid-screen window snapped when the cursor merely grazed the top edge. The top-half snap and drag-maximize previews now fire only when the dragged window's **own frame** has reached the top of the workspace (`floating_rect.y <= managed_area.y`, with the full frame rect as the fallback when no floating rect exists yet) **and** the cursor is in the top drag-handle space: the cursor overshooting into the header/panel (`mouse_y < area.y`, which requires `area.y >= 1`) maximizes (deferred to release), while the cursor on the top workspace border row (`mouse_y == area.y`) offers the top-half snap. With the panel hidden (`area.y == 0`) the drag-to-maximize path is unreachable — the top border row is a top-half snap, and maximize remains available via title-bar double-click or keyboard. Side/bottom edge snaps and corner snaps are unchanged.
+
 ## [0.9.26-alpha] - 2026-08-15
 
 ### Changed
