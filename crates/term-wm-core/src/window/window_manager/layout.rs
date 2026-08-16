@@ -484,6 +484,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 self.regions.set(*key, *rect);
                 active_keys.push(*key);
             }
+            // A side is eligible when it is empty Void space (no leaves) or a
+            // subtree containing at least one tiled window. Sides whose only
+            // windows are floating are resized via floating chrome, never the
+            // tiling split handles.
+            let side_ok = |node: &LayoutNode<WindowKey>| {
+                !node.subtree_any(|_| true) || node.subtree_any(|key| !self.is_window_floating(key))
+            };
+            let has_tiled = |node: &LayoutNode<WindowKey>| {
+                node.subtree_any(|key| !self.is_window_floating(key))
+            };
             let filtered_handles: Vec<SplitHandle> = handles
                 .into_iter()
                 .filter(|handle| {
@@ -494,10 +504,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     };
                     let left = children.get(handle.index);
                     let right = children.get(handle.index + 1);
-                    left.is_some_and(|node| node.subtree_any(|key| !self.is_window_floating(key)))
-                        && right.is_some_and(|node| {
-                            node.subtree_any(|key| !self.is_window_floating(key))
-                        })
+                    // Both sides must be eligible, and at least one side must
+                    // hold a real tiled window — a [Void, Void] split must
+                    // never expose a phantom handle between two empty regions.
+                    left.is_some_and(side_ok)
+                        && right.is_some_and(side_ok)
+                        && (left.is_some_and(has_tiled) || right.is_some_and(has_tiled))
                 })
                 .collect();
             self.handles.extend(filtered_handles);
