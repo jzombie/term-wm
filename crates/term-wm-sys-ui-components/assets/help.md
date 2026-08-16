@@ -87,7 +87,7 @@ Notes:
 
 ## Window Snapping & Drag Preview
 
-While dragging a floating window by its title bar, hovering over a snap target shows a live **ghost preview** — a dashed outline with a shaded fill and a label describing the pending action.
+While dragging a floating window by its title bar, hovering over a snap target shows a live **ghost preview** — a dashed outline and a label describing the pending action.
 
 * **Snap targets:** screen edges (`snap to edge`), screen corners (`snap to corner`), and the top edge (`maximize`).
 * **Auto-snap countdown:** if the pointer leaves the screen area while a snap target is active, the window snaps automatically after a short countdown (default 2 seconds). Releasing the button over the target also snaps.
