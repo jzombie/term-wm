@@ -15,7 +15,7 @@ use term_wm_core::layout::rect_contains;
 use term_wm_core::layout::tiling::SplitHandle;
 use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
-use term_wm_core::theme::{Color, Theme};
+use term_wm_core::theme::{BgColor, Color, FgColor, Theme};
 use term_wm_core::utils::truncate_with_ellipsis;
 use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -1900,13 +1900,13 @@ impl ColorConvert for Color {
     }
 }
 
-/// Apply background-color inversion (`Modifier::REVERSED`) to the cell under
+/// Paint a solid `theme.cursor_bg`/`theme.cursor_fg` block over the cell under
 /// the mouse cursor.  Must be called as the **absolute last** render step
 /// (highest Z-order) so it paints over all previously rendered content.
 ///
-/// Uses style-modifier overrides only — no character replacement — so the
-/// underlying text is fully preserved.  The active state (drag/resize) also
-/// inverts an adjacent cell as a visual "badge", clamped to buffer boundaries.
+/// Overrides only the cell's foreground/background colors — no character or
+/// modifier replacement — so the underlying glyph and its formatting
+/// (bold/dim/italic/etc.) are fully preserved.
 pub fn render_cursor_overlay<
     C: Component<TermWmAction>,
     L: WmComponent,
@@ -1914,10 +1914,8 @@ pub fn render_cursor_overlay<
 >(
     buf: &mut Buffer,
     wm: &WindowManager<C, L, O>,
-    _theme: &Theme,
+    theme: &Theme,
 ) {
-    use ratatui::style::Modifier;
-
     // Don't render when mouse capture is disabled — the last hover position
     // would be stale and the OS pointer already provides visual feedback.
     if !wm.mouse_capture_enabled() {
@@ -1932,10 +1930,12 @@ pub fn render_cursor_overlay<
         return;
     }
 
-    // Apply REVERSED to cell under cursor (preserves text).
+    // Paint the cursor block colors over the cell under the cursor — mutates
+    // fg/bg only, preserving the cell's symbol and modifier flags.
     let buf_w = buf.area.width as usize;
     let cell = &mut buf.content[hy as usize * buf_w + hx as usize];
-    cell.set_style(cell.style().add_modifier(Modifier::REVERSED));
+    cell.set_fg(theme.fg(FgColor::CursorFg).to_ratatui());
+    cell.set_bg(theme.bg(BgColor::CursorBg).to_ratatui());
 }
 
 #[cfg(test)]
@@ -2289,15 +2289,30 @@ mod tests {
     }
 
     #[test]
-    fn cursor_overlay_hover_applies_reversed() {
+    fn cursor_overlay_hover_applies_cursor_colors() {
         let mut buf = make_buf(10, 10);
         let mut wm = make_wm();
         wm.set_hover_pos(3, 4);
+        // Prime an existing formatting modifier to verify it survives the overlay.
+        buf.cell_mut((3, 4))
+            .unwrap()
+            .modifier
+            .insert(Modifier::BOLD);
         render_cursor_overlay(&mut buf, &wm, &NOIR);
         let cell = buf.cell((3, 4)).unwrap();
+        assert_eq!(
+            cell.style().fg,
+            Some(ratatui::style::Color::Rgb(255, 255, 255)),
+            "cell at hover position should use the theme cursor fg"
+        );
+        assert_eq!(
+            cell.style().bg,
+            Some(ratatui::style::Color::Rgb(0, 90, 200)),
+            "cell at hover position should use the theme cursor bg"
+        );
         assert!(
-            cell.modifier.contains(Modifier::REVERSED),
-            "cell at hover position should have REVERSED modifier"
+            cell.modifier.contains(Modifier::BOLD),
+            "existing modifiers must be preserved by the overlay"
         );
         // Symbol should be preserved
         assert_eq!(cell.symbol(), "·", "symbol must not be overwritten");
@@ -2319,14 +2334,18 @@ mod tests {
         let mut wm = make_wm();
         wm.set_hover_pos(0, 0);
         render_cursor_overlay(&mut buf, &wm, &NOIR);
-        assert!(
-            buf.cell((0, 0))
-                .unwrap()
-                .modifier
-                .contains(Modifier::REVERSED),
-            "single cell should be REVERSED"
+        let cell = buf.cell((0, 0)).unwrap();
+        assert_eq!(
+            cell.style().fg,
+            Some(ratatui::style::Color::Rgb(255, 255, 255)),
+            "single cell should use the theme cursor fg"
         );
-        assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "·");
+        assert_eq!(
+            cell.style().bg,
+            Some(ratatui::style::Color::Rgb(0, 90, 200)),
+            "single cell should use the theme cursor bg"
+        );
+        assert_eq!(cell.symbol(), "·");
     }
 
     // ── Window chrome snapshot tests ────────────────────────────────────
