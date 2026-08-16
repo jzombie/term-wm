@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 ### Changed
 
 - **Mouse cursor color configuration (#253):** the mouse-cursor overlay previously inverted the hovered cell (`Modifier::REVERSED`). It now paints a solid block using the theme's `cursor_bg` / `cursor_fg` (blue + white in `NOIR`), preserving the underlying cell's glyph and formatting modifiers. Configurable by overriding those fields in a custom `Theme`.
+- **Screen is cleared immediately before term-wm exit (#262):** `ConsoleRenderTarget::exit()` now emits `Clear(ClearType::All)` (`\x1b[2J`) right before `LeaveAlternateScreen`, erasing the alternate screen's UI content so the terminal returns to the primary screen free of term-wm's data — a cleaner exit that also clears potentially sensitive junk on screen. Applied on the normal exit path, on panic/error exits via `Drop`, and covered by a byte-order regression test.
 
 ## [0.9.27-alpha] - 2026-08-16
 
