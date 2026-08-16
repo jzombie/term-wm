@@ -36,7 +36,8 @@ FROM alpine:3.24
 # Layer 1: the window manager binary.
 COPY --from=build /src/term-wm/target/release/term-wm /bin/term-wm
 
-# Layer 2: apps installed into the image. Add/remove tools (htop, git, ...)
+# Layer 2: apps installed into the image.
+# Add/remove tools (htop, git, ...)
 # here without touching the WM layer above.
 # bash is the default shell fallback, used for spawned panes.
 RUN apk add --no-cache bash htop
