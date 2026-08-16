@@ -3249,6 +3249,109 @@ mod tests {
         assert_eq!(wm.managed_area().height, 1, "height must never reach 0");
     }
 
+    /// Regression test for #255: in monocle mode the focused window is rendered
+    /// culled to the full managed area (draw-plan culling), so the dispatch
+    /// geometry (`region_for_key` -> `component_context_for` -> `ctx.screen_area`)
+    /// must match that full-screen rect — not the window's un-culled tiling
+    /// rect. A window created while monocle is active is stacked at the
+    /// bottom/right of the tree, focused, and rendered full-screen; localizing
+    /// mouse coordinates against its stale tile origin is what offsets text
+    /// selection vertically.
+    #[test]
+    fn monocle_focused_region_matches_culled_render_geometry() {
+        use crate::layout::{Direction, LayoutNode, TilingLayout};
+        use crate::window::{FloatRect, FloatRectSpec};
+
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let keys = make_keys(&mut wm, 2);
+        let (key_a, key_b) = (keys[0], keys[1]);
+        let area = crate::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+
+        // Vertical stack: key_b occupies the bottom half of the screen.
+        wm.set_managed_layout(TilingLayout::new(LayoutNode::split(
+            Direction::Vertical,
+            vec![LayoutNode::leaf(key_a), LayoutNode::leaf(key_b)],
+        )));
+        wm.update_monocle_mode(50);
+        assert!(wm.is_monocle(), "width 50 < 80 must force monocle");
+        wm.set_panel_visible(false);
+        wm.focus_app_window(key_a);
+        wm.register_managed_layout(area);
+
+        // key_b's un-culled tiling rect (captured while key_a is focused).
+        let tile_b = wm.full_region_for_key(key_b);
+        assert_ne!(tile_b, wm.managed_area(), "setup sanity: tiles are partial");
+
+        // Switch focus to key_b WITHOUT re-registering the layout — the
+        // dispatch geometry must update immediately (query-time derivation).
+        wm.focus_app_window(key_b);
+        assert_eq!(
+            wm.full_region_for_key(key_b),
+            wm.managed_area(),
+            "focused window must report the culled full-screen bounds"
+        );
+        let expected_b = crate::chrome::content_rect(
+            wm.managed_area(),
+            wm.window_borders_enabled(key_b),
+            wm.window_header_enabled(key_b),
+        );
+        assert_eq!(
+            wm.region(key_b),
+            expected_b,
+            "dispatch content region must match the full-screen render geometry (vertical alignment)"
+        );
+        assert_ne!(
+            wm.full_region_for_key(key_a),
+            wm.managed_area(),
+            "the unfocused window must keep its tiling rect"
+        );
+
+        // Focus back: the previously focused window reverts instantly.
+        wm.focus_app_window(key_a);
+        assert_eq!(wm.full_region_for_key(key_a), wm.managed_area());
+        assert_eq!(
+            wm.full_region_for_key(key_b),
+            tile_b,
+            "unfocused window reverts to its un-culled tiling rect without re-layout"
+        );
+
+        // Floating-window parity: a focused floating window in monocle is also
+        // culled to the full managed area, so hit-testing must resolve the
+        // whole screen to it — not its original floating spec rect.
+        wm.set_floating_rect(
+            key_b,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 30,
+                y: 6,
+                width: 20,
+                height: 12,
+            })),
+        );
+        wm.register_managed_layout(area);
+        wm.focus_app_window(key_b);
+        assert_eq!(
+            wm.visible_region_for_key(key_b),
+            wm.managed_area(),
+            "focused floating window must not bypass the monocle override"
+        );
+        assert_eq!(
+            wm.hit_test_region_topmost(0, 0, &wm.managed_draw_order.to_vec()),
+            Some(key_b),
+            "click far outside the floating spec must resolve to the focused full-screen window"
+        );
+    }
+
     #[test]
     fn enforce_min_visible_margin_horizontal() {
         use crate::window::{FloatRect, FloatRectSpec};
