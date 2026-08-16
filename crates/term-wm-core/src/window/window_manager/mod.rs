@@ -8436,4 +8436,186 @@ mod tests {
             "handle hover must show when no higher-Z element obscures it"
         );
     }
+
+    // ─── Top drag gestures gated on the window's own rect ──────────────
+
+    fn wm_at_top_for_snap() -> (WindowManager<TestComponent>, WindowKey) {
+        use crate::window::{FloatRect, FloatRectSpec};
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.managed_area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_floating_rect(
+            key,
+            Some(FloatRectSpec::Absolute(FloatRect {
+                x: 20,
+                y: 0,
+                width: 30,
+                height: 12,
+            })),
+        );
+        (wm, key)
+    }
+
+    fn assert_no_snap(wm: &WindowManager<TestComponent>) {
+        assert_eq!(wm.drag_snap, None, "drag_snap must be cleared");
+        assert_eq!(wm.snap_preview, None, "snap_preview must be cleared");
+    }
+
+    #[test]
+    fn top_snap_fires_only_when_window_at_top_and_cursor_on_border() {
+        let (mut wm, key) = wm_at_top_for_snap();
+        let mut detach = None;
+
+        // Window frame is at row 0 (area.y), cursor on the top border row → snap.
+        wm.update_snap_preview(key, 40, 0, &mut detach);
+        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Edge(InsertPosition::Top)));
+
+        // Same cursor row but window NOT at top (floating rect moved down) → no snap.
+        let (mut wm2, key2) = wm_at_top_for_snap();
+        wm2.set_floating_rect(
+            key2,
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: 20,
+                y: 5,
+                width: 30,
+                height: 12,
+            })),
+        );
+        wm2.update_snap_preview(key2, 40, 0, &mut detach);
+        assert_no_snap(&wm2);
+    }
+
+    #[test]
+    fn maximize_fires_only_when_window_at_top_and_cursor_in_header() {
+        let (mut wm, key) = wm_at_top_for_snap();
+        // Header present: managed_area.y == 1, window frame at row 0 (<= area.y).
+        wm.managed_area = Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 23,
+        };
+        wm.set_floating_rect(
+            key,
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: 20,
+                y: 0,
+                width: 30,
+                height: 12,
+            })),
+        );
+        let mut detach = None;
+
+        // Cursor overshot into the header (row 0 < area.y == 1) → maximize.
+        wm.update_snap_preview(key, 40, 0, &mut detach);
+        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Maximize));
+
+        // Window NOT at top but cursor still in header → no maximize.
+        let (mut wm2, key2) = wm_at_top_for_snap();
+        wm2.managed_area = Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 23,
+        };
+        wm2.set_floating_rect(
+            key2,
+            Some(crate::window::FloatRectSpec::Absolute(crate::window::FloatRect {
+                x: 20,
+                y: 5,
+                width: 30,
+                height: 12,
+            })),
+        );
+        wm2.update_snap_preview(key2, 40, 0, &mut detach);
+        assert_no_snap(&wm2);
+    }
+
+    #[test]
+    fn no_header_means_no_drag_maximize() {
+        let (mut wm, key) = wm_at_top_for_snap();
+        let mut detach = None;
+
+        // area.y == 0 (panel hidden): row 0 is the top border → top-half snap,
+        // never maximize (mouse_y < 0 is impossible for u16).
+        wm.update_snap_preview(key, 40, 0, &mut detach);
+        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Edge(InsertPosition::Top)));
+    }
+
+    #[test]
+    fn sideways_drag_of_top_anchored_window_does_not_snap() {
+        let (mut wm, key) = wm_at_top_for_snap();
+        let mut detach = None;
+
+        // Window at top (row 0) but cursor on the title bar (row 1, below border)
+        // while dragging sideways → no top snap; no snap at all mid-workspace.
+        wm.update_snap_preview(key, 40, 1, &mut detach);
+        assert_no_snap(&wm);
+
+        // Near the left edge the side edge-snap still fires (mid-height, clear
+        // of the top corner threshold).
+        wm.update_snap_preview(key, 1, 12, &mut detach);
+        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Edge(InsertPosition::Left)));
+    }
+
+    #[test]
+    fn top_corners_unchanged() {
+        let (mut wm, key) = wm_at_top_for_snap();
+        let mut detach = None;
+
+        // Corner detection is cursor-based and unaffected by the window rect gate.
+        wm.update_snap_preview(key, 0, 0, &mut detach);
+        assert_eq!(wm.snap_preview, Some(SnapPreviewState::Corner(InsertPosition::TopLeft)));
+    }
+
+    #[test]
+    fn window_at_top_uses_full_region_fallback() {
+        // When no floating rect exists, the gate must use the FULL frame rect
+        // (chrome included), not the content rect which is offset by
+        // TOP_BORDER_HEIGHT + HEADER_HEIGHT below the frame top.
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.managed_area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let key = make_keys(&mut wm, 1)[0];
+        // Frame parked at row 0; content rect (region) would report y == 2.
+        wm.regions.set(
+            key,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 12,
+            },
+        );
+        assert!(wm.floating_rect(key).is_none(), "precondition: not floating");
+
+        let mut detach = None;
+        wm.update_snap_preview(key, 40, 0, &mut detach);
+        assert_eq!(
+            wm.snap_preview,
+            Some(SnapPreviewState::Edge(InsertPosition::Top)),
+            "full_region (frame) at area.y must satisfy the window_at_top gate"
+        );
+    }
 }
