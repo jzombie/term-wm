@@ -82,6 +82,7 @@ pub enum FgColor {
     DecoratorBorderActive,
     DebugHighlight,
     BottomPanelFg,
+    CursorFg,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumIter)]
@@ -102,6 +103,7 @@ pub enum BgColor {
     ProfileHigh,
     ProfileMid,
     ProfileLow,
+    CursorBg,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,10 @@ pub struct Theme {
     pub dialog_separator: Color,
     pub selection_bg: Color,
     pub selection_fg: Color,
+    /// Background of the mouse-cursor block overlay.
+    pub cursor_bg: Color,
+    /// Foreground (glyph tint) of the mouse-cursor block overlay.
+    pub cursor_fg: Color,
     /// Dark end of the drop-shadow interpolation — used for the topmost
     /// (highest z-depth) floating window.
     pub shadow_bg: Color,
@@ -177,6 +183,7 @@ impl Theme {
             FgColor::DecoratorBorderActive => self.decorator_border_active,
             FgColor::DebugHighlight => self.debug_highlight,
             FgColor::BottomPanelFg => self.bottom_panel_fg,
+            FgColor::CursorFg => self.cursor_fg,
         }
     }
 
@@ -198,6 +205,7 @@ impl Theme {
             BgColor::ProfileHigh => self.profile_high,
             BgColor::ProfileMid => self.profile_mid,
             BgColor::ProfileLow => self.profile_low,
+            BgColor::CursorBg => self.cursor_bg,
         }
     }
 }
@@ -246,6 +254,9 @@ pub const NOIR: Theme = Theme {
     // Selection
     selection_bg: Color::Rgb(0, 230, 118),
     selection_fg: Color::Rgb(10, 10, 15),
+    // Mouse cursor overlay (blue per #253)
+    cursor_bg: Color::Rgb(0, 90, 200),
+    cursor_fg: Color::Rgb(255, 255, 255),
     // Link
     link_color: Color::Rgb(100, 180, 255),
     link_underline: true,
@@ -553,6 +564,65 @@ mod tests {
         (FgColor::DebugHighlight, BgColor::Warning, "never combined"),
         (FgColor::BottomPanelFg, BgColor::Error, "never combined"),
         (FgColor::BottomPanelFg, BgColor::Warning, "never combined"),
+        // Mouse-cursor overlay: the overlay always sets fg+bg together, so
+        // cursor colors are never mixed with any other semantic role.
+        // CursorFg only appears on CursorBg:
+        (FgColor::CursorFg, BgColor::PanelBg, "never combined"),
+        (FgColor::CursorFg, BgColor::PanelActiveBg, "never combined"),
+        (FgColor::CursorFg, BgColor::MenuBg, "never combined"),
+        (FgColor::CursorFg, BgColor::MenuSelectedBg, "never combined"),
+        (FgColor::CursorFg, BgColor::SelectionBg, "never combined"),
+        (FgColor::CursorFg, BgColor::DialogBg, "never combined"),
+        (
+            FgColor::CursorFg,
+            BgColor::DecoratorHeaderBg,
+            "never combined",
+        ),
+        (FgColor::CursorFg, BgColor::BottomPanelBg, "never combined"),
+        (FgColor::CursorFg, BgColor::Surface, "never combined"),
+        (FgColor::CursorFg, BgColor::ShadowBg, "never combined"),
+        (FgColor::CursorFg, BgColor::ShadowTint, "never combined"),
+        (FgColor::CursorFg, BgColor::Error, "never combined"),
+        (FgColor::CursorFg, BgColor::Warning, "never combined"),
+        // CursorBg only carries CursorFg:
+        (FgColor::Accent, BgColor::CursorBg, "never combined"),
+        (FgColor::AccentAlt, BgColor::CursorBg, "never combined"),
+        (FgColor::PanelFg, BgColor::CursorBg, "never combined"),
+        (
+            FgColor::PanelInactiveFg,
+            BgColor::CursorBg,
+            "never combined",
+        ),
+        (FgColor::PanelActiveFg, BgColor::CursorBg, "never combined"),
+        (FgColor::MenuFg, BgColor::CursorBg, "never combined"),
+        (FgColor::MenuSelectedFg, BgColor::CursorBg, "never combined"),
+        (FgColor::MenuSelectedBg, BgColor::CursorBg, "never combined"),
+        (FgColor::Success, BgColor::CursorBg, "never combined"),
+        (FgColor::SelectionFg, BgColor::CursorBg, "never combined"),
+        (FgColor::DialogFg, BgColor::CursorBg, "never combined"),
+        (
+            FgColor::DialogSeparator,
+            BgColor::CursorBg,
+            "never combined",
+        ),
+        (FgColor::LinkColor, BgColor::CursorBg, "never combined"),
+        (
+            FgColor::DecoratorHeaderFg,
+            BgColor::CursorBg,
+            "never combined",
+        ),
+        (
+            FgColor::DecoratorBorder,
+            BgColor::CursorBg,
+            "never combined",
+        ),
+        (
+            FgColor::DecoratorBorderActive,
+            BgColor::CursorBg,
+            "never combined",
+        ),
+        (FgColor::DebugHighlight, BgColor::CursorBg, "never combined"),
+        (FgColor::BottomPanelFg, BgColor::CursorBg, "never combined"),
     ];
 
     /// Every FgColor × BgColor pair at 3.0:1 (WCAG AA UI/large).
