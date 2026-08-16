@@ -6,10 +6,6 @@ pub use term_wm_core::*;
 pub use term_wm_render::RenderBackend;
 pub use term_wm_ui_components::*;
 pub use term_wm_view::view;
-// Root-level re-exports of the core types the generated `view!` code and
-// consumer apps reference (the root `components` module is app-specific and
-// shadows `term_wm_core::components`, so these are hoisted to the root). The
-// remainder are re-exported by promoting the existing `use` imports below.
 pub use term_wm_core::actions::EventResult;
 pub use term_wm_core::component_context::ComponentContext;
 pub use term_wm_core::events::Event;
