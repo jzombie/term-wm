@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.9.27-alpha] - 2026-08-16
+
+### Changed
+
+- **Snap preview is now an outline instead of a fill (#259):** the drag snap ghost preview previously painted a solid interior shade over the target area, obscuring the underlying tiling content. It now renders as a dashed outline only, so the preview shows the pending window's bounds without covering the workspace beneath it.
+
+### Fixed
+
+- **Tiled windows adjacent to void space now expose resize handles (#258):** tiling resize regions were filtered out unless both sides of a split contained a tiled window, so a window snapped to the top half (empty space below) or tiled into a bottom quadrant (empty space above) had no resize handle along the void boundary and could not be resized vertically. Split handles adjacent to empty `Void` space are now kept — dragging one resizes the window against the void — while a `[Void, Void]` split still never exposes a phantom handle, and boundaries against floating-only subtrees remain excluded (those windows are resized via their floating chrome).
+- **False top-half snap / maximize previews while dragging a window:** top drag gestures were decided purely from the cursor position — `mouse_y == 0` maximized and `detect_edge_snap` returned `Top` whenever the cursor was within 3 cells of the top edge — so dragging a top-anchored window sideways instantly offered a top snap, and a mid-screen window snapped when the cursor merely grazed the top edge. The top-half snap and drag-maximize previews now fire only when the dragged window's **own frame** has reached the top of the workspace (`floating_rect.y <= managed_area.y`, with the full frame rect as the fallback when no floating rect exists yet) **and** the cursor is in the top drag-handle space: the cursor overshooting into the header/panel (`mouse_y < area.y`, which requires `area.y >= 1`) maximizes (deferred to release), while the cursor on the top workspace border row (`mouse_y == area.y`) offers the top-half snap. With the panel hidden (`area.y == 0`) the drag-to-maximize path is unreachable — the top border row is a top-half snap, and maximize remains available via title-bar double-click or keyboard. Side/bottom edge snaps and corner snaps are unchanged.
+
 ## [0.9.26-alpha] - 2026-08-15
 
 ### Changed

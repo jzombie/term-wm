@@ -173,9 +173,13 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     ///
     /// Spatial priority order (smallest region first):
     /// 1. Corner snap (TopLeft/TopRight/BottomLeft/BottomRight)
-    /// 2. Sacred top edge maximize (y=0, deferred to release)
-    /// 3. Edge snap (Left/Right/Top/Bottom half-screen) — checked first
-    ///    when cursor is near a screen edge, even if inside a tiled window
+    /// 2. Top gestures (maximize / top-half snap) — gated on the dragged
+    ///    window's own frame reaching the workspace top AND the cursor being
+    ///    in the top drag-handle space (`mouse_y <= area.y`). Maximize is
+    ///    deferred to release.
+    /// 3. Edge snap (Left/Right/Bottom half-screen; Top is exclusive to #2) —
+    ///    checked first when cursor is near a screen edge, even if inside a
+    ///    tiled window
     /// 4. Tiled insert (quadrant-based) — when inside a tiled window
     ///    but NOT near a screen edge
     /// 5. Void region (Snap Assist receptacle)
@@ -273,17 +277,43 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             return;
         }
 
-        // Priority 2: Sacred top edge — full-screen maximize (deferred to release)
-        if mouse_y == 0 {
-            self.drag_snap = Some((None, InsertPosition::Top, area));
-            self.snap_preview = Some(SnapPreviewState::Maximize);
-            return;
+        // Priority 2: Top gestures (maximize / top-half snap) — gated on the
+        // dragged window's OWN frame reaching the workspace top, not just the
+        // cursor row. This prevents false top snaps while dragging a top-anchored
+        // window sideways, and prevents mid-screen windows from snapping when the
+        // cursor merely grazes the top edge.
+        //
+        // The live source is `floating_rect` (updated by `move_floating` every
+        // drag event); `full_region` (full frame bounds, chrome included) is the
+        // fallback when no floating rect exists yet.
+        let window_at_top = self
+            .floating_rect(dragging_key)
+            .map(|spec| spec.resolve_signed(area))
+            .is_some_and(|r| r.y <= area.y)
+            || (self.floating_rect(dragging_key).is_none()
+                && self.full_region(dragging_key).y <= area.y);
+
+        let mut top_pos = None;
+        if window_at_top {
+            if (mouse_y as i32) < area.y {
+                // Cursor overshot into the top header/panel (requires area.y >= 1;
+                // unreachable when the panel is hidden and area.y == 0).
+                self.drag_snap = Some((None, InsertPosition::Top, area));
+                self.snap_preview = Some(SnapPreviewState::Maximize);
+                return;
+            }
+            if (mouse_y as i32) == area.y {
+                // Cursor on the top workspace border row — top-half snap.
+                top_pos = Some(InsertPosition::Top);
+            }
         }
 
         // Priority 3: Edge snap
-        if let Some(pos) =
+        let edge_pos = top_pos.or_else(|| {
             detect_edge_snap(mouse_x, mouse_y, managed_layout_rect, EDGE_SNAP_THRESHOLD)
-        {
+                .filter(|p| *p != InsertPosition::Top)
+        });
+        if let Some(pos) = edge_pos {
             // Compute position-based layout cache for this snap position
             if self
                 .snap_preview_cache

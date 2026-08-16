@@ -441,7 +441,7 @@ pub fn render_app<
                 &wm.config().theme,
             );
 
-            // Snap preview (dashed border + shade fill + countdown text)
+            // Snap preview (dashed border outline + countdown text)
             if let Some((_, _, snap_rect)) = wm.drag_snap_rect_data() {
                 use ratatui::layout::Alignment;
                 use ratatui::style::{Color, Style};

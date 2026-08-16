@@ -737,7 +737,10 @@ mod drag_snap_pipeline {
     }
 
     #[test]
-    fn drag_to_top_maximizes() {
+    fn drag_to_top_no_header_snaps_top_half() {
+        // Panel hidden + chrome disabled => no header row (managed_area.y == 0).
+        // Per the drag-snap spec, without a header the drag-to-top gesture is a
+        // top-half snap (Edge Top), never maximize.
         let (mut wm, mut engine, mut renderer, keys) = setup();
         advance_frame(&mut wm, &mut engine, &mut renderer);
         let header = header_rect(&mut wm, keys[0]);
@@ -753,31 +756,36 @@ mod drag_snap_pipeline {
         let drag = make_mouse(MouseEventKind::Drag(MouseButton::Left), mid_x, 0);
         wm.dispatch_mouse(&drag);
 
-        // Verify ghost preview is maximize (full area)
+        // Verify ghost preview is the top-half snap. The projected vertical
+        // split reserves a 1-cell split gap, so the top half is (24-1)/2 = 11.
         let snap_rect = wm
             .drag_snap_rect()
             .expect("drag_snap must be set after Drag to top edge");
-        assert_eq!(snap_rect.x, AREA.x, "maximize ghost x");
-        assert_eq!(snap_rect.y, AREA.y, "maximize ghost y");
-        assert_eq!(snap_rect.width, AREA.width, "maximize ghost width");
-        assert_eq!(snap_rect.height, AREA.height, "maximize ghost height");
+        assert_eq!(snap_rect.x, AREA.x, "top-half ghost x");
+        assert_eq!(snap_rect.y, AREA.y, "top-half ghost y");
+        assert_eq!(snap_rect.width, AREA.width, "top-half ghost width");
+        assert_eq!(
+            snap_rect.height,
+            AREA.height / 2 - 1,
+            "top-half ghost height"
+        );
 
         let up = make_mouse(MouseEventKind::Release(MouseButton::Left), mid_x, 0);
         wm.dispatch_mouse(&up);
 
-        // Ghost overlay must be cleared immediately after maximize applies
+        // Ghost overlay must be cleared immediately after the snap applies
         assert!(
             wm.drag_snap_rect().is_none(),
-            "drag_snap must be None after maximize release"
+            "drag_snap must be None after top-half snap release"
         );
 
         advance_frame(&mut wm, &mut engine, &mut renderer);
 
         let r = wm.region(keys[0]);
-        assert_eq!(r.x, AREA.x, "maximized x");
-        assert_eq!(r.y, AREA.y, "maximized y");
-        assert_eq!(r.width, AREA.width, "maximized width");
-        assert_eq!(r.height, AREA.height, "maximized height");
+        assert_eq!(r.x, AREA.x, "top-snapped x");
+        assert_eq!(r.y, AREA.y, "top-snapped y");
+        assert_eq!(r.width, AREA.width, "top-snapped width");
+        assert_eq!(r.height, AREA.height / 2 - 1, "top-snapped height");
     }
 
     #[test]
@@ -1175,6 +1183,81 @@ mod drag_snap_pipeline {
         assert!(
             r0.width > r1.width,
             "left window must be wider after dragging handle right"
+        );
+    }
+
+    #[test]
+    fn tiled_window_with_void_above_below_has_resize_handles() {
+        // Issue #258: a tiled window adjacent to empty Void space must expose
+        // a resize handle through the full render pipeline, and dragging it
+        // must resize the window.
+        let config = WmConfig {
+            chrome_enabled: false,
+            ..Default::default()
+        };
+        let mut wm = WindowManager::<NoopComponent>::with_config(
+            config,
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            term_wm_core::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        wm.set_panel_visible(false);
+        let k0 = wm.create_window(NoopComponent);
+        let split = LayoutNode::Split {
+            direction: Direction::Vertical,
+            children: vec![LayoutNode::Leaf(k0), LayoutNode::Void(77)],
+            weights: vec![1u16, 1u16],
+            resizable: true,
+        };
+        wm.set_managed_layout(TilingLayout::new(split));
+
+        let mut engine = CoreEngine::new();
+        let mut renderer = DrawPlanRenderer::new();
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        // The window/void boundary must expose exactly one resize handle.
+        let handles = wm.tiling_handles();
+        assert_eq!(
+            handles.len(),
+            1,
+            "leaf+void split must expose a resize handle"
+        );
+
+        let gap = &handles[0].rect;
+        let gap_col = (gap.x + i32::from(gap.width) / 2) as u16;
+        let gap_row = (gap.y + i32::from(gap.height) / 2) as u16;
+        let height_before = wm.region(k0).height;
+
+        let down = make_mouse(MouseEventKind::Press(MouseButton::Left), gap_col, gap_row);
+        assert!(
+            wm.dispatch_mouse(&down).is_consumed(),
+            "Press on void-adjacent handle must be consumed"
+        );
+        let drag = make_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            gap_col,
+            gap_row + 3,
+        );
+        assert!(
+            wm.dispatch_mouse(&drag).is_consumed(),
+            "Drag on void-adjacent handle must be consumed"
+        );
+        let up = make_mouse(
+            MouseEventKind::Release(MouseButton::Left),
+            gap_col,
+            gap_row + 3,
+        );
+        wm.dispatch_mouse(&up);
+
+        advance_frame(&mut wm, &mut engine, &mut renderer);
+
+        let height_after = wm.region(k0).height;
+        assert!(
+            height_after > height_before,
+            "window must grow when void-adjacent handle is dragged down: {} -> {}",
+            height_before,
+            height_after
         );
     }
 
