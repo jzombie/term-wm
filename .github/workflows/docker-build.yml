@@ -1,0 +1,49 @@
+name: docker-build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+# Ensure only one run per branch/PR at a time. If new commits are pushed,
+# older jobs will be automatically canceled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build docker image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # Buildx with the docker-container driver is required for the GHA cache
+      # backend and gives cross-run layer caching for the cargo fetch/build
+      # layers, so a release build doesn't start from scratch on every run.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: term-wm:test
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Smoke test: the runtime image actually starts the musl binary.
+      # clap derives `version`, so `--version` exits 0 on headless runners.
+      - name: Smoke test image
+        run: docker run --rm term-wm:test --version
