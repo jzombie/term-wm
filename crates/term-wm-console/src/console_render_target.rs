@@ -164,9 +164,12 @@ impl<W: Write> RenderTarget for ConsoleRenderTarget<W> {
         }
 
         // write_ansi() — always write so tests verify the byte stream.
+        // Clear the alternate screen immediately before leaving it so the
+        // terminal returns to the primary screen free of term-wm's UI data.
         execute!(
             self.terminal.backend_mut(),
             DisableBracketedPaste,
+            Clear(ClearType::All),
             LeaveAlternateScreen,
         )?;
 
@@ -251,6 +254,34 @@ mod tests {
                 .windows(b"\x1b[?2004l".len())
                 .any(|w| w == b"\x1b[?2004l"),
             "exit() must write bracketed paste disable \\x1b[?2004l. \
+             Captured bytes: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    /// Tests that `exit()` writes `\x1b[2J` (clear screen) immediately before
+    /// `\x1b[?1049l` (leave alternate screen), so the term-wm UI is erased
+    /// before the terminal restores the primary screen.
+    #[test]
+    fn exit_writes_clear_screen_before_leave_alternate_screen() {
+        let (mut rt, writer) = ConsoleRenderTarget::new_capturing();
+        // Must call real enter() so crossterm saves initial terminal state
+        rt.enter().expect("enter must succeed");
+        // Clear the capture buffer so we only assert on exit's output
+        writer.clear();
+        rt.exit().expect("exit must succeed");
+        let bytes = writer.bytes();
+        let clear_pos = bytes
+            .windows(b"\x1b[2J".len())
+            .position(|w| w == b"\x1b[2J")
+            .expect("exit() must write clear screen \\x1b[2J");
+        let leave_pos = bytes
+            .windows(b"\x1b[?1049l".len())
+            .position(|w| w == b"\x1b[?1049l")
+            .expect("exit() must write leave alternate screen \\x1b[?1049l");
+        assert!(
+            clear_pos < leave_pos,
+            "clear screen must be emitted before LeaveAlternateScreen. \
              Captured bytes: {:?}",
             String::from_utf8_lossy(&bytes)
         );
