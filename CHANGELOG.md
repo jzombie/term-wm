@@ -10,10 +10,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 - **Snap preview is now an outline instead of a fill (#259):** the drag snap ghost preview previously painted a solid interior shade over the target area, obscuring the underlying tiling content. It now renders as a dashed outline only, so the preview shows the pending window's bounds without covering the workspace beneath it.
 
-### Changed
-
-- **Snap preview is now an outline instead of a fill (#259):** the drag snap ghost preview previously painted a solid interior shade over the target area, obscuring the underlying tiling content. It now renders as a dashed outline only, so the preview shows the pending window's bounds without covering the workspace beneath it.
-
 ### Fixed
 
 - **Tiled windows adjacent to void space now expose resize handles (#258):** tiling resize regions were filtered out unless both sides of a split contained a tiled window, so a window snapped to the top half (empty space below) or tiled into a bottom quadrant (empty space above) had no resize handle along the void boundary and could not be resized vertically. Split handles adjacent to empty `Void` space are now kept — dragging one resizes the window against the void — while a `[Void, Void]` split still never exposes a phantom handle, and boundaries against floating-only subtrees remain excluded (those windows are resized via their floating chrome).
