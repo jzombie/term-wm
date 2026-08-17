@@ -2,7 +2,7 @@ use crate::Rect;
 use crate::hitbox_registry::HitboxId;
 use term_wm_layout_engine::LayoutRect;
 
-pub use term_wm_layout_engine::{FLOATING_MIN_HEIGHT, FLOATING_MIN_WIDTH, ResizeEdge};
+pub use term_wm_layout_engine::ResizeEdge;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResizeHandle<K: Copy + Eq + Ord> {
@@ -173,8 +173,9 @@ pub fn floating_header_for_region<K: Copy + Eq + Ord>(
     key: K,
     rect: Rect,
     bounds: Rect,
+    min_dim: u16,
 ) -> Option<DragHandle<K>> {
-    if rect.width < 3 || rect.height < 3 {
+    if rect.width < min_dim || rect.height < min_dim {
         return None;
     }
     let header_y = rect.y.saturating_add(1);
@@ -203,6 +204,8 @@ pub fn apply_resize_drag(
     start_row: u16,
     bounds: Rect,
     allow_offscreen: bool,
+    min_width: u16,
+    min_height: u16,
 ) -> Rect {
     let fr = term_wm_layout_engine::apply_resize_drag_signed(
         start.x,
@@ -221,6 +224,8 @@ pub fn apply_resize_drag(
             height: bounds.height,
         },
         allow_offscreen,
+        min_width,
+        min_height,
     );
     Rect {
         x: fr.x.max(0),
@@ -249,7 +254,7 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let res = apply_resize_drag(start, ResizeEdge::Top, 10, 55, 10, 50, bounds, false);
+        let res = apply_resize_drag(start, ResizeEdge::Top, 10, 55, 10, 50, bounds, false, 6, 3);
         assert_eq!(
             res,
             Rect {
@@ -275,7 +280,7 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let res = apply_resize_drag(start, ResizeEdge::Top, 10, 45, 10, 50, bounds, false);
+        let res = apply_resize_drag(start, ResizeEdge::Top, 10, 45, 10, 50, bounds, false, 6, 3);
         assert_eq!(
             res,
             Rect {
@@ -307,6 +312,8 @@ mod tests {
             15,
             bounds_lr,
             true,
+            6,
+            3,
         );
         assert_eq!(res.x, -4);
         assert_eq!(res.width, 26);
@@ -392,6 +399,7 @@ mod tests {
                 width: 100,
                 height: 100,
             },
+            3,
         );
         assert!(result.is_none());
     }
@@ -412,6 +420,7 @@ mod tests {
                 width: 100,
                 height: 100,
             },
+            3,
         );
         assert!(result.is_some());
         let handle = result.unwrap();
@@ -436,6 +445,7 @@ mod tests {
                 width: 100,
                 height: 90,
             },
+            3,
         );
         assert!(result.is_none());
     }
@@ -454,7 +464,18 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let res = apply_resize_drag(start, ResizeEdge::Right, 25, 15, 20, 15, bounds, false);
+        let res = apply_resize_drag(
+            start,
+            ResizeEdge::Right,
+            25,
+            15,
+            20,
+            15,
+            bounds,
+            false,
+            6,
+            3,
+        );
         assert!(res.width > start.width);
     }
 
@@ -472,7 +493,18 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let res = apply_resize_drag(start, ResizeEdge::Bottom, 15, 25, 15, 20, bounds, false);
+        let res = apply_resize_drag(
+            start,
+            ResizeEdge::Bottom,
+            15,
+            25,
+            15,
+            20,
+            bounds,
+            false,
+            6,
+            3,
+        );
         assert!(res.height > start.height);
     }
 }

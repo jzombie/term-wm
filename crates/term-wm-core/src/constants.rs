@@ -139,3 +139,10 @@ pub const CHROME_BUTTON_INSET_RIGHT: u16 = 1;
 
 /// Spacing between adjacent title buttons (button cell + 1 gap column).
 pub const HEADER_BUTTON_GAP: u16 = 2;
+
+/// Default scrollback buffer size (in lines) for terminal windows.
+/// This controls how many lines of history you can scroll up to see.
+pub const DEFAULT_SCROLLBACK_LEN: usize = 2000;
+
+/// Unicode ellipsis character used for text truncation.
+pub const ELLIPSIS_CHAR: char = '\u{2026}';

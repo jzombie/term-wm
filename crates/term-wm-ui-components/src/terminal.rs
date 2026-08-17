@@ -28,10 +28,6 @@ use term_wm_pty_engine::input_encoding::{
 };
 use term_wm_pty_engine::{Pane, PtyStatus};
 
-// This controls the scrollback buffer size in the vt100 parser.
-// It determines how many lines you can scroll up to see.
-const DEFAULT_SCROLLBACK_LEN: usize = 2000;
-
 /// Whether the user is forcing native text selection for a mouse event.
 ///
 /// Shift is the universal override; on macOS Option (reported as `alt`) also
@@ -374,11 +370,6 @@ impl TerminalComponent {
         }
     }
 
-    /// Convenience spawn that uses `default_pty_size()`.
-    pub fn spawn_default(command: CommandBuilder) -> term_wm_pty_engine::PtyResult<Self> {
-        Self::spawn(command, Self::default_pty_size())
-    }
-
     /// Construct a terminal wrapper around any Pane implementation.
     pub fn from_pane(pane: Box<dyn Pane>) -> Self {
         Self {
@@ -398,33 +389,6 @@ impl TerminalComponent {
             window_key: None,
             word_extra_chars: DEFAULT_WORD_EXTRA_CHARS.to_string(),
         }
-    }
-
-    pub fn spawn(command: CommandBuilder, size: PtySize) -> term_wm_pty_engine::PtyResult<Self> {
-        let command_description = format!("{:?}", command);
-        let pane: Box<dyn Pane> = Box::new(term_wm_pty_engine::Pty::spawn_with_scrollback(
-            command,
-            size,
-            DEFAULT_SCROLLBACK_LEN,
-        )?);
-        let comp = Self {
-            hitbox_id: HitboxId::new(),
-            pane: RefCell::new(pane),
-            last_size: Cell::new((size.cols, size.rows)),
-            linkifier: Linkifier::new(),
-            link_overlay: RefCell::new(LinkOverlay::new()),
-            link_handler: None,
-            command_description,
-            selection: RefCell::new(SelectionController::new()),
-            selection_enabled: false,
-            last_scrollback: Cell::new(0),
-            last_max_scrollback: Cell::new(0),
-            last_mode_suppressed_scroll: Cell::new(false),
-            reported_alt_screen: Cell::new(false),
-            window_key: None,
-            word_extra_chars: DEFAULT_WORD_EXTRA_CHARS.to_string(),
-        };
-        Ok(comp)
     }
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {

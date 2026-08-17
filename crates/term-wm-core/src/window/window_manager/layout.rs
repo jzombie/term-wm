@@ -747,6 +747,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             return;
         }
         let allow_offscreen = self.floating_resize_offscreen;
+        let min_width = self.config.floating_min_width;
+        let min_height = self.config.floating_min_height;
         // The per-window clamp math lives in the layout engine; this wrapper
         // only iterates the WM's floating windows and applies the results.
         for window in self.windows.values_mut() {
@@ -758,6 +760,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                 bounds,
                 MIN_FLOATING_VISIBLE_MARGIN,
                 allow_offscreen,
+                min_width,
+                min_height,
             );
             window.set_floating_rect(Some(FloatRectSpec::Absolute(clamped)));
         }

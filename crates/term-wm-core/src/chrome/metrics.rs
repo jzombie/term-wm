@@ -1,5 +1,11 @@
 use crate::Rect;
-use crate::constants::{CHROME_BUTTON_INSET_RIGHT, HEADER_BUTTON_GAP};
+use crate::constants::{
+    CHROME_BOTTOM_ROW, CHROME_BUTTON_INSET_RIGHT, CHROME_HEADER_ROW, CHROME_LEFT_COL,
+    CHROME_RIGHT_COL, CHROME_TOP_ROW, HEADER_BUTTON_GAP,
+};
+
+/// Minimum content dimension (in cells) for a window to be considered valid.
+const MIN_CONTENT_DIM: u16 = 1;
 
 /// Compute the x-position of a title button in window-chrome coordinates.
 ///
@@ -14,7 +20,7 @@ use crate::constants::{CHROME_BUTTON_INSET_RIGHT, HEADER_BUTTON_GAP};
 /// place extra hitboxes (e.g. the D button) at the correct coordinate.
 pub fn button_x_pos(outer_right: u16, borders_enabled: bool, button_index: usize) -> u16 {
     let header_right = if borders_enabled {
-        outer_right.saturating_sub(RIGHT_BORDER_WIDTH)
+        outer_right.saturating_sub(CHROME_RIGHT_COL)
     } else {
         outer_right
     };
@@ -22,15 +28,6 @@ pub fn button_x_pos(outer_right: u16, borders_enabled: bool, button_index: usize
         .saturating_sub(CHROME_BUTTON_INSET_RIGHT)
         .saturating_sub(HEADER_BUTTON_GAP * button_index as u16)
 }
-
-// TODO: This hardcodes metrics regarding physical window chrome layout that is not
-// a core concern.
-pub const LEFT_BORDER_WIDTH: u16 = 1;
-pub const RIGHT_BORDER_WIDTH: u16 = 1;
-pub const TOP_BORDER_HEIGHT: u16 = 1;
-pub const BOTTOM_BORDER_HEIGHT: u16 = 1;
-pub const HEADER_HEIGHT: u16 = 1;
-pub const MIN_CONTENT_DIM: u16 = 1;
 
 /// Compute the inner content rectangle from the full frame rect,
 /// given per-window chrome flags. This is the single source of truth
@@ -40,14 +37,14 @@ pub fn content_rect(full: Rect, borders_enabled: bool, header_enabled: bool) -> 
         return full;
     }
     let min_width = if borders_enabled {
-        LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH + MIN_CONTENT_DIM
+        CHROME_LEFT_COL + CHROME_RIGHT_COL + MIN_CONTENT_DIM
     } else {
         MIN_CONTENT_DIM
     };
     let min_height = if borders_enabled && header_enabled {
-        TOP_BORDER_HEIGHT + HEADER_HEIGHT + BOTTOM_BORDER_HEIGHT + MIN_CONTENT_DIM
+        CHROME_TOP_ROW + CHROME_HEADER_ROW + CHROME_BOTTOM_ROW + MIN_CONTENT_DIM
     } else if borders_enabled || header_enabled {
-        TOP_BORDER_HEIGHT.max(HEADER_HEIGHT) + MIN_CONTENT_DIM
+        CHROME_TOP_ROW.max(CHROME_HEADER_ROW) + MIN_CONTENT_DIM
     } else {
         MIN_CONTENT_DIM
     };
@@ -55,33 +52,33 @@ pub fn content_rect(full: Rect, borders_enabled: bool, header_enabled: bool) -> 
         return Rect::default();
     }
     let x = if borders_enabled {
-        full.x + i32::from(LEFT_BORDER_WIDTH)
+        full.x + i32::from(CHROME_LEFT_COL)
     } else {
         full.x
     };
     let y = if borders_enabled && header_enabled {
-        full.y + i32::from(TOP_BORDER_HEIGHT) + i32::from(HEADER_HEIGHT)
+        full.y + i32::from(CHROME_TOP_ROW) + i32::from(CHROME_HEADER_ROW)
     } else if header_enabled {
-        full.y + i32::from(HEADER_HEIGHT)
+        full.y + i32::from(CHROME_HEADER_ROW)
     } else if borders_enabled {
-        full.y + i32::from(TOP_BORDER_HEIGHT)
+        full.y + i32::from(CHROME_TOP_ROW)
     } else {
         full.y
     };
     let width = if borders_enabled {
         full.width
-            .saturating_sub(LEFT_BORDER_WIDTH + RIGHT_BORDER_WIDTH)
+            .saturating_sub(CHROME_LEFT_COL + CHROME_RIGHT_COL)
     } else {
         full.width
     };
     let height = if borders_enabled && header_enabled {
         full.height
-            .saturating_sub(TOP_BORDER_HEIGHT + HEADER_HEIGHT + BOTTOM_BORDER_HEIGHT)
+            .saturating_sub(CHROME_TOP_ROW + CHROME_HEADER_ROW + CHROME_BOTTOM_ROW)
     } else if header_enabled {
-        full.height.saturating_sub(HEADER_HEIGHT)
+        full.height.saturating_sub(CHROME_HEADER_ROW)
     } else if borders_enabled {
         full.height
-            .saturating_sub(TOP_BORDER_HEIGHT + BOTTOM_BORDER_HEIGHT)
+            .saturating_sub(CHROME_TOP_ROW + CHROME_BOTTOM_ROW)
     } else {
         full.height
     };

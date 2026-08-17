@@ -10,6 +10,8 @@ pub use keyboard_normalizer::KeyboardNormalizer;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::constants::ELLIPSIS_CHAR;
+
 /// Truncate a string to a maximum cellular width, appending `…` (U+2026)
 /// if the string exceeds the bound. Safe for multi-width Unicode characters.
 /// Returns an empty string when `max_width` is 0.
@@ -32,11 +34,7 @@ pub fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
         out.push(c);
     }
 
-    // TODO: Not a fan of Unicode characters (or any strings) being hardcoded
-    // into the core, but the Command Palette and several other places
-    // currently use them.
-    // Unicode ellipsis
-    out.push('\u{2026}');
+    out.push(ELLIPSIS_CHAR);
     out
 }
 
