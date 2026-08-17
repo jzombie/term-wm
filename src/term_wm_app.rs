@@ -34,9 +34,6 @@ use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 use crate::components::{AppRootComponent, NoopComponent};
 use crate::unified_event_source::{EVENT_CHANNEL_CAPACITY, UnifiedEvent, UnifiedEventSource};
 
-/// Scrollback size for windows spawned by the default "New Terminal" action.
-const NEW_TERMINAL_SCROLLBACK: usize = 2000;
-
 /// Command-palette allow-list installed by `new_custom` / `new_with_config`.
 ///
 /// Deliberately a restricted subset of the full `DEFAULT_SUPPORTED_MENU_ACTIONS`
@@ -275,10 +272,10 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     pub fn spawn_terminal_window(
         &mut self,
         cmd: portable_pty::CommandBuilder,
-        scrollback: usize,
         initial_command: Option<String>,
         title: impl Into<String>,
     ) -> io::Result<WindowKey> {
+        let scrollback = self.wm.config().scrollback_lines;
         let size = TerminalComponent::default_pty_size();
         let pty = Pty::spawn_with_scrollback(cmd, size, scrollback).map_err(io::Error::other)?;
         let tracker: std::sync::Arc<dyn DirectInputTracker> = pty.direct_input_tracker();
@@ -539,7 +536,6 @@ impl<C: Component<TermWmAction> + 'static>
         self.terminal_counter += 1;
         self.spawn_terminal_window(
             default_shell_command(),
-            NEW_TERMINAL_SCROLLBACK,
             None,
             format!("Terminal {}", self.terminal_counter),
         )?;
@@ -772,7 +768,7 @@ mod tests {
 
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         let key = app
-            .spawn_terminal_window(default_shell_command(), 200, None, "rewire-test")
+            .spawn_terminal_window(default_shell_command(), None, "rewire-test")
             .expect("spawn shell");
 
         // Simulate run(): point the app and pre-spawned terminals at a live

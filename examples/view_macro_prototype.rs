@@ -52,7 +52,7 @@ fn main() -> std::io::Result<()> {
     let pty = term_wm_pty_engine::Pty::spawn_with_scrollback(
         term_wm::default_shell_command(),
         size,
-        2000,
+        term_wm_core::constants::DEFAULT_SCROLLBACK_LEN,
     )
     .map_err(std::io::Error::other)?;
     let tracker = pty.direct_input_tracker();

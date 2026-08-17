@@ -1688,6 +1688,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
                                     *start_row,
                                     bounds,
                                     self.floating_resize_offscreen,
+                                    self.config.floating_min_width,
+                                    self.config.floating_min_height,
                                 );
                                 self.set_floating_rect(
                                     *key,

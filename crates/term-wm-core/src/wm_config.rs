@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::actions::TermWmAction;
+use crate::constants::DEFAULT_SCROLLBACK_LEN;
 use crate::keybindings::KeyBindings;
 use crate::theme::NOIR;
 
@@ -108,6 +109,12 @@ pub struct WmConfig {
     pub hint_visibility: HintVisibility,
     /// Color theme.
     pub theme: crate::theme::Theme,
+    /// Scrollback buffer size (in lines) for terminal windows.
+    pub scrollback_lines: usize,
+    /// Minimum width for a floating window (in cells).
+    pub floating_min_width: u16,
+    /// Minimum height for a floating window (in cells).
+    pub floating_min_height: u16,
 }
 
 impl Default for WmConfig {
@@ -133,6 +140,9 @@ impl Default for WmConfig {
             menu_outline_timeout: Duration::from_millis(500),
             drag_snap_timeout: Some(Duration::from_millis(2000)),
             theme: NOIR,
+            scrollback_lines: DEFAULT_SCROLLBACK_LEN,
+            floating_min_width: 6,
+            floating_min_height: 3,
         }
     }
 }

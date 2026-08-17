@@ -16,11 +16,8 @@ use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_core::events::Event;
+use term_wm_core::wm_config::WmConfig;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
-
-// TODO: Is this the same as DEFAULT_MAX_LINES in terminal.rs?
-// TODO: Make this user-configurable
-const PTY_SCROLLBACK_LEN: usize = 2000;
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
@@ -34,6 +31,10 @@ struct Cli {
     /// Total number of windows to open (default 2; min 1).
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
+
+    /// Scrollback buffer size per terminal window (default 2000).
+    #[arg(long = "scrollback", default_value_t = term_wm_core::constants::DEFAULT_SCROLLBACK_LEN)]
+    scrollback: usize,
 
     /// Command to run in a window; repeatable, one window per `--run`.
     #[arg(short = 'r', long = "run", value_name = "CMD", action = clap::ArgAction::Append)]
@@ -71,9 +72,14 @@ fn main() -> io::Result<()> {
     let commands = build_commands(cli.run_cmds, cli.cmds);
     let total = total_windows(cli.count, &commands);
 
+    let config = WmConfig {
+        scrollback_lines: cli.scrollback,
+        ..Default::default()
+    };
+
     let mut event_source = UnifiedEventSource::new()?;
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
-    let mut app = App::new_with(commands, total, pty_wakeup_tx)?;
+    let mut app = App::new_with(commands, total, config, pty_wakeup_tx)?;
 
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
@@ -95,11 +101,13 @@ struct App {
 /// so the full default action set is available.
 fn build_wm(
     app_ctx: &Arc<AppContext>,
+    config: WmConfig,
 ) -> term_wm::window::WindowManager<AppRootComponent, LayerComponent, OverlayComponent> {
     let hostname = app_ctx.hostname.as_deref();
     let app_name = app_ctx.app_name.clone();
     let app_version = app_ctx.app_version.clone();
     AppBuilder::<LayerComponent>::new()
+        .config(config)
         .app_ctx(Arc::clone(app_ctx))
         .top_panel(LayerComponent::TopPanel(
             term_wm_sys_ui_components::WmTopPanelComponent::new(&app_name),
@@ -122,6 +130,7 @@ impl App {
     fn new_with(
         commands: Vec<String>,
         num_windows: usize,
+        config: WmConfig,
         pty_wakeup_tx: Sender<UnifiedEvent>,
     ) -> io::Result<Self> {
         let app_ctx = Arc::new(
@@ -133,7 +142,7 @@ impl App {
             ),
         );
 
-        let wm = build_wm(&app_ctx);
+        let wm = build_wm(&app_ctx, config);
 
         let inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
         let mut app = Self {
@@ -175,12 +184,8 @@ impl App {
         command_to_send: Option<String>,
     ) -> io::Result<()> {
         let count = self.inner.wm().window_count() + 1;
-        self.inner.spawn_terminal_window(
-            cmd,
-            PTY_SCROLLBACK_LEN,
-            command_to_send,
-            format!("Shell {}", count),
-        )?;
+        self.inner
+            .spawn_terminal_window(cmd, command_to_send, format!("Shell {}", count))?;
         Ok(())
     }
 }
@@ -251,7 +256,7 @@ mod tests {
     #[test]
     fn main_build_wm_gets_full_default_menu_actions() {
         let app_ctx = Arc::new(AppContext::new("term-wm", "0.0.0").with_hostname("test-host"));
-        let wm = build_wm(&app_ctx);
+        let wm = build_wm(&app_ctx, WmConfig::default());
         assert_eq!(
             wm.supported_menu_actions(),
             term_wm::constants::DEFAULT_SUPPORTED_MENU_ACTIONS,

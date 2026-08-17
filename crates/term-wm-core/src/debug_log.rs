@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::utils::ansi::strip_ansi_escapes;
 
-pub const DEFAULT_MAX_LINES: usize = 2000;
+pub const DEFAULT_DEBUG_LOG_MAX_LINES: usize = 2000;
 
 static GLOBAL_LOG: OnceLock<DebugLogHandle> = OnceLock::new();
 

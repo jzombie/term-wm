@@ -142,7 +142,7 @@ impl WmDebugLogComponent {
     }
 
     pub fn new_default() -> (Self, DebugLogHandle) {
-        Self::new(term_wm_core::debug_log::DEFAULT_MAX_LINES)
+        Self::new(term_wm_core::debug_log::DEFAULT_DEBUG_LOG_MAX_LINES)
     }
 
     /// Create from an existing handle (preserves log history).
