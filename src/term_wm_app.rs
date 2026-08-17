@@ -50,6 +50,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleTiling,
     TermWmAction::NewTerminal,
     TermWmAction::ToggleDebugWindow,
+    TermWmAction::NewWorkspace,
 ];
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
@@ -128,6 +129,13 @@ where
     /// window close/reopen, so titles stay unique even when the window count
     /// drops.
     terminal_counter: usize,
+    /// Cached workspace channel names for the Command Palette.
+    /// Populated by `refresh_workspace_cache()` via short-lived IPC.
+    #[cfg(feature = "session-persistence")]
+    cached_workspaces: Vec<String>,
+    /// Current workspace name for filtering the palette switch list.
+    #[cfg(feature = "session-persistence")]
+    current_workspace: String,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -254,6 +262,10 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             pty_wakeup_tx,
             last_key: Rc::new(RefCell::new(None)),
             terminal_counter: 0,
+            #[cfg(feature = "session-persistence")]
+            cached_workspaces: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            current_workspace: "default".to_string(),
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) AND the bundled
@@ -262,6 +274,42 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // init_system_windows() itself. Idempotent.
         app.init_system_windows();
         app
+    }
+
+    /// Refresh the cached workspace channel list from the daemon via short-lived IPC.
+    /// Called before opening the Command Palette — never on every keystroke.
+    #[cfg(feature = "session-persistence")]
+    pub fn refresh_workspace_cache(&mut self) {
+        match term_session::list_channels() {
+            Ok(resp) => {
+                self.cached_workspaces = resp
+                    .channels
+                    .iter()
+                    .map(|ch| {
+                        // TODO: Don't hardcode split symbol
+                        ch.name.split('/').next().unwrap_or(&ch.name).to_string()
+                    })
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                self.cached_workspaces.sort();
+            }
+            Err(e) => {
+                tracing::debug!("Failed to refresh workspace cache: {e}");
+            }
+        }
+    }
+
+    /// Return the cached workspace channel names.
+    #[cfg(feature = "session-persistence")]
+    pub fn cached_workspaces(&self) -> &[String] {
+        &self.cached_workspaces
+    }
+
+    /// Set the current workspace name.
+    #[cfg(feature = "session-persistence")]
+    pub fn set_current_workspace(&mut self, name: String) {
+        self.current_workspace = name;
     }
 
     /// Spawn a fully-wired PTY terminal window in a single call.
@@ -597,7 +645,22 @@ impl<C: Component<TermWmAction> + 'static>
         let anchor = self.wm.take_pending_palette_anchor();
         palette.set_anchor(anchor);
         palette.show();
-        let items = self.wm.wm_menu_items();
+
+        #[cfg(feature = "session-persistence")]
+        {
+            self.wm.cached_workspaces = self.cached_workspaces.clone();
+            self.wm.current_workspace = self.current_workspace.clone();
+        }
+
+        #[cfg(feature = "session-persistence")]
+        let workspaces = &self.cached_workspaces;
+        #[cfg(not(feature = "session-persistence"))]
+        let workspaces: &[String] = &[];
+
+        #[cfg(feature = "session-persistence")]
+        let items = self.wm.wm_menu_items(workspaces, &self.current_workspace);
+        #[cfg(not(feature = "session-persistence"))]
+        let items = self.wm.wm_menu_items(workspaces, "");
         let supported = self.wm.supported_menu_actions();
         // Filter out items not in the supported set; keep separators.
         let items: Vec<_> = items
@@ -613,6 +676,8 @@ impl<C: Component<TermWmAction> + 'static>
                                 | TermWmAction::CloseWindow(_)
                                 | TermWmAction::SendSuperKeyToWindow(_)
                                 | TermWmAction::SendSuperKeyToFocusedWindow
+                                | TermWmAction::SwitchWorkspace(_)
+                                | TermWmAction::NewWorkspace
                         )
                 }
                 MenuDisplayItem::Separator => true,
@@ -696,6 +761,7 @@ mod tests {
                 TermWmAction::ToggleTiling,
                 TermWmAction::NewTerminal,
                 TermWmAction::ToggleDebugWindow,
+                TermWmAction::NewWorkspace,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );

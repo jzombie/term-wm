@@ -3247,6 +3247,7 @@ dependencies = [
  "serial_test",
  "tempfile",
  "term-clipboard",
+ "term-session",
  "term-session-client",
  "term-session-mock",
  "term-session-muxio-service-definitions",

@@ -17,7 +17,11 @@ license.workspace = true
 publish.workspace = true
 
 [package.metadata.cargo-udeps.ignore]
-development = ["term-bench", "term-session-client"]
+development = ["term-bench"]
+
+[features]
+default = ["session-persistence"]
+session-persistence = ["dep:term-session", "dep:tokio"]
 
 [workspace]
 members = [
@@ -145,6 +149,7 @@ libc = { workspace = true }
 line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
+term-session = { workspace = true, optional = true }
 term-sys-io = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
@@ -155,6 +160,7 @@ term-wm-sys-ui-components = { workspace = true }
 term-wm-ui-components = { workspace = true }
 term-wm-ui-facade = { workspace = true }
 term-wm-view = { workspace = true }
+tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 unicode-width = { workspace = true }

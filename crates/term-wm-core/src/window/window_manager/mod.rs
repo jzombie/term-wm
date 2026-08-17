@@ -422,6 +422,10 @@ pub struct WindowManager<
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     /// Tap-swap targeting state
     pub(crate) tap_swap_state: Option<TapSwapState>,
+    /// Cached workspace names for palette rebuild on focus change.
+    pub cached_workspaces: Vec<String>,
+    /// Current workspace name for palette rebuild on focus change.
+    pub current_workspace: String,
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
@@ -932,6 +936,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             fab_enabled: true,
             bottom_content: DelayedReleaseBool::new(crate::constants::FAB_RESERVATION_DEBOUNCE),
             tap_swap_state: None,
+            cached_workspaces: Vec::new(),
+            current_workspace: "default".to_string(),
         }
     }
 
@@ -6692,7 +6698,7 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items();
+        let items = wm.wm_menu_items(&[], "");
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6769,7 +6775,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items();
+        let items = wm.wm_menu_items(&[], "");
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {

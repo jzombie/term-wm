@@ -12,10 +12,10 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty,
-    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn,
-    SpawnRequest, SpawnResponse, WriteInput,
+    ListChannels, ListChannelsResponse, OnPtyResized, RequestWorkspaceSwitch,
+    RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN,
+    RPC_ERROR_UNATTACHED, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, WriteInput, WorkspaceRebind,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -1297,6 +1297,49 @@ pub async fn run_gateway(
         })
         .await
         .map_err(|e| format!("register ShutdownGateway: {e:?}"))?;
+
+    // ── RequestWorkspaceSwitch ────────────────────────────────────────
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(
+            RequestWorkspaceSwitch::METHOD_ID,
+            move |payload, _ctx| {
+                let state = Arc::clone(&st);
+                async move {
+                    if state.is_shutting_down.load(Ordering::SeqCst) {
+                        return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                    }
+                    let req =
+                        RequestWorkspaceSwitch::decode_request(&payload).map_err(boxed_io)?;
+                    let source = ChannelName::parse(&req.source_channel)
+                        .map_err(|e| rpc_err(&e))?;
+                    // Find the viewer attached to the source channel and push
+                    // WorkspaceRebind to it.
+                    let conns = state.conns.read().await;
+                    for entry in conns.values() {
+                        if let ConnState::Attached(name) = &entry.state
+                            && name == &source
+                        {
+                            let caller = entry.handle.clone();
+                            let target = req.target.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    WorkspaceRebind::call(&caller, target).await
+                                {
+                                    tracing::debug!(
+                                        error = ?e,
+                                        "Failed to deliver WorkspaceRebind"
+                                    );
+                                }
+                            });
+                        }
+                    }
+                    RequestWorkspaceSwitch::encode_response(()).map_err(boxed_io)
+                }
+            },
+        )
+        .await
+        .map_err(|e| format!("register RequestWorkspaceSwitch: {e:?}"))?;
 
     // ── Connection event loop ────────────────────────────────────────
     let st = Arc::clone(&state);

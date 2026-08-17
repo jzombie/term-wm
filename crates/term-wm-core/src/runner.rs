@@ -74,6 +74,13 @@ pub trait WindowManagerHost<
     fn handle_app_event(&mut self, _event: &Event) -> bool {
         false
     }
+
+    /// Handle an application-specific action that the core WM doesn't know about.
+    /// Returns `true` if the action was handled, `false` to fall through to
+    /// component update.
+    fn handle_custom_action(&mut self, _action: &TermWmAction) -> bool {
+        false
+    }
 }
 
 /// Single authoritative action dispatcher. Both the component action queue
@@ -157,6 +164,17 @@ fn dispatch_action<
                 );
                 if !bytes.is_empty() {
                     queue.push_back((key, TermWmAction::KeyToBytes(bytes)));
+                }
+            }
+        }
+        // Workspace actions: delegate to the app's custom action handler
+        action @ (TermWmAction::SwitchWorkspace(_)
+        | TermWmAction::NewWorkspace) => {
+            if !app.handle_custom_action(&action) {
+                // Unhandled — forward to component update
+                let ctx = app.wm().component_context_for(true, key);
+                if let Some(comp) = app.wm().component_for_key_mut(key) {
+                    comp.update(action, &ctx, queue);
                 }
             }
         }
