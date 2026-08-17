@@ -127,6 +127,21 @@ impl<L: WmComponent> AppBuilder<L> {
         self
     }
 
+    pub fn scrollback_lines(mut self, lines: usize) -> Self {
+        self.config.scrollback_lines = lines;
+        self
+    }
+
+    pub fn floating_min_width(mut self, width: u16) -> Self {
+        self.config.floating_min_width = width;
+        self
+    }
+
+    pub fn floating_min_height(mut self, height: u16) -> Self {
+        self.config.floating_min_height = height;
+        self
+    }
+
     /// Build a [`WindowManager`] from the accumulated configuration.
     pub fn build<C: Component<TermWmAction> + 'static, O: Overlay<TermWmAction>>(
         self,

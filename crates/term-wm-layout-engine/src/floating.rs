@@ -1,12 +1,5 @@
 use crate::rect::{LayoutRect, rect_contains};
 
-// TODO: Remove these constants; the layout engine should be agnostic to these
-/// Minimum width for a floating window (in cells).
-pub const FLOATING_MIN_WIDTH: u16 = 6;
-
-/// Minimum height for a floating window (in cells).
-pub const FLOATING_MIN_HEIGHT: u16 = 3;
-
 /// Identifies which edge(s) of a floating window are being dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeEdge {
@@ -172,14 +165,14 @@ pub fn resize_handles_for_region<R: Copy + Eq + Ord>(
     handles
 }
 
-// TODO: The hardcoded magic numbers have to go; the layout engine should be agnostic to these as well/
 /// Generate a drag handle for the title bar of a floating window.
 pub fn floating_header_for_region<R: Copy + Eq + Ord>(
     id: R,
     rect: LayoutRect,
     bounds: LayoutRect,
+    min_dim: u16,
 ) -> Option<DragHandle<R>> {
-    if rect.width < 3 || rect.height < 3 {
+    if rect.width < min_dim || rect.height < min_dim {
         return None;
     }
     let header_rect = LayoutRect {
@@ -214,6 +207,8 @@ pub fn apply_resize_drag_signed(
     start_row: u16,
     bounds: LayoutRect,
     allow_offscreen: bool,
+    min_width: u16,
+    min_height: u16,
 ) -> LayoutRect {
     let dx = i32::from(column).saturating_sub(i32::from(start_col));
     let dy = i32::from(row).saturating_sub(i32::from(start_row));
@@ -246,8 +241,8 @@ pub fn apply_resize_drag_signed(
     }
 
     // Enforce minimum size
-    let min_w = i32::from(FLOATING_MIN_WIDTH);
-    let min_h = i32::from(FLOATING_MIN_HEIGHT);
+    let min_w = i32::from(min_width);
+    let min_h = i32::from(min_height);
 
     if w < min_w {
         match edge {
@@ -306,9 +301,11 @@ pub fn clamp_floating_to_bounds(
     bounds: LayoutRect,
     min_visible_margin: u16,
     allow_offscreen: bool,
+    min_width: u16,
+    min_height: u16,
 ) -> LayoutRect {
-    let min_w = FLOATING_MIN_WIDTH.min(bounds.width.max(1));
-    let min_h = FLOATING_MIN_HEIGHT.min(bounds.height.max(1));
+    let min_w = min_width.min(bounds.width.max(1));
+    let min_h = min_height.min(bounds.height.max(1));
 
     let width = if allow_offscreen {
         rect.width.max(min_w)
@@ -422,7 +419,7 @@ mod tests {
             width: 20,
             height: 20,
         };
-        let header = floating_header_for_region(1u8, rect, area());
+        let header = floating_header_for_region(1u8, rect, area(), 3);
         assert!(header.is_some());
         let h = header.unwrap();
         assert_eq!(h.rect.width, 18);
@@ -438,7 +435,7 @@ mod tests {
             width: 2,
             height: 2,
         };
-        assert!(floating_header_for_region(1u8, rect, area()).is_none());
+        assert!(floating_header_for_region(1u8, rect, area(), 3).is_none());
     }
 
     #[test]
@@ -455,6 +452,8 @@ mod tests {
             10,
             area(),
             false,
+            6,
+            3,
         );
         assert_eq!(result.width, 40); // 20 + (50-30)
         assert_eq!(result.x, 10);
@@ -474,6 +473,8 @@ mod tests {
             10,
             area(),
             false,
+            6,
+            3,
         );
         assert_eq!(result.x, 0); // 20 + (10-30) = 0
         assert_eq!(result.width, 40); // 20 - (10-30) = 40
@@ -494,14 +495,29 @@ mod tests {
             10,
             area(),
             false,
+            6,
+            3,
         );
-        assert_eq!(result.width, FLOATING_MIN_WIDTH);
+        assert_eq!(result.width, 6);
     }
 
     #[test]
     fn apply_resize_drag_offscreen_allowed() {
-        let result =
-            apply_resize_drag_signed(0, 0, 80, 24, ResizeEdge::Left, 40, 0, 0, 0, area(), true);
+        let result = apply_resize_drag_signed(
+            0,
+            0,
+            80,
+            24,
+            ResizeEdge::Left,
+            40,
+            0,
+            0,
+            0,
+            area(),
+            true,
+            6,
+            3,
+        );
         assert_eq!(result.x, 40);
         assert_eq!(result.width, 40);
     }
@@ -522,7 +538,7 @@ mod tests {
             width: 6,
             height: 3,
         };
-        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true, 6, 3);
         // left edge clamped so 4 cells stay visible: x = -(6 - 4) = -2
         assert_eq!(clamped.x, -2);
         assert_eq!(clamped.width, 6);
@@ -542,7 +558,7 @@ mod tests {
             width: 6,
             height: 4,
         };
-        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true, 6, 3);
         assert!(
             clamped.y >= -1,
             "must keep >= 4 visible rows: y={}",
@@ -565,7 +581,7 @@ mod tests {
             width: 6,
             height: 3,
         };
-        let clamped = clamp_floating_to_bounds(rect, bounds, 4, false);
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, false, 6, 3);
         assert_eq!(clamped.x, 0);
         assert_eq!(clamped.y, 7); // bounds.height - height
         assert_eq!(clamped.width, 6);
@@ -586,9 +602,9 @@ mod tests {
             width: 1,
             height: 1,
         };
-        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
-        assert_eq!(clamped.width, FLOATING_MIN_WIDTH);
-        assert_eq!(clamped.height, FLOATING_MIN_HEIGHT);
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true, 6, 3);
+        assert_eq!(clamped.width, 6);
+        assert_eq!(clamped.height, 3);
     }
 
     #[test]
@@ -600,7 +616,7 @@ mod tests {
             width: 6,
             height: 4,
         };
-        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true);
+        let clamped = clamp_floating_to_bounds(rect, bounds, 4, true, 6, 3);
         // No panic; result stays a valid rect even for degenerate bounds.
         assert!(clamped.width >= 1);
     }
