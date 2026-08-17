@@ -92,6 +92,9 @@ fn total_windows(count: Option<usize>, commands: &[String]) -> usize {
 
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
+    // Normalize workspace: strip any "/main" suffix so callers can safely
+    // append "/main" without double-slash paths like "ws/main/main".
+    let workspace: String = cli.workspace.split('/').next().unwrap_or("default").into();
 
     // 0. Stop daemon
     #[cfg(feature = "session-persistence")]
@@ -114,7 +117,7 @@ fn main() -> io::Result<()> {
     #[cfg(feature = "session-persistence")]
     if cli.no_wm {
         let socket = term_session::auto_spawn::connect_or_spawn_server(None)?;
-        let channel = format!("{}/main", cli.workspace);
+        let channel = format!("{}/main", workspace);
         return term_session::client::run_session(&socket, &channel, &cli.cmds).map(|_| ());
     }
 
@@ -122,7 +125,7 @@ fn main() -> io::Result<()> {
     #[cfg(feature = "session-persistence")]
     if !cli.internal_session {
         let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
-        let mut current_workspace = cli.workspace.clone();
+        let mut current_workspace: String = workspace.clone();
 
         loop {
             let channel = format!("{}/main", current_workspace);
@@ -152,12 +155,25 @@ fn main() -> io::Result<()> {
                 inner_cmd.extend(cli.cmds.clone());
             }
 
-            match term_session::client::run_session(&socket_path, &channel, &inner_cmd)? {
-                Some(target_workspace) => {
-                    current_workspace = target_workspace;
+            match term_session::client::run_session(&socket_path, &channel, &inner_cmd) {
+                Ok(Some(target_workspace)) => {
+                    let clean_target = target_workspace
+                        .strip_suffix("/main")
+                        .unwrap_or(&target_workspace);
+                    current_workspace = clean_target.to_string();
                     continue;
                 }
-                None => return Ok(()),
+                Ok(None) => return Ok(()),
+                Err(e) => {
+                    tracing::error!("Session failed on workspace '{}': {}", current_workspace, e);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if current_workspace != "default" {
+                        current_workspace = "default".to_string();
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                }
             }
         }
     }
@@ -178,7 +194,7 @@ fn main() -> io::Result<()> {
 
     let mut event_source = UnifiedEventSource::new()?;
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
-    let mut app = App::new_with(commands, total, config, pty_wakeup_tx, cli.workspace)?;
+        let mut app = App::new_with(commands, total, config, pty_wakeup_tx, workspace)?;
 
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
@@ -315,8 +331,8 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                 #[cfg(feature = "session-persistence")]
                 {
                     let source_channel = format!("{}/main", self.current_workspace);
-                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, _target)
-                    {
+                    let clean_target = _target.strip_suffix("/main").unwrap_or(_target);
+                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, clean_target) {
                         tracing::warn!("Failed to request workspace switch: {e}");
                     }
                 }
@@ -330,64 +346,17 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                         .unwrap_or_default()
                         .as_secs();
 
-                    // TODO: Don't hardcode
                     let target_ws = format!("ws-{}", ts);
-                    let target_channel = format!("{}/main", target_ws);
+                    let source_channel = format!("{}/main", self.current_workspace);
 
-                    if let Ok(exe) = std::env::current_exe() {
-                        let inner_cmd = vec![
-                            exe.to_string_lossy().into_owned(),
-                            // TODO: Don't hardcode params; extremely hard to test this way
-                            "--internal-session".to_string(),
-                            "-w".to_string(),
-                            target_ws.clone(),
-                        ];
-
-                        let res = term_session::with_gateway(|client| async move {
-                            use term_session::protocol::{
-                                Attach, AttachRequest, Spawn, SpawnRequest,
-                            };
-                            use term_session::rpc_client::RpcCallPrebuffered;
-                            let _ = Attach::call(
-                                &*client,
-                                AttachRequest {
-                                    channel: target_channel,
-                                    // TODO: Don't hardcode
-                                    hostname: "local".to_string(),
-                                    pid: std::process::id() as u64,
-                                    // TODO: Don't hardcode
-                                    user: "term-wm".to_string(),
-                                    version: env!("CARGO_PKG_VERSION").to_string(),
-                                    ssh_ip: None,
-                                },
-                            )
-                            .await
-                            .map_err(std::io::Error::other)?;
-
-                            Spawn::call(
-                                &*client,
-                                SpawnRequest {
-                                    cmd: Some(inner_cmd),
-                                    // TODO: Don't hardcode this (make it optional if it requires bogus initial params)
-                                    cols: 80,
-                                    rows: 24,
-                                    cwd: None,
-                                },
-                            )
-                            .await
-                            .map_err(std::io::Error::other)
-                        })
-                        .and_then(|r| r);
-
-                        if let Err(e) = res {
-                            tracing::error!("Failed to spawn new workspace channel: {e}");
-                        } else {
-                            self.inner.refresh_workspace_cache();
-                            self.inner.wm().push_notification(
-                                format!("Created workspace: {target_ws}"),
-                                std::time::Duration::from_secs(3),
-                            );
-                        }
+                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, &target_ws) {
+                        tracing::error!("Failed to switch to new workspace: {e}");
+                    } else {
+                        self.inner.refresh_workspace_cache();
+                        self.inner.wm().push_notification(
+                            format!("Created workspace: {target_ws}"),
+                            std::time::Duration::from_secs(3),
+                        );
                     }
                 }
                 true

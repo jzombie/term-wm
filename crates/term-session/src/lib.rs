@@ -67,31 +67,36 @@ pub fn format_unix_relative_at(ts: u64, now: u64) -> String {
     }
 }
 
-/// Connect to the gateway daemon and run `op` with a live client. The tokio
-/// runtime that hosts the muxio connection is kept alive for the whole `op`,
-/// so RPCs complete (dropping it early would tear down the connection and
-/// hang the call). `op` receives an owned `Arc` and runs on that runtime.
+/// Connect to the gateway daemon and run `op` with a live client. Spawns an
+/// OS thread so the new Tokio runtime is fully isolated from any runtime
+/// already active on the calling thread (avoids the `block_on`-inside-runtime
+/// panic).
 pub fn with_gateway<F, Fut, T>(op: F) -> io::Result<T>
 where
-    F: FnOnce(Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>) -> Fut,
-    Fut: std::future::Future<Output = T>,
+    F: FnOnce(Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
 {
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
-    rt.block_on(async {
-        let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
-            .await
-            .map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::ConnectionRefused,
-                    format!(
-                        "No gateway daemon is running on '{gateway}'. Start one with `term-session --channel <name>` or `term-session --daemon` first.\n  cause: {e}"
-                    ),
-                )
-            })?;
-        Ok(op(client).await)
+    std::thread::spawn(move || {
+        let rt =
+            tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+        rt.block_on(async {
+            let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
+                .await
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::ConnectionRefused,
+                        format!(
+                            "No gateway daemon is running on '{gateway}'. Start one with `term-session --channel <name>` or `term-session --daemon` first.\n  cause: {e}"
+                        ),
+                    )
+                })?;
+            Ok(op(client).await)
+        })
     })
+    .join()
+    .unwrap_or_else(|_| Err(io::Error::other("gateway thread panicked")))
 }
 
 /// List channels from the gateway, including the daemon PID + socket name.
@@ -105,16 +110,18 @@ pub fn list_channels() -> io::Result<ListChannelsResponse> {
 /// The gateway refuses while any participant is attached to the channel unless
 /// `force` is true (see `RPC_ERROR_LIVE_PARTICIPANTS`).
 pub fn kill_channel(channel: &str, force: bool) -> io::Result<()> {
-    with_gateway(|client| async move {
-        KillChannel::call(&*client, (channel.to_string(), force)).await
+    let ch = channel.to_string();
+    with_gateway(move |client| async move {
+        KillChannel::call(&*client, (ch, force)).await
     })?
     .map_err(|e| io::Error::other(format!("kill channel: {e}")))
 }
 
 /// Detach a single client socket from a channel by `conn_id`.
 pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
-    with_gateway(|client| async move {
-        KillClient::call(&*client, (channel.to_string(), conn_id)).await
+    let ch = channel.to_string();
+    with_gateway(move |client| async move {
+        KillClient::call(&*client, (ch, conn_id)).await
     })?
     .map_err(|e| io::Error::other(format!("kill client: {e}")))
 }
@@ -122,15 +129,17 @@ pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
 /// Request the gateway to rebind all viewers attached to `source_channel`
 /// over to the `target` workspace.
 pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Result<()> {
-    with_gateway(|client| async move {
+    let source_owned = source_channel.to_string();
+    let target_owned = target.to_string();
+    with_gateway(move |client| async move {
         use term_session_muxio_service_definitions::{RebindWorkspace, RebindWorkspaceRequest};
         use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
 
         RebindWorkspace::call(
             &*client,
             RebindWorkspaceRequest {
-                source_channel: source_channel.to_string(),
-                target: target.to_string(),
+                source_channel: source_owned,
+                target: target_owned,
             },
         )
         .await
@@ -143,7 +152,7 @@ pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Resul
 /// The daemon refuses to shut down while any live session is running unless
 /// `force` is true (see `RPC_ERROR_LIVE_SESSIONS`).
 pub fn stop_gateway(force: bool) -> io::Result<()> {
-    with_gateway(|client| async move { ShutdownGateway::call(&*client, force).await })?
+    with_gateway(move |client| async move { ShutdownGateway::call(&*client, force).await })?
         .map_err(|e| io::Error::other(format!("shutdown: {e}")))
 }
 

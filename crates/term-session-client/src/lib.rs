@@ -593,6 +593,13 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         force_render |= resized;
         clear_display |= resized;
 
+        // Workspace rebind: server told us to switch channels.
+        // Checked BEFORE the blocking select so the signal is never stuck
+        // behind a crossbeam recv that has no pending data.
+        if let Some(target) = rebind_target.lock().unwrap().take() {
+            return Ok(Some(target));
+        }
+
         // Retrieve next input event (either buffered from previous coalescing
         // pass or blocking on the input/PTY-output channel)
         let input_event = if let Some(evt) = pending_input.take() {
@@ -733,11 +740,6 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
             let screen = parser.screen();
             let (rows, cols) = screen.size();
             render_frame(&mut out, screen, rows, cols, clear_display)?;
-        }
-
-        // Workspace rebind: server told us to switch channels
-        if let Some(target) = rebind_target.lock().unwrap().take() {
-            return Ok(Some(target));
         }
 
         // Exit on session exit
