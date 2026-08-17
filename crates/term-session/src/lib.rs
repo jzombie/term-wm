@@ -1,5 +1,10 @@
 pub mod auto_spawn;
 
+pub use term_session_client as client;
+pub use term_session_server as server;
+pub use term_session_muxio_service_definitions as protocol;
+pub use muxio_tokio_rpc_ipc_client as rpc_client;
+
 use std::io;
 use std::sync::Arc;
 
@@ -112,6 +117,25 @@ pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
         KillClient::call(&*client, (channel.to_string(), conn_id)).await
     })?
     .map_err(|e| io::Error::other(format!("kill client: {e}")))
+}
+
+/// Request the gateway to rebind all viewers attached to `source_channel`
+/// over to the `target` workspace.
+pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Result<()> {
+    with_gateway(|client| async move {
+        use term_session_muxio_service_definitions::{RebindWorkspace, RebindWorkspaceRequest};
+        use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+
+        RebindWorkspace::call(
+            &*client,
+            RebindWorkspaceRequest {
+                source_channel: source_channel.to_string(),
+                target: target.to_string(),
+            },
+        )
+        .await
+    })?
+    .map_err(|e| io::Error::other(format!("rebind workspace: {e}")))
 }
 
 /// Stop the gateway daemon.

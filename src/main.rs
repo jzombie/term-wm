@@ -19,9 +19,6 @@ use term_wm_core::events::Event;
 use term_wm_core::wm_config::WmConfig;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
-#[cfg(feature = "session-persistence")]
-use term_session::ControlEvent;
-
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
 #[command(
@@ -118,7 +115,7 @@ fn main() -> io::Result<()> {
     if cli.no_wm {
         let socket = term_session::auto_spawn::connect_or_spawn_server(None)?;
         let channel = format!("{}/main", cli.workspace);
-        return term_session::client::run_session(&socket, &channel, &cli.cmds);
+        return term_session::client::run_session(&socket, &channel, &cli.cmds).map(|_| ());
     }
 
     // 3. Outer launcher with workspace rebind loop
@@ -128,7 +125,6 @@ fn main() -> io::Result<()> {
         let mut current_workspace = cli.workspace.clone();
 
         loop {
-            // TODO: Don't hardcode default name and format
             let channel = format!("{}/main", current_workspace);
 
             let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
@@ -156,16 +152,12 @@ fn main() -> io::Result<()> {
                 inner_cmd.extend(cli.cmds.clone());
             }
 
-            match term_session::client::run_session_with_control(
-                &socket_path,
-                &channel,
-                &inner_cmd,
-            )? {
-                ControlEvent::RebindWorkspace(target) => {
-                    current_workspace = target;
+            match term_session::client::run_session(&socket_path, &channel, &inner_cmd)? {
+                Some(target_workspace) => {
+                    current_workspace = target_workspace;
                     continue;
                 }
-                ControlEvent::ClientExit => return Ok(()),
+                None => return Ok(()),
             }
         }
     }
@@ -255,7 +247,9 @@ impl App {
 
         let wm = build_wm(&app_ctx, config);
 
-        let inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
+        let mut inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
+        #[cfg(feature = "session-persistence")]
+        inner.set_current_workspace(workspace.clone());
         let mut app = Self {
             inner,
             pty_wakeup_tx,
@@ -321,12 +315,10 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                 #[cfg(feature = "session-persistence")]
                 {
                     let source_channel = format!("{}/main", self.current_workspace);
-                    if let Err(e) = term_session::request_workspace_switch(&source_channel, _target)
+                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, _target)
                     {
-                        tracing::debug!("Workspace switch RPC failed: {e}");
+                        tracing::warn!("Failed to request workspace switch: {e}");
                     }
-                    self.current_workspace = _target.clone();
-                    self.inner.set_current_workspace(_target.clone());
                 }
                 true
             }

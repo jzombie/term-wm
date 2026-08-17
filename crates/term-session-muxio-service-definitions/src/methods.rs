@@ -477,6 +477,75 @@ impl RpcMethodPrebuffered for ShutdownGateway {
     }
 }
 
+// ── RebindWorkspace (client asks server to rebind viewers) ───────────
+
+/// Client request to rebind all viewers on `source_channel` to `target`.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct RebindWorkspaceRequest {
+    pub source_channel: String,
+    pub target: String,
+}
+
+pub struct RebindWorkspace;
+
+impl RpcMethodPrebuffered for RebindWorkspace {
+    const METHOD_ID: u64 = rpc_method_id!("session.rebind_workspace");
+
+    type Input = RebindWorkspaceRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<RebindWorkspaceRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── OnWorkspaceRebind (server pushes to outer viewer) ────────────────
+
+/// Server push telling the outer viewer to rebind to `target`.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct OnWorkspaceRebindRequest {
+    pub target: String,
+}
+
+pub struct OnWorkspaceRebind;
+
+impl RpcMethodPrebuffered for OnWorkspaceRebind {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_workspace_rebind");
+
+    type Input = OnWorkspaceRebindRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<OnWorkspaceRebindRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
 // ── OnPtyResized (server calls client to notify geometry change) ─────
 
 #[derive(Encode, Decode)]

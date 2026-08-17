@@ -19,8 +19,9 @@ use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCal
 use portable_pty::PtySize;
 use term_clipboard::{Clipboard, Osc52Extractor};
 use term_session_muxio_service_definitions::{
-    Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse, path_wire,
+    Attach, AttachRequest, OnPtyResized, OnWorkspaceRebind, RpcMethodPrebuffered,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse,
+    path_wire,
 };
 #[cfg(unix)]
 use term_sys_io::redirect_fd_to_tracing;
@@ -266,7 +267,7 @@ fn client_ssh_ip() -> Option<String> {
 /// `channel` is the logical channel to attach to; `cmd` is the command to run
 /// (empty = the gateway's default shell). PTY geometry is read from the real
 /// terminal.
-pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Result<()> {
+pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Result<Option<String>> {
     // Windows console hosts default to "QuickEdit" mode: clicking the window
     // enters text-selection mode, during which the kernel suspends the
     // process's console I/O until the selection is cleared (Esc). A stray
@@ -320,6 +321,28 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
             },
         ))
         .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
+    }
+
+    // Workspace rebind signal: set by OnWorkspaceRebind handler when the
+    // server tells this viewer to switch to a different channel.
+    let rebind_target: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    {
+        let target_ref = Arc::clone(&rebind_target);
+        rt.block_on(client.get_endpoint().register_prebuffered(
+            OnWorkspaceRebind::METHOD_ID,
+            move |payload, _ctx| {
+                let target_ref = Arc::clone(&target_ref);
+                async move {
+                    let req = OnWorkspaceRebind::decode_request(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    *target_ref.lock().unwrap() = Some(req.target);
+                    OnWorkspaceRebind::encode_response(())
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            },
+        ))
+        .map_err(|e| io::Error::other(format!("register OnWorkspaceRebind: {e:?}")))?;
     }
 
     // Channels for raw PTY output bytes and clipboard text from the subscription stream.
@@ -712,9 +735,14 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
             render_frame(&mut out, screen, rows, cols, clear_display)?;
         }
 
+        // Workspace rebind: server told us to switch channels
+        if let Some(target) = rebind_target.lock().unwrap().take() {
+            return Ok(Some(target));
+        }
+
         // Exit on session exit
         if pane.has_exited() {
-            return Ok(());
+            return Ok(None);
         }
     }
 }

@@ -172,7 +172,7 @@ fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
     // The argv comes straight from the outer shell (split exactly once);
     // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
-    run_session(&socket_name, &channel.to_string(), cmd)
+    run_session(&socket_name, &channel.to_string(), cmd).map(|_| ())
 }
 
 fn list() -> io::Result<()> {

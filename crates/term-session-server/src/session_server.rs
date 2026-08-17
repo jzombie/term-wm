@@ -12,10 +12,11 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnPtyResized, RequestWorkspaceSwitch,
-    RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN,
-    RPC_ERROR_UNATTACHED, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, WriteInput, WorkspaceRebind,
+    ListChannels, ListChannelsResponse, OnPtyResized, OnWorkspaceRebind,
+    OnWorkspaceRebindRequest, RebindWorkspace, RPC_ERROR_LIVE_PARTICIPANTS,
+    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn,
+    SpawnRequest, SpawnResponse, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -1298,11 +1299,11 @@ pub async fn run_gateway(
         .await
         .map_err(|e| format!("register ShutdownGateway: {e:?}"))?;
 
-    // ── RequestWorkspaceSwitch ────────────────────────────────────────
+    // ── RebindWorkspace ──────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
         .register_prebuffered(
-            RequestWorkspaceSwitch::METHOD_ID,
+            RebindWorkspace::METHOD_ID,
             move |payload, _ctx| {
                 let state = Arc::clone(&st);
                 async move {
@@ -1310,11 +1311,9 @@ pub async fn run_gateway(
                         return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                     }
                     let req =
-                        RequestWorkspaceSwitch::decode_request(&payload).map_err(boxed_io)?;
+                        RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
                     let source = ChannelName::parse(&req.source_channel)
                         .map_err(|e| rpc_err(&e))?;
-                    // Find the viewer attached to the source channel and push
-                    // WorkspaceRebind to it.
                     let conns = state.conns.read().await;
                     for entry in conns.values() {
                         if let ConnState::Attached(name) = &entry.state
@@ -1324,22 +1323,22 @@ pub async fn run_gateway(
                             let target = req.target.clone();
                             tokio::spawn(async move {
                                 if let Err(e) =
-                                    WorkspaceRebind::call(&caller, target).await
+                                    OnWorkspaceRebind::call(&caller, OnWorkspaceRebindRequest { target }).await
                                 {
                                     tracing::debug!(
                                         error = ?e,
-                                        "Failed to deliver WorkspaceRebind"
+                                        "Failed to deliver OnWorkspaceRebind"
                                     );
                                 }
                             });
                         }
                     }
-                    RequestWorkspaceSwitch::encode_response(()).map_err(boxed_io)
+                    RebindWorkspace::encode_response(()).map_err(boxed_io)
                 }
             },
         )
         .await
-        .map_err(|e| format!("register RequestWorkspaceSwitch: {e:?}"))?;
+        .map_err(|e| format!("register RebindWorkspace: {e:?}"))?;
 
     // ── Connection event loop ────────────────────────────────────────
     let st = Arc::clone(&state);
