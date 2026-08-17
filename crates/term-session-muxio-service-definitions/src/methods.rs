@@ -12,11 +12,8 @@ use crate::path_wire::PathWire;
 pub const RPC_ERROR_UNATTACHED: &str =
     "gateway: connection is not attached to a channel; call Attach first";
 pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
-
-// TODO: Fix this message; if calling from term-wm, it would use `term-wm --stop-daemon --force`
 pub const RPC_ERROR_LIVE_SESSIONS: &str =
     "gateway: live session(s) running; use `term-session stop --force` to stop anyway";
-
 pub const RPC_ERROR_LIVE_PARTICIPANTS: &str = "gateway: live participant(s) attached to channel; use `term-session kill <channel> --force` to kill anyway";
 
 // ── Attach ──────────────────────────────────────────────────────────
@@ -469,70 +466,6 @@ impl RpcMethodPrebuffered for ShutdownGateway {
         let r = bitcode::decode::<ShutdownGatewayRequest>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok(r.force)
-    }
-
-    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
-        Ok(Vec::new())
-    }
-
-    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
-        Ok(())
-    }
-}
-
-// ── WorkspaceRebind (server pushes to outer viewer) ────────────────
-
-/// Daemon pushes this to the outer viewer's control stream to trigger
-/// rebinding to a different workspace channel.
-pub struct WorkspaceRebind;
-
-/// Inner process requests the outer viewer to rebind to a different channel.
-#[derive(Encode, Decode)]
-pub struct RequestWorkspaceSwitchRequest {
-    pub source_channel: String,
-    pub target: String,
-}
-
-impl RpcMethodPrebuffered for WorkspaceRebind {
-    const METHOD_ID: u64 = rpc_method_id!("session.workspace_rebind");
-
-    type Input = String;
-    type Output = ();
-
-    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&input))
-    }
-
-    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
-        bitcode::decode::<String>(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-    }
-
-    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
-        Ok(Vec::new())
-    }
-
-    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
-        Ok(())
-    }
-}
-
-// ── RequestWorkspaceSwitch ─────────────────────────────────────────
-
-pub struct RequestWorkspaceSwitch;
-
-impl RpcMethodPrebuffered for RequestWorkspaceSwitch {
-    const METHOD_ID: u64 = rpc_method_id!("session.request_workspace_switch");
-
-    type Input = RequestWorkspaceSwitchRequest;
-    type Output = ();
-
-    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&input))
-    }
-
-    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
-        bitcode::decode::<RequestWorkspaceSwitchRequest>(bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {

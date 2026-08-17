@@ -80,14 +80,12 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
 pub fn gateway_channel_name() -> ChannelName {
     if let Ok(name) = std::env::var(GATEWAY_CHANNEL_ENV_VAR) {
         return ChannelName::parse(&name).unwrap_or_else(|_| ChannelName {
-            // TODO: Don't hardcode
             namespace: "term-wm".to_string(),
             name: "gateway".to_string(),
         });
     }
     let user = current_os_user();
     ChannelName {
-        // TODO: Don't hardcode
         namespace: "term-wm".to_string(),
         name: format!("{user}/gateway"),
     }
