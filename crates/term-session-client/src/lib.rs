@@ -509,7 +509,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     for _ in 0..INITIAL_WAIT_ITERS {
         pane.drain_pushes();
         let parser = pane.shared_parser();
-        let parser = parser.lock().unwrap();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
         if !parser.screen().contents_formatted().is_empty() {
             break;
         }
@@ -520,7 +520,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     // Resize local parser to server-constrained geometry
     {
         let parser = pane.shared_parser();
-        let mut parser_lk = parser.lock().unwrap();
+        let mut parser_lk = parser.lock().unwrap_or_else(|e| e.into_inner());
         let (cur_rows, cur_cols) = parser_lk.screen().size();
         if actual_cols != cur_cols || actual_rows != cur_rows {
             parser_lk.screen_mut().set_size(actual_rows, actual_cols);
@@ -575,7 +575,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     // Initial full-frame render
     {
         let parser = pane.shared_parser();
-        let parser = parser.lock().unwrap();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen();
         let (rows, cols) = screen.size();
         render_frame(&mut out, screen, rows, cols, false)?;
@@ -593,7 +593,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                 let cols = server_cols.load(Ordering::Relaxed);
                 let rows = server_rows.load(Ordering::Relaxed);
                 if cols > 0 && rows > 0 {
-                    let mut parser_lk = shared_parser.lock().unwrap();
+                    let mut parser_lk = shared_parser.lock().unwrap_or_else(|e| e.into_inner());
                     let (cur_rows, cur_cols) = parser_lk.screen().size();
                     if cur_cols != cols || cur_rows != rows {
                         parser_lk.screen_mut().set_size(rows, cols);
@@ -645,7 +645,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
 
                             // PTY output — process directly into parser
                             let parser = pane.shared_parser();
-                            let mut parser = parser.lock().unwrap();
+                            let mut parser = parser.lock().unwrap_or_else(|e| e.into_inner());
                             parser.process(&data);
                             None
                         }
@@ -731,7 +731,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                 Event::Mouse(ref mouse) => {
                     let mouse_active = {
                         let parser = pane.shared_parser();
-                        let parser = parser.lock().unwrap();
+                        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
                         parser.screen().mouse_protocol_mode() != MouseProtocolMode::None
                     };
                     if mouse_active {
@@ -773,7 +773,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         // Full-frame explicit row-by-row render
         if has_new_data || force_render {
             let parser = pane.shared_parser();
-            let parser = parser.lock().unwrap();
+            let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
             let screen = parser.screen();
             let (rows, cols) = screen.size();
             render_frame(&mut out, screen, rows, cols, clear_display)?;
@@ -915,6 +915,7 @@ pub fn render_frame(
     out.flush()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1448,6 +1449,7 @@ mod tests {
 // ── Snapshot tests for render_frame byte output ─────────────────────────
 // Uses a push_rx mock (crossbeam channel) + RemotePane(client: None) for
 // deterministic, non-flaky byte-stream assertions.
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 #[allow(clippy::type_complexity)]
 mod snapshot_tests {

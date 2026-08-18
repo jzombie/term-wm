@@ -151,6 +151,7 @@ impl Pane for RemotePane {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

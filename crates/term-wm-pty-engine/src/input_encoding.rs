@@ -212,6 +212,7 @@ pub fn mouse_event_to_bytes(mouse: &MouseEvent, encoding: MouseProtocolEncoding)
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

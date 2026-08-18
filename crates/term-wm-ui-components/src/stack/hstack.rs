@@ -140,6 +140,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for HStackComponent<C> 
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -146,6 +146,7 @@ fn current_os_user() -> String {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -751,6 +751,7 @@ pub trait WmComponent: std::fmt::Debug + Component<TermWmAction> {
     fn set_visible(&mut self, _visible: bool) {}
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

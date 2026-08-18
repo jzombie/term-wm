@@ -352,6 +352,7 @@ pub fn split_sizes(
         .collect()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

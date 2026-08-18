@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Binary/daemon tests for the `term-session` gateway.
 //!
 //! These exercise the real compiled binary (`CARGO_BIN_EXE_term-session`):

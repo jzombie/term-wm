@@ -190,3 +190,9 @@ term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }
 term-wm-render = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true
+
+[workspace.lints.clippy]
+unwrap_used = "deny"

@@ -235,6 +235,7 @@ pub fn apply_resize_drag(
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

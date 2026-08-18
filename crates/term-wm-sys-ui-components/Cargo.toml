@@ -23,3 +23,6 @@ webbrowser = { workspace = true }
 
 [dev-dependencies]
 term-wm-console = { workspace = true }
+
+[lints]
+workspace = true

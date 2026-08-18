@@ -47,6 +47,7 @@ pub fn truncate_to_width(value: &str, width: usize) -> String {
     value.chars().take(width).collect()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

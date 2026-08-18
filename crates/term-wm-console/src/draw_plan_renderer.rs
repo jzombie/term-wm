@@ -1938,6 +1938,7 @@ pub fn render_cursor_overlay<
     cell.set_bg(theme.bg(BgColor::CursorBg).to_ratatui());
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

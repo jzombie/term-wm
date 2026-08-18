@@ -263,6 +263,7 @@ impl Component<TermWmAction> for KeyMonitorComponent {
     fn destroy(&mut self) {}
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

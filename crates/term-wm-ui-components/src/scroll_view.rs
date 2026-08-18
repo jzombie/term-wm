@@ -683,6 +683,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for ScrollViewComponent
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

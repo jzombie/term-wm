@@ -868,7 +868,7 @@ pub async fn run_gateway(
                 // If a session already exists and hasn't exited, reuse it.
                 if guard.session.as_ref().is_some_and(|s| !s.exited) {
                     guard.recalculate_pty_size();
-                    let session = guard.session.as_ref().unwrap();
+                    let session = guard.session.as_ref().expect("session checked above");
                     let (ncols, nrows) = (session.cols, session.rows);
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     let id = session.id;
@@ -911,7 +911,7 @@ pub async fn run_gateway(
                 guard.set_session(session);
                 guard.recalculate_pty_size();
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
-                let session = guard.session.as_ref().unwrap();
+                let session = guard.session.as_ref().expect("session just set");
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
                 let (ncols, nrows) = (scol, srow);
                 drop(guard);
@@ -1563,6 +1563,7 @@ pub async fn run_gateway(
     Ok(exit_code)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

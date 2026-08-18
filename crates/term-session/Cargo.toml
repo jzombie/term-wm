@@ -34,3 +34,6 @@ muxio-tokio-rpc-ipc-client = { workspace = true }
 tempfile = { workspace = true }
 term-session-mock = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true

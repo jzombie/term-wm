@@ -139,6 +139,7 @@ pub fn try_translate_event(evt: crossterm::event::Event) -> Option<Event> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

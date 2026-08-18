@@ -447,7 +447,7 @@ fn strip_trailing_punctuation(s: &str) -> (&str, &str) {
     // ".,?!:;)]'\"" from URLs that `linkify` may include at match time.
     let mut end = s.len();
     while end > 0 {
-        let ch = s[..end].chars().last().unwrap();
+        let ch = s[..end].chars().last().expect("end > 0");
         if matches!(
             ch,
             '.' | ',' | '?' | '!' | ':' | ';' | ')' | ']' | '\'' | '"'

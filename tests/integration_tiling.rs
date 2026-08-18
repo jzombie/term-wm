@@ -111,6 +111,7 @@ fn rects_overlap(a: Rect, b: Rect) -> bool {
 
 // ─── Module 1: Snap Detection ────────────────────────────────────────
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod snap_detection {
     use super::*;
@@ -170,6 +171,7 @@ mod snap_detection {
 
 // ─── Module 2: Multi-Window Tiling ───────────────────────────────────
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod multi_window_tiling {
     use super::*;
@@ -353,6 +355,7 @@ mod multi_window_tiling {
 
 // ─── Module 3: Void Node Lifecycle ───────────────────────────────────
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod void_node_lifecycle {
     use super::*;
@@ -447,6 +450,7 @@ mod void_node_lifecycle {
 
 // ─── Module 4: Spatial Isolation ─────────────────────────────────────
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod spatial_isolation {
     use super::*;
@@ -581,6 +585,7 @@ mod spatial_isolation {
 // These tests verify that the state machine correctly handles
 // Press→Drag→Release sequences without panics or state corruption.
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod drag_snap_pipeline {
     use super::*;
@@ -1342,6 +1347,7 @@ mod drag_snap_pipeline {
 
 // ─── Module 6: Property Tests ────────────────────────────────────────
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod property_tests {
     use super::*;
@@ -1480,6 +1486,7 @@ mod property_tests {
 // All tiled windows occupy a mathematically flat base layer; all floating
 // windows occupy an elevated Z-layer above the entire tiled grid.
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod floating_tiled_separation {
     use super::*;
@@ -1942,6 +1949,7 @@ mod floating_tiled_separation {
 
 // ─── Module 8: Render Pipeline Verification ──────────────────────────
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod render_verification {
     use super::*;

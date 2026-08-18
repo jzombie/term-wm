@@ -131,8 +131,11 @@ impl AsciiImageComponent {
     }
 
     pub fn set_luma8(&mut self, width: u32, height: u32, luma: Vec<u8>) {
-        let expected = width.checked_mul(height).map(|v| v as usize);
-        if width == 0 || height == 0 || expected.is_none() || luma.len() != expected.unwrap() {
+        let Some(expected) = width.checked_mul(height).map(|v| v as usize) else {
+            self.clear();
+            return;
+        };
+        if width == 0 || height == 0 || luma.len() != expected {
             self.clear();
             return;
         }
@@ -150,7 +153,11 @@ impl AsciiImageComponent {
             .checked_mul(height)
             .and_then(|v| v.checked_mul(4))
             .map(|v| v as usize);
-        if width == 0 || height == 0 || expected.is_none() || rgba.len() != expected.unwrap() {
+        let Some(expected) = expected else {
+            self.clear();
+            return;
+        };
+        if width == 0 || height == 0 || rgba.len() != expected {
             self.clear();
             return;
         }
@@ -485,6 +492,7 @@ fn braille_bit(dx: u32, dy: u32) -> u16 {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

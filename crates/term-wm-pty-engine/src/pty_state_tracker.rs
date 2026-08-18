@@ -349,6 +349,7 @@ impl Perform for PtyPerformAdapter {
     fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

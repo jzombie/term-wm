@@ -725,6 +725,7 @@ fn parse_grid_constraints(paths: &Paths, s: &str) -> Result<Vec<TokenStream2>, S
         .collect()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
