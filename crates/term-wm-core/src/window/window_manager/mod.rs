@@ -2964,6 +2964,7 @@ mod tests {
     use crate::hitbox_registry::HitboxId;
     use crate::layout::Direction;
     use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
+    use serial_test::serial;
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
 
@@ -6685,6 +6686,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(wm_menu_items)]
     fn wm_menu_items_disables_close_for_non_closable() {
         use crate::components::{MenuDisplayItem, MenuItem};
         let mut wm = WindowManager::<TestComponent>::with_config(
@@ -6768,6 +6770,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(wm_menu_items)]
     fn wm_menu_items_has_single_clipboard_toggle() {
         use crate::components::{MenuDisplayItem, MenuItem};
         let wm = WindowManager::<TestComponent>::with_config(

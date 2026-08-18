@@ -30,6 +30,7 @@ members = [
     "crates/term-session-server",
     "crates/term-size-box",
     "crates/term-sys-io",
+    "crates/term-wm-config",
     "crates/term-wm-console",
     "crates/term-wm-core",
     "crates/term-wm-crossterm-adapter",
@@ -104,6 +105,7 @@ term-session-muxio-service-definitions = { path = "crates/term-session-muxio-ser
 term-session-server = { path = "crates/term-session-server", version = "0.9.28-alpha" }
 term-sys-io = { path = "crates/term-sys-io", version = "0.9.28-alpha" }
 term-wm = { path = ".", version = "0.9.28-alpha" }
+term-wm-config = { path = "crates/term-wm-config", version = "0.9.28-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.9.28-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.9.28-alpha" }
 term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.9.28-alpha" }
@@ -147,6 +149,8 @@ session-persistence = [
     "dep:tokio",
     "dep:muxio-rpc-service-caller",
     "dep:muxio-rpc-service-endpoint",
+    "term-wm-config/session-persistence",
+    "term-wm-core/session-persistence",
 ]
 
 [dependencies]
@@ -161,6 +165,7 @@ portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-session = { workspace = true, optional = true }
 term-sys-io = { workspace = true }
+term-wm-config = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
 term-wm-layout-engine = { workspace = true }

@@ -167,30 +167,36 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             MenuDisplayItem::Separator,
         ];
 
-        // Workspace group — always show "New workspace"
-        items.push(mi(
-            "New Workspace",
-            Some("+"),
-            crate::actions::TermWmAction::NewWorkspace,
-        ));
+        // Workspace group — always show "New Workspace"
+        #[cfg(feature = "session-persistence")]
+        if term_wm_config::runtime::session_persistence_enabled() {
+            items.push(mi(
+                "New Workspace",
+                Some("+"),
+                crate::actions::TermWmAction::NewWorkspace,
+            ));
 
-        if !workspaces.is_empty() {
-            for ws in workspaces {
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Switch to Workspace: {ws}").into(),
-                    icon: Some("→"),
-                    action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
-                    disabled: ws == current_workspace,
-                }));
+            if !workspaces.is_empty() {
+                for ws in workspaces {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Switch to Workspace: {ws}").into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
+                        disabled: ws == current_workspace,
+                    }));
+                }
             }
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: "Detach Viewer".into(),
+                icon: Some("-"),
+                action: crate::actions::TermWmAction::DetachCurrentClient,
+                disabled: false,
+            }));
+            items.push(MenuDisplayItem::Separator);
         }
-        items.push(MenuDisplayItem::Item(MenuItem {
-            label: "Detach Viewer".into(),
-            icon: Some("-"),
-            action: crate::actions::TermWmAction::DetachCurrentClient,
-            disabled: false,
-        }));
-        items.push(MenuDisplayItem::Separator);
+
+        // TODO: Comment why this is needed
+        let _ = (workspaces, current_workspace);
 
         // Window management group (directly below top group)
         {
@@ -343,6 +349,7 @@ mod tests {
     use crate::window::test_component::TestComponent;
     use crate::window::window_manager::TestOverlay;
     use crate::wm_config::WmConfig;
+    use serial_test::serial;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -575,6 +582,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(wm_menu_items)]
     fn wm_menu_items_separates_controls_and_switcher() {
         use crate::components::{MenuDisplayItem, MenuItem};
         use crate::window::WindowState;
@@ -603,6 +611,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(wm_menu_items)]
     fn wm_menu_items_skips_separator_when_no_switch_targets() {
         use crate::components::{MenuDisplayItem, MenuItem};
         let mut wm = make_wm::<TestOverlay>();
@@ -623,6 +632,40 @@ mod tests {
         assert!(
             !has_switch,
             "no Switch to entries expected when display order is empty"
+        );
+    }
+
+    #[test]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_omits_workspace_group_when_runtime_disabled() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+
+        // Disable the runtime toggle so workspace actions are suppressed.
+        term_wm_config::runtime::init(term_wm_config::runtime::RuntimeConfig {
+            session_persistence: false,
+        });
+
+        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default");
+
+        // Restore the default so parallel tests see the expected state.
+        term_wm_config::runtime::init(term_wm_config::runtime::RuntimeConfig::default());
+
+        let has_workspace_action = items.iter().any(|entry| {
+            matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem { action, .. })
+                    if matches!(
+                        action,
+                        TermWmAction::NewWorkspace
+                            | TermWmAction::SwitchWorkspace(_)
+                            | TermWmAction::DetachCurrentClient
+                    )
+            )
+        });
+        assert!(
+            !has_workspace_action,
+            "workspace actions must not appear when runtime toggle is disabled"
         );
     }
 }

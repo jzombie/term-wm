@@ -1,10 +1,8 @@
 use std::fmt;
 
 use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
-
-/// Environment variable that overrides the gateway channel name at runtime.
-/// Injected by the test harness for suite isolation, or set by an operator.
-pub const GATEWAY_CHANNEL_ENV_VAR: &str = "TERM_WM_GATEWAY";
+use term_wm_config::env::active_environment;
+pub use term_wm_config::env::{GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE};
 
 /// Default workspace name (namespace when no `/` is present).
 pub const DEFAULT_WORKSPACE: &str = "default";
@@ -98,24 +96,36 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
 /// Resolve the logical gateway channel name.
 ///
 /// Deterministic and static by default: `TERM_WM_GATEWAY` env override wins
-/// at runtime, otherwise the gateway resolves to `term-wm/<user>/gateway`
-/// where `<user>` is the current OS user. No build-time entropy is involved;
-/// the compiled artifact is reproducible and an upgraded binary probes the
-/// same endpoint as a running daemon. Test isolation is the test harness's
-/// job — it injects a unique `TERM_WM_GATEWAY` per suite into the client and
-/// daemon subprocesses.
+/// wholesale at runtime; otherwise the gateway resolves to
+/// `{namespace}/<env>/<user>/gateway` where `{namespace}` is [`GATEWAY_NAMESPACE`],
+/// `<env>` is the active environment (`TERM_WM_ENV`, defaulting to `dev` in
+/// debug / `prod` in release builds), and `<user>` is the current OS user.
+/// Environment-scoping keeps dev builds from ever attaching to (or tearing
+/// down) production gateways while the shared namespace keeps all binaries
+/// interoperating on the same socket family. No build-time entropy is
+/// involved; the compiled artifact is reproducible and an upgraded binary
+/// probes the same endpoint as a running daemon. Test isolation is the test
+/// harness's job — it injects a unique `TERM_WM_GATEWAY` per suite into the
+/// client and daemon subprocesses.
 pub fn gateway_channel_name() -> ChannelName {
     if let Ok(name) = std::env::var(GATEWAY_CHANNEL_ENV_VAR) {
         return ChannelName::parse(&name).unwrap_or_else(|_| ChannelName {
-            namespace: "term-wm".to_string(),
+            namespace: GATEWAY_NAMESPACE.to_string(),
             name: "gateway".to_string(),
         });
     }
+    let env = active_environment();
     let user = current_os_user();
     ChannelName {
-        namespace: "term-wm".to_string(),
-        name: format!("{user}/gateway"),
+        namespace: GATEWAY_NAMESPACE.to_string(),
+        name: format!("{env}/{user}/gateway"),
     }
+}
+
+/// One-line `--help` footer describing the resolved gateway. Shared by both
+/// the `term-wm` and `term-session` binaries so the label stays consistent.
+pub fn gateway_help_line() -> String {
+    format!("Persistence gateway: {}", gateway_channel_name())
 }
 
 /// Current OS username for the user-scoped default gateway name.
@@ -192,30 +202,87 @@ mod tests {
     #[test]
     fn gateway_override_env_wins() {
         let _guard = env_lock();
-        // TERM_WM_GATEWAY must be honoured when present (runtime injection).
+        // TERM_WM_GATEWAY must be honoured when present (runtime injection),
+        // even when TERM_WM_ENV is also set.
         unsafe {
             std::env::set_var(GATEWAY_CHANNEL_ENV_VAR, "test/iso-gateway");
+            std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "prod");
         }
         let gw = gateway_channel_name();
         assert_eq!(gw.to_string(), "test/iso-gateway");
         unsafe {
             std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
         }
     }
 
     #[test]
     fn gateway_default_is_deterministic_and_user_scoped() {
         let _guard = env_lock();
-        // No override -> must be term-wm/<user>/gateway, stable across calls
-        // and never a bare shared literal.
+        // No overrides -> must be {namespace}/<env>/<user>/gateway, stable
+        // across calls and never a bare shared literal.
         unsafe {
             std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
         }
         let a = gateway_channel_name();
         let b = gateway_channel_name();
         assert_eq!(a, b);
-        assert_eq!(a.namespace, "term-wm");
-        assert!(a.name.ends_with("/gateway"), "got {}", a.name);
+        assert_eq!(a.namespace, GATEWAY_NAMESPACE);
+        // {env}/{user}/gateway  (3 segments)
+        let parts: Vec<&str> = a.name.split('/').collect();
+        assert_eq!(parts.len(), 3, "got {}", a.name);
+        assert_eq!(
+            parts[0],
+            term_wm_config::env::default_environment().as_str()
+        );
+        assert!(!parts[1].is_empty(), "user segment must be non-empty");
+        assert_eq!(parts[2], "gateway");
+    }
+
+    #[test]
+    fn gateway_default_honors_environment_override() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "test");
+        }
+        let gw = gateway_channel_name();
+        let env_segment = gw.name.split('/').next().unwrap_or("");
+        assert_eq!(env_segment, "test");
+        unsafe {
+            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+        }
+    }
+
+    #[test]
+    fn gateway_default_falls_back_on_invalid_environment() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "bogus");
+        }
+        let gw = gateway_channel_name();
+        let env_segment = gw.name.split('/').next().unwrap_or("");
+        assert_eq!(
+            env_segment,
+            term_wm_config::env::default_environment().as_str()
+        );
+        unsafe {
+            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+        }
+    }
+
+    #[test]
+    fn gateway_help_line_mentions_gateway() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+        }
+        assert!(
+            gateway_help_line().starts_with(&format!("Persistence gateway: {GATEWAY_NAMESPACE}/"))
+        );
     }
 
     #[test]

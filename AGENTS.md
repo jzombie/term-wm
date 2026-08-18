@@ -35,6 +35,16 @@ Shared ScrollView
 Helper-Method Naming
 - Avoid naming inherent helpers `render` when the `Component::render` trait method exists; prefer `render_content` or another distinct name to prevent accidental recursion.
 
+UI String Style
+- User-facing action names use Chicago title-case: capitalize major words; keep
+  minor words (`a`, `an`, `and`, `at`, `by`, `for`, `in`, `of`, `on`, `or`, `the`,
+  `to`) lowercase unless they are first or last.
+- `TermWmAction::Display` strings are the canonical machine-rendered action names
+  and MUST match the Command Palette labels; update both together when a label
+  changes.
+- Full rules, the canonical action-name list, and stable terminology live in
+  [docs/UI-STYLE.md](./docs/UI-STYLE.md).
+
 Component Trait Requirements
 - Every component must implement the shared `Component` trait (e.g., `resize`, `render`, `handle_event`) and import the trait with `use crate::components::Component;` when needed.
 

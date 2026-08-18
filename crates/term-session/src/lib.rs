@@ -4,7 +4,7 @@ pub use muxio_tokio_rpc_ipc_client as rpc_client;
 pub use term_session_client as client;
 pub use term_session_muxio_service_definitions as protocol;
 pub use term_session_muxio_service_definitions::{
-    ChannelName, DEFAULT_WORKSPACE, SESSION_CHANNEL_NAME,
+    ChannelName, DEFAULT_WORKSPACE, SESSION_CHANNEL_NAME, gateway_channel_name, gateway_help_line,
 };
 pub use term_session_server as server;
 
@@ -16,8 +16,7 @@ use term_session_muxio_service_definitions::{
     KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
 };
 
-// TODO: Rename to TERM_SESSION_CHANNEL
-pub const CHANNEL_ENV_VAR: &str = "TERM_WM_CHANNEL";
+pub use term_wm_config::env::CHANNEL_ENV_VAR;
 pub const DEFAULT_CHANNEL: &str = "default/main";
 
 /// Resolve the channel from an optional CLI arg, falling back to the env var,
@@ -106,6 +105,59 @@ where
 pub fn list_channels() -> io::Result<ListChannelsResponse> {
     with_gateway(|client| async move { ListChannels::call(&*client, ()).await })?
         .map_err(|e| io::Error::other(format!("list: {e}")))
+}
+
+/// Print a human-readable listing of all channels to stdout, including the
+/// gateway daemon PID + socket. Returns the same error as [`list_channels`]
+/// if the gateway is unreachable.
+pub fn print_list() -> io::Result<()> {
+    let resp = list_channels()?;
+    // Header: which PID on this system is the gateway daemon.
+    println!(
+        "Gateway Daemon PID: {} | Socket: {}",
+        resp.gateway_pid, resp.socket
+    );
+    if resp.channels.is_empty() {
+        println!("\nNo channels.");
+        return Ok(());
+    }
+    // Vertical list: one block per channel, one line per client. Kept short so
+    // it wraps cleanly instead of being a wide table.
+    for ch in &resp.channels {
+        let session = ch
+            .session
+            .as_ref()
+            .map(|s| format!("shared size: {}x{}", s.cols, s.rows))
+            .unwrap_or_else(|| "none".to_string());
+        let nclients = ch.clients.len();
+        println!();
+        println!("channel: {}", ch.name);
+        println!("  created: {}", format_unix_relative(ch.created_at_unix));
+        println!("  {session}");
+        println!(
+            "  clients: {}",
+            if nclients == 0 {
+                "none".to_string()
+            } else {
+                format!("{nclients} connected")
+            }
+        );
+        for c in &ch.clients {
+            println!("    - conn: {}  (pid {})", c.conn_id, c.pid);
+            println!("      user: {}", c.user);
+            println!("      version: {}", c.version);
+            if let Some(ip) = &c.ssh_ip {
+                println!("      ssh ip from: {}", ip);
+            }
+            println!("      host: {}", c.hostname);
+            println!("      size: {}x{}", c.cols, c.rows);
+            println!(
+                "      connected: {}",
+                format_unix_relative(c.connected_at_unix)
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Kill a channel's session and detach all its sockets.
@@ -303,7 +355,7 @@ fn write_selfcheck_marker(marker: &std::path::Path) {
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate `TERM_WM_CHANNEL`, which is process-global.
+    /// Serializes tests that mutate `TERM_SESSION_CHANNEL`, which is process-global.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())

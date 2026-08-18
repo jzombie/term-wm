@@ -1,6 +1,6 @@
 use std::io;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use term_session::auto_spawn::connect_or_spawn_server;
 use term_session_client::run_session;
 use term_session_muxio_service_definitions::ChannelName;
@@ -29,7 +29,7 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon_selfcheck: Option<std::path::PathBuf>,
 
-    /// Channel name [default: default/main or $TERM_WM_CHANNEL]
+    /// Channel name [default: default/main or $TERM_SESSION_CHANNEL]
     #[arg(long)]
     channel: Option<String>,
 
@@ -118,15 +118,25 @@ fn main() {
     }
 }
 
+/// Build the CLI `Command`, decorating the help footer with the resolved
+/// persistence gateway so `--help` (and the bare-run long help) shows the exact
+/// socket this build targets.
+fn cli_command() -> clap::Command {
+    Cli::command().after_help(term_session_muxio_service_definitions::gateway_help_line())
+}
+
 fn run() -> io::Result<()> {
-    let cli = Cli::parse();
+    let cli = {
+        let mut matches = cli_command().get_matches();
+        Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
+    };
 
     // Gateway name resolution: explicit --gateway wins; else TERM_WM_GATEWAY
-    // (handled by gateway_channel_name()); else the static user-scoped default.
+    // (handled by gateway_channel_name()); else the environment-scoped user
+    // default.
     if let Some(ref gw) = cli.gateway {
         unsafe {
-            // TODO: Use constant
-            std::env::set_var("TERM_WM_GATEWAY", gw);
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gw);
         }
     }
 
@@ -135,7 +145,7 @@ fn run() -> io::Result<()> {
     }
 
     match cli.command {
-        Some(Command::List) => list(),
+        Some(Command::List) => term_session::print_list(),
         Some(Command::Kill {
             channel,
             force,
@@ -158,7 +168,7 @@ fn run() -> io::Result<()> {
                 // convention). `--daemon` is handled above. Long help so it
                 // matches `--help` exactly (version + long_about).
                 let mut stderr = io::stderr();
-                let _ = Cli::command().write_long_help(&mut stderr);
+                let _ = cli_command().write_long_help(&mut stderr);
                 std::process::exit(2);
             }
         }
@@ -176,60 +186,6 @@ fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
     run_session(&socket_name, &channel.to_string(), cmd).map(|_| ())
 }
 
-// TODO: Rename to print_list, move into the lib, and expose to term-wm main
-fn list() -> io::Result<()> {
-    let resp = term_session::list_channels()?;
-    // Header: which PID on this system is the gateway daemon.
-    println!(
-        "Gateway Daemon PID: {} | Socket: {}",
-        resp.gateway_pid, resp.socket
-    );
-    if resp.channels.is_empty() {
-        println!("\nNo channels.");
-        return Ok(());
-    }
-    // Vertical list: one block per channel, one line per client. Kept short so
-    // it wraps cleanly instead of being a wide table.
-    for ch in &resp.channels {
-        let session = ch
-            .session
-            .as_ref()
-            .map(|s| format!("shared size: {}x{}", s.cols, s.rows))
-            .unwrap_or_else(|| "none".to_string());
-        let nclients = ch.clients.len();
-        println!();
-        println!("channel: {}", ch.name);
-        println!(
-            "  created: {}",
-            term_session::format_unix_relative(ch.created_at_unix)
-        );
-        println!("  {session}");
-        println!(
-            "  clients: {}",
-            if nclients == 0 {
-                "none".to_string()
-            } else {
-                format!("{nclients} connected")
-            }
-        );
-        for c in &ch.clients {
-            println!("    - conn: {}  (pid {})", c.conn_id, c.pid);
-            println!("      user: {}", c.user);
-            println!("      version: {}", c.version);
-            if let Some(ip) = &c.ssh_ip {
-                println!("      ssh ip from: {}", ip);
-            }
-            println!("      host: {}", c.hostname);
-            println!("      size: {}x{}", c.cols, c.rows);
-            println!(
-                "      connected: {}",
-                term_session::format_unix_relative(c.connected_at_unix)
-            );
-        }
-    }
-    Ok(())
-}
-
 fn kill(channel: &str, force: bool) -> io::Result<()> {
     term_session::kill_channel(channel, force)?;
     println!("Killed channel {channel}.");
@@ -240,4 +196,36 @@ fn stop(force: bool) -> io::Result<()> {
     term_session::stop_gateway(force)?;
     println!("Gateway shutdown initiated.");
     Ok(())
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializes tests that mutate `TERM_WM_GATEWAY` / `TERM_WM_ENV`, which
+    /// are process-global and unsafe to read/write concurrently.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn help_shows_resolved_gateway() {
+        let _guard = env_lock();
+        // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
+        // otherwise change the rendered footer.
+        unsafe {
+            std::env::remove_var("TERM_WM_GATEWAY");
+            std::env::remove_var("TERM_WM_ENV");
+        }
+        let mut cmd = cli_command();
+        let help = cmd.render_long_help().to_string();
+        assert!(help.contains("Persistence gateway:"), "help was:\n{help}");
+        assert!(
+            help.contains(term_session_muxio_service_definitions::GATEWAY_NAMESPACE),
+            "help was:\n{help}"
+        );
+        assert!(help.contains("/gateway"), "help was:\n{help}");
+    }
 }
