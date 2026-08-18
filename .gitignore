@@ -7,3 +7,4 @@ samply.json
 
 DEBUG.sh
 *.log
+.build/
