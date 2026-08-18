@@ -167,7 +167,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             MenuDisplayItem::Separator,
         ];
 
-        // Workspace group — always show "New workspace"
+        // Workspace group — always show "New Workspace"
         #[cfg(feature = "session-persistence")]
         if term_wm_config::runtime::session_persistence_enabled() {
             items.push(mi(
