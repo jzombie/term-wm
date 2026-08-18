@@ -7,8 +7,8 @@
 **term-wm** is a high-performance terminal window manager and multiplexer featuring asynchronous PTY handling, tree-based tiling, and detachable sessions.
 
 <div align="center">
-  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.1-alpha-linux.png?raw=true" alt="term-wm v0.9.1-alpha on Linux" /><br />
-  <em>pictured: term-wm v0.9.1-alpha on Linux</em>
+  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.28-alpha-linux.png?raw=true" alt="term-wm v0.9.28-alpha on Linux" /><br />
+  <em>pictured: term-wm v0.9.28-alpha on Linux</em>
 </div>
 <div align="center">
   <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.0-alpha-mac.png?raw=true" alt="term-wm v0.9.0-alpha on macOS" /><br />
