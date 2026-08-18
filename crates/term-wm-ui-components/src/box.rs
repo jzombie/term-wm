@@ -282,6 +282,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for BoxComponent<C> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

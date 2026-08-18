@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
 use serial_test::serial;

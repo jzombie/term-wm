@@ -100,6 +100,7 @@ pub fn resolve_target<Id: Copy>(
     find_closest_region(cx, cy, regions, aspect_ratio_weight)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

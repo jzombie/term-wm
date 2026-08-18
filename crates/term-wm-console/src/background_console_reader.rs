@@ -121,6 +121,7 @@ fn input_loop(tx: Sender<Event>, shutdown: Arc<AtomicBool>) {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

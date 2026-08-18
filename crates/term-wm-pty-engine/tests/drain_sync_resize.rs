@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 // Integration tests for drain-synchronized PTY resize: a resize request is
 // applied by the reader thread at the pipe-drain boundary (emulator reflow +
 // OS ioctl/SIGWINCH), not mid-shell-write. These live here (not in src/pty.rs)

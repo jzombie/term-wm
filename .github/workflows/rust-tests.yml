@@ -70,6 +70,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ steps.rustc.outputs.hash }}-${{ steps.lockfile.outputs.hash }}-
 
+      - name: Check for bare .lock().unwrap() in production code
+        shell: bash
+        run: bash ci/check-mutex-unwrap.sh
+
       - name: Test
         run: cargo test --workspace --all-features --lib --bins --tests --examples -- --include-ignored
 

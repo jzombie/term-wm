@@ -462,7 +462,11 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             TermWmAction::DetachCurrentClient => {
                 #[cfg(feature = "session-persistence")]
                 {
-                    if let Some(conn_id) = *self.event_owner.lock().unwrap() {
+                    if let Some(conn_id) = *self
+                        .event_owner
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                    {
                         let channel =
                             term_session::ChannelName::session(&self.current_workspace).to_string();
                         if let Err(e) = term_session::kill_client(&channel, conn_id) {
@@ -525,6 +529,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

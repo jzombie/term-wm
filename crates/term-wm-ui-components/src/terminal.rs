@@ -156,7 +156,7 @@ impl Component<TermWmAction> for TerminalComponent {
 
                 let mut pane = self.pane.borrow_mut();
                 let parser_arc = pane.shared_parser();
-                let parser = parser_arc.lock().unwrap();
+                let parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
                 let screen = parser.screen();
                 let encoding = screen.mouse_protocol_encoding();
 
@@ -190,7 +190,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 let bracketed_paste = {
                     let mut pane = self.pane.borrow_mut();
                     let parser = pane.shared_parser();
-                    let parser_lock = parser.lock().unwrap();
+                    let parser_lock = parser.lock().unwrap_or_else(|err| err.into_inner());
                     parser_lock.screen().bracketed_paste()
                 };
                 let bytes = paste_to_bytes(text.as_str(), bracketed_paste);
@@ -229,7 +229,7 @@ impl Component<TermWmAction> for TerminalComponent {
                 let bracketed_paste = {
                     let mut pane = self.pane.borrow_mut();
                     let parser = pane.shared_parser();
-                    let parser_lock = parser.lock().unwrap();
+                    let parser_lock = parser.lock().unwrap_or_else(|err| err.into_inner());
                     parser_lock.screen().bracketed_paste()
                 };
                 let bytes = paste_to_bytes(text.as_str(), bracketed_paste);
@@ -612,7 +612,7 @@ impl TerminalComponent {
 
         // Lock the shared parser once for both link overlay and cell rendering.
         let parser_arc = pane.shared_parser();
-        let parser = parser_arc.lock().unwrap();
+        let parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
         let screen = parser.screen();
 
         let bytes_seen = pane.bytes_received();
@@ -782,7 +782,7 @@ fn word_range_at_in_pane(
     let mut pane = pane.borrow_mut();
     let max_scrollback = pane.max_scrollback();
     let parser_arc = pane.shared_parser();
-    let mut parser = parser_arc.lock().unwrap();
+    let mut parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
     let screen = parser.screen_mut();
 
     let (viewport_rows, cols) = screen.size();
@@ -920,7 +920,7 @@ impl TerminalComponent {
         let max_scrollback = pane.max_scrollback();
 
         let parser_arc = pane.shared_parser();
-        let mut parser = parser_arc.lock().unwrap();
+        let mut parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
         let screen = parser.screen_mut();
 
         let (viewport_rows, cols) = screen.size();
@@ -1257,12 +1257,12 @@ impl TestPane {
     }
 
     fn write_to_parser(&mut self, bytes: &[u8]) {
-        let mut parser = self.parser.lock().unwrap();
+        let mut parser = self.parser.lock().unwrap_or_else(|err| err.into_inner());
         parser.process(bytes);
     }
 
     fn set_parser_size(&mut self, rows: u16, cols: u16) {
-        let mut parser = self.parser.lock().unwrap();
+        let mut parser = self.parser.lock().unwrap_or_else(|err| err.into_inner());
         parser.screen_mut().set_size(rows, cols);
     }
 
@@ -1343,6 +1343,7 @@ impl Pane for TestPane {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2739,7 +2740,10 @@ mod tests {
         // screen().bracketed_paste().
         {
             let parser = term.pane.borrow_mut().shared_parser();
-            parser.lock().unwrap().process(b"\x1b[?2004h");
+            parser
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .process(b"\x1b[?2004h");
         }
 
         let ctx = ComponentContext::default();
@@ -2841,7 +2845,10 @@ mod tests {
         // Simulate the child sending \x1b[?2004h (DECSET 2004).
         {
             let parser = term.pane.borrow_mut().shared_parser();
-            parser.lock().unwrap().process(b"\x1b[?2004h");
+            parser
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .process(b"\x1b[?2004h");
         }
 
         let ctx = ComponentContext::default();
@@ -2871,7 +2878,10 @@ mod tests {
         // Enable bracketed paste on the child's parser
         {
             let parser = term.pane.borrow_mut().shared_parser();
-            parser.lock().unwrap().process(b"\x1b[?2004h");
+            parser
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .process(b"\x1b[?2004h");
         }
 
         let ctx = ComponentContext::default();
@@ -2907,7 +2917,10 @@ mod tests {
         {
             let mut pane = term.pane.borrow_mut();
             let parser = pane.shared_parser();
-            parser.lock().unwrap().process(b"\x1b[?2004h");
+            parser
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .process(b"\x1b[?2004h");
         }
 
         let ctx = ComponentContext::default();
@@ -2965,7 +2978,10 @@ mod tests {
         // Enable bracketed paste on the child's parser
         {
             let parser = term.pane.borrow_mut().shared_parser();
-            parser.lock().unwrap().process(b"\x1b[?2004h");
+            parser
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .process(b"\x1b[?2004h");
         }
 
         let ctx = ComponentContext::default();
@@ -3257,7 +3273,7 @@ mod tests {
 
         let pane = term.pane_mut();
         let shared_parser = pane.shared_parser();
-        let parser = shared_parser.lock().unwrap();
+        let parser = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
         let count = parser.screen().contents().matches("DUPLICHECK").count();
         assert!(
             count < 2,

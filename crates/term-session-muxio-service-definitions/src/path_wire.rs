@@ -159,6 +159,7 @@ pub fn decode_path(pw: &PathWire) -> PathBuf {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::{PathWire, decode_path, encode_path};

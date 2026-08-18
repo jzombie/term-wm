@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Ground-truth diagnostic: where do mouse events for the embedded terminal in
 //! a `view!` tree actually go?
 //!

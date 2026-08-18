@@ -449,6 +449,7 @@ pub fn detect_corner_snap(
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -804,6 +804,7 @@ impl Default for Osc52Extractor {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

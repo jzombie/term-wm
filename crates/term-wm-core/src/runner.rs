@@ -950,7 +950,9 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
 
     let mut heuristic = LongestSide;
     let mut windows_iter = windows.iter();
-    let first = *windows_iter.next().unwrap();
+    let first = *windows_iter
+        .next()
+        .expect("auto_layout_for_windows: checked non-empty");
     let mut root: BspNode<WindowKey> = BspNode::leaf(first);
 
     for (depth, &key) in windows_iter.enumerate() {
@@ -983,6 +985,7 @@ pub fn auto_layout_for_windows(windows: &[WindowKey]) -> Option<TilingLayout<Win
     Some(TilingLayout::new(layout_node))
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1932,6 +1935,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod power_calibration_tests {
     use super::*;

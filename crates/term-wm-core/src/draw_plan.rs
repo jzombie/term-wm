@@ -200,6 +200,7 @@ impl DrawPlan {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -392,6 +393,7 @@ pub mod tests {
         }
     }
 
+    #[allow(clippy::unwrap_used)]
     #[cfg(test)]
     #[allow(clippy::module_inception)]
     mod tests {

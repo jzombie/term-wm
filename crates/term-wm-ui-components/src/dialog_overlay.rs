@@ -276,6 +276,7 @@ impl Default for DialogOverlayComponent {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

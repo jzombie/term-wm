@@ -47,6 +47,7 @@ pub fn install_sigint_handler() -> std::io::Result<SigintHandle> {
     Ok(SigintHandle { flag })
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

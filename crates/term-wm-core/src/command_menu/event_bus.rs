@@ -38,6 +38,7 @@ impl CommandMenuEventBus {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::super::arena::{CommandAction, CommandName};
