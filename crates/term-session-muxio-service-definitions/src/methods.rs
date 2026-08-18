@@ -651,6 +651,102 @@ impl RpcMethodPrebuffered for SubscribeInternalInput {
     }
 }
 
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip_request<M: RpcMethodPrebuffered>(input: M::Input) -> M::Input
+    where
+        M::Input: Clone + Encode + for<'a> Decode<'a>,
+    {
+        let bytes = M::encode_request(input.clone()).unwrap();
+        M::decode_request(&bytes).unwrap()
+    }
+
+    #[test]
+    fn rebind_workspace_round_trips() {
+        let req: RebindWorkspaceRequest = RebindWorkspace::decode_request(
+            &RebindWorkspace::encode_request(RebindWorkspaceRequest {
+                source_channel: "dev/main".into(),
+                target: "ws-123/main".into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(req.source_channel, "dev/main");
+        assert_eq!(req.target, "ws-123/main");
+        assert_eq!(RebindWorkspace::decode_response(&[]).unwrap(), ());
+    }
+
+    #[test]
+    fn on_workspace_rebind_round_trips() {
+        let req = roundtrip_request::<OnWorkspaceRebind>(OnWorkspaceRebindRequest {
+            target: "ws-123/main".into(),
+        });
+        assert_eq!(req.target, "ws-123/main");
+        assert_eq!(OnWorkspaceRebind::decode_response(&[]).unwrap(), ());
+    }
+
+    #[test]
+    fn send_attributed_input_round_trips() {
+        let req = roundtrip_request::<SendAttributedInput>(SendAttributedInputRequest {
+            channel: "dev/main".into(),
+            event: Event::Resize(120, 40),
+        });
+        assert_eq!(req.channel, "dev/main");
+        match req.event {
+            Event::Resize(cols, rows) => {
+                assert_eq!((cols, rows), (120, 40));
+            }
+            other => panic!("expected Resize event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn on_attributed_input_round_trips() {
+        let req = roundtrip_request::<OnAttributedInput>(OnAttributedInputRequest {
+            conn_id: 42,
+            event: Event::FocusGained,
+        });
+        assert_eq!(req.conn_id, 42);
+        assert!(matches!(req.event, Event::FocusGained));
+    }
+
+    #[test]
+    fn subscribe_internal_input_round_trips() {
+        let req = roundtrip_request::<SubscribeInternalInput>(SubscribeInternalInputRequest {
+            channel: "dev/main".into(),
+        });
+        assert_eq!(req.channel, "dev/main");
+    }
+
+    #[test]
+    fn on_pty_resized_round_trips() {
+        let bytes = OnPtyResized::encode_request((200, 60)).unwrap();
+        assert_eq!(OnPtyResized::decode_request(&bytes).unwrap(), (200, 60));
+    }
+
+    #[test]
+    fn malformed_wire_bytes_are_rejected() {
+        let bad = b"not-bitcode".to_vec();
+        assert!(RebindWorkspace::decode_request(&bad).is_err());
+        assert!(OnWorkspaceRebind::decode_request(&bad).is_err());
+        assert!(SendAttributedInput::decode_request(&bad).is_err());
+        assert!(OnAttributedInput::decode_request(&bad).is_err());
+        assert!(SubscribeInternalInput::decode_request(&bad).is_err());
+        assert!(OnPtyResized::decode_request(&bad).is_err());
+    }
+
+    #[test]
+    fn error_message_constants_are_stable() {
+        assert!(RPC_ERROR_UNATTACHED.starts_with("gateway:"));
+        assert!(RPC_ERROR_SHUTTING_DOWN.starts_with("gateway:"));
+        assert!(RPC_ERROR_LIVE_SESSIONS.starts_with("gateway:"));
+        assert!(RPC_ERROR_LIVE_PARTICIPANTS.starts_with("gateway:"));
+    }
+}
+
 // ── OnPtyResized (server calls client to notify geometry change) ─────
 
 #[derive(Encode, Decode)]

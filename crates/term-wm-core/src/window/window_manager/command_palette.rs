@@ -668,4 +668,44 @@ mod tests {
             "workspace actions must not appear when runtime toggle is disabled"
         );
     }
+
+    #[test]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_shows_workspace_group_when_runtime_enabled() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+
+        // Runtime enabled by default: the workspace group must offer
+        // New Workspace, Switch to Workspace entries (current one disabled),
+        // and Detach Viewer.
+        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev");
+
+        let mut workspace: Vec<(String, bool)> = items
+            .iter()
+            .filter_map(|entry| match entry {
+                MenuDisplayItem::Item(MenuItem {
+                    label,
+                    action:
+                        TermWmAction::NewWorkspace
+                        | TermWmAction::SwitchWorkspace(_)
+                        | TermWmAction::DetachCurrentClient,
+                    disabled,
+                    ..
+                }) => Some((label.to_string(), *disabled)),
+                _ => None,
+            })
+            .collect();
+
+        workspace.sort();
+        assert_eq!(
+            workspace,
+            vec![
+                ("Detach Viewer".to_string(), false),
+                ("New Workspace".to_string(), false),
+                ("Switch to Workspace: dev".to_string(), true),
+                ("Switch to Workspace: prod".to_string(), false),
+            ],
+            "workspace group must list all actions, disabling the current workspace"
+        );
+    }
 }

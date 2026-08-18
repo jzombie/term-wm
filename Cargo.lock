@@ -3361,6 +3361,7 @@ dependencies = [
  "libc",
  "line-ending",
  "portable-pty",
+ "serial_test",
  "term-clipboard",
  "term-session-mock",
  "term-sys-io",

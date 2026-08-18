@@ -7,8 +7,8 @@
 **term-wm** is a high-performance terminal window manager and multiplexer featuring asynchronous PTY handling, tree-based tiling, and detachable sessions.
 
 <div align="center">
-  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.1-alpha-linux.png?raw=true" alt="term-wm v0.9.1-alpha on Linux" /><br />
-  <em>pictured: term-wm v0.9.1-alpha on Linux</em>
+  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.28-alpha-linux.png?raw=true" alt="term-wm v0.9.28-alpha on Linux" /><br />
+  <em>pictured: term-wm v0.9.28-alpha on Linux</em>
 </div>
 <div align="center">
   <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.0-alpha-mac.png?raw=true" alt="term-wm v0.9.0-alpha on macOS" /><br />
@@ -141,6 +141,19 @@ The UI event loop runs synchronously on a single thread. Each PTY runs its own r
 ### Testability
 
 The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with test doubles (`TestPane`, `TestComponent`), so layout, rendering, and PTY scroll synchronization are verified without a terminal — including property tests for scroll sync.
+
+### Code Coverage
+
+Line coverage is tracked via [Coveralls](https://coveralls.io/github/jzombie/term-wm?branch=main) using `cargo-llvm-cov` (see the CI `coverage` job in `.github/workflows/rust-tests.yml`). A root [`Makefile`](./Makefile) makes the same measurement reproducible locally:
+
+```sh
+make coverage             # clean + full coverage run (workspace, all features) + summary
+make coverage-baseline    # as above, and tees the summary to coverage-baseline.txt
+make coverage-main        # coverage of the `main` branch via a throwaway git worktree (.build/main-worktree)
+make coverage-clean       # remove the worktree and coverage artifacts
+```
+
+Prerequisites (once): `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov` (or `cargo binstall cargo-llvm-cov`). Coverage output is written to `lcov.info` (git-ignored). The workflow mirrors the CI commands exactly, so a local run reproduces the Coveralls numbers up to platform differences.
 
 ### Features
 

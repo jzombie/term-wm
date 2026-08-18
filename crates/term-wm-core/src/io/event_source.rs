@@ -265,4 +265,34 @@ mod tests {
         EventSource::set_max_sleep_duration(&mut s, Some(Duration::from_secs(1)));
         EventSource::set_max_sleep_duration(&mut s, None);
     }
+
+    #[test]
+    fn last_event_owner_default_returns_none_and_forwards_via_mut_ref() {
+        // A source without attribution support reports None for the owner.
+        let d = Dummy;
+        assert_eq!(d.last_event_owner(), None);
+
+        // The blanket impl must forward to the referent.
+        struct OwnerSource(Option<usize>);
+        impl EventSource for OwnerSource {
+            fn poll(&mut self, _: Duration) -> io::Result<bool> {
+                Ok(false)
+            }
+            fn read(&mut self) -> io::Result<Event> {
+                unreachable!()
+            }
+            fn next_key(&mut self) -> io::Result<KeyEvent> {
+                unreachable!()
+            }
+            fn next_mouse(&mut self) -> io::Result<MouseEvent> {
+                Err(io::Error::other("no"))
+            }
+            fn last_event_owner(&self) -> Option<usize> {
+                self.0
+            }
+        }
+        let inner = OwnerSource(Some(7));
+        let reference = &inner;
+        assert_eq!(reference.last_event_owner(), Some(7));
+    }
 }
