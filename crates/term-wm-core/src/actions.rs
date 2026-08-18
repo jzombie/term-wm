@@ -166,6 +166,14 @@ pub enum TermWmAction {
     // without modifying the framework enum. The numeric code is
     // application-defined; components interpret it in `update()`.
     Custom(u16),
+
+    // --- Workspace actions ---
+    /// Switch the outer viewer to a different workspace channel.
+    SwitchWorkspace(String),
+    /// Create a new workspace (prompts for name).
+    NewWorkspace,
+    /// Detach the current viewer connection from the session.
+    DetachCurrentClient,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -266,7 +274,10 @@ impl TermWmAction {
             | TermWmAction::ConfirmSwap
             | TermWmAction::CancelSwap
             | TermWmAction::SendSuperKeyToWindow(_)
-            | TermWmAction::SendSuperKeyToFocusedWindow => Category::Windows,
+            | TermWmAction::SendSuperKeyToFocusedWindow
+            | TermWmAction::SwitchWorkspace(_)
+            | TermWmAction::NewWorkspace
+            | TermWmAction::DetachCurrentClient => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -406,6 +417,11 @@ impl fmt::Display for TermWmAction {
             TermWmAction::PanDown => "Pan down",
             TermWmAction::CycleViewMode => "Cycle view",
             TermWmAction::Custom(_) => "Custom action",
+            TermWmAction::SwitchWorkspace(name) => {
+                return write!(f, "Switch to workspace: {name}");
+            }
+            TermWmAction::NewWorkspace => "New workspace",
+            TermWmAction::DetachCurrentClient => "Detach viewer",
         };
         write!(f, "{}", s)
     }

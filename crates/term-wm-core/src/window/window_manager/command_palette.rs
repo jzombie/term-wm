@@ -102,8 +102,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.close_command_palette();
     }
 
+    // TODO: Workspaces & current_workspace should be derived from context, I think
     pub fn wm_menu_items(
         &self,
+        workspaces: &[String],
+        current_workspace: &str,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
         use crate::window::WindowState;
@@ -163,6 +166,31 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             ),
             MenuDisplayItem::Separator,
         ];
+
+        // Workspace group — always show "New workspace"
+        items.push(mi(
+            "New Workspace",
+            Some("+"),
+            crate::actions::TermWmAction::NewWorkspace,
+        ));
+
+        if !workspaces.is_empty() {
+            for ws in workspaces {
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Switch to Workspace: {ws}").into(),
+                    icon: Some("→"),
+                    action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
+                    disabled: ws == current_workspace,
+                }));
+            }
+        }
+        items.push(MenuDisplayItem::Item(MenuItem {
+            label: "Detach Viewer".into(),
+            icon: Some("-"),
+            action: crate::actions::TermWmAction::DetachCurrentClient,
+            disabled: false,
+        }));
+        items.push(MenuDisplayItem::Separator);
 
         // Window management group (directly below top group)
         {
@@ -555,7 +583,7 @@ mod tests {
         wm.focus_window_key(key);
         wm.set_window_title(key, "alpha");
 
-        let items = wm.wm_menu_items();
+        let items = wm.wm_menu_items(&[], "");
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
@@ -584,7 +612,7 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items();
+        let items = wm.wm_menu_items(&[], "");
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,

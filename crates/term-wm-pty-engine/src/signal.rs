@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A handle for monitoring SIGINT (Ctrl-C) signals delivered to the process.
@@ -21,17 +22,28 @@ impl SigintHandle {
     }
 }
 
+/// Global flag shared by all `SigintHandle` instances. Installed once; safe to
+/// call `install_sigint_handler` multiple times (e.g. across workspace
+/// re-connections).
+static SIGINT_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
 /// Install a SIGINT handler that sets a flag instead of terminating.
 ///
-/// The returned [`SigintHandle`] lets event loops check for and acknowledge
-/// the signal without performing I/O in signal context.
+/// The first call registers the `ctrlc` handler; subsequent calls return a
+/// handle to the same flag. This is safe to call across workspace
+/// re-connections without triggering the "handler already registered" error.
 pub fn install_sigint_handler() -> std::io::Result<SigintHandle> {
-    let flag = Arc::new(AtomicBool::new(false));
-    let f = Arc::clone(&flag);
-    ctrlc::set_handler(move || {
-        f.store(true, Ordering::Release);
-    })
-    .map_err(std::io::Error::other)?;
+    let flag = SIGINT_FLAG
+        .get_or_init(|| {
+            let flag = Arc::new(AtomicBool::new(false));
+            let f = Arc::clone(&flag);
+            ctrlc::set_handler(move || {
+                f.store(true, Ordering::Release);
+            })
+            .expect("failed to install SIGINT handler");
+            flag
+        })
+        .clone();
     Ok(SigintHandle { flag })
 }
 

@@ -125,6 +125,7 @@ fn run() -> io::Result<()> {
     // (handled by gateway_channel_name()); else the static user-scoped default.
     if let Some(ref gw) = cli.gateway {
         unsafe {
+            // TODO: Use constant
             std::env::set_var("TERM_WM_GATEWAY", gw);
         }
     }
@@ -142,7 +143,7 @@ fn run() -> io::Result<()> {
         }) => kill(&channel, force),
         Some(Command::KillClient { channel, client_id }) => {
             term_session::kill_client(&channel, client_id)?;
-            println!("Detached client {client_id} from channel {channel}");
+            println!("Detached client {client_id} from channel {channel}.");
             Ok(())
         }
         Some(Command::Stop { force }) => stop(force),
@@ -172,9 +173,10 @@ fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
     // The argv comes straight from the outer shell (split exactly once);
     // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
-    run_session(&socket_name, &channel.to_string(), cmd)
+    run_session(&socket_name, &channel.to_string(), cmd).map(|_| ())
 }
 
+// TODO: Rename to print_list, move into the lib, and expose to term-wm main
 fn list() -> io::Result<()> {
     let resp = term_session::list_channels()?;
     // Header: which PID on this system is the gateway daemon.
@@ -230,7 +232,7 @@ fn list() -> io::Result<()> {
 
 fn kill(channel: &str, force: bool) -> io::Result<()> {
     term_session::kill_channel(channel, force)?;
-    println!("Killed channel {channel}");
+    println!("Killed channel {channel}.");
     Ok(())
 }
 
