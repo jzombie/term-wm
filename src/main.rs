@@ -126,9 +126,11 @@ fn main() -> io::Result<()> {
     if !cli.internal_session {
         let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
         let mut current_workspace = workspace.clone();
-        let mut last_working_workspace = current_workspace.clone();
 
         loop {
+            let clean_workspace = current_workspace.strip_suffix("/main").unwrap_or(&current_workspace);
+            current_workspace = clean_workspace.to_string();
+
             let channel = format!("{}/main", current_workspace);
             let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
 
@@ -157,33 +159,13 @@ fn main() -> io::Result<()> {
 
             match term_session::client::run_session(&socket_path, &channel, &inner_cmd) {
                 Ok(Some(target_workspace)) => {
-                    let clean_target = target_workspace.strip_suffix("/main").unwrap_or(&target_workspace);
-                    let debug_msg = format!("[term-wm-debug] launcher: rebind to '{}'\n", clean_target);
-                    let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/term-wm-debug.log").and_then(|mut f| std::io::Write::write_all(&mut f, debug_msg.as_bytes()));
-                    last_working_workspace = current_workspace.clone();
-                    current_workspace = clean_target.to_string();
+                    current_workspace = target_workspace;
                     continue;
                 }
-                Ok(None) => {
-                    let debug_msg = format!("[term-wm-debug] launcher: session exited normally on '{}'\n", current_workspace);
-                    let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/term-wm-debug.log").and_then(|mut f| std::io::Write::write_all(&mut f, debug_msg.as_bytes()));
-                    if current_workspace != last_working_workspace {
-                        eprintln!("\r\n[term-wm] Workspace '{}' exited unexpectedly. Falling back to '{}'...", current_workspace, last_working_workspace);
-                        std::thread::sleep(std::time::Duration::from_secs(1));
-                        current_workspace = last_working_workspace.clone();
-                        continue;
-                    }
-                    return Ok(());
-                }
+                Ok(None) => return Ok(()),
                 Err(e) => {
-                    let debug_msg = format!("[term-wm-debug] launcher: session ERROR on '{}': {e}\n", current_workspace);
-                    let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/term-wm-debug.log").and_then(|mut f| std::io::Write::write_all(&mut f, debug_msg.as_bytes()));
-                    eprintln!("\r\n[term-wm] Connection error on '{}': {}", current_workspace, e);
-                    if current_workspace != last_working_workspace {
-                        std::thread::sleep(std::time::Duration::from_secs(1));
-                        current_workspace = last_working_workspace.clone();
-                        continue;
-                    }
+                    eprintln!("\r\n\r\n[term-wm FATAL] Connection dropped: {}", e);
+                    std::thread::sleep(std::time::Duration::from_secs(3));
                     return Err(e);
                 }
             }
@@ -344,22 +326,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                 {
                     let source_channel = format!("{}/main", self.current_workspace);
                     let clean_target = _target.strip_suffix("/main").unwrap_or(_target);
-                    let debug_msg = format!(
-                        "[term-wm-debug] SwitchWorkspace: source={}, target={}\n",
-                        source_channel, clean_target
-                    );
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/tmp/term-wm-debug.log")
-                        .and_then(|mut f| std::io::Write::write_all(&mut f, debug_msg.as_bytes()));
                     if let Err(e) = term_session::request_workspace_rebind(&source_channel, clean_target) {
-                        let err_msg = format!("[term-wm-debug] rebind FAILED: {e}\n");
-                        let _ = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("/tmp/term-wm-debug.log")
-                            .and_then(|mut f| std::io::Write::write_all(&mut f, err_msg.as_bytes()));
                         tracing::warn!("Failed to request workspace switch: {e}");
                     }
                 }
@@ -376,36 +343,10 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                     let target_ws = format!("ws-{}", ts);
                     let source_channel = format!("{}/main", self.current_workspace);
 
-                    let debug_msg = format!(
-                        "[term-wm-debug] NewWorkspace: source={}, target={}\n",
-                        source_channel, target_ws
-                    );
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/tmp/term-wm-debug.log")
-                        .and_then(|mut f| std::io::Write::write_all(&mut f, debug_msg.as_bytes()));
-
                     if let Err(e) = term_session::request_workspace_rebind(&source_channel, &target_ws) {
-                        let err_msg = format!("[term-wm-debug] rebind FAILED: {e}\n");
-                        let _ = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("/tmp/term-wm-debug.log")
-                            .and_then(|mut f| std::io::Write::write_all(&mut f, err_msg.as_bytes()));
                         tracing::error!("Failed to switch to new workspace: {e}");
                     } else {
-                        let ok_msg = "[term-wm-debug] rebind OK\n".to_string();
-                        let _ = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("/tmp/term-wm-debug.log")
-                            .and_then(|mut f| std::io::Write::write_all(&mut f, ok_msg.as_bytes()));
                         self.inner.refresh_workspace_cache();
-                        self.inner.wm().push_notification(
-                            format!("Created workspace: {target_ws}"),
-                            std::time::Duration::from_secs(3),
-                        );
                     }
                 }
                 true
