@@ -28,20 +28,20 @@ use term_wm_ui_facade::{LayerComponent, OverlayComponent};
     long_about = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_DESCRIPTION")),
 )]
 struct Cli {
-    /// Total number of windows to open (default 2; min 1). Only takes affect on new sessions.
+    /// Total number of windows to open (default 2; min 1). Only takes effect on new sessions.
     #[arg(short = 'n', long = "count")]
     count: Option<usize>,
 
-    /// Scrollback buffer size per terminal window (default 2000). Only takes affect on new sessions.
+    /// Scrollback buffer size per terminal window (default 2000). Only takes effect on new sessions.
     #[arg(long = "scrollback", default_value_t = term_wm_core::constants::DEFAULT_SCROLLBACK_LEN)]
     scrollback: usize,
 
-    /// Command to run in a window; repeatable, one window per `--run`. Only takes affect on new sessions.
+    /// Command to run in a window; repeatable, one window per `--run`. Only takes effect on new sessions.
     #[arg(short = 'r', long = "run", value_name = "CMD", action = clap::ArgAction::Append)]
     run_cmds: Vec<String>,
 
     /// One command for a window (the whole argv after `--`); it follows any
-    /// `--run` windows. Remaining `--count` windows are default shells. Only takes affect on new sessions.
+    /// `--run` windows. Remaining `--count` windows are default shells. Only takes effect on new sessions.
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmds: Vec<String>,
 
