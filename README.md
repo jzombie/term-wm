@@ -164,7 +164,7 @@ The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with te
 | :--- | :--- | :--- |
 | `TERM_WM_ENV` | Runtime environment (`dev`/`prod`/`test`, case-insensitive); scopes the gateway endpoint. | `dev` in debug builds, `prod` in release |
 | `TERM_WM_GATEWAY` | Wholesale override of the gateway endpoint. | `term-wm/<env>/<user>/gateway` |
-| `TERM_WM_CHANNEL` | Session channel override (read by `term-session`). | `default/main` |
+| `TERM_SESSION_CHANNEL` | Session channel override (read by `term-session`). | `default/main` |
 | `TERM_WM_NO_SESSION_PERSISTENCE` | Disables session-persistence behavior at runtime (same as `--no-session-persistence`). | unset (persistence enabled) |
 | `TERM_WM_TRACE_ESC` | Dumps raw PTY→emulator bytes to a file (debugging aid). | off |
 

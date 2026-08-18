@@ -9,7 +9,7 @@ pub const GATEWAY_NAMESPACE: &str = "term-wm";
 /// Gateway channel override (CI isolation, operators). Read by `term-session`.
 pub const GATEWAY_CHANNEL_ENV_VAR: &str = "TERM_WM_GATEWAY";
 /// Session channel override. Read by `term-session`.
-pub const CHANNEL_ENV_VAR: &str = "TERM_WM_CHANNEL";
+pub const CHANNEL_ENV_VAR: &str = "TERM_SESSION_CHANNEL";
 /// Enables dumping raw PTY→emulator bytes to a file (debugging). Read by
 /// `term-wm-pty-engine`.
 pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";

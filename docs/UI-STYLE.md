@@ -57,7 +57,7 @@ update the palette entry and the `Display` string together.
 ## Environment Variables & Flags
 
 - Environment variables are always uppercase `TERM_WM_*` (`TERM_WM_ENV`,
-  `TERM_WM_GATEWAY`, `TERM_WM_CHANNEL`, `TERM_WM_NO_SESSION_PERSISTENCE`,
+  `TERM_WM_GATEWAY`, `TERM_SESSION_CHANNEL`, `TERM_WM_NO_SESSION_PERSISTENCE`,
   `TERM_WM_TRACE_ESC`).
 - CLI flags are lowercase kebab-case (`--no-session-persistence`,
   `--list-channels`, `-w/--workspace`).
