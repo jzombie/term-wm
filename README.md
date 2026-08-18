@@ -142,6 +142,19 @@ The UI event loop runs synchronously on a single thread. Each PTY runs its own r
 
 The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with test doubles (`TestPane`, `TestComponent`), so layout, rendering, and PTY scroll synchronization are verified without a terminal — including property tests for scroll sync.
 
+### Code Coverage
+
+Line coverage is tracked via [Coveralls](https://coveralls.io/github/jzombie/term-wm?branch=main) using `cargo-llvm-cov` (see the CI `coverage` job in `.github/workflows/rust-tests.yml`). A root [`Makefile`](./Makefile) makes the same measurement reproducible locally:
+
+```sh
+make coverage             # clean + full coverage run (workspace, all features) + summary
+make coverage-baseline    # as above, and tees the summary to coverage-baseline.txt
+make coverage-main        # coverage of the `main` branch via a throwaway git worktree (.build/main-worktree)
+make coverage-clean       # remove the worktree and coverage artifacts
+```
+
+Prerequisites (once): `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov` (or `cargo binstall cargo-llvm-cov`). Coverage output is written to `lcov.info` (git-ignored). The workflow mirrors the CI commands exactly, so a local run reproduces the Coveralls numbers up to platform differences.
+
 ### Features
 
 * **Hybrid Layout Engine:** Seamlessly mix Binary Space Partitioning (BSP) and N-ary tree tiling with a free-floating window layer. Floating windows support mouse-driven repositioning, edge-snapping, and Z-index drop shadows. 
