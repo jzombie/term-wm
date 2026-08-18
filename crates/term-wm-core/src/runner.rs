@@ -2090,4 +2090,230 @@ mod power_calibration_tests {
             "draw must fire from pre-loop initial render (FramePacer never armed)"
         );
     }
+
+    /// Workspace actions the binary's `App` does not handle must be forwarded
+    /// to the focused component's `update` (the default
+    /// `WindowManagerHost::handle_custom_action` returns `false`).
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    fn dispatch_workspace_actions_forward_to_component_when_unhandled() {
+        use crate::window::WindowManager;
+        use crate::window::test_component::{ActionRecorder, TestComponent};
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let recorder = ActionRecorder {
+            actions: Vec::new(),
+            received_mouse_bytes: false,
+        };
+        let k = wm.create_window(TestComponent::ActionRecorder(recorder));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        wm.focus_window_key(k);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+
+        for action in [
+            TermWmAction::SwitchWorkspace("dev".into()),
+            TermWmAction::NewWorkspace,
+            TermWmAction::DetachCurrentClient,
+        ] {
+            dispatch_action(&mut app, k, action, &mut queue);
+        }
+
+        if let Some(comp) = app.wm.component_for_key_mut(k) {
+            if let TestComponent::ActionRecorder(r) = comp {
+                assert!(
+                    r.actions
+                        .contains(&TermWmAction::SwitchWorkspace("dev".into()))
+                );
+                assert!(r.actions.contains(&TermWmAction::NewWorkspace));
+                assert!(r.actions.contains(&TermWmAction::DetachCurrentClient));
+            } else {
+                panic!("expected ActionRecorder component");
+            }
+        } else {
+            panic!("component should exist at the created key");
+        }
+    }
+
+    /// When the app's `handle_custom_action` consumes a workspace action, it
+    /// must NOT be forwarded to the component update.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    fn dispatch_workspace_actions_stop_when_handled_by_app() {
+        use crate::window::WindowManager;
+        use crate::window::test_component::{ActionRecorder, TestComponent};
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+            fn handle_custom_action(&mut self, _action: &TermWmAction) -> bool {
+                true
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let recorder = ActionRecorder {
+            actions: Vec::new(),
+            received_mouse_bytes: false,
+        };
+        let k = wm.create_window(TestComponent::ActionRecorder(recorder));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        wm.focus_window_key(k);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+
+        dispatch_action(
+            &mut app,
+            k,
+            TermWmAction::SwitchWorkspace("dev".into()),
+            &mut queue,
+        );
+
+        if let Some(comp) = app.wm.component_for_key_mut(k) {
+            if let TestComponent::ActionRecorder(r) = comp {
+                assert!(
+                    r.actions.is_empty(),
+                    "handled workspace action must not reach component update"
+                );
+            } else {
+                panic!("expected ActionRecorder component");
+            }
+        } else {
+            panic!("component should exist at the created key");
+        }
+    }
+
+    /// Every remaining `dispatch_action` arm that is observable through the
+    /// WM must route correctly: window/geometry ops, toggle ops, notifications,
+    /// callbacks, and quit. This pins the full dispatch match so coverage
+    /// reflects the whole routing table, not just the workspace actions.
+    #[test]
+    fn dispatch_action_covers_window_toggle_and_system_arms() {
+        use crate::window::WindowManager;
+        use crate::window::test_component::{ActionRecorder, TestComponent};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let recorder = ActionRecorder {
+            actions: Vec::new(),
+            received_mouse_bytes: false,
+        };
+        let k1 = wm.create_window(TestComponent::ActionRecorder(recorder));
+        let k2 = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k1, crate::window::WindowState::Mapped);
+        wm.transition_window(k2, crate::window::WindowState::Mapped);
+        wm.focus_window_key(k1);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+
+        // Toggle arms (all three default to enabled, so a toggle flips them off).
+        let mc = app.wm.mouse_capture_enabled();
+        dispatch_action(&mut app, k1, TermWmAction::ToggleMouseCapture, &mut queue);
+        assert_ne!(app.wm.mouse_capture_enabled(), mc);
+        let cb = app.wm.clipboard_enabled();
+        dispatch_action(&mut app, k1, TermWmAction::ToggleClipboardMode, &mut queue);
+        assert_ne!(app.wm.clipboard_enabled(), cb);
+        let ws = app.wm.window_selection_enabled();
+        dispatch_action(
+            &mut app,
+            k1,
+            TermWmAction::ToggleWindowSelection,
+            &mut queue,
+        );
+        assert_ne!(app.wm.window_selection_enabled(), ws);
+
+        // Window geometry arms: maximize a mapped window, then minimize it.
+        dispatch_action(&mut app, k1, TermWmAction::MaximizeWindow(k2), &mut queue);
+        assert_eq!(
+            app.wm.window_state(k2),
+            Some(crate::window::WindowState::Mapped),
+            "MaximizeWindow must keep the target mapped"
+        );
+        dispatch_action(&mut app, k1, TermWmAction::MinimizeWindow(k2), &mut queue);
+        assert_eq!(
+            app.wm.window_state(k2),
+            Some(crate::window::WindowState::Iconic),
+            "MinimizeWindow must iconify the target"
+        );
+
+        // FocusWindow on an iconic window must restore it to mapped.
+        dispatch_action(&mut app, k1, TermWmAction::FocusWindow(k2), &mut queue);
+        assert_eq!(app.wm.focused_window(), k2);
+
+        // Notification + Callback arms.
+        dispatch_action(
+            &mut app,
+            k1,
+            TermWmAction::SendNotification("hi".into()),
+            &mut queue,
+        );
+        assert!(!app.wm.notifications().is_empty());
+
+        static CALLBACK_FIRED: AtomicBool = AtomicBool::new(false);
+        CALLBACK_FIRED.store(false, Ordering::Relaxed);
+        dispatch_action(
+            &mut app,
+            k1,
+            TermWmAction::Callback(|| {
+                CALLBACK_FIRED.store(true, Ordering::Relaxed);
+            }),
+            &mut queue,
+        );
+        assert!(CALLBACK_FIRED.load(Ordering::Relaxed));
+
+        // Overlay/system arms: dispatched for coverage (default no-ops).
+        dispatch_action(&mut app, k1, TermWmAction::ToggleMonocle, &mut queue);
+        dispatch_action(&mut app, k1, TermWmAction::ToggleTiling, &mut queue);
+        dispatch_action(&mut app, k1, TermWmAction::Help, &mut queue);
+        dispatch_action(&mut app, k1, TermWmAction::OpenHelp, &mut queue);
+        dispatch_action(&mut app, k1, TermWmAction::OpenCommandPalette, &mut queue);
+        dispatch_action(&mut app, k1, TermWmAction::ToggleDebugWindow, &mut queue);
+        dispatch_action(&mut app, k1, TermWmAction::ToggleSystemPanel, &mut queue);
+
+        // Quit arm (default open_exit_confirm requests quit on the WM).
+        dispatch_action(&mut app, k1, TermWmAction::Quit, &mut queue);
+        assert!(app.wm.quit_requested(), "Quit must request a quit");
+
+        // Close arm.
+        dispatch_action(&mut app, k1, TermWmAction::CloseWindow(k2), &mut queue);
+        assert_eq!(
+            app.wm.window_state(k2),
+            None,
+            "CloseWindow must remove the target window"
+        );
+    }
 }

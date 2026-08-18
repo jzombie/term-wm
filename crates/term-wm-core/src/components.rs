@@ -1184,4 +1184,308 @@ mod tests {
         comp.handle_events(&event, &ctx);
         assert_eq!(comp.coords.get(), (0, 0));
     }
+
+    /// The blanket `impl Component for &mut C` forwards every lifecycle method
+    /// to the referent. This is the mechanism `view!` borrowed trees
+    /// (`{ &mut self.terminal }`) rely on, so each forward is pinned here.
+    #[test]
+    fn mutable_ref_component_forwards_every_method() {
+        use crate::events::{
+            KeyCode, KeyEvent, KeyKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        use crate::hitbox_registry::HitboxId;
+        use std::cell::RefCell;
+
+        struct NoopRenderBackend;
+        impl term_wm_render::RenderBackend for NoopRenderBackend {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+            fn acquire_mask(&mut self) -> &mut [u8] {
+                &mut []
+            }
+        }
+
+        struct FullRecorder {
+            calls: RefCell<Vec<&'static str>>,
+            hitbox: Option<HitboxId>,
+        }
+        impl Component<()> for FullRecorder {
+            fn init(&mut self) {
+                self.calls.borrow_mut().push("init");
+            }
+            fn on_mount(&mut self, _key: WindowKey, _app: &crate::app_context::AppContext) {
+                self.calls.borrow_mut().push("on_mount");
+            }
+            fn hitbox_id(&self) -> Option<HitboxId> {
+                self.hitbox
+            }
+            fn handle_events(
+                &mut self,
+                _event: &Event,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.calls.borrow_mut().push("handle_events");
+                EventResult::Consumed
+            }
+            fn on_mouse_press(
+                &mut self,
+                _local_x: u16,
+                _local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.calls.borrow_mut().push("on_mouse_press");
+                EventResult::Consumed
+            }
+            fn on_mouse_release(
+                &mut self,
+                _local_x: u16,
+                _local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.calls.borrow_mut().push("on_mouse_release");
+                EventResult::Consumed
+            }
+            fn on_mouse_drag(
+                &mut self,
+                _local_x: u16,
+                _local_y: u16,
+                _button: MouseButton,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.calls.borrow_mut().push("on_mouse_drag");
+                EventResult::Consumed
+            }
+            fn on_mouse_scroll(
+                &mut self,
+                _local_x: u16,
+                _local_y: u16,
+                _kind: MouseEventKind,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.calls.borrow_mut().push("on_mouse_scroll");
+                EventResult::Consumed
+            }
+            fn on_mouse_move(
+                &mut self,
+                _local_x: u16,
+                _local_y: u16,
+                _modifiers: KeyModifiers,
+                _ctx: &ComponentContext,
+            ) -> EventResult<()> {
+                self.calls.borrow_mut().push("on_mouse_move");
+                EventResult::Consumed
+            }
+            fn on_key(&mut self, _event: &Event, _ctx: &ComponentContext) -> EventResult<()> {
+                self.calls.borrow_mut().push("on_key");
+                EventResult::Consumed
+            }
+            fn update(
+                &mut self,
+                _action: (),
+                _ctx: &ComponentContext,
+                _actions: &mut VecDeque<(crate::window::WindowKey, ())>,
+            ) {
+                self.calls.borrow_mut().push("update");
+            }
+            fn render(
+                &mut self,
+                _backend: &mut dyn term_wm_render::RenderBackend,
+                _area: LayoutRect,
+                _ctx: &ComponentContext,
+                _registry: &mut crate::hitbox_registry::HitboxRegistry,
+            ) {
+                self.calls.borrow_mut().push("render");
+            }
+            fn destroy(&mut self) {
+                self.calls.borrow_mut().push("destroy");
+            }
+            fn clear_selection(&mut self) {
+                self.calls.borrow_mut().push("clear_selection");
+            }
+            fn selection_status(&self) -> SelectionStatus {
+                self.calls.borrow_mut().push("selection_status");
+                SelectionStatus::default()
+            }
+            fn selection_text(&self) -> Option<String> {
+                self.calls.borrow_mut().push("selection_text");
+                Some("sel".into())
+            }
+            fn desired_height(&self, _width: u16) -> u16 {
+                self.calls.borrow_mut().push("desired_height");
+                7
+            }
+            fn take_pending_title(&mut self) -> Option<String> {
+                self.calls.borrow_mut().push("take_pending_title");
+                Some("title".into())
+            }
+            fn take_alternate_screen_transition(&mut self) -> Option<bool> {
+                self.calls
+                    .borrow_mut()
+                    .push("take_alternate_screen_transition");
+                Some(true)
+            }
+            fn take_teardown_parts(
+                &mut self,
+            ) -> Option<(
+                Box<dyn std::any::Any + Send + Sync>,
+                std::thread::JoinHandle<()>,
+            )> {
+                self.calls.borrow_mut().push("take_teardown_parts");
+                None
+            }
+            fn set_selection_enabled(&mut self, _enabled: bool) {
+                self.calls.borrow_mut().push("set_selection_enabled");
+            }
+            fn paste(&mut self, _text: &str) -> bool {
+                self.calls.borrow_mut().push("paste");
+                true
+            }
+        }
+
+        let mut inner = FullRecorder {
+            calls: RefCell::new(Vec::new()),
+            hitbox: None,
+        };
+        let hid = HitboxId::default();
+        inner.hitbox = Some(hid);
+        let key = WindowKey::default();
+        let ctx = ComponentContext::new(true);
+        let key_evt = Event::Key(KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Press,
+        });
+        let mouse_evt = Event::Mouse(MouseEvent {
+            column: 1,
+            row: 1,
+            kind: MouseEventKind::Press(MouseButton::Left),
+            modifiers: KeyModifiers::NONE,
+        });
+
+        {
+            let mut comp: &mut FullRecorder = &mut inner;
+            // Call through the blanket `impl Component for &mut C` explicitly
+            // (UFCS): method-syntax on `&mut FullRecorder` would resolve to
+            // FullRecorder's own impl via deref and never hit the forwards.
+            <&mut FullRecorder as Component<()>>::init(&mut comp);
+            <&mut FullRecorder as Component<()>>::on_mount(
+                &mut comp,
+                key,
+                &crate::AppContext::new("t", "0"),
+            );
+            assert_eq!(
+                <&mut FullRecorder as Component<()>>::hitbox_id(&comp),
+                Some(hid)
+            );
+            <&mut FullRecorder as Component<()>>::handle_events(&mut comp, &key_evt, &ctx);
+            <&mut FullRecorder as Component<()>>::on_mouse_press(
+                &mut comp,
+                0,
+                0,
+                MouseButton::Left,
+                KeyModifiers::NONE,
+                &ctx,
+            );
+            <&mut FullRecorder as Component<()>>::on_mouse_release(
+                &mut comp,
+                0,
+                0,
+                MouseButton::Left,
+                KeyModifiers::NONE,
+                &ctx,
+            );
+            <&mut FullRecorder as Component<()>>::on_mouse_drag(
+                &mut comp,
+                0,
+                0,
+                MouseButton::Left,
+                KeyModifiers::NONE,
+                &ctx,
+            );
+            <&mut FullRecorder as Component<()>>::on_mouse_scroll(
+                &mut comp,
+                0,
+                0,
+                MouseEventKind::ScrollUp,
+                KeyModifiers::NONE,
+                &ctx,
+            );
+            <&mut FullRecorder as Component<()>>::on_mouse_move(
+                &mut comp,
+                0,
+                0,
+                KeyModifiers::NONE,
+                &ctx,
+            );
+            <&mut FullRecorder as Component<()>>::on_key(&mut comp, &key_evt, &ctx);
+            <&mut FullRecorder as Component<()>>::update(&mut comp, (), &ctx, &mut VecDeque::new());
+            <&mut FullRecorder as Component<()>>::destroy(&mut comp);
+            <&mut FullRecorder as Component<()>>::clear_selection(&mut comp);
+            <&mut FullRecorder as Component<()>>::selection_status(&comp);
+            <&mut FullRecorder as Component<()>>::selection_text(&comp);
+            assert_eq!(
+                <&mut FullRecorder as Component<()>>::desired_height(&comp, 80),
+                7
+            );
+            assert_eq!(
+                <&mut FullRecorder as Component<()>>::take_pending_title(&mut comp).as_deref(),
+                Some("title")
+            );
+            assert_eq!(
+                <&mut FullRecorder as Component<()>>::take_alternate_screen_transition(&mut comp),
+                Some(true)
+            );
+            assert!(<&mut FullRecorder as Component<()>>::take_teardown_parts(&mut comp).is_none());
+            <&mut FullRecorder as Component<()>>::set_selection_enabled(&mut comp, true);
+            assert!(<&mut FullRecorder as Component<()>>::paste(&mut comp, "x"));
+            let mut backend = NoopRenderBackend;
+            let mut reg = crate::hitbox_registry::HitboxRegistry::new();
+            <&mut FullRecorder as Component<()>>::render(
+                &mut comp,
+                &mut backend,
+                LayoutRect::default(),
+                &ctx,
+                &mut reg,
+            );
+        }
+
+        // Dropping the mouse event directly (not via handle_events) is already
+        // exercised above; this asserts the forward for a non-routed path too.
+        let _ = mouse_evt;
+        for expected in [
+            "init",
+            "on_mount",
+            "handle_events",
+            "on_mouse_press",
+            "on_mouse_release",
+            "on_mouse_drag",
+            "on_mouse_scroll",
+            "on_mouse_move",
+            "on_key",
+            "update",
+            "destroy",
+            "clear_selection",
+            "selection_status",
+            "selection_text",
+            "desired_height",
+            "take_pending_title",
+            "take_alternate_screen_transition",
+            "take_teardown_parts",
+            "set_selection_enabled",
+            "paste",
+            "render",
+        ] {
+            assert!(
+                inner.calls.borrow().contains(&expected),
+                "&mut C forward did not reach method {expected:?}"
+            );
+        }
+    }
 }

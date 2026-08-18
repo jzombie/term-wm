@@ -28,6 +28,7 @@ windows-sys = { workspace = true }
 
 [dev-dependencies]
 indoc = { workspace = true }
+serial_test = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 # Only the `#[cfg(windows)]` Job Object test (`spawn_assigns_job_object_containing_child`

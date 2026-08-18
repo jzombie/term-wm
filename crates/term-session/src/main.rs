@@ -228,4 +228,80 @@ mod tests {
         );
         assert!(help.contains("/gateway"), "help was:\n{help}");
     }
+
+    #[test]
+    fn cli_parses_list_subcommand_and_alias() {
+        let cli = Cli::try_parse_from(["term-session", "ls"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::List)));
+        let cli = Cli::try_parse_from(["term-session", "list"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::List)));
+    }
+
+    #[test]
+    fn cli_parses_kill_subcommand() {
+        let cli = Cli::try_parse_from(["term-session", "kill", "dev/main", "--force"]).unwrap();
+        match cli.command {
+            Some(Command::Kill {
+                channel,
+                force,
+                kill_session: _,
+            }) => {
+                assert_eq!(channel, "dev/main");
+                assert!(force);
+            }
+            _ => panic!("expected Kill subcommand"),
+        }
+        let cli = Cli::try_parse_from(["term-session", "kill", "dev/main"]).unwrap();
+        match cli.command {
+            Some(Command::Kill { channel, force, .. }) => {
+                assert_eq!(channel, "dev/main");
+                assert!(!force);
+            }
+            _ => panic!("expected Kill subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_kill_client_subcommand() {
+        let cli = Cli::try_parse_from(["term-session", "kill-client", "dev/main", "7"]).unwrap();
+        match cli.command {
+            Some(Command::KillClient { channel, client_id }) => {
+                assert_eq!(channel, "dev/main");
+                assert_eq!(client_id, 7);
+            }
+            _ => panic!("expected KillClient subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_stop_subcommand() {
+        let cli = Cli::try_parse_from(["term-session", "stop"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Stop { force: false })));
+        let cli = Cli::try_parse_from(["term-session", "stop", "--force"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Stop { force: true })));
+    }
+
+    #[test]
+    fn cli_parses_daemon_channel_and_positional_command() {
+        let cli = Cli::try_parse_from(["term-session", "--daemon"]).unwrap();
+        assert!(cli.daemon);
+        let cli =
+            Cli::try_parse_from(["term-session", "--channel", "custom/main", "--", "vim"]).unwrap();
+        assert_eq!(cli.channel.as_deref(), Some("custom/main"));
+        assert_eq!(cli.cmd, vec!["vim"]);
+    }
+
+    #[test]
+    fn cli_parses_gateway_override_flag() {
+        let cli =
+            Cli::try_parse_from(["term-session", "--gateway", "term-wm/test/u/gateway", "ls"])
+                .unwrap();
+        assert_eq!(cli.gateway.as_deref(), Some("term-wm/test/u/gateway"));
+    }
+
+    #[test]
+    fn cli_rejects_missing_kill_client_args() {
+        assert!(Cli::try_parse_from(["term-session", "kill-client"]).is_err());
+        assert!(Cli::try_parse_from(["term-session", "kill-client", "dev/main"]).is_err());
+    }
 }
