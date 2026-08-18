@@ -1009,3 +1009,98 @@ fn connection_error_is_printed_to_stderr() {
     stop_flag.store(true, Ordering::Relaxed);
     acceptor.join().expect("acceptor thread failed");
 }
+
+/// A client started inside an active term-session environment (marker present,
+/// no `--allow-nested`) must refuse to attach, print the FATAL diagnostic, and
+/// exit non-zero. A bound dummy gateway makes `connect_or_spawn_server`'s probe
+/// succeed so no real daemon is spawned; the nesting guard fires before any
+/// connect, so the listener is never accepted.
+#[test]
+fn attach_inside_nested_env_aborts_without_allow_nested() {
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
+
+    let gateway = unique_gateway("nested-block");
+    let name = gateway
+        .as_str()
+        .to_ns_name::<GenericNamespaced>()
+        .expect("gateway ns name");
+    let listener = ListenerOptions::new()
+        .name(name)
+        .try_overwrite(true)
+        .create_sync()
+        .expect("bind dummy gateway");
+
+    let out = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .env("TERM_SESSION_ACTIVE", "1")
+        .args(["--channel", "test/nested"])
+        .output()
+        .expect("run client");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "must refuse nesting, got status: {:?}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains("FATAL"),
+        "expected nesting FATAL diagnostic, got stderr: {stderr}"
+    );
+    drop(listener);
+}
+
+/// With `--allow-nested`, the same nested environment must be allowed to attach
+/// and host a live session, proving the guard is bypassed. (The interactive
+/// client exits non-zero on a non-TTY stdin regardless, so liveness on the
+/// channel — not the exit code — is the meaningful signal: a firing guard
+/// returns `Err` before connecting and would never create a session.)
+#[tokio::test]
+async fn attach_inside_nested_env_proceeds_with_allow_nested() {
+    let gateway = unique_gateway("nested-allow");
+    let channel = "test/nested-allow";
+    let mock = mock_bin().to_string_lossy().to_string();
+    let (mut daemon, _marker) = spawn_daemon(&gateway, false);
+    let rpc = wait_connectable(&gateway).await;
+
+    let mut client = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &gateway)
+        .env("TERM_SESSION_ACTIVE", "1")
+        .args([
+            "--allow-nested",
+            "--channel",
+            channel,
+            "--",
+            &mock,
+            "sleep",
+            "60000",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn nested client with --allow-nested");
+
+    let start = Instant::now();
+    loop {
+        let resp = ListChannels::call(&*rpc, ()).await.unwrap();
+        let live = resp
+            .channels
+            .iter()
+            .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited));
+        if live {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "session never appeared with --allow-nested (guard may have blocked attach)"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let _ = client.kill();
+    let _ = client.wait();
+    ShutdownGateway::call(&*rpc, true).await.unwrap();
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+}

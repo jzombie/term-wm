@@ -152,7 +152,24 @@ fn cli_command() -> clap::Command {
     }
 }
 
+/// Route through the shared error formatter (see `term_session::run_and_exit`)
+/// so fatal errors print as `error: {e}` (Display) to the original stderr and
+/// exit 1, uniformly with the rest of the term-wm family. The `term_session`
+/// facade is only a dependency when `session-persistence` is enabled; that
+/// build is the default, so this is the normal path.
+#[cfg(feature = "session-persistence")]
+fn main() {
+    term_session::run_and_exit(run);
+}
+
+/// Without the `term_session` facade (non-persistence build) fall back to
+/// Rust's default `main() -> Result` error reporting.
+#[cfg(not(feature = "session-persistence"))]
 fn main() -> io::Result<()> {
+    run()
+}
+
+fn run() -> io::Result<()> {
     let cli = {
         let mut matches = cli_command().get_matches();
         Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
@@ -194,7 +211,7 @@ fn main() -> io::Result<()> {
     if cli.no_wm && term_wm_config::runtime::session_persistence_enabled() {
         let socket = term_session::auto_spawn::connect_or_spawn_server(None)?;
         let channel = term_session::ChannelName::session(&workspace).to_string();
-        return term_session::client::run_session(&socket, &channel, &cli.cmds).map(|_| ());
+        return term_session::client::run_session(&socket, &channel, &cli.cmds, false).map(|_| ());
     }
 
     // 3. Outer launcher with workspace rebind loop
@@ -213,7 +230,7 @@ fn main() -> io::Result<()> {
 
             let inner_cmd = build_inner_command(current_exe, &current_workspace, &cli);
 
-            match term_session::client::run_session(&socket_path, &channel, &inner_cmd) {
+            match term_session::client::run_session(&socket_path, &channel, &inner_cmd, false) {
                 Ok(Some(target_channel)) => {
                     current_workspace = target_channel;
                     continue;

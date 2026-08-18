@@ -4,7 +4,8 @@ pub mod path_wire;
 
 pub use channel::{
     ChannelName, DEFAULT_WORKSPACE, GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE,
-    SESSION_CHANNEL_NAME, gateway_channel_name, gateway_help_line, probe_ipc_endpoint,
+    SESSION_ACTIVE_ENV_VAR, SESSION_CHANNEL_NAME, gateway_channel_name, gateway_help_line,
+    probe_ipc_endpoint,
 };
 pub use methods::{
     Attach, AttachRequest, ChannelInfo, ClientInfo, CloseSession, KillChannel, KillClient,
