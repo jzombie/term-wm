@@ -1559,4 +1559,206 @@ mod tests {
             "dirty_windows must be populated from the unified channel"
         );
     }
+
+    /// Remote (attributed) viewer input must carry its `conn_id` through
+    /// `drain_pending` → `read()` onto the shared `event_owner`, while local
+    /// console input (`conn_id: None`) resets the owner. This is the
+    /// attribution contract the "Detach Viewer" action and multi-viewer
+    /// routing rely on.
+    #[test]
+    fn attributed_conn_id_is_preserved_through_read() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let event_owner = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: event_owner.clone(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+
+        // Remote viewer key (conn_id 7) followed by a local console key.
+        tx.send(UnifiedEvent::Input {
+            conn_id: Some(7),
+            event: key_evt(KeyCode::Char('r')),
+        })
+        .unwrap();
+        tx.send(UnifiedEvent::Input {
+            conn_id: None,
+            event: key_evt(KeyCode::Char('l')),
+        })
+        .unwrap();
+
+        source.drain_pending();
+        assert_eq!(source.input_buffer.len(), 2);
+
+        // First read surfaces the remote viewer's conn_id on the shared owner.
+        match source.read().unwrap() {
+            Event::Key(k) => assert_eq!(k.code, KeyCode::Char('r')),
+            _ => panic!("expected Key event"),
+        }
+        assert_eq!(
+            *event_owner.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(7)
+        );
+
+        // Local console input resets the owner to None.
+        match source.read().unwrap() {
+            Event::Key(k) => assert_eq!(k.code, KeyCode::Char('l')),
+            _ => panic!("expected Key event"),
+        }
+        assert_eq!(*event_owner.lock().unwrap_or_else(|e| e.into_inner()), None);
+    }
+
+    /// `UnifiedEventSource::new(true)` (internal-session mode) must skip
+    /// crossterm console reading entirely and route attributed input through
+    /// `pty_wakeup_tx()` into the main channel — the fix for event-loop
+    /// starvation in headless mode.
+    #[test]
+    fn headless_new_routes_attributed_input_through_pty_wakeup_tx() {
+        let (mut source, owner) = UnifiedEventSource::new(true).expect("headless new");
+        assert!(source.console.is_none());
+        assert!(source.console_rx.is_none());
+        assert!(
+            !source.console_alive,
+            "headless source must not use a console"
+        );
+
+        // Attributed input arrives through the shared wakeup channel.
+        source
+            .pty_wakeup_tx()
+            .send(UnifiedEvent::Input {
+                conn_id: Some(9),
+                event: key_evt(KeyCode::Char('x')),
+            })
+            .unwrap();
+
+        // poll() must wake immediately (no console select path) and read()
+        // must surface the event with its conn_id on the shared owner.
+        assert!(
+            source.poll(Duration::from_millis(500)).unwrap(),
+            "poll must report an available event in headless mode"
+        );
+        match source.read().unwrap() {
+            Event::Key(k) => assert_eq!(k.code, KeyCode::Char('x')),
+            _ => panic!("expected Key event"),
+        }
+        assert_eq!(
+            *owner.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(9),
+            "attributed conn_id must be published to the shared owner"
+        );
+    }
+
+    /// The drain/state-accessor surface of the unified source: direct-input
+    /// transitions, signals, and redraw requests must be collected and
+    /// consumed exactly once.
+    #[test]
+    fn drain_collects_direct_input_signal_and_redraw_requests() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+
+        let key = WindowKey::default();
+        let mode = DirectInputMode::default();
+        tx.send(UnifiedEvent::DirectInputChanged(key, mode))
+            .unwrap();
+        tx.send(UnifiedEvent::Signal).unwrap();
+        source.request_redraw();
+        source.set_max_sleep_duration(Some(Duration::from_secs(1)));
+
+        source.drain_pending();
+
+        assert!(
+            source.take_signal(),
+            "Signal must be latched by drain_pending"
+        );
+        assert!(!source.take_signal(), "take_signal must be consume-once");
+        assert_eq!(source.take_direct_input_changed(), vec![(key, mode)]);
+        assert!(source.take_direct_input_changed().is_empty());
+        assert!(
+            source.take_redraw_request(),
+            "request_redraw must be latched"
+        );
+        assert!(
+            !source.take_redraw_request(),
+            "take_redraw_request must be consume-once"
+        );
+    }
+
+    /// `next_key` (used by keybinding evaluation) must surface attributed
+    /// keys and publish their conn_id on the shared owner.
+    #[test]
+    fn next_key_surfaces_attributed_key_and_owner() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let event_owner = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: event_owner.clone(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+
+        tx.send(UnifiedEvent::Input {
+            conn_id: Some(11),
+            event: key_evt(KeyCode::Char('k')),
+        })
+        .unwrap();
+
+        let key = source.next_key().expect("next_key");
+        assert_eq!(key.code, KeyCode::Char('k'));
+        assert_eq!(
+            *event_owner.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(11),
+            "attributed key must set the shared owner"
+        );
+    }
 }

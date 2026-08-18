@@ -721,6 +721,7 @@ impl<C: Component<TermWmAction> + 'static>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// Every construction path must initialize the system windows (debug log,
     /// system panel) and leave them hidden (`Unmapped`).
@@ -888,5 +889,48 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// With session persistence disabled at runtime, `refresh_workspace_cache`
+    /// must return immediately without touching IPC, leaving the cache empty.
+    /// The process-global runtime config is restored afterwards so parallel
+    /// tests observing `session_persistence_enabled()` are unaffected.
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(runtime_config)]
+    fn refresh_workspace_cache_is_noop_when_runtime_disabled() {
+        use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
+        let prev = {
+            // Snapshot the previous config to restore it after the test.
+            let saved = RuntimeConfig {
+                session_persistence: session_persistence_enabled(),
+            };
+            init(RuntimeConfig {
+                session_persistence: false,
+            });
+            saved
+        };
+
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.refresh_workspace_cache();
+        assert!(
+            app.cached_workspaces().is_empty(),
+            "runtime-disabled refresh must not populate the cache"
+        );
+
+        init(prev);
+    }
+
+    /// `set_current_workspace` round-trips the workspace name the binary uses
+    /// for channel resolution. (No IPC: the cache is only populated by
+    /// `refresh_workspace_cache`, which requires a reachable gateway.)
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn current_workspace_accessors_round_trip() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert_eq!(app.current_workspace, term_session::DEFAULT_WORKSPACE);
+        app.set_current_workspace("dev".to_string());
+        assert_eq!(app.current_workspace, "dev");
+        assert!(app.cached_workspaces().is_empty());
     }
 }

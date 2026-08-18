@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 use muxio_tokio_mpsc_adapter::ChannelCallerExt;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
 use serial_test::serial;
@@ -1811,5 +1812,109 @@ async fn kill_channel_without_force_succeeds_when_no_participants() {
     KillChannel::call(&*client, ("test/nonexistent".to_string(), false))
         .await
         .unwrap();
+    guard.shutdown().await;
+}
+
+/// Workspace switching is driven by `RebindWorkspace`: the outer viewer asks
+/// the gateway to rebind every viewer attached to `source_channel` to a target
+/// channel. The server must push `OnWorkspaceRebind { target }` to the
+/// attached viewer, which the outer launcher uses to reconnect (the
+/// `Ok(Some(target))` return path of `run_session`).
+#[tokio::test]
+async fn rebind_workspace_pushes_target_to_attached_viewer() {
+    use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+    use term_session_muxio_service_definitions::{
+        OnWorkspaceRebind, RebindWorkspace, RebindWorkspaceRequest,
+    };
+
+    let source = test_channel("test/rebind-src");
+    let (client, _conn_id, guard) = spawn_session(&source).await;
+
+    let (target_tx, mut target_rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let target_tx = target_tx.clone();
+        client
+            .get_endpoint()
+            .register_prebuffered(OnWorkspaceRebind::METHOD_ID, move |payload, _ctx| {
+                let target_tx = target_tx.clone();
+                async move {
+                    let req = OnWorkspaceRebind::decode_request(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    let _ = target_tx.send(req.target);
+                    OnWorkspaceRebind::encode_response(())
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            })
+            .await
+            .expect("register OnWorkspaceRebind handler");
+    }
+
+    RebindWorkspace::call(
+        &*client,
+        RebindWorkspaceRequest {
+            source_channel: source.to_string(),
+            target: "ws-123/main".to_string(),
+        },
+    )
+    .await
+    .expect("rebind workspace");
+
+    let received = tokio::time::timeout(Duration::from_secs(2), target_rx.recv())
+        .await
+        .expect("timed out waiting for OnWorkspaceRebind push")
+        .expect("target channel closed");
+    assert_eq!(received, "ws-123/main");
+
+    guard.shutdown().await;
+}
+
+/// `RebindWorkspace` with an unknown source channel is a no-op: no viewer is
+/// attached there, so no `OnWorkspaceRebind` push may arrive.
+#[tokio::test]
+async fn rebind_workspace_to_unknown_source_sends_no_push() {
+    use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+    use term_session_muxio_service_definitions::{
+        OnWorkspaceRebind, RebindWorkspace, RebindWorkspaceRequest,
+    };
+
+    let source = test_channel("test/rebind-unknown");
+    let (client, _conn_id, guard) = spawn_session(&source).await;
+
+    let (target_tx, mut target_rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let target_tx = target_tx.clone();
+        client
+            .get_endpoint()
+            .register_prebuffered(OnWorkspaceRebind::METHOD_ID, move |payload, _ctx| {
+                let target_tx = target_tx.clone();
+                async move {
+                    let req = OnWorkspaceRebind::decode_request(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    let _ = target_tx.send(req.target);
+                    OnWorkspaceRebind::encode_response(())
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            })
+            .await
+            .expect("register OnWorkspaceRebind handler");
+    }
+
+    // No connection is attached to this source channel.
+    RebindWorkspace::call(
+        &*client,
+        RebindWorkspaceRequest {
+            source_channel: "test/rebind-nobody".to_string(),
+            target: "ws-123/main".to_string(),
+        },
+    )
+    .await
+    .expect("rebind to unknown source must still succeed");
+
+    let maybe = tokio::time::timeout(Duration::from_millis(500), target_rx.recv()).await;
+    assert!(
+        maybe.is_err(),
+        "no OnWorkspaceRebind push expected for an unknown source channel"
+    );
+
     guard.shutdown().await;
 }

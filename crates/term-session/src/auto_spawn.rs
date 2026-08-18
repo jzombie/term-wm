@@ -307,3 +307,73 @@ pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<Stri
         format!("Timed out waiting for gateway on channel '{gateway}'"),
     ))
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializes tests that mutate `TERM_WM_GATEWAY` / `TERM_WM_ENV` /
+    /// `USER`, which are process-global and unsafe to read/write concurrently.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn resolve_gateway_honors_override() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var(
+                term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR,
+                "custom/gateway",
+            );
+        }
+        assert_eq!(resolve_gateway().to_string(), "custom/gateway");
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
+    }
+
+    #[test]
+    fn resolve_gateway_defaults_to_env_scoped_user_gateway() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+            std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "test");
+            std::env::set_var("USER", "tester");
+        }
+        let gw = resolve_gateway();
+        assert_eq!(gw.to_string(), "term-wm/test/tester/gateway");
+        assert_eq!(gw.namespace, "term-wm");
+        unsafe {
+            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+            std::env::remove_var("USER");
+        }
+    }
+
+    #[test]
+    fn resolve_gateway_falls_back_when_override_is_malformed() {
+        let _guard = env_lock();
+        // Three segments cannot parse as `name` or `namespace/name`.
+        unsafe {
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, "a/b/c");
+        }
+        assert_eq!(resolve_gateway().to_string(), "term-wm/gateway");
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_exit_status_formats_unix_status() {
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 3")
+            .status()
+            .expect("run sh");
+        let rendered = DaemonExitStatus::Unix(status).to_string();
+        assert!(rendered.contains("exit status"), "rendered: {rendered}");
+    }
+}

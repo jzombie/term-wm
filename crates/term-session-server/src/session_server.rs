@@ -1674,4 +1674,74 @@ mod tests {
 
         assert!(!state.input_forwarders.lock().unwrap().contains_key(&1));
     }
+
+    #[tokio::test]
+    async fn evict_conn_reverts_internal_wm_channel_to_raw_pty() {
+        // Prime the channel as if the internal WM had subscribed via
+        // `SubscribeInternalInput`: attributed routing mode, an internal-WM
+        // conn id, and a canonicalized entry in `internal_channels`.
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse channel");
+        {
+            let ch = state
+                .channels
+                .read()
+                .await
+                .get(&name)
+                .expect("channel exists")
+                .clone();
+            let mut guard = ch.lock().await;
+            guard.internal_wm_conn_id = Some(1);
+            guard.input_mode = InputMode::AttributedIpc { wm_conn_id: 1 };
+        }
+        state
+            .internal_channels
+            .lock()
+            .unwrap()
+            .insert("test/coalesce".to_string());
+        state
+            .conn_to_channel
+            .lock()
+            .unwrap()
+            .insert(1, "test/coalesce".to_string());
+
+        evict_conn(&state, 1).await;
+
+        // The internal-WM teardown path must purge the channel from
+        // `internal_channels` (so raw StreamInput bytes are no longer
+        // suppressed) and revert the routing mode to RawPty.
+        assert!(
+            !state
+                .internal_channels
+                .lock()
+                .unwrap()
+                .contains("test/coalesce"),
+            "internal_channels must lose the channel after WM disconnect"
+        );
+        assert!(
+            !state.conn_to_channel.lock().unwrap().contains_key(&1),
+            "conn_to_channel must purge the evicted connection"
+        );
+        let ch = state
+            .channels
+            .read()
+            .await
+            .get(&name)
+            .expect("channel exists")
+            .clone();
+        let guard = ch.lock().await;
+        assert_eq!(guard.input_mode, InputMode::RawPty);
+        assert_eq!(guard.internal_wm_conn_id, None);
+        assert!(guard.internal_wm_caller.is_none());
+    }
+
+    #[test]
+    fn channel_state_defaults_to_raw_pty_mode() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let channel = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert_eq!(channel.input_mode, InputMode::RawPty);
+        assert_eq!(channel.internal_wm_conn_id, None);
+        assert!(channel.internal_wm_caller.is_none());
+    }
 }

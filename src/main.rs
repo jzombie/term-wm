@@ -582,6 +582,8 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use term_wm_core::actions::TermWmAction;
 
     #[test]
     fn main_build_wm_gets_full_default_menu_actions() {
@@ -695,11 +697,59 @@ mod tests {
         );
     }
 
-    /// Serializes tests that mutate `TERM_WM_GATEWAY` / `TERM_WM_ENV`, which
-    /// are process-global and unsafe to read/write concurrently.
+    /// Serializes tests that mutate process-global environment variables
+    /// (`TERM_WM_GATEWAY` / `TERM_WM_ENV` / `TERM_WM_NO_SESSION_PERSISTENCE`),
+    /// which are unsafe to read/write concurrently.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `runtime_config_for` enables persistence when neither the flag nor the
+    /// env var is present.
+    #[test]
+    fn runtime_config_enabled_without_flag_or_env() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
+        }
+        assert!(runtime_config_for(false).session_persistence);
+    }
+
+    /// The `--no-session-persistence` flag alone disables persistence.
+    #[test]
+    fn runtime_config_flag_disables_persistence() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
+        }
+        assert!(!runtime_config_for(true).session_persistence);
+    }
+
+    /// The `TERM_WM_NO_SESSION_PERSISTENCE` env var alone disables persistence.
+    #[test]
+    fn runtime_config_env_disables_persistence() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR, "1");
+        }
+        assert!(!runtime_config_for(false).session_persistence);
+        unsafe {
+            std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
+        }
+    }
+
+    /// Both sources together still disable persistence (OR semantics).
+    #[test]
+    fn runtime_config_flag_and_env_both_disable() {
+        let _guard = env_lock();
+        unsafe {
+            std::env::set_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR, "1");
+        }
+        assert!(!runtime_config_for(true).session_persistence);
+        unsafe {
+            std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
+        }
     }
 
     #[cfg(feature = "session-persistence")]
@@ -720,5 +770,83 @@ mod tests {
             "help was:\n{help}"
         );
         assert!(help.contains("/gateway"), "help was:\n{help}");
+    }
+
+    /// Build an `App` without spawning any PTYs, so the workspace-action
+    /// handler can be unit-tested directly.
+    fn test_app() -> App {
+        let (event_source, event_owner) = UnifiedEventSource::new(true).expect("headless source");
+        let pty_wakeup_tx = event_source.pty_wakeup_tx();
+        let app_ctx = Arc::new(AppContext::new("term-wm", "0.0.0").with_hostname("test-host"));
+        let wm = build_wm(&app_ctx, WmConfig::default());
+        let inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
+        App {
+            inner,
+            pty_wakeup_tx,
+            current_workspace: "dev".into(),
+            event_owner,
+        }
+    }
+
+    /// With session persistence disabled at runtime, every workspace action
+    /// must fall through as unhandled (`false`) — the runtime toggle's contract.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(runtime_config)]
+    fn handle_custom_action_returns_false_when_runtime_disabled() {
+        use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
+        let prev = RuntimeConfig {
+            session_persistence: session_persistence_enabled(),
+        };
+        init(RuntimeConfig {
+            session_persistence: false,
+        });
+
+        let mut app = test_app();
+        for action in [
+            TermWmAction::SwitchWorkspace("prod".into()),
+            TermWmAction::NewWorkspace,
+            TermWmAction::DetachCurrentClient,
+        ] {
+            assert!(
+                !app.handle_custom_action(&action),
+                "runtime-disabled app must not consume {action:?}"
+            );
+        }
+
+        init(prev);
+    }
+
+    /// With session persistence enabled, `SwitchWorkspace` / `NewWorkspace`
+    /// are consumed by the app (`true`) even when no gateway is reachable —
+    /// the IPC failure is logged, not bubbled up. Hermetic: a throwaway
+    /// gateway name avoids colliding with a real daemon.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(runtime_config)]
+    fn handle_custom_action_consumes_workspace_actions() {
+        use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
+        let _guard = env_lock();
+        let prev = RuntimeConfig {
+            session_persistence: session_persistence_enabled(),
+        };
+        init(RuntimeConfig {
+            session_persistence: true,
+        });
+        unsafe {
+            std::env::set_var("TERM_WM_GATEWAY", "term-wm/coverage-test-gw");
+        }
+
+        let mut app = test_app();
+        assert!(app.handle_custom_action(&TermWmAction::SwitchWorkspace("prod".into())));
+        assert!(app.handle_custom_action(&TermWmAction::NewWorkspace));
+
+        // Detach with no attributed conn id: no gateway call, still consumed.
+        assert!(app.handle_custom_action(&TermWmAction::DetachCurrentClient));
+
+        init(prev);
+        unsafe {
+            std::env::remove_var("TERM_WM_GATEWAY");
+        }
     }
 }
