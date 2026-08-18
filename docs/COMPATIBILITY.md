@@ -40,3 +40,5 @@ Minimal or headless installations must meet the following for correct operation:
 ## Windows Session Hosting
 
 `term-session` auto-daemonizes on Windows like it does on macOS and Linux. The gateway is spawned with `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS`, which gives the child no console — so the parent console's `CTRL_CLOSE_EVENT` never reaches it — and standard handles are disinherited (`Stdio::null()` + `inherit_handles(false)`), so wrappers, CI, and SSH runners never wait on inherited pipes. PTY children are contained in a Win32 Job Object (spawned `CREATE_SUSPENDED`, assigned to the job, then resumed) so killing a session terminates the whole process tree rather than just the shell.
+
+The same daemonization mechanics back `term-wm`'s embedded persistence gateway: when run with session persistence enabled, `term-wm` auto-spawns a detached gateway on first launch using the platform's native detachment (`setsid()` on macOS/Linux, the above on Windows) on all supported OSes.

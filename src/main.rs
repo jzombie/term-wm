@@ -45,7 +45,7 @@ struct Cli {
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmds: Vec<String>,
 
-    /// Workspace name (default: "default")
+    /// Workspace name (default: "default"); maps to the daemon channel <workspace>/main
     #[arg(short = 'w', long = "workspace", default_value = "default")]
     workspace: String,
 
