@@ -29,7 +29,7 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon_selfcheck: Option<std::path::PathBuf>,
 
-    /// Channel name [default: default/main or $TERM_WM_CHANNEL]
+    /// Channel name [default: default/main or $TERM_SESSION_CHANNEL]
     #[arg(long)]
     channel: Option<String>,
 

@@ -16,7 +16,6 @@ use term_session_muxio_service_definitions::{
     KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
 };
 
-// TODO: Rename to TERM_SESSION_CHANNEL
 pub use term_wm_config::env::CHANNEL_ENV_VAR;
 pub const DEFAULT_CHANNEL: &str = "default/main";
 
@@ -356,7 +355,7 @@ fn write_selfcheck_marker(marker: &std::path::Path) {
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate `TERM_WM_CHANNEL`, which is process-global.
+    /// Serializes tests that mutate `TERM_SESSION_CHANNEL`, which is process-global.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
