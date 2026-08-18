@@ -291,7 +291,10 @@ impl UnifiedEventSource {
                 if let Some(normalized) = self.normalizer.normalize(event) {
                     self.frame_pacer.reset();
                     self.pending_event = Some(normalized);
-                    *self.event_owner.lock().unwrap() = Some(conn_id);
+                    *self
+                        .event_owner
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                     UnifiedPoll::Ready
                 } else {
                     UnifiedPoll::Continue
@@ -339,7 +342,10 @@ impl UnifiedEventSource {
                 event,
             } => {
                 self.last_event_at = Some(Instant::now());
-                *self.event_owner.lock().unwrap() = Some(conn_id);
+                *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                 self.normalizer.normalize(event)
             }
         }
@@ -351,7 +357,10 @@ impl UnifiedEventSource {
         if let Some(idx) = self.input_buffer.iter().position(|(_, evt)| predicate(evt))
             && let Some((conn_id, event)) = self.input_buffer.remove(idx)
         {
-            *self.event_owner.lock().unwrap() = conn_id;
+            *self
+                .event_owner
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = conn_id;
             return Some(event);
         }
         None
@@ -480,7 +489,10 @@ impl EventSource for UnifiedEventSource {
         // Fallback: check buffer, then block on the channels.
         loop {
             if let Some((conn_id, event)) = self.input_buffer.pop_front() {
-                *self.event_owner.lock().unwrap() = conn_id;
+                *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner()) = conn_id;
                 self.last_event_at = Some(Instant::now());
                 if let Some(normalized) = self.normalizer.normalize(event) {
                     return Ok(normalized);
@@ -583,7 +595,7 @@ impl EventSource for UnifiedEventSource {
                         }
                         Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
                             if let Event::Key(key) = event {
-                                *self.event_owner.lock().unwrap() = Some(conn_id);
+                                *self.event_owner.lock().unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                                 return Ok(key);
                             }
                             self.input_buffer.push_back((Some(conn_id), event));
@@ -622,7 +634,10 @@ impl EventSource for UnifiedEventSource {
                         event,
                     }) => {
                         if let Event::Key(key) = event {
-                            *self.event_owner.lock().unwrap() = Some(conn_id);
+                            *self
+                                .event_owner
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                             return Ok(key);
                         }
                         self.input_buffer.push_back((Some(conn_id), event));
@@ -692,7 +707,7 @@ impl EventSource for UnifiedEventSource {
                         }
                         Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
                             if let Event::Mouse(mouse) = event {
-                                *self.event_owner.lock().unwrap() = Some(conn_id);
+                                *self.event_owner.lock().unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                                 return Ok(mouse);
                             }
                             self.input_buffer.push_back((Some(conn_id), event));
@@ -731,7 +746,10 @@ impl EventSource for UnifiedEventSource {
                         event,
                     }) => {
                         if let Event::Mouse(mouse) = event {
-                            *self.event_owner.lock().unwrap() = Some(conn_id);
+                            *self
+                                .event_owner
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                             return Ok(mouse);
                         }
                         self.input_buffer.push_back((Some(conn_id), event));
@@ -826,6 +844,7 @@ impl EventSource for UnifiedEventSource {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

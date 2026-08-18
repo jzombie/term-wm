@@ -71,6 +71,7 @@ impl<T: Ord> Default for RegionMap<T> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

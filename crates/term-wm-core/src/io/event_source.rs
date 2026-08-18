@@ -150,6 +150,7 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

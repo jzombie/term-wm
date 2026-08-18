@@ -292,6 +292,7 @@ pub fn core_event_to_wm(event: &Event) -> Option<WmEvent> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

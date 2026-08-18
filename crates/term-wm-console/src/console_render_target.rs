@@ -49,12 +49,14 @@ impl ConsoleRenderTarget<Stdout> {
 /// `Arc<Mutex<...>>` so the buffer can be read after the writer is moved
 /// into `CrosstermBackend` / `Terminal`.
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 #[derive(Clone, Default)]
 pub struct CaptureWriter {
     buf: Arc<Mutex<Vec<u8>>>,
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 impl CaptureWriter {
     pub fn new() -> Self {
         Self::default()
@@ -70,6 +72,7 @@ impl CaptureWriter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 impl Write for CaptureWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.buf.lock().unwrap().extend_from_slice(buf);
@@ -82,6 +85,7 @@ impl Write for CaptureWriter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 impl ConsoleRenderTarget<CaptureWriter> {
     /// Create a test render target backed by a `CaptureWriter`.
     ///
@@ -215,6 +219,7 @@ impl<W: Write> Drop for ConsoleRenderTarget<W> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

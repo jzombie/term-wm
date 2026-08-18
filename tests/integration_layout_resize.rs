@@ -1,3 +1,4 @@
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use term_wm::layout::Direction;

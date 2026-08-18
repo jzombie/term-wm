@@ -104,6 +104,7 @@ impl<C: Component<TermWmAction>> Component<TermWmAction> for CenterComponent<C> 
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

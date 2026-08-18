@@ -298,6 +298,7 @@ fn write_selfcheck_marker(marker: &std::path::Path) {
     let _ = std::fs::write(marker, proof);
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

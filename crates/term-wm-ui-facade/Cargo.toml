@@ -14,3 +14,6 @@ term-wm-core = { workspace = true }
 term-wm-render = { workspace = true }
 term-wm-sys-ui-components = { workspace = true }
 term-wm-ui-components = { workspace = true }
+
+[lints]
+workspace = true

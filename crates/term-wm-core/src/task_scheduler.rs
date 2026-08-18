@@ -203,7 +203,7 @@ impl<T> TaskHandle<T> {
             if entry.deadline > now {
                 break;
             }
-            let entry = inner.heap.pop().unwrap();
+            let Some(entry) = inner.heap.pop() else { break };
             if inner.cancelled.remove(&entry.id) {
                 continue;
             }
@@ -237,7 +237,7 @@ impl<T> TaskHandle<T> {
             if entry.deadline > now {
                 break;
             }
-            let entry = inner.heap.pop().unwrap();
+            let Some(entry) = inner.heap.pop() else { break };
             if inner.cancelled.remove(&entry.id) {
                 continue;
             }
@@ -286,6 +286,7 @@ impl<A> AppTask<A> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

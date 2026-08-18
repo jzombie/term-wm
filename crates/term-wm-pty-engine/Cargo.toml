@@ -36,3 +36,5 @@ indoc = { workspace = true }
 # binary built exactly where the test needs it and keeps the Linux/Unix build clean.
 term-session-mock = { workspace = true }
 
+[lints]
+workspace = true

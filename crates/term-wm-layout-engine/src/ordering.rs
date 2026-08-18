@@ -120,6 +120,7 @@ impl<T: fmt::Debug + Copy + Eq> fmt::Display for FocusRing<T> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

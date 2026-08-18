@@ -36,3 +36,6 @@ webbrowser = { workspace = true }
 # is maintained.
 # proptest = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

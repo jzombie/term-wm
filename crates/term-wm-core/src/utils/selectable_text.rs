@@ -774,6 +774,7 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
         && i32::from(row) < max_y
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

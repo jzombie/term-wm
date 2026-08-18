@@ -30,6 +30,7 @@ impl<C> AppRootComponent<C> {
 
 impl_component_delegate!(AppRootComponent, param: C, bound: Component<TermWmAction>, variants: { Core, Custom });
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

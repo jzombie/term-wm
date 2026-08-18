@@ -155,7 +155,7 @@ impl<Id: Copy + Eq + Ord> TilingLayout<Id> {
             .iter()
             .max_by_key(|(_, r)| (r.width as u32) * (r.height as u32))
             .copied()
-            .unwrap();
+            .expect("tiling: regions non-empty");
 
         // Split direction: only one axis fits → that axis; both fit (or neither)
         // → decide by visual aspect ratio. Checking each axis independently avoids
@@ -313,6 +313,7 @@ impl<Id: Copy + Eq + Ord> LayoutPlan<Id> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 //! Probe: exercise the `impl_view_component!` integration styles in the
 //! window-host shape used by `rust-argtuner/src/cli/tui/mod.rs`: a
 //! `TermWmApp<AppComponent>` where `AppComponent` is a delegate enum (via

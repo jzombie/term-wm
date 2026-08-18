@@ -670,6 +670,7 @@ impl<K: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static> Tab
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

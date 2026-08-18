@@ -1336,6 +1336,7 @@ pub fn split_at_path_mut<'a, Id: Copy + Eq + Ord>(
     Some(current)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

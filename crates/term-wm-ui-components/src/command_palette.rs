@@ -747,6 +747,7 @@ impl Component<TermWmAction> for CommandPaletteComponent {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

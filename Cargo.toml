@@ -137,6 +137,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_WindowsProgramming",
 ] }
 
+[workspace.lints.clippy]
+unwrap_used = "deny"
+
 [features]
 default = ["session-persistence"]
 session-persistence = [
@@ -190,3 +193,6 @@ term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }
 term-wm-render = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true

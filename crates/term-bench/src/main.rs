@@ -460,6 +460,7 @@ fn poll_for_exit(wait: Duration) -> io::Result<bool> {
     Ok(false)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

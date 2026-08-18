@@ -306,6 +306,7 @@ pub fn contrast_ratio(a: Color, b: Color) -> f64 {
     (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

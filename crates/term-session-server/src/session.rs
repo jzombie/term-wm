@@ -133,6 +133,7 @@ impl Session {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::{Session, resolve_cwd};
