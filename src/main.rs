@@ -90,11 +90,37 @@ fn total_windows(count: Option<usize>, commands: &[String]) -> usize {
     }
 }
 
+/// Serializes the outer launcher's CLI state into an inner process command.
+/// Injects the headless `--internal-session` flag and the target workspace.
+fn build_inner_command(exe: String, workspace: &str, cli: &Cli) -> Vec<String> {
+    let mut inner_cmd = vec![
+        exe,
+        "--internal-session".to_string(),
+        "-w".to_string(),
+        workspace.to_string(),
+    ];
+    if let Some(count) = cli.count {
+        inner_cmd.push("-n".to_string());
+        inner_cmd.push(count.to_string());
+    }
+    if cli.scrollback != term_wm_core::constants::DEFAULT_SCROLLBACK_LEN {
+        inner_cmd.push("--scrollback".to_string());
+        inner_cmd.push(cli.scrollback.to_string());
+    }
+    for run_cmd in &cli.run_cmds {
+        inner_cmd.push("--run".to_string());
+        inner_cmd.push(run_cmd.clone());
+    }
+    if !cli.cmds.is_empty() {
+        inner_cmd.push("--".to_string());
+        inner_cmd.extend(cli.cmds.clone());
+    }
+    inner_cmd
+}
+
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
-    // Normalize workspace: strip any "/main" suffix so callers can safely
-    // append "/main" without double-slash paths like "ws/main/main".
-    let workspace: String = cli.workspace.split('/').next().unwrap_or("default").into();
+    let workspace: String = term_session::ChannelName::parse_workspace(&cli.workspace).to_string();
 
     // 0. Stop daemon
     #[cfg(feature = "session-persistence")]
@@ -117,7 +143,7 @@ fn main() -> io::Result<()> {
     #[cfg(feature = "session-persistence")]
     if cli.no_wm {
         let socket = term_session::auto_spawn::connect_or_spawn_server(None)?;
-        let channel = format!("{}/main", workspace);
+        let channel = term_session::ChannelName::session(&workspace).to_string();
         return term_session::client::run_session(&socket, &channel, &cli.cmds).map(|_| ());
     }
 
@@ -128,44 +154,27 @@ fn main() -> io::Result<()> {
         let mut current_workspace = workspace.clone();
 
         loop {
-            let clean_workspace = current_workspace.strip_suffix("/main").unwrap_or(&current_workspace);
-            current_workspace = clean_workspace.to_string();
+            let clean_workspace = term_session::ChannelName::parse_workspace(&current_workspace).to_string();
+            current_workspace = clean_workspace.clone();
 
-            let channel = format!("{}/main", current_workspace);
+            let channel = term_session::ChannelName::session(&current_workspace).to_string();
             let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
 
-            let mut inner_cmd = vec![
-                current_exe,
-                "--internal-session".to_string(),
-                "-w".to_string(),
-                current_workspace.clone(),
-            ];
-            if let Some(count) = cli.count {
-                inner_cmd.push("-n".to_string());
-                inner_cmd.push(count.to_string());
-            }
-            if cli.scrollback != term_wm_core::constants::DEFAULT_SCROLLBACK_LEN {
-                inner_cmd.push("--scrollback".to_string());
-                inner_cmd.push(cli.scrollback.to_string());
-            }
-            for run_cmd in &cli.run_cmds {
-                inner_cmd.push("--run".to_string());
-                inner_cmd.push(run_cmd.clone());
-            }
-            if !cli.cmds.is_empty() {
-                inner_cmd.push("--".to_string());
-                inner_cmd.extend(cli.cmds.clone());
-            }
+            let inner_cmd = build_inner_command(current_exe, &current_workspace, &cli);
 
             match term_session::client::run_session(&socket_path, &channel, &inner_cmd) {
-                Ok(Some(target_workspace)) => {
-                    current_workspace = target_workspace;
+                Ok(Some(target_channel)) => {
+                    current_workspace = target_channel;
                     continue;
                 }
                 Ok(None) => return Ok(()),
                 Err(e) => {
-                    eprintln!("\r\n\r\n[term-wm FATAL] Connection dropped: {}", e);
-                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    tracing::error!("Connection dropped for workspace '{}': {}", current_workspace, e);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if current_workspace != term_session::DEFAULT_WORKSPACE {
+                        current_workspace = term_session::DEFAULT_WORKSPACE.to_string();
+                        continue;
+                    }
                     return Err(e);
                 }
             }
@@ -324,9 +333,13 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             TermWmAction::SwitchWorkspace(_target) => {
                 #[cfg(feature = "session-persistence")]
                 {
-                    let source_channel = format!("{}/main", self.current_workspace);
-                    let clean_target = _target.strip_suffix("/main").unwrap_or(_target);
-                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, clean_target) {
+                    let source_ws = term_session::ChannelName::parse_workspace(&self.current_workspace);
+                    let target_ws = term_session::ChannelName::parse_workspace(_target);
+
+                    let source_channel = term_session::ChannelName::session(source_ws).to_string();
+                    let target_channel = term_session::ChannelName::session(target_ws).to_string();
+
+                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, &target_channel) {
                         tracing::warn!("Failed to request workspace switch: {e}");
                     }
                 }
@@ -341,12 +354,19 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                         .as_secs();
 
                     let target_ws = format!("ws-{}", ts);
-                    let source_channel = format!("{}/main", self.current_workspace);
+                    let source_ws = term_session::ChannelName::parse_workspace(&self.current_workspace);
 
-                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, &target_ws) {
+                    let source_channel = term_session::ChannelName::session(source_ws).to_string();
+                    let target_channel = term_session::ChannelName::session(&target_ws).to_string();
+
+                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, &target_channel) {
                         tracing::error!("Failed to switch to new workspace: {e}");
                     } else {
                         self.inner.refresh_workspace_cache();
+                        self.inner.wm().push_notification(
+                            format!("Created workspace: {target_ws}"),
+                            std::time::Duration::from_secs(3),
+                        );
                     }
                 }
                 true
@@ -472,5 +492,32 @@ mod tests {
     fn total_windows_count_expands_beyond_commands() {
         let cmds = vec!["a".into()];
         assert_eq!(total_windows(Some(4), &cmds), 4);
+    }
+
+    #[test]
+    fn build_inner_command_basic() {
+        let cli = Cli::parse_from(["term-wm"]);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        assert_eq!(cmd, vec!["exe", "--internal-session", "-w", "dev"]);
+    }
+
+    #[test]
+    fn build_inner_command_with_count_and_scrollback() {
+        let cli = Cli::parse_from(["term-wm", "-n", "4", "--scrollback", "5000"]);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        assert_eq!(cmd, vec![
+            "exe", "--internal-session", "-w", "dev",
+            "-n", "4", "--scrollback", "5000"
+        ]);
+    }
+
+    #[test]
+    fn build_inner_command_with_runs_and_positionals() {
+        let cli = Cli::parse_from(["term-wm", "-r", "htop", "--", "vim", "file.txt"]);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        assert_eq!(cmd, vec![
+            "exe", "--internal-session", "-w", "dev",
+            "--run", "htop", "--", "vim", "file.txt"
+        ]);
     }
 }

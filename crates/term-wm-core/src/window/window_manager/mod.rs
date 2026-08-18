@@ -937,7 +937,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             bottom_content: DelayedReleaseBool::new(crate::constants::FAB_RESERVATION_DEBOUNCE),
             tap_swap_state: None,
             cached_workspaces: Vec::new(),
-            current_workspace: "default".to_string(),
+            // Leave empty. The outer executable injects the real workspace immediately after instantiation.
+            current_workspace: String::new(),
         }
     }
 

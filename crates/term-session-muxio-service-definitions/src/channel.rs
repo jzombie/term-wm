@@ -6,6 +6,12 @@ use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
 /// Injected by the test harness for suite isolation, or set by an operator.
 pub const GATEWAY_CHANNEL_ENV_VAR: &str = "TERM_WM_GATEWAY";
 
+/// Default workspace name (namespace when no `/` is present).
+pub const DEFAULT_WORKSPACE: &str = "default";
+
+/// Default session channel name within a workspace.
+pub const SESSION_CHANNEL_NAME: &str = "main";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ChannelName {
     pub namespace: String,
@@ -13,6 +19,27 @@ pub struct ChannelName {
 }
 
 impl ChannelName {
+    /// Construct a session channel for the given workspace.
+    pub fn session(workspace: &str) -> Self {
+        Self {
+            namespace: workspace.to_string(),
+            name: SESSION_CHANNEL_NAME.to_string(),
+        }
+    }
+
+    /// Extract the workspace (namespace) from an arbitrary input string.
+    /// Handles both raw workspace names (`"ws-123"`) and full channel paths
+    /// (`"ws-123/main"`). Does NOT use `ChannelName::parse` which would
+    /// misinterpret single-segment strings as a name in the "default" namespace.
+    pub fn parse_workspace(input: &str) -> &str {
+        input.split('/').next().unwrap_or(input)
+    }
+
+    /// Extract the workspace (namespace) from a parsed channel.
+    pub fn workspace(&self) -> &str {
+        &self.namespace
+    }
+
     pub fn parse(input: &str) -> Result<Self, String> {
         let input = input.trim();
         let parts: Vec<&str> = input.split('/').collect();
@@ -188,5 +215,45 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.namespace, "term-wm");
         assert!(a.name.ends_with("/gateway"), "got {}", a.name);
+    }
+
+    #[test]
+    fn session_channel_constructs_correctly() {
+        let ch = ChannelName::session("ws-123");
+        assert_eq!(ch.namespace, "ws-123");
+        assert_eq!(ch.name, "main");
+        assert_eq!(ch.to_string(), "ws-123/main");
+    }
+
+    #[test]
+    fn session_channel_default_workspace() {
+        let ch = ChannelName::session(DEFAULT_WORKSPACE);
+        assert_eq!(ch.to_string(), "default/main");
+    }
+
+    #[test]
+    fn parse_workspace_raw_name() {
+        assert_eq!(ChannelName::parse_workspace("ws-123"), "ws-123");
+    }
+
+    #[test]
+    fn parse_workspace_channel_path() {
+        assert_eq!(ChannelName::parse_workspace("ws-123/main"), "ws-123");
+    }
+
+    #[test]
+    fn parse_workspace_double_main() {
+        assert_eq!(ChannelName::parse_workspace("ws-123/main/main"), "ws-123");
+    }
+
+    #[test]
+    fn parse_workspace_empty() {
+        assert_eq!(ChannelName::parse_workspace(""), "");
+    }
+
+    #[test]
+    fn workspace_method_returns_namespace() {
+        let ch = ChannelName::session("dev");
+        assert_eq!(ch.workspace(), "dev");
     }
 }

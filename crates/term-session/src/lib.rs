@@ -4,6 +4,7 @@ pub use term_session_client as client;
 pub use term_session_server as server;
 pub use term_session_muxio_service_definitions as protocol;
 pub use muxio_tokio_rpc_ipc_client as rpc_client;
+pub use term_session_muxio_service_definitions::{ChannelName, DEFAULT_WORKSPACE, SESSION_CHANNEL_NAME};
 
 use std::io;
 use std::sync::Arc;

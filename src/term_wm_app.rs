@@ -265,7 +265,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             #[cfg(feature = "session-persistence")]
             cached_workspaces: Vec::new(),
             #[cfg(feature = "session-persistence")]
-            current_workspace: "default".to_string(),
+            current_workspace: term_session::DEFAULT_WORKSPACE.to_string(),
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) AND the bundled
@@ -286,8 +286,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                     .channels
                     .iter()
                     .map(|ch| {
-                        // TODO: Don't hardcode split symbol
-                        ch.name.split('/').next().unwrap_or(&ch.name).to_string()
+                        term_session::ChannelName::parse_workspace(&ch.name).to_string()
                     })
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
