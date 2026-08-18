@@ -341,7 +341,10 @@ mod tests {
         unsafe {
             std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
             std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "test");
+            // `current_os_user()` reads $USER on Unix and %USERNAME% on
+            // Windows; set both so the assertion is platform-independent.
             std::env::set_var("USER", "tester");
+            std::env::set_var("USERNAME", "tester");
         }
         let gw = resolve_gateway();
         assert_eq!(gw.to_string(), "term-wm/test/tester/gateway");
@@ -349,6 +352,7 @@ mod tests {
         unsafe {
             std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
             std::env::remove_var("USER");
+            std::env::remove_var("USERNAME");
         }
     }
 

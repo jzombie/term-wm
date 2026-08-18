@@ -283,10 +283,14 @@ async fn session_starts_in_client_cwd() {
 
     // Poll for the report: the mock writes it right before exiting. The mock
     // reports its cwd as raw wire bytes (lossless), so read them byte-for-byte.
+    // Retry while the file is missing OR empty: `std::fs::write` truncates the
+    // target before writing, so a read that races the truncate can observe a
+    // zero-length file (which would canonicalize to an empty path and panic).
     let start = Instant::now();
     let got = loop {
-        if let Ok(content) = std::fs::read(&report) {
-            break content;
+        match std::fs::read(&report) {
+            Ok(content) if !content.is_empty() => break content,
+            _ => {}
         }
         assert!(
             start.elapsed() < Duration::from_secs(10),
