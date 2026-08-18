@@ -32,6 +32,7 @@ Press **%SUPER%** to open the Command Palette — a fuzzy-searchable list of act
 * Type to filter the list; press **%MENU_NAV%** to move and **%MENU_SELECT%** to activate the highlighted command.
 * Press **%FOCUS_NEXT% / %FOCUS_PREV%** to cycle focus between windows without closing the palette.
 * Press **%SUPER%** again to send the **%SUPER%** keystroke to the focused application.
+* When session persistence is active, the palette also offers workspace actions — **New Workspace** (create a new named workspace), **Switch to Workspace: `<name>`** (switch to another workspace without restarting; the previous one keeps running in the background), and **Detach Viewer** (disconnect this viewer from its session while leaving the process running).
 
 ## Window Navigation & Focus
 
@@ -125,6 +126,20 @@ Notes:
   clipboard is unreachable (e.g. a terminal without OSC 52 support, or over SSH) the
   two can diverge. Paste reads the OS clipboard when available and falls back to the
   internal copy, so the same **Paste** action should work in most cases.
+
+## Workspaces & Session Persistence
+
+`%PACKAGE%` keeps sessions persistent: a background gateway daemon is spawned
+automatically on first launch, so windows, layout, and running processes survive
+terminal-emulator restarts and SSH disconnects.
+
+* **Workspaces:** Each named workspace (e.g. `default`, `dev`) has its own independent
+  session and window-manager instance. From the Command Palette, choose **New Workspace**
+  to create one or **Switch to Workspace: `<name>`** to switch to another — switching
+  does not restart the process, and the previous workspace keeps running in the background.
+* **Detach Viewer:** Choose **Detach Viewer** from the Command Palette to disconnect
+  the current viewer from its session without terminating the PTY process — the session
+  keeps running in the background and can be re-attached.
 
 ## Environment & Compatibility
 
