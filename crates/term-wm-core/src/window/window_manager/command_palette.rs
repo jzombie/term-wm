@@ -169,7 +169,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         // Workspace group — always show "New workspace"
         #[cfg(feature = "session-persistence")]
-        {
+        if term_wm_config::runtime::session_persistence_enabled() {
             items.push(mi(
                 "New Workspace",
                 Some("+"),
@@ -194,6 +194,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }));
             items.push(MenuDisplayItem::Separator);
         }
+
+        // TODO: Comment why this is needed
         let _ = (workspaces, current_workspace);
 
         // Window management group (directly below top group)

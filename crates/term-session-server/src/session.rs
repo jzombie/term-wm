@@ -60,7 +60,7 @@ impl Session {
             default_shell_command()
         };
         if let Some(ch) = channel {
-            builder.env("TERM_WM_CHANNEL", ch.to_string());
+            builder.env(term_wm_config::env::CHANNEL_ENV_VAR, ch.to_string());
         }
         if let Some(c) = resolved_cwd {
             builder.cwd(c);

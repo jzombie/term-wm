@@ -11,8 +11,8 @@ use term_session_muxio_service_definitions::{
 use std::process::{Child, Command, Stdio};
 
 /// Resolve the gateway channel name to probe/spawn.
-/// Uses the runtime `TERM_WM_GATEWAY` override if present, else the static
-/// user-scoped default (`term-wm/<user>/gateway`).
+/// Uses the runtime `TERM_WM_GATEWAY` override if present, else the
+/// environment-scoped user default (`term-wm/<env>/<user>/gateway`).
 pub fn resolve_gateway() -> ChannelName {
     gateway_channel_name()
 }

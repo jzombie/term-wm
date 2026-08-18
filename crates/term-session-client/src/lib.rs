@@ -167,6 +167,24 @@ fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
 /// only when both the event kind and modifier flags match.  Modifier changes
 /// mid-drag (Shift/Ctrl/Alt pressed or released) must be preserved — they
 /// signal state transitions that terminal applications rely on.
+fn attributed_mouse_is_motion(e: &Event) -> bool {
+    matches!(
+        e,
+        Event::Mouse(m) if matches!(m.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+    )
+}
+
+/// Whether two events are coalescable mouse motion events (same kind family
+/// and same modifier set — delegates to [`is_coalescable_mouse`]).
+fn attributed_mouse_coalescable(a: &Event, b: &Event) -> bool {
+    match (a, b) {
+        (Event::Mouse(am), Event::Mouse(bm)) => {
+            is_coalescable_mouse(&am.kind, &am.modifiers, &bm.kind, &bm.modifiers)
+        }
+        _ => false,
+    }
+}
+
 fn is_coalescable_mouse(
     a_kind: &MouseEventKind,
     a_mod: &KeyModifiers,
@@ -497,9 +515,37 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     {
         let client_clone = client.clone();
         rt.spawn(async move {
-            while let Some(req) = attributed_rx.recv().await {
-                use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
-                use term_session_muxio_service_definitions::SendAttributedInput;
+            use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
+            use term_session_muxio_service_definitions::SendAttributedInput;
+
+            let mut pending_req = None;
+            loop {
+                let mut req = match pending_req.take() {
+                    Some(r) => r,
+                    None => match attributed_rx.recv().await {
+                        Some(r) => r,
+                        None => break,
+                    },
+                };
+
+                // Latest-position coalescing for queued motion events. A
+                // popped event that cannot be merged is stashed in
+                // `pending_req` (NOT dropped) and processed on the next
+                // iteration, preserving discrete-event ordering.
+                while attributed_mouse_is_motion(&req.event) {
+                    match attributed_rx.try_recv() {
+                        Ok(next_req)
+                            if attributed_mouse_coalescable(&req.event, &next_req.event) =>
+                        {
+                            req = next_req;
+                        }
+                        Ok(next_req) => {
+                            pending_req = Some(next_req);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
                 let _ = SendAttributedInput::call(&*client_clone, req).await;
             }
         });

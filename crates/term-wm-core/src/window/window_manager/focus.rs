@@ -90,11 +90,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                     );
                     #[cfg(feature = "session-persistence")]
                     let always_pass = always_pass
-                        || matches!(
-                            item.action,
-                            crate::actions::TermWmAction::SwitchWorkspace(_)
-                                | crate::actions::TermWmAction::NewWorkspace
-                        );
+                        || (term_wm_config::runtime::session_persistence_enabled()
+                            && matches!(
+                                item.action,
+                                crate::actions::TermWmAction::SwitchWorkspace(_)
+                                    | crate::actions::TermWmAction::NewWorkspace
+                            ));
                     supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,

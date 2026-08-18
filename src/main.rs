@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use crossbeam_channel::Sender;
 
 use term_wm::app_context::AppContext;
@@ -65,9 +65,19 @@ struct Cli {
     #[arg(long = "stop-daemon")]
     stop_daemon: bool,
 
+    /// List channels and their sessions/clients, then exit.
+    #[arg(long = "list-channels")]
+    list_channels: bool,
+
     /// Force stop daemon or kill channels even if sessions/participants are active
     #[arg(long = "force", short = 'f')]
     force: bool,
+
+    /// Disable session-persistence behavior at runtime (workspaces, gateway,
+    /// daemon modes). Ignored when the `session-persistence` feature is not
+    /// compiled in.
+    #[arg(long = "no-session-persistence")]
+    no_session_persistence: bool,
 }
 
 /// Combine repeatable `--run` commands with the single trailing `--` command
@@ -92,6 +102,7 @@ fn total_windows(count: Option<usize>, commands: &[String]) -> usize {
 
 /// Serializes the outer launcher's CLI state into an inner process command.
 /// Injects the headless `--internal-session` flag and the target workspace.
+#[cfg(any(feature = "session-persistence", test))]
 fn build_inner_command(exe: String, workspace: &str, cli: &Cli) -> Vec<String> {
     let mut inner_cmd = vec![
         exe,
@@ -118,8 +129,38 @@ fn build_inner_command(exe: String, workspace: &str, cli: &Cli) -> Vec<String> {
     inner_cmd
 }
 
+/// Build the runtime config from the CLI flag and env var. Both sources are
+/// OR'd: session persistence is disabled when either is present.
+fn runtime_config_for(no_session_persistence_flag: bool) -> term_wm_config::runtime::RuntimeConfig {
+    term_wm_config::runtime::RuntimeConfig {
+        session_persistence: !no_session_persistence_flag
+            && !term_wm_config::env::no_session_persistence(),
+    }
+}
+
+/// Build the CLI `Command`. With session persistence compiled in, decorate the
+/// help footer with the resolved persistence gateway so `--help` shows the
+/// exact socket this build targets.
+fn cli_command() -> clap::Command {
+    #[cfg(feature = "session-persistence")]
+    {
+        Cli::command().after_help(term_session::gateway_help_line())
+    }
+    #[cfg(not(feature = "session-persistence"))]
+    {
+        Cli::command()
+    }
+}
+
 fn main() -> io::Result<()> {
-    let cli = Cli::parse();
+    let cli = {
+        let mut matches = cli_command().get_matches();
+        Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
+    };
+
+    // Initialize runtime config before any session-persistence code paths.
+    term_wm_config::runtime::init(runtime_config_for(cli.no_session_persistence));
+
     #[cfg(feature = "session-persistence")]
     let workspace: String = term_session::ChannelName::parse_workspace(&cli.workspace).to_string();
     #[cfg(not(feature = "session-persistence"))]
@@ -127,13 +168,19 @@ fn main() -> io::Result<()> {
 
     // 0. Stop daemon
     #[cfg(feature = "session-persistence")]
-    if cli.stop_daemon {
+    if cli.stop_daemon && term_wm_config::runtime::session_persistence_enabled() {
         return term_session::stop_gateway(cli.force);
+    }
+
+    // 0b. List channels and exit
+    #[cfg(feature = "session-persistence")]
+    if cli.list_channels && term_wm_config::runtime::session_persistence_enabled() {
+        return term_session::print_list();
     }
 
     // 1. Standalone daemon mode
     #[cfg(feature = "session-persistence")]
-    if cli.daemon {
+    if cli.daemon && term_wm_config::runtime::session_persistence_enabled() {
         let gateway = term_session::auto_spawn::resolve_gateway();
         let rt = tokio::runtime::Runtime::new()?;
         return rt
@@ -144,7 +191,7 @@ fn main() -> io::Result<()> {
 
     // 2. Headless client mode (no WM chrome)
     #[cfg(feature = "session-persistence")]
-    if cli.no_wm {
+    if cli.no_wm && term_wm_config::runtime::session_persistence_enabled() {
         let socket = term_session::auto_spawn::connect_or_spawn_server(None)?;
         let channel = term_session::ChannelName::session(&workspace).to_string();
         return term_session::client::run_session(&socket, &channel, &cli.cmds).map(|_| ());
@@ -152,7 +199,7 @@ fn main() -> io::Result<()> {
 
     // 3. Outer launcher with workspace rebind loop
     #[cfg(feature = "session-persistence")]
-    if !cli.internal_session {
+    if !cli.internal_session && term_wm_config::runtime::session_persistence_enabled() {
         let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
         let mut current_workspace = workspace.clone();
 
@@ -199,12 +246,13 @@ fn main() -> io::Result<()> {
     let _rt_guard = rt.enter();
 
     let (mut event_source, event_owner) = UnifiedEventSource::new(cli.internal_session)?;
+    #[cfg(feature = "session-persistence")]
     let pty_wakeup_tx = event_source.pty_wakeup_tx();
 
     // For internal sessions, spawn a Muxio listener that receives structured
     // events from the server and pipes them into the event source via pty_wakeup_tx.
     #[cfg(feature = "session-persistence")]
-    if cli.internal_session {
+    if cli.internal_session && term_wm_config::runtime::session_persistence_enabled() {
         let tx = pty_wakeup_tx.clone();
         let channel = term_session::ChannelName::session(&workspace).to_string();
         let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
@@ -297,6 +345,7 @@ struct App {
     #[allow(dead_code, reason = "used only with session-persistence")]
     current_workspace: String,
     /// Shared event attribution — updated by UnifiedEventSource, read by handle_custom_action.
+    #[cfg_attr(not(feature = "session-persistence"), allow(dead_code))]
     event_owner: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
 }
 
@@ -350,6 +399,7 @@ impl App {
 
         let wm = build_wm(&app_ctx, config);
 
+        #[cfg_attr(not(feature = "session-persistence"), allow(unused_mut))]
         let mut inner = TermWmApp::from_wm(wm, pty_wakeup_tx.clone());
         #[cfg(feature = "session-persistence")]
         inner.set_current_workspace(workspace.clone());
@@ -413,12 +463,15 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn handle_custom_action(&mut self, action: &term_wm_core::actions::TermWmAction) -> bool {
+        if !term_wm_config::runtime::session_persistence_enabled() {
+            return false;
+        }
+        #[cfg_attr(not(feature = "session-persistence"), allow(unused_imports))]
         use term_wm_core::actions::TermWmAction;
         match action {
             #[cfg(feature = "session-persistence")]
             TermWmAction::SwitchWorkspace(_target) => {
-                let source_ws =
-                    term_session::ChannelName::parse_workspace(&self.current_workspace);
+                let source_ws = term_session::ChannelName::parse_workspace(&self.current_workspace);
                 let target_ws = term_session::ChannelName::parse_workspace(_target);
 
                 let source_channel = term_session::ChannelName::session(source_ws).to_string();
@@ -439,8 +492,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                     .as_secs();
 
                 let target_ws = format!("ws-{}", ts);
-                let source_ws =
-                    term_session::ChannelName::parse_workspace(&self.current_workspace);
+                let source_ws = term_session::ChannelName::parse_workspace(&self.current_workspace);
 
                 let source_channel = term_session::ChannelName::session(source_ws).to_string();
                 let target_channel = term_session::ChannelName::session(&target_ws).to_string();
@@ -641,5 +693,32 @@ mod tests {
                 "file.txt"
             ]
         );
+    }
+
+    /// Serializes tests that mutate `TERM_WM_GATEWAY` / `TERM_WM_ENV`, which
+    /// are process-global and unsafe to read/write concurrently.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    fn help_shows_resolved_gateway() {
+        let _guard = env_lock();
+        // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
+        // otherwise change the rendered footer.
+        unsafe {
+            std::env::remove_var("TERM_WM_GATEWAY");
+            std::env::remove_var("TERM_WM_ENV");
+        }
+        let mut cmd = cli_command();
+        let help = cmd.render_long_help().to_string();
+        assert!(help.contains("Persistence gateway:"), "help was:\n{help}");
+        assert!(
+            help.contains(term_session::protocol::GATEWAY_NAMESPACE),
+            "help was:\n{help}"
+        );
+        assert!(help.contains("/gateway"), "help was:\n{help}");
     }
 }

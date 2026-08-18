@@ -281,6 +281,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     /// Called before opening the Command Palette — never on every keystroke.
     #[cfg(feature = "session-persistence")]
     pub fn refresh_workspace_cache(&mut self) {
+        if !term_wm_config::runtime::session_persistence_enabled() {
+            return;
+        }
         match term_session::list_channels() {
             Ok(resp) => {
                 self.cached_workspaces = resp
@@ -678,8 +681,7 @@ impl<C: Component<TermWmAction> + 'static>
                     let always_pass = always_pass
                         || matches!(
                             item.action,
-                            TermWmAction::SwitchWorkspace(_)
-                                | TermWmAction::NewWorkspace
+                            TermWmAction::SwitchWorkspace(_) | TermWmAction::NewWorkspace
                         );
                     supported.contains(&item.action) || always_pass
                 }
