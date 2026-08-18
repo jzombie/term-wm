@@ -50,6 +50,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleTiling,
     TermWmAction::NewTerminal,
     TermWmAction::ToggleDebugWindow,
+    #[cfg(feature = "session-persistence")]
     TermWmAction::NewWorkspace,
 ];
 
@@ -664,18 +665,23 @@ impl<C: Component<TermWmAction> + 'static>
             .into_iter()
             .filter(|entry| match entry {
                 MenuDisplayItem::Item(item) => {
-                    supported.contains(&item.action)
+                    let always_pass = matches!(
+                        item.action,
+                        TermWmAction::FocusWindow(_)
+                            | TermWmAction::MaximizeWindow(_)
+                            | TermWmAction::MinimizeWindow(_)
+                            | TermWmAction::CloseWindow(_)
+                            | TermWmAction::SendSuperKeyToWindow(_)
+                            | TermWmAction::SendSuperKeyToFocusedWindow
+                    );
+                    #[cfg(feature = "session-persistence")]
+                    let always_pass = always_pass
                         || matches!(
                             item.action,
-                            TermWmAction::FocusWindow(_)
-                                | TermWmAction::MaximizeWindow(_)
-                                | TermWmAction::MinimizeWindow(_)
-                                | TermWmAction::CloseWindow(_)
-                                | TermWmAction::SendSuperKeyToWindow(_)
-                                | TermWmAction::SendSuperKeyToFocusedWindow
-                                | TermWmAction::SwitchWorkspace(_)
+                            TermWmAction::SwitchWorkspace(_)
                                 | TermWmAction::NewWorkspace
-                        )
+                        );
+                    supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,
             })
@@ -744,6 +750,7 @@ mod tests {
     /// It must keep the command-palette actions limited to the allow-list it
     /// configures — never the full default set.
     #[test]
+    #[cfg(feature = "session-persistence")]
     fn new_custom_limits_supported_menu_actions() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         assert_eq!(

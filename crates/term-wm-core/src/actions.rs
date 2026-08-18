@@ -169,10 +169,13 @@ pub enum TermWmAction {
 
     // --- Workspace actions ---
     /// Switch the outer viewer to a different workspace channel.
+    #[cfg(feature = "session-persistence")]
     SwitchWorkspace(String),
     /// Create a new workspace (prompts for name).
+    #[cfg(feature = "session-persistence")]
     NewWorkspace,
     /// Detach the current viewer connection from the session.
+    #[cfg(feature = "session-persistence")]
     DetachCurrentClient,
 }
 
@@ -274,8 +277,10 @@ impl TermWmAction {
             | TermWmAction::ConfirmSwap
             | TermWmAction::CancelSwap
             | TermWmAction::SendSuperKeyToWindow(_)
-            | TermWmAction::SendSuperKeyToFocusedWindow
-            | TermWmAction::SwitchWorkspace(_)
+            | TermWmAction::SendSuperKeyToFocusedWindow => Category::Windows,
+
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::SwitchWorkspace(_)
             | TermWmAction::NewWorkspace
             | TermWmAction::DetachCurrentClient => Category::Windows,
 
@@ -417,10 +422,13 @@ impl fmt::Display for TermWmAction {
             TermWmAction::PanDown => "Pan down",
             TermWmAction::CycleViewMode => "Cycle view",
             TermWmAction::Custom(_) => "Custom action",
+            #[cfg(feature = "session-persistence")]
             TermWmAction::SwitchWorkspace(name) => {
                 return write!(f, "Switch to workspace: {name}");
             }
+            #[cfg(feature = "session-persistence")]
             TermWmAction::NewWorkspace => "New workspace",
+            #[cfg(feature = "session-persistence")]
             TermWmAction::DetachCurrentClient => "Detach viewer",
         };
         write!(f, "{}", s)

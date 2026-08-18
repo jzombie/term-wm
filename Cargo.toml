@@ -147,6 +147,7 @@ session-persistence = [
     "dep:tokio",
     "dep:muxio-rpc-service-caller",
     "dep:muxio-rpc-service-endpoint",
+    "term-wm-core/session-persistence",
 ]
 
 [dependencies]

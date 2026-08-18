@@ -12,6 +12,7 @@ license.workspace = true
 [features]
 default = ["pty"]
 pty = ["portable-pty"]
+session-persistence = []
 
 [dependencies]
 bitflags = { workspace = true }

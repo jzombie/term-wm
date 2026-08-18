@@ -79,18 +79,23 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .into_iter()
             .filter(|entry| match entry {
                 MenuDisplayItem::Item(item) => {
-                    supported.contains(&item.action)
+                    let always_pass = matches!(
+                        item.action,
+                        crate::actions::TermWmAction::FocusWindow(_)
+                            | crate::actions::TermWmAction::MaximizeWindow(_)
+                            | crate::actions::TermWmAction::MinimizeWindow(_)
+                            | crate::actions::TermWmAction::CloseWindow(_)
+                            | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
+                            | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
+                    );
+                    #[cfg(feature = "session-persistence")]
+                    let always_pass = always_pass
                         || matches!(
                             item.action,
-                            crate::actions::TermWmAction::FocusWindow(_)
-                                | crate::actions::TermWmAction::MaximizeWindow(_)
-                                | crate::actions::TermWmAction::MinimizeWindow(_)
-                                | crate::actions::TermWmAction::CloseWindow(_)
-                                | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
-                                | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
-                                | crate::actions::TermWmAction::SwitchWorkspace(_)
+                            crate::actions::TermWmAction::SwitchWorkspace(_)
                                 | crate::actions::TermWmAction::NewWorkspace
-                        )
+                        );
+                    supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,
             })

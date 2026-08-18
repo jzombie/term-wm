@@ -168,6 +168,7 @@ fn dispatch_action<
             }
         }
         // Workspace actions: delegate to the app's custom action handler
+        #[cfg(feature = "session-persistence")]
         action @ (TermWmAction::SwitchWorkspace(_)
         | TermWmAction::NewWorkspace
         | TermWmAction::DetachCurrentClient) => {

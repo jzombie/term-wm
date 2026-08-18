@@ -120,7 +120,10 @@ fn build_inner_command(exe: String, workspace: &str, cli: &Cli) -> Vec<String> {
 
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
+    #[cfg(feature = "session-persistence")]
     let workspace: String = term_session::ChannelName::parse_workspace(&cli.workspace).to_string();
+    #[cfg(not(feature = "session-persistence"))]
+    let workspace: String = cli.workspace.clone();
 
     // 0. Stop daemon
     #[cfg(feature = "session-persistence")]
@@ -412,66 +415,60 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     fn handle_custom_action(&mut self, action: &term_wm_core::actions::TermWmAction) -> bool {
         use term_wm_core::actions::TermWmAction;
         match action {
+            #[cfg(feature = "session-persistence")]
             TermWmAction::SwitchWorkspace(_target) => {
-                #[cfg(feature = "session-persistence")]
+                let source_ws =
+                    term_session::ChannelName::parse_workspace(&self.current_workspace);
+                let target_ws = term_session::ChannelName::parse_workspace(_target);
+
+                let source_channel = term_session::ChannelName::session(source_ws).to_string();
+                let target_channel = term_session::ChannelName::session(target_ws).to_string();
+
+                if let Err(e) =
+                    term_session::request_workspace_rebind(&source_channel, &target_channel)
                 {
-                    let source_ws =
-                        term_session::ChannelName::parse_workspace(&self.current_workspace);
-                    let target_ws = term_session::ChannelName::parse_workspace(_target);
-
-                    let source_channel = term_session::ChannelName::session(source_ws).to_string();
-                    let target_channel = term_session::ChannelName::session(target_ws).to_string();
-
-                    if let Err(e) =
-                        term_session::request_workspace_rebind(&source_channel, &target_channel)
-                    {
-                        tracing::warn!("Failed to request workspace switch: {e}");
-                    }
+                    tracing::warn!("Failed to request workspace switch: {e}");
                 }
                 true
             }
+            #[cfg(feature = "session-persistence")]
             TermWmAction::NewWorkspace => {
-                #[cfg(feature = "session-persistence")]
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                let target_ws = format!("ws-{}", ts);
+                let source_ws =
+                    term_session::ChannelName::parse_workspace(&self.current_workspace);
+
+                let source_channel = term_session::ChannelName::session(source_ws).to_string();
+                let target_channel = term_session::ChannelName::session(&target_ws).to_string();
+
+                if let Err(e) =
+                    term_session::request_workspace_rebind(&source_channel, &target_channel)
                 {
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-
-                    let target_ws = format!("ws-{}", ts);
-                    let source_ws =
-                        term_session::ChannelName::parse_workspace(&self.current_workspace);
-
-                    let source_channel = term_session::ChannelName::session(source_ws).to_string();
-                    let target_channel = term_session::ChannelName::session(&target_ws).to_string();
-
-                    if let Err(e) =
-                        term_session::request_workspace_rebind(&source_channel, &target_channel)
-                    {
-                        tracing::error!("Failed to switch to new workspace: {e}");
-                    } else {
-                        self.inner.refresh_workspace_cache();
-                        self.inner.wm().push_notification(
-                            format!("Created workspace: {target_ws}"),
-                            std::time::Duration::from_secs(3),
-                        );
-                    }
+                    tracing::error!("Failed to switch to new workspace: {e}");
+                } else {
+                    self.inner.refresh_workspace_cache();
+                    self.inner.wm().push_notification(
+                        format!("Created workspace: {target_ws}"),
+                        std::time::Duration::from_secs(3),
+                    );
                 }
                 true
             }
+            #[cfg(feature = "session-persistence")]
             TermWmAction::DetachCurrentClient => {
-                #[cfg(feature = "session-persistence")]
+                if let Some(conn_id) = *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
                 {
-                    if let Some(conn_id) = *self
-                        .event_owner
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                    {
-                        let channel =
-                            term_session::ChannelName::session(&self.current_workspace).to_string();
-                        if let Err(e) = term_session::kill_client(&channel, conn_id) {
-                            tracing::warn!("Failed to detach viewer: {e}");
-                        }
+                    let channel =
+                        term_session::ChannelName::session(&self.current_workspace).to_string();
+                    if let Err(e) = term_session::kill_client(&channel, conn_id) {
+                        tracing::warn!("Failed to detach viewer: {e}");
                     }
                 }
                 true

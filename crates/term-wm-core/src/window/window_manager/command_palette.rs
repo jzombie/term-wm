@@ -168,29 +168,33 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         ];
 
         // Workspace group — always show "New workspace"
-        items.push(mi(
-            "New Workspace",
-            Some("+"),
-            crate::actions::TermWmAction::NewWorkspace,
-        ));
+        #[cfg(feature = "session-persistence")]
+        {
+            items.push(mi(
+                "New Workspace",
+                Some("+"),
+                crate::actions::TermWmAction::NewWorkspace,
+            ));
 
-        if !workspaces.is_empty() {
-            for ws in workspaces {
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Switch to Workspace: {ws}").into(),
-                    icon: Some("→"),
-                    action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
-                    disabled: ws == current_workspace,
-                }));
+            if !workspaces.is_empty() {
+                for ws in workspaces {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Switch to Workspace: {ws}").into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
+                        disabled: ws == current_workspace,
+                    }));
+                }
             }
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: "Detach Viewer".into(),
+                icon: Some("-"),
+                action: crate::actions::TermWmAction::DetachCurrentClient,
+                disabled: false,
+            }));
+            items.push(MenuDisplayItem::Separator);
         }
-        items.push(MenuDisplayItem::Item(MenuItem {
-            label: "Detach Viewer".into(),
-            icon: Some("-"),
-            action: crate::actions::TermWmAction::DetachCurrentClient,
-            disabled: false,
-        }));
-        items.push(MenuDisplayItem::Separator);
+        let _ = (workspaces, current_workspace);
 
         // Window management group (directly below top group)
         {
