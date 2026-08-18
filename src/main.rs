@@ -125,11 +125,11 @@ fn main() -> io::Result<()> {
     #[cfg(feature = "session-persistence")]
     if !cli.internal_session {
         let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
-        let mut current_workspace: String = workspace.clone();
+        let mut current_workspace = workspace.clone();
+        let mut last_working_workspace = current_workspace.clone();
 
         loop {
             let channel = format!("{}/main", current_workspace);
-
             let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
 
             let mut inner_cmd = vec![
@@ -157,22 +157,28 @@ fn main() -> io::Result<()> {
 
             match term_session::client::run_session(&socket_path, &channel, &inner_cmd) {
                 Ok(Some(target_workspace)) => {
-                    let clean_target = target_workspace
-                        .strip_suffix("/main")
-                        .unwrap_or(&target_workspace);
+                    let clean_target = target_workspace.strip_suffix("/main").unwrap_or(&target_workspace);
+                    last_working_workspace = current_workspace.clone();
                     current_workspace = clean_target.to_string();
                     continue;
                 }
-                Ok(None) => return Ok(()),
-                Err(e) => {
-                    tracing::error!("Session failed on workspace '{}': {}", current_workspace, e);
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    if current_workspace != "default" {
-                        current_workspace = "default".to_string();
+                Ok(None) => {
+                    if current_workspace != last_working_workspace {
+                        eprintln!("\r\n[term-wm] Workspace '{}' exited unexpectedly. Falling back to '{}'...", current_workspace, last_working_workspace);
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        current_workspace = last_working_workspace.clone();
                         continue;
-                    } else {
-                        return Err(e);
                     }
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("\r\n[term-wm] Connection error on '{}': {}", current_workspace, e);
+                    if current_workspace != last_working_workspace {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        current_workspace = last_working_workspace.clone();
+                        continue;
+                    }
+                    return Err(e);
                 }
             }
         }
