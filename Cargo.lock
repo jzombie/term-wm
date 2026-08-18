@@ -3189,6 +3189,7 @@ dependencies = [
  "interprocess",
  "libc",
  "muxio-rpc-service",
+ "term-wm-events",
 ]
 
 [[package]]
@@ -3239,6 +3240,8 @@ dependencies = [
  "libc",
  "line-ending",
  "muxio-rpc-service",
+ "muxio-rpc-service-caller",
+ "muxio-rpc-service-endpoint",
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
@@ -3247,6 +3250,7 @@ dependencies = [
  "serial_test",
  "tempfile",
  "term-clipboard",
+ "term-session",
  "term-session-client",
  "term-session-mock",
  "term-session-muxio-service-definitions",
@@ -3324,6 +3328,7 @@ dependencies = [
 name = "term-wm-events"
 version = "0.9.28-alpha"
 dependencies = [
+ "bitcode",
  "term-wm-layout-engine",
 ]
 

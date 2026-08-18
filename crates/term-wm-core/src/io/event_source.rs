@@ -79,6 +79,13 @@ pub trait EventSource {
     fn take_redraw_request(&mut self) -> bool {
         false
     }
+
+    /// Returns the `conn_id` of the client that produced the most recently
+    /// consumed event. Used by the WM to attribute actions (e.g. Detach)
+    /// to the correct viewer connection. Returns `None` for local input.
+    fn last_event_owner(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl<T: EventSource + ?Sized> EventSource for &mut T {
@@ -136,6 +143,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn take_redraw_request(&mut self) -> bool {
         (**self).take_redraw_request()
+    }
+
+    fn last_event_owner(&self) -> Option<usize> {
+        (**self).last_event_owner()
     }
 }
 

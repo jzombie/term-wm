@@ -5,7 +5,7 @@ use term_wm_layout_engine::{CoordSpace, LayoutRect, MousePosition};
 // ============================================================================
 
 /// Core-owned keyboard event (independent of crossterm)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct KeyEvent {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
@@ -24,7 +24,7 @@ impl KeyEvent {
 }
 
 /// Core-owned key code (independent of crossterm)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub enum KeyCode {
     Char(char),
     Enter,
@@ -50,7 +50,7 @@ pub enum KeyCode {
 }
 
 /// Core-owned key modifiers (independent of crossterm)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct KeyModifiers {
     pub shift: bool,
     pub control: bool,
@@ -67,7 +67,7 @@ impl KeyModifiers {
 
 // TODO: Rename to `KeyEventKind`?
 /// Core-owned key event kind (independent of crossterm)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub enum KeyKind {
     Press,
     Repeat,
@@ -75,7 +75,7 @@ pub enum KeyKind {
 }
 
 /// Core-owned mouse event (independent of crossterm)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct MouseEvent {
     pub kind: MouseEventKind,
     pub modifiers: KeyModifiers,
@@ -174,7 +174,7 @@ impl MouseEvent {
 }
 
 /// Core-owned mouse event kind (independent of crossterm)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub enum MouseEventKind {
     Press(MouseButton),
     Release(MouseButton),
@@ -187,7 +187,7 @@ pub enum MouseEventKind {
 }
 
 /// Core-owned mouse button (independent of crossterm)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub enum MouseButton {
     Left,
     Right,
@@ -199,7 +199,7 @@ pub enum MouseButton {
 // ============================================================================
 
 /// Core-owned event enum (independent of crossterm)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bitcode::Encode, bitcode::Decode)]
 pub enum Event {
     /// Keyboard event
     Key(KeyEvent),

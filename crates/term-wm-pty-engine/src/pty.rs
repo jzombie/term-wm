@@ -821,7 +821,10 @@ impl Pty {
         if self.dirty.swap(false, Ordering::Acquire) {
             // Send DSR response if requested by the reader thread.
             if self.dsr_requested.swap(false, Ordering::Relaxed) {
-                let parser = self.shared_parser.lock().unwrap();
+                let parser = self
+                    .shared_parser
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
                 let (row, col) = parser.screen().cursor_position();
                 drop(parser);
                 let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
@@ -829,7 +832,7 @@ impl Pty {
             }
             // Acquire the lock to prevent lost wakeups on the condition variable
             let (lock, cvar) = &*self.dirty_cond;
-            let _guard = lock.lock().unwrap();
+            let _guard = lock.lock().unwrap_or_else(|err| err.into_inner());
             cvar.notify_all();
         }
     }
@@ -865,13 +868,19 @@ impl Pty {
 
     pub fn scrollback(&mut self) -> usize {
         self.screen(); // sync dirty state
-        let parser = self.shared_parser.lock().unwrap();
+        let parser = self
+            .shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         parser.screen().scrollback()
     }
 
     pub fn set_scrollback(&mut self, rows: usize) {
         let max = self.scrollback_len;
-        let mut parser = self.shared_parser.lock().unwrap();
+        let mut parser = self
+            .shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         parser.screen_mut().set_scrollback(rows.min(max));
     }
 
@@ -884,7 +893,10 @@ impl Pty {
         if max_sb == 0 {
             return 0;
         }
-        let mut parser = self.shared_parser.lock().unwrap();
+        let mut parser = self
+            .shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let screen = parser.screen_mut();
         let current = screen.scrollback();
         screen.set_scrollback(max_sb);
@@ -895,7 +907,10 @@ impl Pty {
 
     pub fn alternate_screen(&mut self) -> bool {
         self.screen(); // sync dirty state
-        let parser = self.shared_parser.lock().unwrap();
+        let parser = self
+            .shared_parser
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         parser.screen().alternate_screen()
     }
 

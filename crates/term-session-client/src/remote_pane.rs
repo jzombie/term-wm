@@ -49,7 +49,7 @@ impl RemotePane {
         loop {
             match self.push_rx.try_recv() {
                 Ok(data) => {
-                    let mut parser = self.parser.lock().unwrap();
+                    let mut parser = self.parser.lock().unwrap_or_else(|err| err.into_inner());
                     parser.process(&data);
                     updated = true;
                 }
@@ -84,7 +84,7 @@ impl Pane for RemotePane {
             (size.cols, size.rows)
         };
         {
-            let mut parser = self.parser.lock().unwrap();
+            let mut parser = self.parser.lock().unwrap_or_else(|err| err.into_inner());
             parser.screen_mut().set_size(actual_rows, actual_cols);
         }
         Ok(())
@@ -95,7 +95,7 @@ impl Pane for RemotePane {
     }
 
     fn alternate_screen(&mut self) -> bool {
-        let parser = self.parser.lock().unwrap();
+        let parser = self.parser.lock().unwrap_or_else(|err| err.into_inner());
         parser.screen().alternate_screen()
     }
 
