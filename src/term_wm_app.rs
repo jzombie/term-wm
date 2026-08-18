@@ -285,9 +285,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                 self.cached_workspaces = resp
                     .channels
                     .iter()
-                    .map(|ch| {
-                        term_session::ChannelName::parse_workspace(&ch.name).to_string()
-                    })
+                    .map(|ch| term_session::ChannelName::parse_workspace(&ch.name).to_string())
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect();

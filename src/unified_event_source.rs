@@ -23,7 +23,10 @@ pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 256;
 pub enum UnifiedEvent {
     /// A user-input event with optional connection attribution.
     /// `conn_id = None` for local console, `Some(id)` for remote Muxio viewers.
-    Input { conn_id: Option<usize>, event: Event },
+    Input {
+        conn_id: Option<usize>,
+        event: Event,
+    },
     /// A PTY reader thread has new data available for `WindowKey`.
     PtyWakeup(WindowKey),
     /// A PTY child process has exited. Sent from the reader thread on EOF.
@@ -120,9 +123,7 @@ impl UnifiedEventSource {
     ///
     /// Returns the source and a shared `Arc<Mutex<Option<usize>>>` for
     /// event attribution that should be passed to `App`.
-    pub fn new(
-        headless: bool,
-    ) -> io::Result<(Self, Arc<Mutex<Option<usize>>>)> {
+    pub fn new(headless: bool) -> io::Result<(Self, Arc<Mutex<Option<usize>>>)> {
         let (tx, rx) = bounded::<UnifiedEvent>(EVENT_CHANNEL_CAPACITY);
         let event_owner = Arc::new(Mutex::new(None));
         let (console, console_rx) = if headless {
@@ -172,12 +173,18 @@ impl UnifiedEventSource {
     fn drain_pending(&mut self) {
         loop {
             match self.rx.try_recv() {
-                Ok(UnifiedEvent::Input { conn_id: None, event }) => {
+                Ok(UnifiedEvent::Input {
+                    conn_id: None,
+                    event,
+                }) => {
                     if let Some(normalized) = self.normalizer.normalize(event) {
                         self.input_buffer.push_back((None, normalized));
                     }
                 }
-                Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
+                Ok(UnifiedEvent::Input {
+                    conn_id: Some(conn_id),
+                    event,
+                }) => {
                     if let Some(normalized) = self.normalizer.normalize(event) {
                         self.input_buffer.push_back((Some(conn_id), normalized));
                     }
@@ -232,7 +239,10 @@ impl UnifiedEventSource {
     /// `recv_timeout` match arms.
     fn handle_unified_poll(&mut self, evt: UnifiedEvent) -> UnifiedPoll {
         match evt {
-            UnifiedEvent::Input { conn_id: None, event } => {
+            UnifiedEvent::Input {
+                conn_id: None,
+                event,
+            } => {
                 self.last_event_at = Some(Instant::now());
                 if let Some(normalized) = self.normalizer.normalize(event) {
                     self.frame_pacer.reset();
@@ -273,7 +283,10 @@ impl UnifiedEventSource {
                 UnifiedPoll::RenderDue
             }
             UnifiedEvent::Tick => UnifiedPoll::RenderDue,
-            UnifiedEvent::Input { conn_id: Some(conn_id), event } => {
+            UnifiedEvent::Input {
+                conn_id: Some(conn_id),
+                event,
+            } => {
                 self.last_event_at = Some(Instant::now());
                 if let Some(normalized) = self.normalizer.normalize(event) {
                     self.frame_pacer.reset();
@@ -291,7 +304,10 @@ impl UnifiedEventSource {
     /// when a normalized user-input event should be returned.
     fn handle_unified_read(&mut self, evt: UnifiedEvent) -> Option<Event> {
         match evt {
-            UnifiedEvent::Input { conn_id: None, event } => {
+            UnifiedEvent::Input {
+                conn_id: None,
+                event,
+            } => {
                 self.last_event_at = Some(Instant::now());
                 self.normalizer.normalize(event)
             }
@@ -318,7 +334,10 @@ impl UnifiedEventSource {
                 None
             }
             UnifiedEvent::Tick => None,
-            UnifiedEvent::Input { conn_id: Some(conn_id), event } => {
+            UnifiedEvent::Input {
+                conn_id: Some(conn_id),
+                event,
+            } => {
                 self.last_event_at = Some(Instant::now());
                 *self.event_owner.lock().unwrap() = Some(conn_id);
                 self.normalizer.normalize(event)
@@ -589,13 +608,19 @@ impl EventSource for UnifiedEventSource {
                 }
             } else {
                 match local_rx.recv() {
-                    Ok(UnifiedEvent::Input { conn_id: None, event }) => {
+                    Ok(UnifiedEvent::Input {
+                        conn_id: None,
+                        event,
+                    }) => {
                         if let Event::Key(key) = event {
                             return Ok(key);
                         }
                         self.input_buffer.push_back((None, event));
                     }
-                    Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
+                    Ok(UnifiedEvent::Input {
+                        conn_id: Some(conn_id),
+                        event,
+                    }) => {
                         if let Event::Key(key) = event {
                             *self.event_owner.lock().unwrap() = Some(conn_id);
                             return Ok(key);
@@ -692,13 +717,19 @@ impl EventSource for UnifiedEventSource {
                 }
             } else {
                 match local_rx.recv() {
-                    Ok(UnifiedEvent::Input { conn_id: None, event }) => {
+                    Ok(UnifiedEvent::Input {
+                        conn_id: None,
+                        event,
+                    }) => {
                         if let Event::Mouse(mouse) = event {
                             return Ok(mouse);
                         }
                         self.input_buffer.push_back((None, event));
                     }
-                    Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
+                    Ok(UnifiedEvent::Input {
+                        conn_id: Some(conn_id),
+                        event,
+                    }) => {
                         if let Event::Mouse(mouse) = event {
                             *self.event_owner.lock().unwrap() = Some(conn_id);
                             return Ok(mouse);
@@ -853,7 +884,10 @@ mod tests {
 
         // Send 10 input events into the channel
         for i in 0..10u8 {
-            tx.send(UnifiedEvent::Input { conn_id: None, event: key_evt(KeyCode::Char(char::from(b'a' + i))) })
+            tx.send(UnifiedEvent::Input {
+                conn_id: None,
+                event: key_evt(KeyCode::Char(char::from(b'a' + i))),
+            })
             .unwrap();
         }
         // Also mix in some PtyWakeups (the reason drain_pending exists)
@@ -956,7 +990,11 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
                 kind,
             });
-            tx.send(UnifiedEvent::Input { conn_id: None, event: evt }).unwrap();
+            tx.send(UnifiedEvent::Input {
+                conn_id: None,
+                event: evt,
+            })
+            .unwrap();
         }
 
         source.drain_pending();
@@ -1020,11 +1058,14 @@ mod tests {
 
         // Send only Release events (filtered on all platforms)
         for _ in 0..3 {
-            tx.send(UnifiedEvent::Input { conn_id: None, event: Event::Key(KeyEvent {
-                code: KeyCode::Char('x'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyKind::Release,
-            }) })
+            tx.send(UnifiedEvent::Input {
+                conn_id: None,
+                event: Event::Key(KeyEvent {
+                    code: KeyCode::Char('x'),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyKind::Release,
+                }),
+            })
             .unwrap();
         }
 

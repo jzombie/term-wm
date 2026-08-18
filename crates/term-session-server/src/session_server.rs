@@ -13,10 +13,11 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
     ListChannels, ListChannelsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
-    OnWorkspaceRebind, OnWorkspaceRebindRequest, RebindWorkspace, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty,
-    SendAttributedInput, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo,
-    ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput, WriteInput,
+    OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
+    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindWorkspace,
+    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
+    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
+    WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -646,7 +647,9 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
         // Remove channel from internal_channels
         let channel_name = channel.to_string();
         drop(guard);
-        let mut channels = state.internal_channels.lock()
+        let mut channels = state
+            .internal_channels
+            .lock()
             .unwrap_or_else(|e| e.into_inner());
         channels.remove(&channel_name);
     } else {
@@ -654,7 +657,9 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     }
     // Remove from conn_to_channel routing table
     {
-        let mut map = state.conn_to_channel.lock()
+        let mut map = state
+            .conn_to_channel
+            .lock()
             .unwrap_or_else(|e| e.into_inner());
         map.remove(&conn_id);
     }
@@ -779,7 +784,9 @@ pub async fn run_gateway(
                 entry.ssh_ip = req.ssh_ip;
                 // Update conn_to_channel routing table
                 {
-                    let mut map = state.conn_to_channel.lock()
+                    let mut map = state
+                        .conn_to_channel
+                        .lock()
                         .unwrap_or_else(|e| e.into_inner());
                     map.insert(conn_id, channel_str.clone());
                 }
@@ -789,7 +796,9 @@ pub async fn run_gateway(
                 {
                     let guard = ch.lock().await;
                     if matches!(guard.input_mode, InputMode::AttributedIpc { .. }) {
-                        let mut channels = state.internal_channels.lock()
+                        let mut channels = state
+                            .internal_channels
+                            .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         channels.insert(channel_str);
                     }
@@ -1387,127 +1396,118 @@ pub async fn run_gateway(
     // ── RebindWorkspace ──────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(
-            RebindWorkspace::METHOD_ID,
-            move |payload, _ctx| {
-                let state = Arc::clone(&st);
-                async move {
-                    if state.is_shutting_down.load(Ordering::SeqCst) {
-                        return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
-                    }
-                    let req =
-                        RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
-                    let source = ChannelName::parse(&req.source_channel)
-                        .map_err(|e| rpc_err(&e))?;
-                    let conns = state.conns.read().await;
-                    for entry in conns.values() {
-                        if let ConnState::Attached(name) = &entry.state
-                            && name == &source
-                        {
-                            let caller = entry.handle.clone();
-                            let target = req.target.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    OnWorkspaceRebind::call(&caller, OnWorkspaceRebindRequest { target }).await
-                                {
-                                    tracing::debug!(
-                                        error = ?e,
-                                        "Failed to deliver OnWorkspaceRebind"
-                                    );
-                                }
-                            });
-                        }
-                    }
-                    RebindWorkspace::encode_response(()).map_err(boxed_io)
+        .register_prebuffered(RebindWorkspace::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-            },
-        )
+                let req = RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
+                let source = ChannelName::parse(&req.source_channel).map_err(|e| rpc_err(&e))?;
+                let conns = state.conns.read().await;
+                for entry in conns.values() {
+                    if let ConnState::Attached(name) = &entry.state
+                        && name == &source
+                    {
+                        let caller = entry.handle.clone();
+                        let target = req.target.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = OnWorkspaceRebind::call(
+                                &caller,
+                                OnWorkspaceRebindRequest { target },
+                            )
+                            .await
+                            {
+                                tracing::debug!(
+                                    error = ?e,
+                                    "Failed to deliver OnWorkspaceRebind"
+                                );
+                            }
+                        });
+                    }
+                }
+                RebindWorkspace::encode_response(()).map_err(boxed_io)
+            }
+        })
         .await
         .map_err(|e| format!("register RebindWorkspace: {e:?}"))?;
 
     // ── SubscribeInternalInput ─────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(
-            SubscribeInternalInput::METHOD_ID,
-            move |payload, ctx| {
-                let state = Arc::clone(&st);
-                async move {
-                    if state.is_shutting_down.load(Ordering::SeqCst) {
-                        return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
-                    }
-                    let req =
-                        SubscribeInternalInput::decode_request(&payload).map_err(boxed_io)?;
-                    let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
-                    if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
-                        let mut guard = ch.lock().await;
-                        // Set input mode on the channel (source of truth)
-                        guard.input_mode = InputMode::AttributedIpc {
-                            wm_conn_id: ctx.conn_id,
-                        };
-                        // Store caller on ChannelState (not Session) so it
-                        // survives session spawn/restart — eliminates race.
-                        guard.internal_wm_caller =
-                            Some(RpcIpcConnectionContextHandle(ctx.clone()));
-                        guard.internal_wm_conn_id = Some(ctx.conn_id);
-                        // Mark channel as internal for StreamInput suppression
-                        {
-                            let mut channels = state.internal_channels.lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            channels.insert(name.to_string());
-                        }
-                        // All existing conn_ids are already in conn_to_channel
-                        // (added by Attach handler). No additional update needed.
-                    }
-                    SubscribeInternalInput::encode_response(()).map_err(boxed_io)
+        .register_prebuffered(SubscribeInternalInput::METHOD_ID, move |payload, ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-            },
-        )
+                let req = SubscribeInternalInput::decode_request(&payload).map_err(boxed_io)?;
+                let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
+                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let mut guard = ch.lock().await;
+                    // Set input mode on the channel (source of truth)
+                    guard.input_mode = InputMode::AttributedIpc {
+                        wm_conn_id: ctx.conn_id,
+                    };
+                    // Store caller on ChannelState (not Session) so it
+                    // survives session spawn/restart — eliminates race.
+                    guard.internal_wm_caller = Some(RpcIpcConnectionContextHandle(ctx.clone()));
+                    guard.internal_wm_conn_id = Some(ctx.conn_id);
+                    // Mark channel as internal for StreamInput suppression
+                    {
+                        let mut channels = state
+                            .internal_channels
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        channels.insert(name.to_string());
+                    }
+                    // All existing conn_ids are already in conn_to_channel
+                    // (added by Attach handler). No additional update needed.
+                }
+                SubscribeInternalInput::encode_response(()).map_err(boxed_io)
+            }
+        })
         .await
         .map_err(|e| format!("register SubscribeInternalInput: {e:?}"))?;
 
     // ── SendAttributedInput ────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
-        .register_prebuffered(
-            SendAttributedInput::METHOD_ID,
-            move |payload, ctx| {
-                let state = Arc::clone(&st);
-                async move {
-                    if state.is_shutting_down.load(Ordering::SeqCst) {
-                        return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
-                    }
-                    let req =
-                        SendAttributedInput::decode_request(&payload).map_err(boxed_io)?;
-                    let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
-                    // Clone handle and drop lock BEFORE awaiting RPC
-                    let caller = if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
-                        let guard = ch.lock().await;
-                        guard.internal_wm_caller.clone()
-                    } else {
-                        None
-                    };
-                    if let Some(caller) = caller {
-                        let conn_id = ctx.conn_id;
-                        let event = req.event;
-                        tokio::spawn(async move {
-                            if let Err(e) = OnAttributedInput::call(
-                                &caller,
-                                OnAttributedInputRequest { conn_id, event },
-                            )
-                            .await
-                            {
-                                tracing::debug!(
-                                    error = ?e,
-                                    "Failed to deliver OnAttributedInput"
-                                );
-                            }
-                        });
-                    }
-                    SendAttributedInput::encode_response(()).map_err(boxed_io)
+        .register_prebuffered(SendAttributedInput::METHOD_ID, move |payload, ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
                 }
-            },
-        )
+                let req = SendAttributedInput::decode_request(&payload).map_err(boxed_io)?;
+                let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
+                // Clone handle and drop lock BEFORE awaiting RPC
+                let caller = if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let guard = ch.lock().await;
+                    guard.internal_wm_caller.clone()
+                } else {
+                    None
+                };
+                if let Some(caller) = caller {
+                    let conn_id = ctx.conn_id;
+                    let event = req.event;
+                    tokio::spawn(async move {
+                        if let Err(e) = OnAttributedInput::call(
+                            &caller,
+                            OnAttributedInputRequest { conn_id, event },
+                        )
+                        .await
+                        {
+                            tracing::debug!(
+                                error = ?e,
+                                "Failed to deliver OnAttributedInput"
+                            );
+                        }
+                    });
+                }
+                SendAttributedInput::encode_response(()).map_err(boxed_io)
+            }
+        })
         .await
         .map_err(|e| format!("register SendAttributedInput: {e:?}"))?;
 

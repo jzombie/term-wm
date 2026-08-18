@@ -1,10 +1,12 @@
 pub mod auto_spawn;
 
-pub use term_session_client as client;
-pub use term_session_server as server;
-pub use term_session_muxio_service_definitions as protocol;
 pub use muxio_tokio_rpc_ipc_client as rpc_client;
-pub use term_session_muxio_service_definitions::{ChannelName, DEFAULT_WORKSPACE, SESSION_CHANNEL_NAME};
+pub use term_session_client as client;
+pub use term_session_muxio_service_definitions as protocol;
+pub use term_session_muxio_service_definitions::{
+    ChannelName, DEFAULT_WORKSPACE, SESSION_CHANNEL_NAME,
+};
+pub use term_session_server as server;
 
 use std::io;
 use std::sync::Arc;
@@ -112,19 +114,15 @@ pub fn list_channels() -> io::Result<ListChannelsResponse> {
 /// `force` is true (see `RPC_ERROR_LIVE_PARTICIPANTS`).
 pub fn kill_channel(channel: &str, force: bool) -> io::Result<()> {
     let ch = channel.to_string();
-    with_gateway(move |client| async move {
-        KillChannel::call(&*client, (ch, force)).await
-    })?
-    .map_err(|e| io::Error::other(format!("kill channel: {e}")))
+    with_gateway(move |client| async move { KillChannel::call(&*client, (ch, force)).await })?
+        .map_err(|e| io::Error::other(format!("kill channel: {e}")))
 }
 
 /// Detach a single client socket from a channel by `conn_id`.
 pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
     let ch = channel.to_string();
-    with_gateway(move |client| async move {
-        KillClient::call(&*client, (ch, conn_id)).await
-    })?
-    .map_err(|e| io::Error::other(format!("kill client: {e}")))
+    with_gateway(move |client| async move { KillClient::call(&*client, (ch, conn_id)).await })?
+        .map_err(|e| io::Error::other(format!("kill client: {e}")))
 }
 
 /// Request the gateway to rebind all viewers attached to `source_channel`
@@ -133,8 +131,8 @@ pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Resul
     let source_owned = source_channel.to_string();
     let target_owned = target.to_string();
     with_gateway(move |client| async move {
-        use term_session_muxio_service_definitions::{RebindWorkspace, RebindWorkspaceRequest};
         use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+        use term_session_muxio_service_definitions::{RebindWorkspace, RebindWorkspaceRequest};
 
         RebindWorkspace::call(
             &*client,
