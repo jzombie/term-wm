@@ -172,6 +172,8 @@ pub enum TermWmAction {
     SwitchWorkspace(String),
     /// Create a new workspace (prompts for name).
     NewWorkspace,
+    /// Detach the current viewer connection from the session.
+    DetachCurrentClient,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -274,7 +276,8 @@ impl TermWmAction {
             | TermWmAction::SendSuperKeyToWindow(_)
             | TermWmAction::SendSuperKeyToFocusedWindow
             | TermWmAction::SwitchWorkspace(_)
-            | TermWmAction::NewWorkspace => Category::Windows,
+            | TermWmAction::NewWorkspace
+            | TermWmAction::DetachCurrentClient => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -418,6 +421,7 @@ impl fmt::Display for TermWmAction {
                 return write!(f, "Switch to workspace: {name}");
             }
             TermWmAction::NewWorkspace => "New workspace",
+            TermWmAction::DetachCurrentClient => "Detach viewer",
         };
         write!(f, "{}", s)
     }

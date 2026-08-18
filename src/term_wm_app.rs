@@ -530,7 +530,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // app's wakeup sender at this source's receiver; otherwise typing in a
         // spawned terminal never repaints until the next console event (e.g. a
         // mouse move).
-        let mut input = UnifiedEventSource::new()?;
+        let (mut input, _event_owner) = UnifiedEventSource::new(false)?;
         let tx = input.pty_wakeup_tx();
         self.pty_wakeup_tx = tx.clone();
         // Re-point any terminals spawned before run(): their callbacks captured

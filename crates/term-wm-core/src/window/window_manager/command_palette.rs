@@ -169,7 +169,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         // Workspace group — always show "New workspace"
         items.push(mi(
-            "New workspace",
+            "New Workspace",
             Some("+"),
             crate::actions::TermWmAction::NewWorkspace,
         ));
@@ -177,13 +177,19 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         if !workspaces.is_empty() {
             for ws in workspaces {
                 items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Switch to workspace: {ws}").into(),
+                    label: format!("Switch to Workspace: {ws}").into(),
                     icon: Some("→"),
                     action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
                     disabled: ws == current_workspace,
                 }));
             }
         }
+        items.push(MenuDisplayItem::Item(MenuItem {
+            label: "Detach Viewer".into(),
+            icon: Some("-"),
+            action: crate::actions::TermWmAction::DetachCurrentClient,
+            disabled: false,
+        }));
         items.push(MenuDisplayItem::Separator);
 
         // Window management group (directly below top group)

@@ -154,7 +154,8 @@ fn main() -> io::Result<()> {
         let mut current_workspace = workspace.clone();
 
         loop {
-            let clean_workspace = term_session::ChannelName::parse_workspace(&current_workspace).to_string();
+            let clean_workspace =
+                term_session::ChannelName::parse_workspace(&current_workspace).to_string();
             current_workspace = clean_workspace.clone();
 
             let channel = term_session::ChannelName::session(&current_workspace).to_string();
@@ -169,7 +170,11 @@ fn main() -> io::Result<()> {
                 }
                 Ok(None) => return Ok(()),
                 Err(e) => {
-                    tracing::error!("Connection dropped for workspace '{}': {}", current_workspace, e);
+                    tracing::error!(
+                        "Connection dropped for workspace '{}': {}",
+                        current_workspace,
+                        e
+                    );
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     if current_workspace != term_session::DEFAULT_WORKSPACE {
                         current_workspace = term_session::DEFAULT_WORKSPACE.to_string();
@@ -190,14 +195,87 @@ fn main() -> io::Result<()> {
     #[cfg(feature = "session-persistence")]
     let _rt_guard = rt.enter();
 
+    let (mut event_source, event_owner) = UnifiedEventSource::new(cli.internal_session)?;
+    let pty_wakeup_tx = event_source.pty_wakeup_tx();
+
+    // For internal sessions, spawn a Muxio listener that receives structured
+    // events from the server and pipes them into the event source via pty_wakeup_tx.
+    #[cfg(feature = "session-persistence")]
+    if cli.internal_session {
+        let tx = pty_wakeup_tx.clone();
+        let channel = term_session::ChannelName::session(&workspace).to_string();
+        let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
+        rt.spawn(async move {
+            use term_session::protocol::OnAttributedInput;
+            use term_session::protocol::RpcMethodPrebuffered;
+            use term_session::protocol::SubscribeInternalInputRequest;
+
+            let client = match term_session::rpc_client::RpcIpcClient::new(&socket_path).await {
+                Ok(c) => std::sync::Arc::new(c),
+                Err(e) => {
+                    tracing::error!("Failed to connect for attributed input: {e:?}");
+                    return;
+                }
+            };
+            // Register handler BEFORE subscribing to avoid race
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnAttributedInput::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let req = OnAttributedInput::decode_request(&payload).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                            // Route through main channel — wakes poll() immediately
+                            let _ = tx.try_send(UnifiedEvent::Input {
+                                conn_id: Some(req.conn_id),
+                                event: req.event,
+                            });
+                            OnAttributedInput::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnAttributedInput");
+            }
+            // Subscribe
+            use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+            let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
+            if let Err(e) = term_session::protocol::SubscribeInternalInput::call(
+                client_ref,
+                SubscribeInternalInputRequest { channel },
+            )
+            .await
+            {
+                tracing::error!("SubscribeInternalInput failed: {e:?}");
+                return;
+            }
+            tracing::info!("Attributed input listener subscribed");
+            // Keep the connection alive so the endpoint keeps processing RPCs.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+    }
+    let pty_wakeup_tx = event_source.pty_wakeup_tx();
+
     let config = WmConfig {
         scrollback_lines: cli.scrollback,
         ..Default::default()
     };
 
-    let mut event_source = UnifiedEventSource::new()?;
-    let pty_wakeup_tx = event_source.pty_wakeup_tx();
-        let mut app = App::new_with(commands, total, config, pty_wakeup_tx, workspace)?;
+    let mut app = App::new_with(
+        commands,
+        total,
+        config,
+        pty_wakeup_tx,
+        workspace,
+        event_owner,
+    )?;
 
     let mut output = ConsoleRenderTarget::new()?;
     output.enter()?;
@@ -215,6 +293,8 @@ struct App {
     /// Current workspace name for IPC source_channel identification.
     #[allow(dead_code, reason = "used only with session-persistence")]
     current_workspace: String,
+    /// Shared event attribution — updated by UnifiedEventSource, read by handle_custom_action.
+    event_owner: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
 }
 
 /// Build the window manager the way the `term-wm` binary runs it: full system
@@ -254,6 +334,7 @@ impl App {
         config: WmConfig,
         pty_wakeup_tx: Sender<UnifiedEvent>,
         workspace: String,
+        event_owner: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
     ) -> io::Result<Self> {
         let app_ctx = Arc::new(
             AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).with_hostname(
@@ -273,6 +354,7 @@ impl App {
             inner,
             pty_wakeup_tx,
             current_workspace: workspace,
+            event_owner,
         };
 
         // One window per command (shell + the command as input), then default
@@ -333,13 +415,16 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
             TermWmAction::SwitchWorkspace(_target) => {
                 #[cfg(feature = "session-persistence")]
                 {
-                    let source_ws = term_session::ChannelName::parse_workspace(&self.current_workspace);
+                    let source_ws =
+                        term_session::ChannelName::parse_workspace(&self.current_workspace);
                     let target_ws = term_session::ChannelName::parse_workspace(_target);
 
                     let source_channel = term_session::ChannelName::session(source_ws).to_string();
                     let target_channel = term_session::ChannelName::session(target_ws).to_string();
 
-                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, &target_channel) {
+                    if let Err(e) =
+                        term_session::request_workspace_rebind(&source_channel, &target_channel)
+                    {
                         tracing::warn!("Failed to request workspace switch: {e}");
                     }
                 }
@@ -354,12 +439,15 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                         .as_secs();
 
                     let target_ws = format!("ws-{}", ts);
-                    let source_ws = term_session::ChannelName::parse_workspace(&self.current_workspace);
+                    let source_ws =
+                        term_session::ChannelName::parse_workspace(&self.current_workspace);
 
                     let source_channel = term_session::ChannelName::session(source_ws).to_string();
                     let target_channel = term_session::ChannelName::session(&target_ws).to_string();
 
-                    if let Err(e) = term_session::request_workspace_rebind(&source_channel, &target_channel) {
+                    if let Err(e) =
+                        term_session::request_workspace_rebind(&source_channel, &target_channel)
+                    {
                         tracing::error!("Failed to switch to new workspace: {e}");
                     } else {
                         self.inner.refresh_workspace_cache();
@@ -367,6 +455,19 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                             format!("Created workspace: {target_ws}"),
                             std::time::Duration::from_secs(3),
                         );
+                    }
+                }
+                true
+            }
+            TermWmAction::DetachCurrentClient => {
+                #[cfg(feature = "session-persistence")]
+                {
+                    if let Some(conn_id) = *self.event_owner.lock().unwrap() {
+                        let channel =
+                            term_session::ChannelName::session(&self.current_workspace).to_string();
+                        if let Err(e) = term_session::kill_client(&channel, conn_id) {
+                            tracing::warn!("Failed to detach viewer: {e}");
+                        }
                     }
                 }
                 true
@@ -505,19 +606,38 @@ mod tests {
     fn build_inner_command_with_count_and_scrollback() {
         let cli = Cli::parse_from(["term-wm", "-n", "4", "--scrollback", "5000"]);
         let cmd = build_inner_command("exe".to_string(), "dev", &cli);
-        assert_eq!(cmd, vec![
-            "exe", "--internal-session", "-w", "dev",
-            "-n", "4", "--scrollback", "5000"
-        ]);
+        assert_eq!(
+            cmd,
+            vec![
+                "exe",
+                "--internal-session",
+                "-w",
+                "dev",
+                "-n",
+                "4",
+                "--scrollback",
+                "5000"
+            ]
+        );
     }
 
     #[test]
     fn build_inner_command_with_runs_and_positionals() {
         let cli = Cli::parse_from(["term-wm", "-r", "htop", "--", "vim", "file.txt"]);
         let cmd = build_inner_command("exe".to_string(), "dev", &cli);
-        assert_eq!(cmd, vec![
-            "exe", "--internal-session", "-w", "dev",
-            "--run", "htop", "--", "vim", "file.txt"
-        ]);
+        assert_eq!(
+            cmd,
+            vec![
+                "exe",
+                "--internal-session",
+                "-w",
+                "dev",
+                "--run",
+                "htop",
+                "--",
+                "vim",
+                "file.txt"
+            ]
+        );
     }
 }

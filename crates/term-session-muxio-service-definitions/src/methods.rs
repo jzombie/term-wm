@@ -4,6 +4,7 @@ use bitcode::{Decode, Encode};
 use muxio_rpc_service::{prebuffered::RpcMethodPrebuffered, rpc_method_id};
 
 use crate::path_wire::PathWire;
+use term_wm_events::Event;
 
 // ── Error message constants ─────────────────────────────────────────
 // muxio's wire error only has Fail/System/NotFound codes, so structured
@@ -534,6 +535,110 @@ impl RpcMethodPrebuffered for OnWorkspaceRebind {
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
         bitcode::decode::<OnWorkspaceRebindRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── SendAttributedInput (client -> server: structured event) ─────────
+
+/// Client sends a structured event to the server for routing.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SendAttributedInputRequest {
+    pub channel: String,
+    pub event: Event,
+}
+
+pub struct SendAttributedInput;
+
+impl RpcMethodPrebuffered for SendAttributedInput {
+    const METHOD_ID: u64 = rpc_method_id!("session.send_attributed_input");
+
+    type Input = SendAttributedInputRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<SendAttributedInputRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── OnAttributedInput (server -> inner WM: attributed event) ─────────
+
+/// Server pushes a structured event with attribution to the inner WM.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct OnAttributedInputRequest {
+    pub conn_id: usize,
+    pub event: Event,
+}
+
+pub struct OnAttributedInput;
+
+impl RpcMethodPrebuffered for OnAttributedInput {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_attributed_input");
+
+    type Input = OnAttributedInputRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<OnAttributedInputRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── SubscribeInternalInput (inner WM -> server: register as receiver) ──
+
+/// Inner WM registers itself as the structured input receiver for a channel.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SubscribeInternalInputRequest {
+    pub channel: String,
+}
+
+pub struct SubscribeInternalInput;
+
+impl RpcMethodPrebuffered for SubscribeInternalInput {
+    const METHOD_ID: u64 = rpc_method_id!("session.subscribe_internal_input");
+
+    type Input = SubscribeInternalInputRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<SubscribeInternalInputRequest>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 

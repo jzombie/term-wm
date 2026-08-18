@@ -20,6 +20,7 @@ pub const DEFAULT_SUPPORTED_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleMonocle,
     TermWmAction::ToggleTiling,
     TermWmAction::NewWorkspace,
+    TermWmAction::DetachCurrentClient,
 ];
 
 /// Minimum number of visible cells a floating window must keep within the

@@ -169,7 +169,8 @@ fn dispatch_action<
         }
         // Workspace actions: delegate to the app's custom action handler
         action @ (TermWmAction::SwitchWorkspace(_)
-        | TermWmAction::NewWorkspace) => {
+        | TermWmAction::NewWorkspace
+        | TermWmAction::DetachCurrentClient) => {
             if !app.handle_custom_action(&action) {
                 // Unhandled — forward to component update
                 let ctx = app.wm().component_context_for(true, key);

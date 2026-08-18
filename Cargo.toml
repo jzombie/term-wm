@@ -21,7 +21,7 @@ development = ["term-bench"]
 
 [features]
 default = ["session-persistence"]
-session-persistence = ["dep:term-session", "dep:tokio"]
+session-persistence = ["dep:term-session", "dep:tokio", "dep:muxio-rpc-service-caller", "dep:muxio-rpc-service-endpoint"]
 
 [workspace]
 members = [
@@ -150,6 +150,8 @@ line-ending = { workspace = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-session = { workspace = true, optional = true }
+muxio-rpc-service-caller = { workspace = true, optional = true }
+muxio-rpc-service-endpoint = { workspace = true, optional = true }
 term-sys-io = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }

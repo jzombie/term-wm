@@ -489,6 +489,22 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         input_writer,
     );
 
+    // Single dedicated worker for attributed input. Replaces per-event
+    // tokio::spawn which caused task queue thrashing and socket contention.
+    let (attributed_tx, mut attributed_rx) = tokio::sync::mpsc::channel::<
+        term_session_muxio_service_definitions::SendAttributedInputRequest,
+    >(1024);
+    {
+        let client_clone = client.clone();
+        rt.spawn(async move {
+            while let Some(req) = attributed_rx.recv().await {
+                use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
+                use term_session_muxio_service_definitions::SendAttributedInput;
+                let _ = SendAttributedInput::call(&*client_clone, req).await;
+            }
+        });
+    }
+
     // Wait for initial output
     for _ in 0..INITIAL_WAIT_ITERS {
         pane.drain_pushes();
@@ -636,6 +652,12 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                         }
                     }
                 }
+                recv(crossbeam_channel::after(Duration::from_millis(100))) -> _ => {
+                    // Periodic wake-up: re-render even when idle, so the
+                    // display stays fresh after focus changes.
+                    force_render = true;
+                    None
+                }
             }
         };
 
@@ -680,6 +702,17 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                         }
                     }
                 }
+            }
+
+            // Send structured event to server for attributed input routing.
+            // Non-blocking: drops events if queue is full (acceptable for
+            // high-frequency mouse movements).
+            {
+                use term_session_muxio_service_definitions::SendAttributedInputRequest;
+                let _ = attributed_tx.try_send(SendAttributedInputRequest {
+                    channel: channel.to_string(),
+                    event: evt.clone(),
+                });
             }
 
             match evt {
