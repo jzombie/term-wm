@@ -19,10 +19,6 @@ publish.workspace = true
 [package.metadata.cargo-udeps.ignore]
 development = ["term-bench"]
 
-[features]
-default = ["session-persistence"]
-session-persistence = ["dep:term-session", "dep:tokio", "dep:muxio-rpc-service-caller", "dep:muxio-rpc-service-endpoint"]
-
 [workspace]
 members = [
     "crates/term-bench",
@@ -141,17 +137,26 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_WindowsProgramming",
 ] }
 
+[features]
+default = ["session-persistence"]
+session-persistence = [
+    "dep:term-session",
+    "dep:tokio",
+    "dep:muxio-rpc-service-caller",
+    "dep:muxio-rpc-service-endpoint",
+]
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 hostname = { workspace = true }
 libc = { workspace = true }
 line-ending = { workspace = true }
+muxio-rpc-service-caller = { workspace = true, optional = true }
+muxio-rpc-service-endpoint = { workspace = true, optional = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
 term-session = { workspace = true, optional = true }
-muxio-rpc-service-caller = { workspace = true, optional = true }
-muxio-rpc-service-endpoint = { workspace = true, optional = true }
 term-sys-io = { workspace = true }
 term-wm-console = { workspace = true }
 term-wm-core = { workspace = true }
