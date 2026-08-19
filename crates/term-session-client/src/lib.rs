@@ -1050,6 +1050,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn nested_session_fatal_error_brands_with_app_name() {
+        let err = nested_session_fatal_error("my-app");
+        let msg = err.to_string();
+        assert!(msg.contains("my-app"), "error must contain app name: {msg}");
+        assert!(msg.contains("--allow-nested"), "error must recommend --allow-nested: {msg}");
+        assert!(msg.starts_with("FATAL:"), "error must start with FATAL: {msg}");
+    }
+
+    #[test]
+    fn is_nested_session_fatal_detects_fatal_errors() {
+        let fatal = nested_session_fatal_error("term-wm");
+        assert!(is_nested_session_fatal(&fatal), "must detect fatal error");
+
+        let other = io::Error::other("some other error");
+        assert!(!is_nested_session_fatal(&other), "must not false-positive on other errors");
+
+        let empty = io::Error::other("");
+        assert!(!is_nested_session_fatal(&empty), "must not false-positive on empty message");
+    }
+
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,
     }
