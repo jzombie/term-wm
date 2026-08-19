@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **`default_environment()` detects Cargo execution context:** `default_environment()` now checks for `CARGO_MANIFEST_DIR` before falling back to `debug_assertions`, so `cargo run --release` (where `debug_assertions` is false) automatically resolves to `Environment::Dev` instead of `Environment::Prod`. Installed binaries (no `CARGO_MANIFEST_DIR`) continue to resolve to `Environment::Prod`. The explicit `TERM_WM_ENV` override still takes precedence.
+
 ## [0.10.0-alpha] - 2026-08-18
 
 ### Added

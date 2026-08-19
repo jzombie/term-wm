@@ -51,9 +51,10 @@ impl fmt::Display for Environment {
     }
 }
 
-/// The compile-time default environment: dev in debug builds, prod in release.
+/// The compile-time default environment: dev in debug builds or when Cargo is
+/// driving the binary (`CARGO_MANIFEST_DIR` is set), prod otherwise.
 pub fn default_environment() -> Environment {
-    if cfg!(debug_assertions) {
+    if std::env::var_os("CARGO_MANIFEST_DIR").is_some() || cfg!(debug_assertions) {
         Environment::Dev
     } else {
         Environment::Prod
@@ -120,6 +121,23 @@ mod tests {
             std::env::remove_var(ENVIRONMENT_ENV_VAR);
         }
         assert_eq!(active_environment(), default_environment());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn default_environment_detects_cargo_manifest_dir() {
+        unsafe {
+            std::env::set_var("CARGO_MANIFEST_DIR", "/fake/path");
+        }
+        assert_eq!(default_environment(), Environment::Dev);
+        unsafe {
+            std::env::remove_var("CARGO_MANIFEST_DIR");
+        }
+        if cfg!(debug_assertions) {
+            assert_eq!(default_environment(), Environment::Dev);
+        } else {
+            assert_eq!(default_environment(), Environment::Prod);
+        }
     }
 
     #[test]
