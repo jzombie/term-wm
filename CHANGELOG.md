@@ -4,11 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
-<<<<<<< HEAD
-## [Unreleased]
-=======
+## [0.10.2-alpha] - 2026-08-19
+
+### Changed
+
+- **Muxio `0.14.0-alpha → 0.15.0-alpha` — frame header `21 → 13` bytes (BREAKING):** `muxio-core` `Frame` no longer carries `u64 timestamp_micros` (`FRAME_HEADER_SIZE 21→13`). Wire is incompatible with `≤0.14.x` — old 21-byte headers decode as `CorruptFrame`. Saves 8 bytes per chunk/frame (~38% header) on every `SendAttributedInput`/`OnAttributedInput` and PTY stream chunk; removes `chrono`/`utils::now` and `tests/utils_tests.rs` timestamp tests. Ordering still via `stream_id`/`seq_id` in `FrameMuxStreamDecoder`, so reliable delivery (including future UDP) is unaffected. Restart the gateway after upgrading (`term-wm --stop-daemon` / `term-session --stop-daemon`) — old daemons cannot speak the new wire.
+- **Muxio transport logs `DEBUG → TRACE`:** `RpcDispatcher::init_catch_all_response_handler` per-request spam (`Added request`, `Appended bytes`, `Payload chunk`, `Request finalized`, `End event`) now `TRACE` with `target = "muxio_rpc_service::transport"` and structured `id`/`bytes`. Previously hammered downstream `LevelFilter::DEBUG` consumers (term-wm in-app Debug Log at `~50–150 ms`, evicting its 2000-line buffer in ~10 s). Now hidden by default; re-enable with `RUST_LOG=muxio_rpc_service::transport=trace`. Fixes the `2147483684+` (`0x8000_0000+`) spam seen in `term-wm --debug`.
+- **Muxio transitive bumps:** `tokio 1.52.3 → 1.53.1`, `tokio-tungstenite 0.29.0 → 0.30.0` / `tungstenite 0.30.0` (`sha1 0.11.0`, `block-buffer 0.12.1`, `crypto-common 0.2.2`, `digest 0.11.3`, `const-oid 0.10.2`, `hybrid-array 0.4.14`), `interprocess 2.4.2 → 2.4.3`, `async-trait 0.1.89 → 0.1.91`, `xxhash-rust 0.8.17 → 0.8.18`; removed unused `tokio-tungstenite` dep from `muxio-tokio-rpc-server` (server now via `axum::extract::ws`), `cargo-udeps` clean.
+
 ## [0.10.1-alpha] - 2026-08-19
->>>>>>> main
 
 ### Added
 
