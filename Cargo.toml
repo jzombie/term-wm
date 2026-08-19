@@ -47,7 +47,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.10.0-alpha"
+version = "0.10.1-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
@@ -97,26 +97,26 @@ smallvec = "1.15"
 strum = { version = "0.28", features = ["derive"] }
 syn = "3.0.3"
 tempfile = "3.24.0"
-term-clipboard = { path = "crates/term-clipboard", version = "0.10.0-alpha" }
-term-session = { path = "crates/term-session", version = "0.10.0-alpha" }
-term-session-client = { path = "crates/term-session-client", version = "0.10.0-alpha" }
-term-session-mock = { path = "crates/term-session-mock", version = "0.10.0-alpha" }
-term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.10.0-alpha" }
-term-session-server = { path = "crates/term-session-server", version = "0.10.0-alpha" }
-term-sys-io = { path = "crates/term-sys-io", version = "0.10.0-alpha" }
-term-wm = { path = ".", version = "0.10.0-alpha" }
-term-wm-config = { path = "crates/term-wm-config", version = "0.10.0-alpha" }
-term-wm-console = { path = "crates/term-wm-console", version = "0.10.0-alpha" }
-term-wm-core = { path = "crates/term-wm-core", version = "0.10.0-alpha" }
-term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.10.0-alpha" }
-term-wm-events = { path = "crates/term-wm-events", version = "0.10.0-alpha" }
-term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.10.0-alpha" }
-term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.10.0-alpha" }
-term-wm-render = { path = "crates/term-wm-render", version = "0.10.0-alpha" }
-term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.10.0-alpha" }
-term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.10.0-alpha" }
-term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.10.0-alpha" }
-term-wm-view = { path = "crates/term-wm-view", version = "0.10.0-alpha" }
+term-clipboard = { path = "crates/term-clipboard", version = "0.10.1-alpha" }
+term-session = { path = "crates/term-session", version = "0.10.1-alpha" }
+term-session-client = { path = "crates/term-session-client", version = "0.10.1-alpha" }
+term-session-mock = { path = "crates/term-session-mock", version = "0.10.1-alpha" }
+term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.10.1-alpha" }
+term-session-server = { path = "crates/term-session-server", version = "0.10.1-alpha" }
+term-sys-io = { path = "crates/term-sys-io", version = "0.10.1-alpha" }
+term-wm = { path = ".", version = "0.10.1-alpha" }
+term-wm-config = { path = "crates/term-wm-config", version = "0.10.1-alpha" }
+term-wm-console = { path = "crates/term-wm-console", version = "0.10.1-alpha" }
+term-wm-core = { path = "crates/term-wm-core", version = "0.10.1-alpha" }
+term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.10.1-alpha" }
+term-wm-events = { path = "crates/term-wm-events", version = "0.10.1-alpha" }
+term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.10.1-alpha" }
+term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.10.1-alpha" }
+term-wm-render = { path = "crates/term-wm-render", version = "0.10.1-alpha" }
+term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.10.1-alpha" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.10.1-alpha" }
+term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.10.1-alpha" }
+term-wm-view = { path = "crates/term-wm-view", version = "0.10.1-alpha" }
 term-wm-vt100 = "0.16.2-patch3"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
@@ -185,6 +185,7 @@ webbrowser = { workspace = true }
 indoc = { workspace = true }
 
 [dev-dependencies]
+interprocess = { workspace = true }
 muxio-rpc-service = { workspace = true }
 muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }

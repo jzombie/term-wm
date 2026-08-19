@@ -78,6 +78,10 @@ struct Cli {
     /// compiled in.
     #[arg(long = "no-session-persistence")]
     no_session_persistence: bool,
+
+    /// Allow running nested inside an existing term-wm session on the same gateway.
+    #[arg(long = "allow-nested")]
+    allow_nested: bool,
 }
 
 /// Combine repeatable `--run` commands with the single trailing `--` command
@@ -213,7 +217,14 @@ fn run() -> io::Result<()> {
     if cli.no_wm && term_wm_config::runtime::session_persistence_enabled() {
         let socket = term_session::auto_spawn::connect_or_spawn_server(None)?;
         let channel = term_session::ChannelName::session(&workspace).to_string();
-        return term_session::client::run_session(&socket, &channel, &cli.cmds, false).map(|_| ());
+        return term_session::client::run_session(
+            &socket,
+            &channel,
+            &cli.cmds,
+            cli.allow_nested,
+            "term-wm",
+        )
+        .map(|_| ());
     }
 
     // 3. Outer launcher with workspace rebind loop
@@ -232,13 +243,22 @@ fn run() -> io::Result<()> {
 
             let inner_cmd = build_inner_command(current_exe, &current_workspace, &cli);
 
-            match term_session::client::run_session(&socket_path, &channel, &inner_cmd, false) {
+            match term_session::client::run_session(
+                &socket_path,
+                &channel,
+                &inner_cmd,
+                cli.allow_nested,
+                "term-wm",
+            ) {
                 Ok(Some(target_channel)) => {
                     current_workspace = target_channel;
                     continue;
                 }
                 Ok(None) => return Ok(()),
                 Err(e) => {
+                    if term_session::client::is_nested_session_fatal(&e) {
+                        return Err(e);
+                    }
                     tracing::error!(
                         "Connection dropped for workspace '{}': {}",
                         current_workspace,
@@ -867,5 +887,15 @@ mod tests {
         unsafe {
             std::env::remove_var("TERM_WM_GATEWAY");
         }
+    }
+
+    #[test]
+    fn cli_parses_allow_nested_flag() {
+        let cli =
+            Cli::try_parse_from(["term-wm", "--allow-nested", "--workspace", "test"]).unwrap();
+        assert!(cli.allow_nested, "--allow-nested must be parsed");
+
+        let cli = Cli::try_parse_from(["term-wm", "--workspace", "test"]).unwrap();
+        assert!(!cli.allow_nested, "default must be false");
     }
 }

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.1-alpha] - 2026-08-19
+
+### Added
+
+- **`--allow-nested` flag on `term-wm`:** `term-wm --allow-nested` now exists and works identically to `term-session --allow-nested`, allowing nested execution inside an active session on the same gateway. Previously the nesting guard error message recommended a flag that didn't exist on the binary.
+
+### Changed
+
+- **Socket-aware session inception guard:** the nesting-inception guard now compares `TERM_SESSION_GATEWAY` (the host gateway socket path injected into every spawned PTY child) against the target socket. Inception is blocked **only** when the inner process targets the exact same gateway — running `cargo run` (dev gateway) inside a prod session no longer triggers a false-positive inception error. The legacy `TERM_SESSION_ACTIVE=1` boolean marker is no longer injected or checked.
+- **Error messages branded with the calling binary:** `nested_session_fatal_error(app_name)` replaces the hardcoded `NESTED_SESSION_FATAL` constant. Running `term-wm` nested shows `term-wm` in the error; running `term-session` nested shows `term-session`. The launcher detects fatal errors via `is_nested_session_fatal()` instead of exact string equality.
+- **Launcher exits immediately on fatal nesting errors:** the workspace-rebind loop in `term-wm`'s `main.rs` now exits on nesting-inception FATAL errors instead of sleeping 2 seconds, switching to the default workspace, and retrying infinitely.
+- **`default_environment()` detects Cargo execution context:** `default_environment()` now checks for `CARGO_MANIFEST_DIR` before falling back to `debug_assertions`, so `cargo run --release` (where `debug_assertions` is false) automatically resolves to `Environment::Dev` instead of `Environment::Prod`. Installed binaries (no `CARGO_MANIFEST_DIR`) continue to resolve to `Environment::Prod`. The explicit `TERM_WM_ENV` override still takes precedence.
+
 ## [0.10.0-alpha] - 2026-08-18
 
 ### Added
