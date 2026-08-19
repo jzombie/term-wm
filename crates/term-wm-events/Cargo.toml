@@ -10,4 +10,8 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+bitcode = { workspace = true, features = ["derive"] }
 term-wm-layout-engine = { workspace = true }
+
+[lints]
+workspace = true

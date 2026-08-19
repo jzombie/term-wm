@@ -1,5 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, bounded};
@@ -20,8 +21,12 @@ pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 256;
 /// Events that can flow through the unified event channel.
 #[derive(Debug, Clone)]
 pub enum UnifiedEvent {
-    /// A user-input event from crossterm (key, mouse, resize).
-    Input(Event),
+    /// A user-input event with optional connection attribution.
+    /// `conn_id = None` for local console, `Some(id)` for remote Muxio viewers.
+    Input {
+        conn_id: Option<usize>,
+        event: Event,
+    },
     /// A PTY reader thread has new data available for `WindowKey`.
     PtyWakeup(WindowKey),
     /// A PTY child process has exited. Sent from the reader thread on EOF.
@@ -48,10 +53,12 @@ pub struct UnifiedEventSource {
     /// One Sender clone kept here so it can be handed to PTY reader threads.
     tx: Sender<UnifiedEvent>,
     /// Background crossterm input thread (owns all crossterm reading).
-    console: BackgroundConsoleReader,
+    /// `None` in headless/internal-session mode.
+    console: Option<BackgroundConsoleReader>,
     /// Clone of the console reader's receive side, selected on during
     /// poll/read/next_key/next_mouse.
-    console_rx: Receiver<Event>,
+    /// `None` in headless/internal-session mode.
+    console_rx: Option<Receiver<Event>>,
     /// False once the console channel disconnects; poll/read then fall back to
     /// the unified channel only (avoids a select! busy-loop on an immediately
     /// Err-ing disconnected receiver).
@@ -66,8 +73,9 @@ pub struct UnifiedEventSource {
     /// Cached input event (poll returned true, waiting for read).
     pending_event: Option<Event>,
     /// Buffer for input events drained during `drain_pending`/`drain_console`
-    /// so none are lost.
-    input_buffer: VecDeque<Event>,
+    /// so none are lost. Each entry carries an optional `conn_id` for
+    /// attributed input routing.
+    input_buffer: VecDeque<(Option<usize>, Event)>,
     /// Signal received flag.
     signal_received: bool,
     /// Keyboard normalizer for consistent event handling.
@@ -91,6 +99,9 @@ pub struct UnifiedEventSource {
     /// `take_redraw_request()` in the runner's `None` branch to arm
     /// the FramePacer for non-input-driven state changes.
     pending_redraw: bool,
+    /// Shared event owner — updated when an event is popped from the buffer.
+    /// Cloned into `App` for action attribution.
+    event_owner: Arc<Mutex<Option<usize>>>,
 }
 
 /// Outcome of processing one unified-channel event during `poll`.
@@ -107,33 +118,45 @@ impl UnifiedEventSource {
     /// Create a new unified event source, delegating crossterm input reading
     /// to a background thread owned by `term-wm-console`.
     ///
-    /// The bounded channel (256 slots) provides mechanical backpressure:
-    /// when the channel is full, PTY reader threads block on `send()` →
-    /// OS pipe buffer fills → child process `write()` blocks → prevents
-    /// memory exhaustion under extreme output load.
-    pub fn new() -> io::Result<Self> {
+    /// If `headless` is `true` (internal session mode), crossterm reading is
+    /// disabled and attributed input arrives via `pty_wakeup_tx()`.
+    ///
+    /// Returns the source and a shared `Arc<Mutex<Option<usize>>>` for
+    /// event attribution that should be passed to `App`.
+    pub fn new(headless: bool) -> io::Result<(Self, Arc<Mutex<Option<usize>>>)> {
         let (tx, rx) = bounded::<UnifiedEvent>(EVENT_CHANNEL_CAPACITY);
-        let console = BackgroundConsoleReader::new()?;
-        let console_rx = console.receiver();
-        Ok(Self {
-            rx,
-            tx,
-            console,
-            console_rx,
-            console_alive: true,
-            dirty_windows: HashSet::new(),
-            exited_windows: Vec::new(),
-            direct_input_changed: Vec::new(),
-            pending_redraw: false,
-            pending_event: None,
-            input_buffer: VecDeque::new(),
-            signal_received: false,
-            normalizer: KeyboardNormalizer::new(),
-            last_event_at: None,
-            frame_pacer: FramePacer::new(),
-            pending_work: false,
-            max_sleep_duration: None,
-        })
+        let event_owner = Arc::new(Mutex::new(None));
+        let (console, console_rx) = if headless {
+            (None, None)
+        } else {
+            let console = BackgroundConsoleReader::new()?;
+            let console_rx = console.receiver();
+            (Some(console), Some(console_rx))
+        };
+        let console_alive = console_rx.is_some();
+        Ok((
+            Self {
+                rx,
+                tx,
+                console,
+                console_rx,
+                console_alive,
+                dirty_windows: HashSet::new(),
+                exited_windows: Vec::new(),
+                direct_input_changed: Vec::new(),
+                pending_redraw: false,
+                pending_event: None,
+                input_buffer: VecDeque::new(),
+                signal_received: false,
+                normalizer: KeyboardNormalizer::new(),
+                last_event_at: None,
+                frame_pacer: FramePacer::new(),
+                pending_work: false,
+                max_sleep_duration: None,
+                event_owner: event_owner.clone(),
+            },
+            event_owner,
+        ))
     }
 
     /// Return a sender that PTY reader threads can use to send wakeup pings.
@@ -150,9 +173,20 @@ impl UnifiedEventSource {
     fn drain_pending(&mut self) {
         loop {
             match self.rx.try_recv() {
-                Ok(UnifiedEvent::Input(event)) => {
+                Ok(UnifiedEvent::Input {
+                    conn_id: None,
+                    event,
+                }) => {
                     if let Some(normalized) = self.normalizer.normalize(event) {
-                        self.input_buffer.push_back(normalized);
+                        self.input_buffer.push_back((None, normalized));
+                    }
+                }
+                Ok(UnifiedEvent::Input {
+                    conn_id: Some(conn_id),
+                    event,
+                }) => {
+                    if let Some(normalized) = self.normalizer.normalize(event) {
+                        self.input_buffer.push_back((Some(conn_id), normalized));
                     }
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
@@ -185,11 +219,11 @@ impl UnifiedEventSource {
     /// Drain all pending console input events (non-blocking) into
     /// `input_buffer`, normalizing with the consumer's own normalizer.
     fn drain_console(&mut self) {
-        loop {
-            match self.console_rx.try_recv() {
+        while let Some(ref console_rx) = self.console_rx {
+            match console_rx.try_recv() {
                 Ok(event) => {
                     if let Some(normalized) = self.normalizer.normalize(event) {
-                        self.input_buffer.push_back(normalized);
+                        self.input_buffer.push_back((None, normalized));
                     }
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
@@ -205,7 +239,10 @@ impl UnifiedEventSource {
     /// `recv_timeout` match arms.
     fn handle_unified_poll(&mut self, evt: UnifiedEvent) -> UnifiedPoll {
         match evt {
-            UnifiedEvent::Input(event) => {
+            UnifiedEvent::Input {
+                conn_id: None,
+                event,
+            } => {
                 self.last_event_at = Some(Instant::now());
                 if let Some(normalized) = self.normalizer.normalize(event) {
                     self.frame_pacer.reset();
@@ -246,6 +283,23 @@ impl UnifiedEventSource {
                 UnifiedPoll::RenderDue
             }
             UnifiedEvent::Tick => UnifiedPoll::RenderDue,
+            UnifiedEvent::Input {
+                conn_id: Some(conn_id),
+                event,
+            } => {
+                self.last_event_at = Some(Instant::now());
+                if let Some(normalized) = self.normalizer.normalize(event) {
+                    self.frame_pacer.reset();
+                    self.pending_event = Some(normalized);
+                    *self
+                        .event_owner
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
+                    UnifiedPoll::Ready
+                } else {
+                    UnifiedPoll::Continue
+                }
+            }
         }
     }
 
@@ -253,7 +307,10 @@ impl UnifiedEventSource {
     /// when a normalized user-input event should be returned.
     fn handle_unified_read(&mut self, evt: UnifiedEvent) -> Option<Event> {
         match evt {
-            UnifiedEvent::Input(event) => {
+            UnifiedEvent::Input {
+                conn_id: None,
+                event,
+            } => {
                 self.last_event_at = Some(Instant::now());
                 self.normalizer.normalize(event)
             }
@@ -280,14 +337,31 @@ impl UnifiedEventSource {
                 None
             }
             UnifiedEvent::Tick => None,
+            UnifiedEvent::Input {
+                conn_id: Some(conn_id),
+                event,
+            } => {
+                self.last_event_at = Some(Instant::now());
+                *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
+                self.normalizer.normalize(event)
+            }
         }
     }
 
     /// Remove the first buffered event matching `predicate` (used by the
     /// `next_key`/`next_mouse` maintenance paths).
     fn pop_matching(&mut self, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
-        if let Some(idx) = self.input_buffer.iter().position(predicate) {
-            return self.input_buffer.remove(idx);
+        if let Some(idx) = self.input_buffer.iter().position(|(_, evt)| predicate(evt))
+            && let Some((conn_id, event)) = self.input_buffer.remove(idx)
+        {
+            *self
+                .event_owner
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = conn_id;
+            return Some(event);
         }
         None
     }
@@ -333,7 +407,11 @@ impl EventSource for UnifiedEventSource {
         // Clone receivers to locals so `select!` does not borrow `self`,
         // letting the arm bodies mutate `self` freely.
         let local_rx = self.rx.clone();
-        let local_console_rx = self.console_rx.clone();
+        let local_console_rx = self.console_rx.clone().unwrap_or_else(|| {
+            // Headless mode: create a disconnected channel
+            let (_tx, rx) = bounded(1);
+            rx
+        });
 
         while remaining > Duration::ZERO {
             // Check frame deadline before each blocking call.
@@ -410,7 +488,11 @@ impl EventSource for UnifiedEventSource {
         }
         // Fallback: check buffer, then block on the channels.
         loop {
-            if let Some(event) = self.input_buffer.pop_front() {
+            if let Some((conn_id, event)) = self.input_buffer.pop_front() {
+                *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner()) = conn_id;
                 self.last_event_at = Some(Instant::now());
                 if let Some(normalized) = self.normalizer.normalize(event) {
                     return Ok(normalized);
@@ -419,7 +501,11 @@ impl EventSource for UnifiedEventSource {
             }
 
             let local_rx = self.rx.clone();
-            let local_console_rx = self.console_rx.clone();
+            let local_console_rx = self.console_rx.clone().unwrap_or_else(|| {
+                // Headless mode: create a disconnected channel
+                let (_tx, rx) = bounded(1);
+                rx
+            });
             if self.console_alive {
                 crossbeam_channel::select! {
                     recv(local_console_rx) -> msg => match msg {
@@ -476,11 +562,15 @@ impl EventSource for UnifiedEventSource {
                 if let Event::Key(key) = event {
                     return Ok(key);
                 }
-                self.input_buffer.push_back(event);
+                self.input_buffer.push_back((None, event));
             }
 
             let local_rx = self.rx.clone();
-            let local_console_rx = self.console_rx.clone();
+            let local_console_rx = self.console_rx.clone().unwrap_or_else(|| {
+                // Headless mode: create a disconnected channel
+                let (_tx, rx) = bounded(1);
+                rx
+            });
             if self.console_alive {
                 crossbeam_channel::select! {
                     recv(local_console_rx) -> msg => match msg {
@@ -489,7 +579,7 @@ impl EventSource for UnifiedEventSource {
                                 if let Event::Key(key) = normalized {
                                     return Ok(key);
                                 }
-                                self.input_buffer.push_back(normalized);
+                                self.input_buffer.push_back((None, normalized));
                             }
                         }
                         Err(_) => {
@@ -497,11 +587,18 @@ impl EventSource for UnifiedEventSource {
                         }
                     },
                     recv(local_rx) -> msg => match msg {
-                        Ok(UnifiedEvent::Input(event)) => {
+                        Ok(UnifiedEvent::Input { conn_id: None, event }) => {
                             if let Event::Key(key) = event {
                                 return Ok(key);
                             }
-                            self.input_buffer.push_back(event);
+                            self.input_buffer.push_back((None, event));
+                        }
+                        Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
+                            if let Event::Key(key) = event {
+                                *self.event_owner.lock().unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
+                                return Ok(key);
+                            }
+                            self.input_buffer.push_back((Some(conn_id), event));
                         }
                         Ok(UnifiedEvent::PtyWakeup(_)) => {}
                         Ok(UnifiedEvent::AppExited(key)) => {
@@ -523,11 +620,27 @@ impl EventSource for UnifiedEventSource {
                 }
             } else {
                 match local_rx.recv() {
-                    Ok(UnifiedEvent::Input(event)) => {
+                    Ok(UnifiedEvent::Input {
+                        conn_id: None,
+                        event,
+                    }) => {
                         if let Event::Key(key) = event {
                             return Ok(key);
                         }
-                        self.input_buffer.push_back(event);
+                        self.input_buffer.push_back((None, event));
+                    }
+                    Ok(UnifiedEvent::Input {
+                        conn_id: Some(conn_id),
+                        event,
+                    }) => {
+                        if let Event::Key(key) = event {
+                            *self
+                                .event_owner
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
+                            return Ok(key);
+                        }
+                        self.input_buffer.push_back((Some(conn_id), event));
                     }
                     Ok(UnifiedEvent::PtyWakeup(_)) => {}
                     Ok(UnifiedEvent::AppExited(key)) => {
@@ -561,11 +674,15 @@ impl EventSource for UnifiedEventSource {
                 if let Event::Mouse(mouse) = event {
                     return Ok(mouse);
                 }
-                self.input_buffer.push_back(event);
+                self.input_buffer.push_back((None, event));
             }
 
             let local_rx = self.rx.clone();
-            let local_console_rx = self.console_rx.clone();
+            let local_console_rx = self.console_rx.clone().unwrap_or_else(|| {
+                // Headless mode: create a disconnected channel
+                let (_tx, rx) = bounded(1);
+                rx
+            });
             if self.console_alive {
                 crossbeam_channel::select! {
                     recv(local_console_rx) -> msg => match msg {
@@ -574,7 +691,7 @@ impl EventSource for UnifiedEventSource {
                                 if let Event::Mouse(mouse) = normalized {
                                     return Ok(mouse);
                                 }
-                                self.input_buffer.push_back(normalized);
+                                self.input_buffer.push_back((None, normalized));
                             }
                         }
                         Err(_) => {
@@ -582,11 +699,18 @@ impl EventSource for UnifiedEventSource {
                         }
                     },
                     recv(local_rx) -> msg => match msg {
-                        Ok(UnifiedEvent::Input(event)) => {
+                        Ok(UnifiedEvent::Input { conn_id: None, event }) => {
                             if let Event::Mouse(mouse) = event {
                                 return Ok(mouse);
                             }
-                            self.input_buffer.push_back(event);
+                            self.input_buffer.push_back((None, event));
+                        }
+                        Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
+                            if let Event::Mouse(mouse) = event {
+                                *self.event_owner.lock().unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
+                                return Ok(mouse);
+                            }
+                            self.input_buffer.push_back((Some(conn_id), event));
                         }
                         Ok(UnifiedEvent::PtyWakeup(_)) => {}
                         Ok(UnifiedEvent::AppExited(key)) => {
@@ -608,11 +732,27 @@ impl EventSource for UnifiedEventSource {
                 }
             } else {
                 match local_rx.recv() {
-                    Ok(UnifiedEvent::Input(event)) => {
+                    Ok(UnifiedEvent::Input {
+                        conn_id: None,
+                        event,
+                    }) => {
                         if let Event::Mouse(mouse) = event {
                             return Ok(mouse);
                         }
-                        self.input_buffer.push_back(event);
+                        self.input_buffer.push_back((None, event));
+                    }
+                    Ok(UnifiedEvent::Input {
+                        conn_id: Some(conn_id),
+                        event,
+                    }) => {
+                        if let Event::Mouse(mouse) = event {
+                            *self
+                                .event_owner
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
+                            return Ok(mouse);
+                        }
+                        self.input_buffer.push_back((Some(conn_id), event));
                     }
                     Ok(UnifiedEvent::PtyWakeup(_)) => {}
                     Ok(UnifiedEvent::AppExited(key)) => {
@@ -638,7 +778,11 @@ impl EventSource for UnifiedEventSource {
     // Delegates to the console crate's background reader, which owns the
     // single canonical adapter call (term_wm_crossterm_adapter::set_mouse_capture).
     fn set_mouse_capture(&mut self, enabled: bool) -> io::Result<()> {
-        self.console.set_mouse_capture(enabled)
+        if let Some(ref console) = self.console {
+            console.set_mouse_capture(enabled)
+        } else {
+            Ok(())
+        }
     }
 
     /// Called by the runner each cycle to signal whether there's pending
@@ -700,6 +844,7 @@ impl EventSource for UnifiedEventSource {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,13 +883,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: tx.clone(),
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -757,9 +903,10 @@ mod tests {
 
         // Send 10 input events into the channel
         for i in 0..10u8 {
-            tx.send(UnifiedEvent::Input(key_evt(KeyCode::Char(char::from(
-                b'a' + i,
-            )))))
+            tx.send(UnifiedEvent::Input {
+                conn_id: None,
+                event: key_evt(KeyCode::Char(char::from(b'a' + i))),
+            })
             .unwrap();
         }
         // Also mix in some PtyWakeups (the reason drain_pending exists)
@@ -778,7 +925,7 @@ mod tests {
         );
 
         // verify ordering is preserved
-        for (i, evt) in source.input_buffer.iter().enumerate() {
+        for (i, (_conn_id, evt)) in source.input_buffer.iter().enumerate() {
             let expected = char::from(b'a' + i as u8);
             match evt {
                 Event::Key(k) => {
@@ -827,13 +974,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: tx.clone(),
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -861,7 +1009,11 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
                 kind,
             });
-            tx.send(UnifiedEvent::Input(evt)).unwrap();
+            tx.send(UnifiedEvent::Input {
+                conn_id: None,
+                event: evt,
+            })
+            .unwrap();
         }
 
         source.drain_pending();
@@ -873,7 +1025,7 @@ mod tests {
         );
 
         // Verify Release event (index 1) is absent
-        for evt in &source.input_buffer {
+        for (_conn_id, evt) in &source.input_buffer {
             if let Event::Key(k) = evt {
                 assert_ne!(
                     k.kind,
@@ -884,8 +1036,8 @@ mod tests {
         }
 
         // Verify first and last events are the Press events
-        let first = source.input_buffer.front().unwrap();
-        let last = source.input_buffer.back().unwrap();
+        let (_c1, first) = source.input_buffer.front().unwrap();
+        let (_c2, last) = source.input_buffer.back().unwrap();
         if let (Event::Key(k1), Event::Key(k2)) = (first, last) {
             assert_eq!(k1.kind, KeyKind::Press);
             assert_eq!(k1.code, KeyCode::Char('a'));
@@ -905,13 +1057,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: tx.clone(),
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -924,11 +1077,14 @@ mod tests {
 
         // Send only Release events (filtered on all platforms)
         for _ in 0..3 {
-            tx.send(UnifiedEvent::Input(Event::Key(KeyEvent {
-                code: KeyCode::Char('x'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyKind::Release,
-            })))
+            tx.send(UnifiedEvent::Input {
+                conn_id: None,
+                event: Event::Key(KeyEvent {
+                    code: KeyCode::Char('x'),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyKind::Release,
+                }),
+            })
             .unwrap();
         }
 
@@ -950,13 +1106,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: tx.clone(),
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1008,13 +1165,14 @@ mod tests {
         let source = UnifiedEventSource {
             rx,
             tx: _tx,
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: set,
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1038,13 +1196,14 @@ mod tests {
         let source = UnifiedEventSource {
             rx: rx1,
             tx: tx1,
-            console: console1,
-            console_rx: console_rx1,
+            console: Some(console1),
+            console_rx: Some(console_rx1),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1066,13 +1225,14 @@ mod tests {
         let source2 = UnifiedEventSource {
             rx: rx2,
             tx: tx2,
-            console: console2,
-            console_rx: console_rx2,
+            console: Some(console2),
+            console_rx: Some(console_rx2),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1104,13 +1264,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: _tx,
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: vec![key],
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1146,13 +1307,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: _tx,
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: set,
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1180,13 +1342,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: _tx,
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1232,13 +1395,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx,
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1269,13 +1433,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx,
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1316,13 +1481,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx,
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1358,13 +1524,14 @@ mod tests {
         let mut source = UnifiedEventSource {
             rx,
             tx: tx.clone(),
-            console,
-            console_rx,
+            console: Some(console),
+            console_rx: Some(console_rx),
             console_alive: true,
             dirty_windows: HashSet::new(),
             exited_windows: Vec::new(),
             direct_input_changed: Vec::new(),
             pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_event: None,
             input_buffer: VecDeque::new(),
             signal_received: false,
@@ -1390,6 +1557,208 @@ mod tests {
         assert!(
             !source.take_dirty_windows().is_empty(),
             "dirty_windows must be populated from the unified channel"
+        );
+    }
+
+    /// Remote (attributed) viewer input must carry its `conn_id` through
+    /// `drain_pending` → `read()` onto the shared `event_owner`, while local
+    /// console input (`conn_id: None`) resets the owner. This is the
+    /// attribution contract the "Detach Viewer" action and multi-viewer
+    /// routing rely on.
+    #[test]
+    fn attributed_conn_id_is_preserved_through_read() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let event_owner = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: event_owner.clone(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+
+        // Remote viewer key (conn_id 7) followed by a local console key.
+        tx.send(UnifiedEvent::Input {
+            conn_id: Some(7),
+            event: key_evt(KeyCode::Char('r')),
+        })
+        .unwrap();
+        tx.send(UnifiedEvent::Input {
+            conn_id: None,
+            event: key_evt(KeyCode::Char('l')),
+        })
+        .unwrap();
+
+        source.drain_pending();
+        assert_eq!(source.input_buffer.len(), 2);
+
+        // First read surfaces the remote viewer's conn_id on the shared owner.
+        match source.read().unwrap() {
+            Event::Key(k) => assert_eq!(k.code, KeyCode::Char('r')),
+            _ => panic!("expected Key event"),
+        }
+        assert_eq!(
+            *event_owner.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(7)
+        );
+
+        // Local console input resets the owner to None.
+        match source.read().unwrap() {
+            Event::Key(k) => assert_eq!(k.code, KeyCode::Char('l')),
+            _ => panic!("expected Key event"),
+        }
+        assert_eq!(*event_owner.lock().unwrap_or_else(|e| e.into_inner()), None);
+    }
+
+    /// `UnifiedEventSource::new(true)` (internal-session mode) must skip
+    /// crossterm console reading entirely and route attributed input through
+    /// `pty_wakeup_tx()` into the main channel — the fix for event-loop
+    /// starvation in headless mode.
+    #[test]
+    fn headless_new_routes_attributed_input_through_pty_wakeup_tx() {
+        let (mut source, owner) = UnifiedEventSource::new(true).expect("headless new");
+        assert!(source.console.is_none());
+        assert!(source.console_rx.is_none());
+        assert!(
+            !source.console_alive,
+            "headless source must not use a console"
+        );
+
+        // Attributed input arrives through the shared wakeup channel.
+        source
+            .pty_wakeup_tx()
+            .send(UnifiedEvent::Input {
+                conn_id: Some(9),
+                event: key_evt(KeyCode::Char('x')),
+            })
+            .unwrap();
+
+        // poll() must wake immediately (no console select path) and read()
+        // must surface the event with its conn_id on the shared owner.
+        assert!(
+            source.poll(Duration::from_millis(500)).unwrap(),
+            "poll must report an available event in headless mode"
+        );
+        match source.read().unwrap() {
+            Event::Key(k) => assert_eq!(k.code, KeyCode::Char('x')),
+            _ => panic!("expected Key event"),
+        }
+        assert_eq!(
+            *owner.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(9),
+            "attributed conn_id must be published to the shared owner"
+        );
+    }
+
+    /// The drain/state-accessor surface of the unified source: direct-input
+    /// transitions, signals, and redraw requests must be collected and
+    /// consumed exactly once.
+    #[test]
+    fn drain_collects_direct_input_signal_and_redraw_requests() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+
+        let key = WindowKey::default();
+        let mode = DirectInputMode::default();
+        tx.send(UnifiedEvent::DirectInputChanged(key, mode))
+            .unwrap();
+        tx.send(UnifiedEvent::Signal).unwrap();
+        source.request_redraw();
+        source.set_max_sleep_duration(Some(Duration::from_secs(1)));
+
+        source.drain_pending();
+
+        assert!(
+            source.take_signal(),
+            "Signal must be latched by drain_pending"
+        );
+        assert!(!source.take_signal(), "take_signal must be consume-once");
+        assert_eq!(source.take_direct_input_changed(), vec![(key, mode)]);
+        assert!(source.take_direct_input_changed().is_empty());
+        assert!(
+            source.take_redraw_request(),
+            "request_redraw must be latched"
+        );
+        assert!(
+            !source.take_redraw_request(),
+            "take_redraw_request must be consume-once"
+        );
+    }
+
+    /// `next_key` (used by keybinding evaluation) must surface attributed
+    /// keys and publish their conn_id on the shared owner.
+    #[test]
+    fn next_key_surfaces_attributed_key_and_owner() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let event_owner = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: event_owner.clone(),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+        };
+
+        tx.send(UnifiedEvent::Input {
+            conn_id: Some(11),
+            event: key_evt(KeyCode::Char('k')),
+        })
+        .unwrap();
+
+        let key = source.next_key().expect("next_key");
+        assert_eq!(key.code, KeyCode::Char('k'));
+        assert_eq!(
+            *event_owner.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(11),
+            "attributed key must set the shared owner"
         );
     }
 }

@@ -346,6 +346,7 @@ pub fn route_mouse_by_rects<C: Component<TermWmAction>>(
     EventResult::Ignored
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

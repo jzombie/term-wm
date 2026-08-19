@@ -60,8 +60,12 @@ impl Session {
             default_shell_command()
         };
         if let Some(ch) = channel {
-            builder.env("TERM_WM_CHANNEL", ch.to_string());
+            builder.env(term_wm_config::env::CHANNEL_ENV_VAR, ch.to_string());
         }
+        // Mark every session child as living inside an active term-session so a
+        // nested `term-session`/`term-wm` attach can detect and refuse inception
+        // (see `run_session`'s nesting guard).
+        builder.env(term_wm_config::env::SESSION_ACTIVE_ENV_VAR, "1");
         if let Some(c) = resolved_cwd {
             builder.cwd(c);
         }
@@ -133,6 +137,7 @@ impl Session {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::{Session, resolve_cwd};
@@ -280,5 +285,47 @@ mod tests {
         let reported = spawn_pwd_report(Some(&path_wire::encode_path(&dir)));
         let expected = std::fs::canonicalize(&dir).expect("canonicalize non-utf8 dir");
         assert_eq!(path_wire::decode_path(&reported), expected);
+    }
+
+    /// Spawn a session running `mock envvar <NAME> <report>` and return the
+    /// report bytes (`<NAME>=<value>`), mirroring `spawn_pwd_report`.
+    fn spawn_envvar_report(name: &str) -> Vec<u8> {
+        let dir = tempfile::tempdir().expect("report tempdir");
+        let report = dir.path().join("envvar.txt");
+        let mock = term_session_mock::get_mock_bin();
+        let cmd = vec![
+            mock.to_string_lossy().into_owned(),
+            "envvar".to_string(),
+            name.to_string(),
+            report.to_string_lossy().into_owned(),
+        ];
+        let mut session =
+            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, None).expect("spawn session");
+        let bytes = read_report(&mut session, &report);
+        session.pty.kill_child().ok();
+        bytes
+    }
+
+    #[test]
+    fn spawn_marks_children_as_in_session() {
+        let var = term_wm_config::env::SESSION_ACTIVE_ENV_VAR;
+        let report = spawn_envvar_report(var);
+        assert_eq!(
+            std::str::from_utf8(&report).expect("utf8 report"),
+            format!("{var}=1")
+        );
+    }
+
+    /// With `channel = None` the daemon sets no channel env var; this both
+    /// confirms the mock reports a genuinely-unset var as `NAME=` (no
+    /// fabricated `1`) and that the `TERM_SESSION_CHANNEL` injection stays
+    /// conditional on a channel being present.
+    #[test]
+    fn spawn_leaves_channel_var_unset_when_no_channel() {
+        let report = spawn_envvar_report(term_wm_config::env::CHANNEL_ENV_VAR);
+        assert_eq!(
+            std::str::from_utf8(&report).expect("utf8 report"),
+            format!("{}=", term_wm_config::env::CHANNEL_ENV_VAR)
+        );
     }
 }

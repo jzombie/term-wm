@@ -44,6 +44,7 @@ pub fn extract_osc_title(data: &[u8]) -> Option<String> {
     None
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

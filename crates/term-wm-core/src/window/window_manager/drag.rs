@@ -661,7 +661,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .iter()
             .find(|(k, _)| *k == anchor_key)
             .map(|(_, r)| *r)
-            .unwrap();
+            .expect("anchor_key must exist in all_windows");
 
         let others: Vec<_> = all_windows
             .iter()

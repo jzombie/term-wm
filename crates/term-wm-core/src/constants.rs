@@ -19,6 +19,10 @@ pub const DEFAULT_SUPPORTED_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ExitUi,
     TermWmAction::ToggleMonocle,
     TermWmAction::ToggleTiling,
+    #[cfg(feature = "session-persistence")]
+    TermWmAction::NewWorkspace,
+    #[cfg(feature = "session-persistence")]
+    TermWmAction::DetachCurrentClient,
 ];
 
 /// Minimum number of visible cells a floating window must keep within the

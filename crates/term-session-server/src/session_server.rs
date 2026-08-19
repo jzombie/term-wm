@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -12,10 +12,12 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnPtyResized, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, ResizePty,
-    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SessionInfo, ShutdownGateway, Spawn,
-    SpawnRequest, SpawnResponse, WriteInput,
+    ListChannels, ListChannelsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
+    OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
+    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindWorkspace,
+    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
+    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
+    WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -114,6 +116,15 @@ struct SubscriberEntry {
 
 /// Per-channel state. One gateway process hosts many channels; each channel
 /// owns its own session, connected clients, subscribers, and input channel.
+/// Input routing mode for a channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputMode {
+    /// Legacy/Raw terminal: bytes go straight to PTY stdin
+    RawPty,
+    /// Headless WM: structured events go to IPC subscriber, raw PTY bytes suppressed
+    AttributedIpc { wm_conn_id: usize },
+}
+
 struct ChannelState {
     session: Option<Session>,
     clients: HashMap<usize, ClientEntry>,
@@ -139,6 +150,14 @@ struct ChannelState {
     /// Tombstone set by GC just before removal; any Attach that read a stale
     /// Arc re-checks this under the write lock (safe double-checked locking).
     is_reaped: bool,
+    /// Current input routing mode.
+    input_mode: InputMode,
+    /// Handle to the inner WM's connection for structured input routing.
+    /// `Some` when an internal WM has subscribed via `SubscribeInternalInput`.
+    /// Lives on `ChannelState` (not `Session`) so it survives session spawn/restart.
+    internal_wm_caller: Option<RpcIpcConnectionContextHandle>,
+    /// The `conn_id` of the subscribing WM connection (for disconnect cleanup).
+    internal_wm_conn_id: Option<usize>,
 }
 
 /// Gateway coordination. Two tiers:
@@ -158,6 +177,10 @@ struct ServerState {
     /// per connection drains it FIFO into the channel's `input_tx`, so bursty
     /// input (e.g. IME voice typing) is never reordered by racing tasks.
     input_forwarders: std::sync::Mutex<HashMap<usize, mpsc::Sender<Vec<u8>>>>,
+    /// Routing: conn_id → channel name. Updated by Attach, cleaned by evict_conn.
+    conn_to_channel: std::sync::Mutex<HashMap<usize, String>>,
+    /// Channel names with active internal WMs. Checked by StreamInput.
+    internal_channels: std::sync::Mutex<HashSet<String>>,
 }
 
 type SharedState = Arc<ServerState>;
@@ -198,6 +221,9 @@ impl ChannelState {
             input_tx,
             kill_pending: false,
             is_reaped: false,
+            input_mode: InputMode::RawPty,
+            internal_wm_caller: None,
+            internal_wm_conn_id: None,
         }
     }
 
@@ -613,12 +639,38 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     let mut guard = ch.lock().await;
     guard.clients.remove(&conn_id);
     guard.subscribers.retain(|s| s.conn_id != conn_id);
+    // If the disconnected client was the internal WM, revert to RawPty mode
+    if guard.internal_wm_conn_id == Some(conn_id) {
+        guard.internal_wm_caller = None;
+        guard.internal_wm_conn_id = None;
+        guard.input_mode = InputMode::RawPty;
+        // Remove channel from internal_channels
+        let channel_name = channel.to_string();
+        drop(guard);
+        let mut channels = state
+            .internal_channels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        channels.remove(&channel_name);
+    } else {
+        drop(guard);
+    }
+    // Remove from conn_to_channel routing table
+    {
+        let mut map = state
+            .conn_to_channel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        map.remove(&conn_id);
+    }
+    // Re-read guard for geometry broadcast (may have been dropped above)
+    let mut guard = ch.lock().await;
     guard.recalculate_pty_size();
-    // Broadcast the session's actual (client-driven) geometry to remaining
-    // clients. If no session exists there is nothing to broadcast.
     let session_size = guard.session.as_ref().map(|s| (s.cols, s.rows));
     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
     drop(guard);
+    // Broadcast the session's actual (client-driven) geometry to remaining
+    // clients. If no session exists there is nothing to broadcast.
     let Some((ncols, nrows)) = session_size else {
         return;
     };
@@ -683,6 +735,8 @@ pub async fn run_gateway(
         is_shutting_down: AtomicBool::new(false),
         next_channel_seq: AtomicU64::new(0),
         input_forwarders: std::sync::Mutex::new(HashMap::new()),
+        conn_to_channel: std::sync::Mutex::new(HashMap::new()),
+        internal_channels: std::sync::Mutex::new(HashSet::new()),
     });
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -720,6 +774,7 @@ pub async fn run_gateway(
                     version: String::new(),
                     ssh_ip: None,
                 });
+                let channel_str = name.to_string();
                 entry.state = ConnState::Attached(name);
                 entry.hostname = req.hostname;
                 entry.connected_at_unix = now_unix();
@@ -727,6 +782,27 @@ pub async fn run_gateway(
                 entry.user = req.user;
                 entry.version = req.version;
                 entry.ssh_ip = req.ssh_ip;
+                // Update conn_to_channel routing table
+                {
+                    let mut map = state
+                        .conn_to_channel
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    map.insert(conn_id, channel_str.clone());
+                }
+                // If channel is internal, add to internal_channels
+                if let Ok(parsed) = ChannelName::parse(&channel_str)
+                    && let Some(ch) = resolve_channel(state.as_ref(), &parsed).await
+                {
+                    let guard = ch.lock().await;
+                    if matches!(guard.input_mode, InputMode::AttributedIpc { .. }) {
+                        let mut channels = state
+                            .internal_channels
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        channels.insert(channel_str);
+                    }
+                }
                 Attach::encode_response(conn_id).map_err(boxed_io)
             }
         })
@@ -792,7 +868,7 @@ pub async fn run_gateway(
                 // If a session already exists and hasn't exited, reuse it.
                 if guard.session.as_ref().is_some_and(|s| !s.exited) {
                     guard.recalculate_pty_size();
-                    let session = guard.session.as_ref().unwrap();
+                    let session = guard.session.as_ref().expect("session checked above");
                     let (ncols, nrows) = (session.cols, session.rows);
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     let id = session.id;
@@ -835,7 +911,7 @@ pub async fn run_gateway(
                 guard.set_session(session);
                 guard.recalculate_pty_size();
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
-                let session = guard.session.as_ref().unwrap();
+                let session = guard.session.as_ref().expect("session just set");
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
                 let (ncols, nrows) = (scol, srow);
                 drop(guard);
@@ -968,6 +1044,25 @@ pub async fn run_gateway(
             let conn_id = ctx.conn_id;
             match event {
                 RpcStreamEvent::PayloadChunk { bytes, .. } => {
+                    // Resolve channel name from conn_to_channel (drop guard first)
+                    let channel_name = {
+                        let map = state.conn_to_channel.lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        map.get(&conn_id).cloned()
+                    };
+                    // Drop chunks from unattached connections — prevents PTY
+                    // buffer leak during the brief window before Attach completes.
+                    let Some(name) = channel_name else {
+                        return;
+                    };
+                    // Check if channel is internal (strict lock ordering: conn_to_channel → internal_channels)
+                    {
+                        let channels = state.internal_channels.lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        if channels.contains(&name) {
+                            return; // Suppress raw bytes for internal WM channels
+                        }
+                    }
                     // Forward the chunk into the connection's ordered queue
                     // synchronously — the handler is invoked sequentially in
                     // wire order per stream, so `try_send` here preserves chunk
@@ -1298,6 +1393,124 @@ pub async fn run_gateway(
         .await
         .map_err(|e| format!("register ShutdownGateway: {e:?}"))?;
 
+    // ── RebindWorkspace ──────────────────────────────────────────────
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(RebindWorkspace::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let req = RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
+                let source = ChannelName::parse(&req.source_channel).map_err(|e| rpc_err(&e))?;
+                let conns = state.conns.read().await;
+                for entry in conns.values() {
+                    if let ConnState::Attached(name) = &entry.state
+                        && name == &source
+                    {
+                        let caller = entry.handle.clone();
+                        let target = req.target.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = OnWorkspaceRebind::call(
+                                &caller,
+                                OnWorkspaceRebindRequest { target },
+                            )
+                            .await
+                            {
+                                tracing::debug!(
+                                    error = ?e,
+                                    "Failed to deliver OnWorkspaceRebind"
+                                );
+                            }
+                        });
+                    }
+                }
+                RebindWorkspace::encode_response(()).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register RebindWorkspace: {e:?}"))?;
+
+    // ── SubscribeInternalInput ─────────────────────────────────────
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(SubscribeInternalInput::METHOD_ID, move |payload, ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let req = SubscribeInternalInput::decode_request(&payload).map_err(boxed_io)?;
+                let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
+                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let mut guard = ch.lock().await;
+                    // Set input mode on the channel (source of truth)
+                    guard.input_mode = InputMode::AttributedIpc {
+                        wm_conn_id: ctx.conn_id,
+                    };
+                    // Store caller on ChannelState (not Session) so it
+                    // survives session spawn/restart — eliminates race.
+                    guard.internal_wm_caller = Some(RpcIpcConnectionContextHandle(ctx.clone()));
+                    guard.internal_wm_conn_id = Some(ctx.conn_id);
+                    // Mark channel as internal for StreamInput suppression
+                    {
+                        let mut channels = state
+                            .internal_channels
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        channels.insert(name.to_string());
+                    }
+                    // All existing conn_ids are already in conn_to_channel
+                    // (added by Attach handler). No additional update needed.
+                }
+                SubscribeInternalInput::encode_response(()).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register SubscribeInternalInput: {e:?}"))?;
+
+    // ── SendAttributedInput ────────────────────────────────────────
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(SendAttributedInput::METHOD_ID, move |payload, ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                if state.is_shutting_down.load(Ordering::SeqCst) {
+                    return Err(rpc_err(RPC_ERROR_SHUTTING_DOWN));
+                }
+                let req = SendAttributedInput::decode_request(&payload).map_err(boxed_io)?;
+                let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
+                // Clone handle and drop lock BEFORE awaiting RPC
+                let caller = if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let guard = ch.lock().await;
+                    guard.internal_wm_caller.clone()
+                } else {
+                    None
+                };
+                if let Some(caller) = caller {
+                    let conn_id = ctx.conn_id;
+                    let event = req.event;
+                    tokio::spawn(async move {
+                        if let Err(e) = OnAttributedInput::call(
+                            &caller,
+                            OnAttributedInputRequest { conn_id, event },
+                        )
+                        .await
+                        {
+                            tracing::debug!(
+                                error = ?e,
+                                "Failed to deliver OnAttributedInput"
+                            );
+                        }
+                    });
+                }
+                SendAttributedInput::encode_response(()).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register SendAttributedInput: {e:?}"))?;
+
     // ── Connection event loop ────────────────────────────────────────
     let st = Arc::clone(&state);
     tokio::spawn(async move {
@@ -1350,6 +1563,7 @@ pub async fn run_gateway(
     Ok(exit_code)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1393,6 +1607,8 @@ mod tests {
             is_shutting_down: AtomicBool::new(false),
             next_channel_seq: AtomicU64::new(0),
             input_forwarders: std::sync::Mutex::new(HashMap::new()),
+            conn_to_channel: std::sync::Mutex::new(HashMap::new()),
+            internal_channels: std::sync::Mutex::new(HashSet::new()),
         })
     }
 
@@ -1457,5 +1673,75 @@ mod tests {
         purge_input_forwarder(&state, 1);
 
         assert!(!state.input_forwarders.lock().unwrap().contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn evict_conn_reverts_internal_wm_channel_to_raw_pty() {
+        // Prime the channel as if the internal WM had subscribed via
+        // `SubscribeInternalInput`: attributed routing mode, an internal-WM
+        // conn id, and a canonicalized entry in `internal_channels`.
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse channel");
+        {
+            let ch = state
+                .channels
+                .read()
+                .await
+                .get(&name)
+                .expect("channel exists")
+                .clone();
+            let mut guard = ch.lock().await;
+            guard.internal_wm_conn_id = Some(1);
+            guard.input_mode = InputMode::AttributedIpc { wm_conn_id: 1 };
+        }
+        state
+            .internal_channels
+            .lock()
+            .unwrap()
+            .insert("test/coalesce".to_string());
+        state
+            .conn_to_channel
+            .lock()
+            .unwrap()
+            .insert(1, "test/coalesce".to_string());
+
+        evict_conn(&state, 1).await;
+
+        // The internal-WM teardown path must purge the channel from
+        // `internal_channels` (so raw StreamInput bytes are no longer
+        // suppressed) and revert the routing mode to RawPty.
+        assert!(
+            !state
+                .internal_channels
+                .lock()
+                .unwrap()
+                .contains("test/coalesce"),
+            "internal_channels must lose the channel after WM disconnect"
+        );
+        assert!(
+            !state.conn_to_channel.lock().unwrap().contains_key(&1),
+            "conn_to_channel must purge the evicted connection"
+        );
+        let ch = state
+            .channels
+            .read()
+            .await
+            .get(&name)
+            .expect("channel exists")
+            .clone();
+        let guard = ch.lock().await;
+        assert_eq!(guard.input_mode, InputMode::RawPty);
+        assert_eq!(guard.internal_wm_conn_id, None);
+        assert!(guard.internal_wm_caller.is_none());
+    }
+
+    #[test]
+    fn channel_state_defaults_to_raw_pty_mode() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let channel = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert_eq!(channel.input_mode, InputMode::RawPty);
+        assert_eq!(channel.internal_wm_conn_id, None);
+        assert!(channel.internal_wm_caller.is_none());
     }
 }

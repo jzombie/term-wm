@@ -19,8 +19,9 @@ use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient, RpcServiceCal
 use portable_pty::PtySize;
 use term_clipboard::{Clipboard, Osc52Extractor};
 use term_session_muxio_service_definitions::{
-    Attach, AttachRequest, OnPtyResized, RpcMethodPrebuffered, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse, path_wire,
+    Attach, AttachRequest, OnPtyResized, OnWorkspaceRebind, RpcMethodPrebuffered,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, Spawn, SpawnRequest, SpawnResponse,
+    path_wire,
 };
 #[cfg(unix)]
 use term_sys_io::redirect_fd_to_tracing;
@@ -101,6 +102,23 @@ const MIN_TERM_ROWS: u16 = 2;
 const FALLBACK_TERM_COLS: u16 = 80;
 const FALLBACK_TERM_ROWS: u16 = 24;
 
+/// Diagnostic printed by [`run_session`]'s nesting guard when a client tries to
+/// start inside an already-active term-session environment. The `term-session`
+/// CLI has no `attach` subcommand (attach is the implicit default), so the
+/// suggested override is a bare `--allow-nested`.
+const NESTED_SESSION_FATAL: &str = "\
+FATAL: Attempted to run term-session inside an existing term-session environment.
+Session inception can cause terminal buffer corruption and accidental gateway stops.
+
+To force nested execution, rerun with:
+  term-session --allow-nested [args...]";
+
+/// Whether an attach should be refused because the caller is already inside an
+/// active term-session and nesting was not explicitly allowed.
+fn should_block_nesting(active_in_session: bool, allow_nested: bool) -> bool {
+    active_in_session && !allow_nested
+}
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -166,6 +184,24 @@ fn convert_crossterm_event(evt: crossterm::event::Event) -> Option<Event> {
 /// only when both the event kind and modifier flags match.  Modifier changes
 /// mid-drag (Shift/Ctrl/Alt pressed or released) must be preserved — they
 /// signal state transitions that terminal applications rely on.
+fn attributed_mouse_is_motion(e: &Event) -> bool {
+    matches!(
+        e,
+        Event::Mouse(m) if matches!(m.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+    )
+}
+
+/// Whether two events are coalescable mouse motion events (same kind family
+/// and same modifier set — delegates to [`is_coalescable_mouse`]).
+fn attributed_mouse_coalescable(a: &Event, b: &Event) -> bool {
+    match (a, b) {
+        (Event::Mouse(am), Event::Mouse(bm)) => {
+            is_coalescable_mouse(&am.kind, &am.modifiers, &bm.kind, &bm.modifiers)
+        }
+        _ => false,
+    }
+}
+
 fn is_coalescable_mouse(
     a_kind: &MouseEventKind,
     a_mod: &KeyModifiers,
@@ -266,7 +302,23 @@ fn client_ssh_ip() -> Option<String> {
 /// `channel` is the logical channel to attach to; `cmd` is the command to run
 /// (empty = the gateway's default shell). PTY geometry is read from the real
 /// terminal.
-pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Result<()> {
+pub fn run_session(
+    socket_path: &str,
+    channel: &str,
+    cmd: &[String],
+    allow_nested: bool,
+) -> io::Result<Option<String>> {
+    // Reject "session inception": a client started inside an already-active
+    // term-session environment (detected via the marker the daemon injects into
+    // every spawned PTY child). Nested sessions corrupt the terminal buffers and
+    // risk accidentally stopping the outer gateway. `--allow-nested` opts out.
+    if should_block_nesting(
+        std::env::var_os(term_session_muxio_service_definitions::SESSION_ACTIVE_ENV_VAR).is_some(),
+        allow_nested,
+    ) {
+        return Err(io::Error::other(NESTED_SESSION_FATAL));
+    }
+
     // Windows console hosts default to "QuickEdit" mode: clicking the window
     // enters text-selection mode, during which the kernel suspends the
     // process's console I/O until the selection is cleared (Esc). A stray
@@ -320,6 +372,28 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
             },
         ))
         .map_err(|e| io::Error::other(format!("register OnPtyResized: {e:?}")))?;
+    }
+
+    // Workspace rebind signal: set by OnWorkspaceRebind handler when the
+    // server tells this viewer to switch to a different channel.
+    let rebind_target: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    {
+        let target_ref = Arc::clone(&rebind_target);
+        rt.block_on(client.get_endpoint().register_prebuffered(
+            OnWorkspaceRebind::METHOD_ID,
+            move |payload, _ctx| {
+                let target_ref = Arc::clone(&target_ref);
+                async move {
+                    let req = OnWorkspaceRebind::decode_request(&payload)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    *target_ref.lock().unwrap_or_else(|err| err.into_inner()) = Some(req.target);
+                    OnWorkspaceRebind::encode_response(())
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            },
+        ))
+        .map_err(|e| io::Error::other(format!("register OnWorkspaceRebind: {e:?}")))?;
     }
 
     // Channels for raw PTY output bytes and clipboard text from the subscription stream.
@@ -466,11 +540,55 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         input_writer,
     );
 
+    // Single dedicated worker for attributed input. Replaces per-event
+    // tokio::spawn which caused task queue thrashing and socket contention.
+    let (attributed_tx, mut attributed_rx) = tokio::sync::mpsc::channel::<
+        term_session_muxio_service_definitions::SendAttributedInputRequest,
+    >(1024);
+    {
+        let client_clone = client.clone();
+        rt.spawn(async move {
+            use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered;
+            use term_session_muxio_service_definitions::SendAttributedInput;
+
+            let mut pending_req = None;
+            loop {
+                let mut req = match pending_req.take() {
+                    Some(r) => r,
+                    None => match attributed_rx.recv().await {
+                        Some(r) => r,
+                        None => break,
+                    },
+                };
+
+                // Latest-position coalescing for queued motion events. A
+                // popped event that cannot be merged is stashed in
+                // `pending_req` (NOT dropped) and processed on the next
+                // iteration, preserving discrete-event ordering.
+                while attributed_mouse_is_motion(&req.event) {
+                    match attributed_rx.try_recv() {
+                        Ok(next_req)
+                            if attributed_mouse_coalescable(&req.event, &next_req.event) =>
+                        {
+                            req = next_req;
+                        }
+                        Ok(next_req) => {
+                            pending_req = Some(next_req);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = SendAttributedInput::call(&*client_clone, req).await;
+            }
+        });
+    }
+
     // Wait for initial output
     for _ in 0..INITIAL_WAIT_ITERS {
         pane.drain_pushes();
         let parser = pane.shared_parser();
-        let parser = parser.lock().unwrap();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
         if !parser.screen().contents_formatted().is_empty() {
             break;
         }
@@ -481,7 +599,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     // Resize local parser to server-constrained geometry
     {
         let parser = pane.shared_parser();
-        let mut parser_lk = parser.lock().unwrap();
+        let mut parser_lk = parser.lock().unwrap_or_else(|e| e.into_inner());
         let (cur_rows, cur_cols) = parser_lk.screen().size();
         if actual_cols != cur_cols || actual_rows != cur_rows {
             parser_lk.screen_mut().set_size(actual_rows, actual_cols);
@@ -536,7 +654,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
     // Initial full-frame render
     {
         let parser = pane.shared_parser();
-        let parser = parser.lock().unwrap();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen();
         let (rows, cols) = screen.size();
         render_frame(&mut out, screen, rows, cols, false)?;
@@ -554,7 +672,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                 let cols = server_cols.load(Ordering::Relaxed);
                 let rows = server_rows.load(Ordering::Relaxed);
                 if cols > 0 && rows > 0 {
-                    let mut parser_lk = shared_parser.lock().unwrap();
+                    let mut parser_lk = shared_parser.lock().unwrap_or_else(|e| e.into_inner());
                     let (cur_rows, cur_cols) = parser_lk.screen().size();
                     if cur_cols != cols || cur_rows != rows {
                         parser_lk.screen_mut().set_size(rows, cols);
@@ -569,6 +687,17 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         let resized = apply_pending_resize(&pane.shared_parser());
         force_render |= resized;
         clear_display |= resized;
+
+        // Workspace rebind: server told us to switch channels.
+        // Checked BEFORE the blocking select so the signal is never stuck
+        // behind a crossbeam recv that has no pending data.
+        if let Some(target) = rebind_target
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
+            return Ok(Some(target));
+        }
 
         // Retrieve next input event (either buffered from previous coalescing
         // pass or blocking on the input/PTY-output channel)
@@ -595,7 +724,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
 
                             // PTY output — process directly into parser
                             let parser = pane.shared_parser();
-                            let mut parser = parser.lock().unwrap();
+                            let mut parser = parser.lock().unwrap_or_else(|e| e.into_inner());
                             parser.process(&data);
                             None
                         }
@@ -605,6 +734,12 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                             None
                         }
                     }
+                }
+                recv(crossbeam_channel::after(Duration::from_millis(100))) -> _ => {
+                    // Periodic wake-up: re-render even when idle, so the
+                    // display stays fresh after focus changes.
+                    force_render = true;
+                    None
                 }
             }
         };
@@ -652,6 +787,17 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                 }
             }
 
+            // Send structured event to server for attributed input routing.
+            // Non-blocking: drops events if queue is full (acceptable for
+            // high-frequency mouse movements).
+            {
+                use term_session_muxio_service_definitions::SendAttributedInputRequest;
+                let _ = attributed_tx.try_send(SendAttributedInputRequest {
+                    channel: channel.to_string(),
+                    event: evt.clone(),
+                });
+            }
+
             match evt {
                 Event::Key(ref key)
                     if key.kind == KeyKind::Press || key.kind == KeyKind::Repeat =>
@@ -664,7 +810,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
                 Event::Mouse(ref mouse) => {
                     let mouse_active = {
                         let parser = pane.shared_parser();
-                        let parser = parser.lock().unwrap();
+                        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
                         parser.screen().mouse_protocol_mode() != MouseProtocolMode::None
                     };
                     if mouse_active {
@@ -706,7 +852,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
         // Full-frame explicit row-by-row render
         if has_new_data || force_render {
             let parser = pane.shared_parser();
-            let parser = parser.lock().unwrap();
+            let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
             let screen = parser.screen();
             let (rows, cols) = screen.size();
             render_frame(&mut out, screen, rows, cols, clear_display)?;
@@ -714,7 +860,7 @@ pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Resu
 
         // Exit on session exit
         if pane.has_exited() {
-            return Ok(());
+            return Ok(None);
         }
     }
 }
@@ -848,12 +994,30 @@ pub fn render_frame(
     out.flush()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
     use term_wm_events::{KeyCode, KeyEvent, MouseButton, MouseEvent};
+
+    #[test]
+    fn should_block_nesting_truth_table() {
+        assert!(
+            should_block_nesting(true, false),
+            "nested, no override -> block"
+        );
+        assert!(
+            !should_block_nesting(true, true),
+            "nested, allow -> proceed"
+        );
+        assert!(!should_block_nesting(false, false), "not nested -> proceed");
+        assert!(
+            !should_block_nesting(false, true),
+            "not nested + allow -> proceed"
+        );
+    }
 
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,
@@ -1381,6 +1545,7 @@ mod tests {
 // ── Snapshot tests for render_frame byte output ─────────────────────────
 // Uses a push_rx mock (crossbeam channel) + RemotePane(client: None) for
 // deterministic, non-flaky byte-stream assertions.
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 #[allow(clippy::type_complexity)]
 mod snapshot_tests {

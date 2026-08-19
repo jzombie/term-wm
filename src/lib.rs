@@ -552,7 +552,10 @@ fn render_tiling_chrome<C, L, O>(
                 render_ghost_preview(buf, *snap_rect, &wm.config().theme);
                 if let Some(remaining) = wm.drag_snap_remaining() {
                     const GRACE: std::time::Duration = std::time::Duration::from_millis(500);
-                    let timeout = wm.config().drag_snap_timeout.unwrap();
+                    let timeout = wm
+                        .config()
+                        .drag_snap_timeout
+                        .unwrap_or(std::time::Duration::from_secs(1));
                     if timeout.saturating_sub(remaining) >= GRACE {
                         let action = wm.snap_preview_action_label().unwrap_or("snap");
                         let text = if remaining == std::time::Duration::ZERO {

@@ -1,5 +1,13 @@
 pub mod auto_spawn;
 
+pub use muxio_tokio_rpc_ipc_client as rpc_client;
+pub use term_session_client as client;
+pub use term_session_muxio_service_definitions as protocol;
+pub use term_session_muxio_service_definitions::{
+    ChannelName, DEFAULT_WORKSPACE, SESSION_CHANNEL_NAME, gateway_channel_name, gateway_help_line,
+};
+pub use term_session_server as server;
+
 use std::io;
 use std::sync::Arc;
 
@@ -8,8 +16,50 @@ use term_session_muxio_service_definitions::{
     KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
 };
 
-// TODO: Rename to TERM_SESSION_CHANNEL
-pub const CHANNEL_ENV_VAR: &str = "TERM_WM_CHANNEL";
+/// Run a CLI entry point and report any error identically across every
+/// term-wm-family binary, then terminate with the matching exit code.
+///
+/// On success this exits `0`. On error it prints `error: {err}` (the `Display`
+/// form — not Rust's default `Error: {err:?}` debug dump) to the *original*
+/// stderr and exits `1`. The original stderr is preserved because the TUI
+/// client may `dup2` fd 2 into the tracing pipe (see `redirect_fd_to_tracing`);
+/// a fatal error surfaced after the UI has started must still reach the user.
+///
+/// `term-session` and `term-wm` both route their `main()` through this so
+/// fatal-error formatting and exit codes stay uniform.
+pub fn run_and_exit(run: impl FnOnce() -> io::Result<()>) -> ! {
+    // Preserve the real stderr before the entry point may redirect fd 2 into
+    // the tracing pipe. Best-effort: if `dup` fails, fall back to `eprintln!`.
+    #[cfg(unix)]
+    let orig_stderr: Option<std::fs::File> = {
+        use std::os::unix::io::FromRawFd;
+        let fd = unsafe { libc::dup(libc::STDERR_FILENO) };
+        if fd >= 0 {
+            Some(unsafe { std::fs::File::from_raw_fd(fd) })
+        } else {
+            None
+        }
+    };
+
+    if let Err(err) = run() {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            match orig_stderr {
+                Some(mut f) => {
+                    let _ = writeln!(f, "error: {err}");
+                }
+                None => eprintln!("error: {err}"),
+            }
+        }
+        #[cfg(not(unix))]
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
+pub use term_wm_config::env::CHANNEL_ENV_VAR;
 pub const DEFAULT_CHANNEL: &str = "default/main";
 
 /// Resolve the channel from an optional CLI arg, falling back to the env var,
@@ -62,31 +112,36 @@ pub fn format_unix_relative_at(ts: u64, now: u64) -> String {
     }
 }
 
-/// Connect to the gateway daemon and run `op` with a live client. The tokio
-/// runtime that hosts the muxio connection is kept alive for the whole `op`,
-/// so RPCs complete (dropping it early would tear down the connection and
-/// hang the call). `op` receives an owned `Arc` and runs on that runtime.
+/// Connect to the gateway daemon and run `op` with a live client. Spawns an
+/// OS thread so the new Tokio runtime is fully isolated from any runtime
+/// already active on the calling thread (avoids the `block_on`-inside-runtime
+/// panic).
 pub fn with_gateway<F, Fut, T>(op: F) -> io::Result<T>
 where
-    F: FnOnce(Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>) -> Fut,
-    Fut: std::future::Future<Output = T>,
+    F: FnOnce(Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
 {
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
-    rt.block_on(async {
-        let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
-            .await
-            .map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::ConnectionRefused,
-                    format!(
-                        "No gateway daemon is running on '{gateway}'. Start one with `term-session --channel <name>` or `term-session --daemon` first.\n  cause: {e}"
-                    ),
-                )
-            })?;
-        Ok(op(client).await)
+    std::thread::spawn(move || {
+        let rt =
+            tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+        rt.block_on(async {
+            let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
+                .await
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::ConnectionRefused,
+                        format!(
+                            "No gateway daemon is running on '{gateway}'. Start one with `term-session --channel <name>` or `term-session --daemon` first.\n  cause: {e}"
+                        ),
+                    )
+                })?;
+            Ok(op(client).await)
+        })
     })
+    .join()
+    .unwrap_or_else(|_| Err(io::Error::other("gateway thread panicked")))
 }
 
 /// List channels from the gateway, including the daemon PID + socket name.
@@ -95,23 +150,95 @@ pub fn list_channels() -> io::Result<ListChannelsResponse> {
         .map_err(|e| io::Error::other(format!("list: {e}")))
 }
 
+/// Print a human-readable listing of all channels to stdout, including the
+/// gateway daemon PID + socket. Returns the same error as [`list_channels`]
+/// if the gateway is unreachable.
+pub fn print_list() -> io::Result<()> {
+    let resp = list_channels()?;
+    // Header: which PID on this system is the gateway daemon.
+    println!(
+        "Gateway Daemon PID: {} | Socket: {}",
+        resp.gateway_pid, resp.socket
+    );
+    if resp.channels.is_empty() {
+        println!("\nNo channels.");
+        return Ok(());
+    }
+    // Vertical list: one block per channel, one line per client. Kept short so
+    // it wraps cleanly instead of being a wide table.
+    for ch in &resp.channels {
+        let session = ch
+            .session
+            .as_ref()
+            .map(|s| format!("shared size: {}x{}", s.cols, s.rows))
+            .unwrap_or_else(|| "none".to_string());
+        let nclients = ch.clients.len();
+        println!();
+        println!("channel: {}", ch.name);
+        println!("  created: {}", format_unix_relative(ch.created_at_unix));
+        println!("  {session}");
+        println!(
+            "  clients: {}",
+            if nclients == 0 {
+                "none".to_string()
+            } else {
+                format!("{nclients} connected")
+            }
+        );
+        for c in &ch.clients {
+            println!("    - conn: {}  (pid {})", c.conn_id, c.pid);
+            println!("      user: {}", c.user);
+            println!("      version: {}", c.version);
+            if let Some(ip) = &c.ssh_ip {
+                println!("      ssh ip from: {}", ip);
+            }
+            println!("      host: {}", c.hostname);
+            println!("      size: {}x{}", c.cols, c.rows);
+            println!(
+                "      connected: {}",
+                format_unix_relative(c.connected_at_unix)
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Kill a channel's session and detach all its sockets.
 ///
 /// The gateway refuses while any participant is attached to the channel unless
 /// `force` is true (see `RPC_ERROR_LIVE_PARTICIPANTS`).
 pub fn kill_channel(channel: &str, force: bool) -> io::Result<()> {
-    with_gateway(|client| async move {
-        KillChannel::call(&*client, (channel.to_string(), force)).await
-    })?
-    .map_err(|e| io::Error::other(format!("kill channel: {e}")))
+    let ch = channel.to_string();
+    with_gateway(move |client| async move { KillChannel::call(&*client, (ch, force)).await })?
+        .map_err(|e| io::Error::other(format!("kill channel: {e}")))
 }
 
 /// Detach a single client socket from a channel by `conn_id`.
 pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
-    with_gateway(|client| async move {
-        KillClient::call(&*client, (channel.to_string(), conn_id)).await
+    let ch = channel.to_string();
+    with_gateway(move |client| async move { KillClient::call(&*client, (ch, conn_id)).await })?
+        .map_err(|e| io::Error::other(format!("kill client: {e}")))
+}
+
+/// Request the gateway to rebind all viewers attached to `source_channel`
+/// over to the `target` workspace.
+pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Result<()> {
+    let source_owned = source_channel.to_string();
+    let target_owned = target.to_string();
+    with_gateway(move |client| async move {
+        use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
+        use term_session_muxio_service_definitions::{RebindWorkspace, RebindWorkspaceRequest};
+
+        RebindWorkspace::call(
+            &*client,
+            RebindWorkspaceRequest {
+                source_channel: source_owned,
+                target: target_owned,
+            },
+        )
+        .await
     })?
-    .map_err(|e| io::Error::other(format!("kill client: {e}")))
+    .map_err(|e| io::Error::other(format!("rebind workspace: {e}")))
 }
 
 /// Stop the gateway daemon.
@@ -119,7 +246,7 @@ pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
 /// The daemon refuses to shut down while any live session is running unless
 /// `force` is true (see `RPC_ERROR_LIVE_SESSIONS`).
 pub fn stop_gateway(force: bool) -> io::Result<()> {
-    with_gateway(|client| async move { ShutdownGateway::call(&*client, force).await })?
+    with_gateway(move |client| async move { ShutdownGateway::call(&*client, force).await })?
         .map_err(|e| io::Error::other(format!("shutdown: {e}")))
 }
 
@@ -266,11 +393,12 @@ fn write_selfcheck_marker(marker: &std::path::Path) {
     let _ = std::fs::write(marker, proof);
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate `TERM_WM_CHANNEL`, which is process-global.
+    /// Serializes tests that mutate `TERM_SESSION_CHANNEL`, which is process-global.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())

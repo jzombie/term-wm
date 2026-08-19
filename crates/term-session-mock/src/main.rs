@@ -27,6 +27,9 @@ use term_session_muxio_service_definitions::path_wire;
 ///   Cross-platform liveness probe for tree-kill assertions.
 /// - `pwd <file>` — writes the process's current working directory to the given
 ///   (absolute) file path, then exits. Lets E2E tests verify session cwd.
+/// - `envvar <NAME> <file>` — writes `<NAME>=<value>` (the value of the given
+///   environment variable, empty if unset) to the given (absolute) file path,
+///   then exits. Lets E2E tests verify which env vars reach a session child.
 pub const OSC52_TEST_PAYLOAD: &[u8] = b"c;dGVzdA==";
 
 #[cfg(windows)]
@@ -109,7 +112,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "Usage: term_session_mock <echo|osc52|osc52_alive|sleep|exit|spawn_child|check_pid|pwd> [args]"
+            "Usage: term_session_mock <echo|osc52|osc52_alive|sleep|exit|spawn_child|check_pid|pwd|envvar> [args]"
         );
         std::process::exit(1);
     }
@@ -273,6 +276,25 @@ fn main() {
                 .unwrap_or_default();
             if let Err(e) = std::fs::write(&file, &cwd) {
                 eprintln!("pwd: failed to write {:?}: {e}", file);
+                std::process::exit(1);
+            }
+        }
+        "envvar" => {
+            // Write `<NAME>=<value>` for the named environment variable (value
+            // empty when unset) to an absolute file path, mirroring `pwd`. Lets
+            // E2E tests verify which env vars reach a session child.
+            let name = std::env::args_os()
+                .nth(2)
+                .expect("envvar requires an env var name");
+            let file = std::env::args_os()
+                .nth(3)
+                .expect("envvar requires an absolute output file path");
+            let value = std::env::var_os(&name).unwrap_or_default();
+            let mut report = name.as_encoded_bytes().to_vec();
+            report.push(b'=');
+            report.extend_from_slice(value.as_encoded_bytes());
+            if let Err(e) = std::fs::write(&file, &report) {
+                eprintln!("envvar: failed to write {:?}: {e}", file);
                 std::process::exit(1);
             }
         }

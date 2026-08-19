@@ -12,6 +12,7 @@ license.workspace = true
 [features]
 default = ["pty"]
 pty = ["portable-pty"]
+session-persistence = ["term-wm-config/session-persistence"]
 
 [dependencies]
 bitflags = { workspace = true }
@@ -24,6 +25,7 @@ slotmap = { workspace = true }
 smallvec = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 term-clipboard = { workspace = true }
+term-wm-config = { workspace = true }
 term-wm-events = { workspace = true }
 term-wm-layout-engine = { workspace = true }
 term-wm-pty-engine = { workspace = true }
@@ -31,3 +33,9 @@ term-wm-render = { workspace = true }
 textwrap = { workspace = true }
 tracing = { workspace = true }
 unicode-width = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+
+[lints]
+workspace = true

@@ -4,6 +4,7 @@ use bitcode::{Decode, Encode};
 use muxio_rpc_service::{prebuffered::RpcMethodPrebuffered, rpc_method_id};
 
 use crate::path_wire::PathWire;
+use term_wm_events::Event;
 
 // ── Error message constants ─────────────────────────────────────────
 // muxio's wire error only has Fail/System/NotFound codes, so structured
@@ -13,7 +14,7 @@ pub const RPC_ERROR_UNATTACHED: &str =
     "gateway: connection is not attached to a channel; call Attach first";
 pub const RPC_ERROR_SHUTTING_DOWN: &str = "gateway: shutting down";
 pub const RPC_ERROR_LIVE_SESSIONS: &str =
-    "gateway: live session(s) running; use `term-session stop --force` to stop anyway";
+    "gateway: live session(s) running; use `--force` to stop anyway";
 pub const RPC_ERROR_LIVE_PARTICIPANTS: &str = "gateway: live participant(s) attached to channel; use `term-session kill <channel> --force` to kill anyway";
 
 // ── Attach ──────────────────────────────────────────────────────────
@@ -474,6 +475,275 @@ impl RpcMethodPrebuffered for ShutdownGateway {
 
     fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
         Ok(())
+    }
+}
+
+// ── RebindWorkspace (client asks server to rebind viewers) ───────────
+
+/// Client request to rebind all viewers on `source_channel` to `target`.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct RebindWorkspaceRequest {
+    pub source_channel: String,
+    pub target: String,
+}
+
+pub struct RebindWorkspace;
+
+impl RpcMethodPrebuffered for RebindWorkspace {
+    const METHOD_ID: u64 = rpc_method_id!("session.rebind_workspace");
+
+    type Input = RebindWorkspaceRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<RebindWorkspaceRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── OnWorkspaceRebind (server pushes to outer viewer) ────────────────
+
+/// Server push telling the outer viewer to rebind to `target`.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct OnWorkspaceRebindRequest {
+    pub target: String,
+}
+
+pub struct OnWorkspaceRebind;
+
+impl RpcMethodPrebuffered for OnWorkspaceRebind {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_workspace_rebind");
+
+    type Input = OnWorkspaceRebindRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<OnWorkspaceRebindRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── SendAttributedInput (client -> server: structured event) ─────────
+
+/// Client sends a structured event to the server for routing.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SendAttributedInputRequest {
+    pub channel: String,
+    pub event: Event,
+}
+
+pub struct SendAttributedInput;
+
+impl RpcMethodPrebuffered for SendAttributedInput {
+    const METHOD_ID: u64 = rpc_method_id!("session.send_attributed_input");
+
+    type Input = SendAttributedInputRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<SendAttributedInputRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── OnAttributedInput (server -> inner WM: attributed event) ─────────
+
+/// Server pushes a structured event with attribution to the inner WM.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct OnAttributedInputRequest {
+    pub conn_id: usize,
+    pub event: Event,
+}
+
+pub struct OnAttributedInput;
+
+impl RpcMethodPrebuffered for OnAttributedInput {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_attributed_input");
+
+    type Input = OnAttributedInputRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<OnAttributedInputRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+// ── SubscribeInternalInput (inner WM -> server: register as receiver) ──
+
+/// Inner WM registers itself as the structured input receiver for a channel.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct SubscribeInternalInputRequest {
+    pub channel: String,
+}
+
+pub struct SubscribeInternalInput;
+
+impl RpcMethodPrebuffered for SubscribeInternalInput {
+    const METHOD_ID: u64 = rpc_method_id!("session.subscribe_internal_input");
+
+    type Input = SubscribeInternalInputRequest;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<SubscribeInternalInputRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roundtrip_request<M: RpcMethodPrebuffered>(input: M::Input) -> M::Input
+    where
+        M::Input: Clone + Encode + for<'a> Decode<'a>,
+    {
+        let bytes = M::encode_request(input.clone()).unwrap();
+        M::decode_request(&bytes).unwrap()
+    }
+
+    #[test]
+    fn rebind_workspace_round_trips() {
+        let req: RebindWorkspaceRequest = RebindWorkspace::decode_request(
+            &RebindWorkspace::encode_request(RebindWorkspaceRequest {
+                source_channel: "dev/main".into(),
+                target: "ws-123/main".into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(req.source_channel, "dev/main");
+        assert_eq!(req.target, "ws-123/main");
+        assert_eq!(RebindWorkspace::decode_response(&[]).unwrap(), ());
+    }
+
+    #[test]
+    fn on_workspace_rebind_round_trips() {
+        let req = roundtrip_request::<OnWorkspaceRebind>(OnWorkspaceRebindRequest {
+            target: "ws-123/main".into(),
+        });
+        assert_eq!(req.target, "ws-123/main");
+        assert_eq!(OnWorkspaceRebind::decode_response(&[]).unwrap(), ());
+    }
+
+    #[test]
+    fn send_attributed_input_round_trips() {
+        let req = roundtrip_request::<SendAttributedInput>(SendAttributedInputRequest {
+            channel: "dev/main".into(),
+            event: Event::Resize(120, 40),
+        });
+        assert_eq!(req.channel, "dev/main");
+        match req.event {
+            Event::Resize(cols, rows) => {
+                assert_eq!((cols, rows), (120, 40));
+            }
+            other => panic!("expected Resize event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn on_attributed_input_round_trips() {
+        let req = roundtrip_request::<OnAttributedInput>(OnAttributedInputRequest {
+            conn_id: 42,
+            event: Event::FocusGained,
+        });
+        assert_eq!(req.conn_id, 42);
+        assert!(matches!(req.event, Event::FocusGained));
+    }
+
+    #[test]
+    fn subscribe_internal_input_round_trips() {
+        let req = roundtrip_request::<SubscribeInternalInput>(SubscribeInternalInputRequest {
+            channel: "dev/main".into(),
+        });
+        assert_eq!(req.channel, "dev/main");
+    }
+
+    #[test]
+    fn on_pty_resized_round_trips() {
+        let bytes = OnPtyResized::encode_request((200, 60)).unwrap();
+        assert_eq!(OnPtyResized::decode_request(&bytes).unwrap(), (200, 60));
+    }
+
+    #[test]
+    fn malformed_wire_bytes_are_rejected() {
+        let bad = b"not-bitcode".to_vec();
+        assert!(RebindWorkspace::decode_request(&bad).is_err());
+        assert!(OnWorkspaceRebind::decode_request(&bad).is_err());
+        assert!(SendAttributedInput::decode_request(&bad).is_err());
+        assert!(OnAttributedInput::decode_request(&bad).is_err());
+        assert!(SubscribeInternalInput::decode_request(&bad).is_err());
+        assert!(OnPtyResized::decode_request(&bad).is_err());
+    }
+
+    #[test]
+    fn error_message_constants_are_stable() {
+        assert!(RPC_ERROR_UNATTACHED.starts_with("gateway:"));
+        assert!(RPC_ERROR_SHUTTING_DOWN.starts_with("gateway:"));
+        assert!(RPC_ERROR_LIVE_SESSIONS.starts_with("gateway:"));
+        assert!(RPC_ERROR_LIVE_PARTICIPANTS.starts_with("gateway:"));
     }
 }
 

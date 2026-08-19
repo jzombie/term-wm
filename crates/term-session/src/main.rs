@@ -1,6 +1,6 @@
 use std::io;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use term_session::auto_spawn::connect_or_spawn_server;
 use term_session_client::run_session;
 use term_session_muxio_service_definitions::ChannelName;
@@ -29,7 +29,7 @@ struct Cli {
     #[arg(long, hide = true)]
     daemon_selfcheck: Option<std::path::PathBuf>,
 
-    /// Channel name [default: default/main or $TERM_WM_CHANNEL]
+    /// Channel name [default: default/main or $TERM_SESSION_CHANNEL]
     #[arg(long)]
     channel: Option<String>,
 
@@ -45,6 +45,11 @@ struct Cli {
     /// Gateway name override [or $TERM_WM_GATEWAY]
     #[arg(long)]
     gateway: Option<String>,
+
+    /// Allow attaching when already running inside an active term-session
+    /// (bypass the nesting-inception guard).
+    #[arg(long)]
+    allow_nested: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -83,49 +88,32 @@ enum Command {
 }
 
 fn main() {
-    // Preserve the real stderr before `run_session` may `dup2` it into the
-    // tracing pipe (see `redirect_fd_to_tracing`): a fatal error returned
-    // after the terminal UI has started must still be visible to the user, so
-    // report it through this preserved handle instead of the (possibly
-    // redirected) fd 2. Best-effort: if `dup` fails, fall back to `eprintln!`.
-    #[cfg(unix)]
-    let orig_stderr: Option<std::fs::File> = {
-        use std::os::unix::io::FromRawFd;
-        let fd = unsafe { libc::dup(libc::STDERR_FILENO) };
-        if fd >= 0 {
-            Some(unsafe { std::fs::File::from_raw_fd(fd) })
-        } else {
-            None
-        }
-    };
+    // Route through the shared error formatter so a fatal error prints as
+    // `error: {e}` (Display) to the original stderr and exits 1, uniformly with
+    // the rest of the term-wm family. `run_and_exit` preserves the real stderr
+    // even when `run_session` `dup2`s fd 2 into the tracing pipe.
+    term_session::run_and_exit(run);
+}
 
-    // Print errors as readable messages (Display), not Rust's Debug dump that
-    // `main() -> Result` emits by default (e.g. `Custom { kind: ..., ... }`).
-    if let Err(e) = run() {
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            match orig_stderr {
-                Some(mut f) => {
-                    let _ = writeln!(f, "error: {e}");
-                }
-                None => eprintln!("error: {e}"),
-            }
-        }
-        #[cfg(not(unix))]
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    }
+/// Build the CLI `Command`, decorating the help footer with the resolved
+/// persistence gateway so `--help` (and the bare-run long help) shows the exact
+/// socket this build targets.
+fn cli_command() -> clap::Command {
+    Cli::command().after_help(term_session_muxio_service_definitions::gateway_help_line())
 }
 
 fn run() -> io::Result<()> {
-    let cli = Cli::parse();
+    let cli = {
+        let mut matches = cli_command().get_matches();
+        Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
+    };
 
     // Gateway name resolution: explicit --gateway wins; else TERM_WM_GATEWAY
-    // (handled by gateway_channel_name()); else the static user-scoped default.
+    // (handled by gateway_channel_name()); else the environment-scoped user
+    // default.
     if let Some(ref gw) = cli.gateway {
         unsafe {
-            std::env::set_var("TERM_WM_GATEWAY", gw);
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gw);
         }
     }
 
@@ -134,7 +122,7 @@ fn run() -> io::Result<()> {
     }
 
     match cli.command {
-        Some(Command::List) => list(),
+        Some(Command::List) => term_session::print_list(),
         Some(Command::Kill {
             channel,
             force,
@@ -142,7 +130,7 @@ fn run() -> io::Result<()> {
         }) => kill(&channel, force),
         Some(Command::KillClient { channel, client_id }) => {
             term_session::kill_client(&channel, client_id)?;
-            println!("Detached client {client_id} from channel {channel}");
+            println!("Detached client {client_id} from channel {channel}.");
             Ok(())
         }
         Some(Command::Stop { force }) => stop(force),
@@ -150,21 +138,21 @@ fn run() -> io::Result<()> {
             if cli.channel.is_some() || !cli.cmd.is_empty() {
                 // A channel and/or command was given without a subcommand:
                 // implicit attach.
-                attach(cli.channel, &cli.cmd)
+                attach(cli.channel, &cli.cmd, cli.allow_nested)
             } else {
                 // No subcommand and nothing to attach: show help instead of
                 // auto-connecting (exit code 2, the clap missing-argument
                 // convention). `--daemon` is handled above. Long help so it
                 // matches `--help` exactly (version + long_about).
                 let mut stderr = io::stderr();
-                let _ = Cli::command().write_long_help(&mut stderr);
+                let _ = cli_command().write_long_help(&mut stderr);
                 std::process::exit(2);
             }
         }
     }
 }
 
-fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
+fn attach(channel: Option<String>, cmd: &[String], allow_nested: bool) -> io::Result<()> {
     let channel_str = term_session::resolve_channel(channel);
     let channel = ChannelName::parse(&channel_str).map_err(|e| {
         io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
@@ -172,65 +160,12 @@ fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
     // The argv comes straight from the outer shell (split exactly once);
     // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
-    run_session(&socket_name, &channel.to_string(), cmd)
-}
-
-fn list() -> io::Result<()> {
-    let resp = term_session::list_channels()?;
-    // Header: which PID on this system is the gateway daemon.
-    println!(
-        "Gateway Daemon PID: {} | Socket: {}",
-        resp.gateway_pid, resp.socket
-    );
-    if resp.channels.is_empty() {
-        println!("\nNo channels.");
-        return Ok(());
-    }
-    // Vertical list: one block per channel, one line per client. Kept short so
-    // it wraps cleanly instead of being a wide table.
-    for ch in &resp.channels {
-        let session = ch
-            .session
-            .as_ref()
-            .map(|s| format!("shared size: {}x{}", s.cols, s.rows))
-            .unwrap_or_else(|| "none".to_string());
-        let nclients = ch.clients.len();
-        println!();
-        println!("channel: {}", ch.name);
-        println!(
-            "  created: {}",
-            term_session::format_unix_relative(ch.created_at_unix)
-        );
-        println!("  {session}");
-        println!(
-            "  clients: {}",
-            if nclients == 0 {
-                "none".to_string()
-            } else {
-                format!("{nclients} connected")
-            }
-        );
-        for c in &ch.clients {
-            println!("    - conn: {}  (pid {})", c.conn_id, c.pid);
-            println!("      user: {}", c.user);
-            println!("      version: {}", c.version);
-            if let Some(ip) = &c.ssh_ip {
-                println!("      ssh ip from: {}", ip);
-            }
-            println!("      host: {}", c.hostname);
-            println!("      size: {}x{}", c.cols, c.rows);
-            println!(
-                "      connected: {}",
-                term_session::format_unix_relative(c.connected_at_unix)
-            );
-        }
-    }
-    Ok(())
+    run_session(&socket_name, &channel.to_string(), cmd, allow_nested).map(|_| ())
 }
 
 fn kill(channel: &str, force: bool) -> io::Result<()> {
     term_session::kill_channel(channel, force)?;
-    println!("Killed channel {channel}");
+    println!("Killed channel {channel}.");
     Ok(())
 }
 
@@ -238,4 +173,130 @@ fn stop(force: bool) -> io::Result<()> {
     term_session::stop_gateway(force)?;
     println!("Gateway shutdown initiated.");
     Ok(())
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializes tests that mutate `TERM_WM_GATEWAY` / `TERM_WM_ENV`, which
+    /// are process-global and unsafe to read/write concurrently.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn help_shows_resolved_gateway() {
+        let _guard = env_lock();
+        // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
+        // otherwise change the rendered footer.
+        unsafe {
+            std::env::remove_var("TERM_WM_GATEWAY");
+            std::env::remove_var("TERM_WM_ENV");
+        }
+        let mut cmd = cli_command();
+        let help = cmd.render_long_help().to_string();
+        assert!(help.contains("Persistence gateway:"), "help was:\n{help}");
+        assert!(
+            help.contains(term_session_muxio_service_definitions::GATEWAY_NAMESPACE),
+            "help was:\n{help}"
+        );
+        assert!(help.contains("/gateway"), "help was:\n{help}");
+    }
+
+    #[test]
+    fn cli_parses_list_subcommand_and_alias() {
+        let cli = Cli::try_parse_from(["term-session", "ls"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::List)));
+        let cli = Cli::try_parse_from(["term-session", "list"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::List)));
+    }
+
+    #[test]
+    fn cli_parses_kill_subcommand() {
+        let cli = Cli::try_parse_from(["term-session", "kill", "dev/main", "--force"]).unwrap();
+        match cli.command {
+            Some(Command::Kill {
+                channel,
+                force,
+                kill_session: _,
+            }) => {
+                assert_eq!(channel, "dev/main");
+                assert!(force);
+            }
+            _ => panic!("expected Kill subcommand"),
+        }
+        let cli = Cli::try_parse_from(["term-session", "kill", "dev/main"]).unwrap();
+        match cli.command {
+            Some(Command::Kill { channel, force, .. }) => {
+                assert_eq!(channel, "dev/main");
+                assert!(!force);
+            }
+            _ => panic!("expected Kill subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_kill_client_subcommand() {
+        let cli = Cli::try_parse_from(["term-session", "kill-client", "dev/main", "7"]).unwrap();
+        match cli.command {
+            Some(Command::KillClient { channel, client_id }) => {
+                assert_eq!(channel, "dev/main");
+                assert_eq!(client_id, 7);
+            }
+            _ => panic!("expected KillClient subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_stop_subcommand() {
+        let cli = Cli::try_parse_from(["term-session", "stop"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Stop { force: false })));
+        let cli = Cli::try_parse_from(["term-session", "stop", "--force"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Stop { force: true })));
+    }
+
+    #[test]
+    fn cli_parses_daemon_channel_and_positional_command() {
+        let cli = Cli::try_parse_from(["term-session", "--daemon"]).unwrap();
+        assert!(cli.daemon);
+        let cli =
+            Cli::try_parse_from(["term-session", "--channel", "custom/main", "--", "vim"]).unwrap();
+        assert_eq!(cli.channel.as_deref(), Some("custom/main"));
+        assert_eq!(cli.cmd, vec!["vim"]);
+    }
+
+    #[test]
+    fn cli_parses_gateway_override_flag() {
+        let cli =
+            Cli::try_parse_from(["term-session", "--gateway", "term-wm/test/u/gateway", "ls"])
+                .unwrap();
+        assert_eq!(cli.gateway.as_deref(), Some("term-wm/test/u/gateway"));
+    }
+
+    #[test]
+    fn cli_parses_allow_nested_flag() {
+        let cli = Cli::try_parse_from([
+            "term-session",
+            "--allow-nested",
+            "--channel",
+            "x",
+            "--",
+            "sh",
+        ])
+        .unwrap();
+        assert!(cli.allow_nested);
+        assert_eq!(cli.channel.as_deref(), Some("x"));
+        assert_eq!(cli.cmd, vec!["sh"]);
+        let cli = Cli::try_parse_from(["term-session", "--channel", "x", "--", "sh"]).unwrap();
+        assert!(!cli.allow_nested, "default must be false");
+    }
+
+    #[test]
+    fn cli_rejects_missing_kill_client_args() {
+        assert!(Cli::try_parse_from(["term-session", "kill-client"]).is_err());
+        assert!(Cli::try_parse_from(["term-session", "kill-client", "dev/main"]).is_err());
+    }
 }

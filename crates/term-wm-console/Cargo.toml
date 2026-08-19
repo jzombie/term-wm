@@ -30,3 +30,6 @@ term-wm-pty-engine = { workspace = true }
 [[bench]]
 name = "blit_buffer"
 harness = false
+
+[lints]
+workspace = true

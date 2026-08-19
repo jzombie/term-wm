@@ -2,6 +2,7 @@ pub fn strip_ansi_escapes(s: &str) -> String {
     console::strip_ansi_codes(s).into_owned()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

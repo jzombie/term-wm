@@ -166,6 +166,17 @@ pub enum TermWmAction {
     // without modifying the framework enum. The numeric code is
     // application-defined; components interpret it in `update()`.
     Custom(u16),
+
+    // --- Workspace actions ---
+    /// Switch the outer viewer to a different workspace channel.
+    #[cfg(feature = "session-persistence")]
+    SwitchWorkspace(String),
+    /// Create a new workspace (prompts for name).
+    #[cfg(feature = "session-persistence")]
+    NewWorkspace,
+    /// Detach the current viewer connection from the session.
+    #[cfg(feature = "session-persistence")]
+    DetachCurrentClient,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -268,6 +279,11 @@ impl TermWmAction {
             | TermWmAction::SendSuperKeyToWindow(_)
             | TermWmAction::SendSuperKeyToFocusedWindow => Category::Windows,
 
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::SwitchWorkspace(_)
+            | TermWmAction::NewWorkspace
+            | TermWmAction::DetachCurrentClient => Category::Windows,
+
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
             | TermWmAction::MenuSelect
@@ -332,80 +348,88 @@ impl fmt::Display for TermWmAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             TermWmAction::Quit => "Quit",
-            TermWmAction::CloseHelp => "Close help / dialog",
-            TermWmAction::CycleNextWindow => "Cycle next window",
-            TermWmAction::CyclePrevWindow => "Cycle previous window",
-            TermWmAction::FocusWindow(_) => "Focus window",
-            TermWmAction::OpenHelp => "Open help",
-            TermWmAction::FocusNext => "Focus next",
-            TermWmAction::FocusPrev => "Focus previous",
+            TermWmAction::CloseHelp => "Close Help / Dialog",
+            TermWmAction::CycleNextWindow => "Cycle Next Window",
+            TermWmAction::CyclePrevWindow => "Cycle Previous Window",
+            TermWmAction::FocusWindow(_) => "Focus Window",
+            TermWmAction::OpenHelp => "Open Help",
+            TermWmAction::FocusNext => "Focus Next",
+            TermWmAction::FocusPrev => "Focus Previous",
             TermWmAction::NewTerminal => "New Terminal",
-            TermWmAction::HintToggle => "Toggle hints",
-            TermWmAction::MenuUp => "Menu up",
-            TermWmAction::MenuDown => "Menu down",
-            TermWmAction::MenuSelect => "Menu select",
-            TermWmAction::MenuNext => "Menu next",
-            TermWmAction::MenuPrev => "Menu previous",
-            TermWmAction::ConfirmToggle => "Confirm toggle",
-            TermWmAction::ConfirmLeft => "Confirm left",
-            TermWmAction::ConfirmRight => "Confirm right",
-            TermWmAction::ConfirmAccept => "Confirm accept",
-            TermWmAction::ConfirmCancel => "Confirm cancel",
-            TermWmAction::ScrollPageUp => "Scroll page up",
-            TermWmAction::ScrollPageDown => "Scroll page down",
-            TermWmAction::ScrollHome => "Scroll to top",
-            TermWmAction::ScrollEnd => "Scroll to end",
-            TermWmAction::ScrollUp => "Scroll up",
-            TermWmAction::ScrollDown => "Scroll down",
-            TermWmAction::ToggleSelection => "Toggle selection",
-            TermWmAction::PasteClipboard => "Paste clipboard",
-            TermWmAction::KeyToBytes(_) => "Key to bytes",
+            TermWmAction::HintToggle => "Toggle Hints",
+            TermWmAction::MenuUp => "Menu Up",
+            TermWmAction::MenuDown => "Menu Down",
+            TermWmAction::MenuSelect => "Menu Select",
+            TermWmAction::MenuNext => "Menu Next",
+            TermWmAction::MenuPrev => "Menu Previous",
+            TermWmAction::ConfirmToggle => "Confirm Toggle",
+            TermWmAction::ConfirmLeft => "Confirm Left",
+            TermWmAction::ConfirmRight => "Confirm Right",
+            TermWmAction::ConfirmAccept => "Confirm Accept",
+            TermWmAction::ConfirmCancel => "Confirm Cancel",
+            TermWmAction::ScrollPageUp => "Scroll Page Up",
+            TermWmAction::ScrollPageDown => "Scroll Page Down",
+            TermWmAction::ScrollHome => "Scroll to Top",
+            TermWmAction::ScrollEnd => "Scroll to End",
+            TermWmAction::ScrollUp => "Scroll Up",
+            TermWmAction::ScrollDown => "Scroll Down",
+            TermWmAction::ToggleSelection => "Toggle Selection",
+            TermWmAction::PasteClipboard => "Paste Clipboard",
+            TermWmAction::KeyToBytes(_) => "Key to Bytes",
             TermWmAction::Scroll(_) => "Scroll",
-            TermWmAction::MouseToBytes(_) => "Mouse to bytes",
-            TermWmAction::ClearSelection => "Clear selection",
-            TermWmAction::LinkClicked(_) => "Link clicked",
-            TermWmAction::ScrollView(_) => "Scroll view",
-            TermWmAction::ScrollToTop => "Scroll view to top",
-            TermWmAction::ScrollToBottom => "Scroll view to bottom",
-            TermWmAction::CloseMenu => "Close menu",
+            TermWmAction::MouseToBytes(_) => "Mouse to Bytes",
+            TermWmAction::ClearSelection => "Clear Selection",
+            TermWmAction::LinkClicked(_) => "Link Clicked",
+            TermWmAction::ScrollView(_) => "Scroll View",
+            TermWmAction::ScrollToTop => "Scroll View to Top",
+            TermWmAction::ScrollToBottom => "Scroll View to Bottom",
+            TermWmAction::CloseMenu => "Close Menu",
             TermWmAction::Help => "Help",
-            TermWmAction::CloseWindow(_) => "Close window",
-            TermWmAction::ReorderWindow { .. } => "Reorder window",
-            TermWmAction::ToggleMouseCapture => "Toggle mouse capture",
-            TermWmAction::ToggleClipboardMode => "Toggle clipboard mode",
-            TermWmAction::ToggleWindowSelection => "Toggle window selection",
-            TermWmAction::MinimizeWindow(_) => "Minimize window",
-            TermWmAction::MaximizeWindow(_) => "Maximize window",
-            TermWmAction::ToggleMonocle => "Toggle monocle mode",
-            TermWmAction::ToggleTiling => "Toggle tiling",
-            TermWmAction::ToggleDebugWindow => "Toggle debug window",
+            TermWmAction::CloseWindow(_) => "Close Window",
+            TermWmAction::ReorderWindow { .. } => "Reorder Window",
+            TermWmAction::ToggleMouseCapture => "Toggle Mouse Capture",
+            TermWmAction::ToggleClipboardMode => "Toggle Clipboard Mode",
+            TermWmAction::ToggleWindowSelection => "Toggle Window Selection",
+            TermWmAction::MinimizeWindow(_) => "Minimize Window",
+            TermWmAction::MaximizeWindow(_) => "Maximize Window",
+            TermWmAction::ToggleMonocle => "Toggle Monocle Mode",
+            TermWmAction::ToggleTiling => "Toggle Tiling",
+            TermWmAction::ToggleDebugWindow => "Toggle Debug Window",
             TermWmAction::ExitUi => "Exit UI",
-            TermWmAction::ToggleSystemPanel => "Toggle system panel",
-            TermWmAction::SendNotification(_) => "Send notification",
-            TermWmAction::ConfirmAction(_) => "Confirm action",
-            TermWmAction::ClipboardPaste(_) => "Clipboard paste",
-            TermWmAction::ProcessExited => "Process exited",
-            TermWmAction::ProfileChange(_) => "Profile change",
-            TermWmAction::RequestKeyboardFocus(_) => "Request keyboard focus",
+            TermWmAction::ToggleSystemPanel => "Toggle System Panel",
+            TermWmAction::SendNotification(_) => "Send Notification",
+            TermWmAction::ConfirmAction(_) => "Confirm Action",
+            TermWmAction::ClipboardPaste(_) => "Clipboard Paste",
+            TermWmAction::ProcessExited => "Process Exited",
+            TermWmAction::ProfileChange(_) => "Profile Change",
+            TermWmAction::RequestKeyboardFocus(_) => "Request Keyboard Focus",
             TermWmAction::OpenCommandPalette => "Open Command Palette",
             TermWmAction::CloseCommandPalette => "Close Command Palette",
-            TermWmAction::ClearCommandPaletteQuery => "Clear Command Palette query",
-            TermWmAction::BeginTapSwap(_) => "Begin tap-to-swap",
-            TermWmAction::TapSwapTarget(_) => "Tap swap target",
-            TermWmAction::ConfirmSwap => "Confirm swap",
-            TermWmAction::CancelSwap => "Cancel swap",
+            TermWmAction::ClearCommandPaletteQuery => "Clear Command Palette Query",
+            TermWmAction::BeginTapSwap(_) => "Begin Tap-to-Swap",
+            TermWmAction::TapSwapTarget(_) => "Tap Swap Target",
+            TermWmAction::ConfirmSwap => "Confirm Swap",
+            TermWmAction::CancelSwap => "Cancel Swap",
             TermWmAction::Callback(_) => "Callback",
-            TermWmAction::SendSuperKeyToWindow(_) => "Send SUPER key to window",
-            TermWmAction::SendSuperKeyToFocusedWindow => "Send SUPER key to focused window",
-            TermWmAction::ZoomIn => "Zoom in",
-            TermWmAction::ZoomOut => "Zoom out",
-            TermWmAction::ResetZoom => "Reset zoom",
-            TermWmAction::PanLeft => "Pan left",
-            TermWmAction::PanRight => "Pan right",
-            TermWmAction::PanUp => "Pan up",
-            TermWmAction::PanDown => "Pan down",
-            TermWmAction::CycleViewMode => "Cycle view",
-            TermWmAction::Custom(_) => "Custom action",
+            TermWmAction::SendSuperKeyToWindow(_) => "Send SUPER Key to Window",
+            TermWmAction::SendSuperKeyToFocusedWindow => "Send SUPER Key to Focused Window",
+            TermWmAction::ZoomIn => "Zoom In",
+            TermWmAction::ZoomOut => "Zoom Out",
+            TermWmAction::ResetZoom => "Reset Zoom",
+            TermWmAction::PanLeft => "Pan Left",
+            TermWmAction::PanRight => "Pan Right",
+            TermWmAction::PanUp => "Pan Up",
+            TermWmAction::PanDown => "Pan Down",
+            TermWmAction::CycleViewMode => "Cycle View",
+            TermWmAction::Custom(_) => "Custom Action",
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::SwitchWorkspace(name) => {
+                return write!(f, "Switch to Workspace: {name}");
+            }
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::NewWorkspace => "New Workspace",
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::DetachCurrentClient => "Detach Viewer",
         };
         write!(f, "{}", s)
     }
@@ -433,4 +457,212 @@ pub enum SystemTask {
     FlushDirectModeToast(WindowKey),
     /// Tab outline has elapsed — restore palette/panels to normal.
     ClearTabOutline,
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hitbox_registry::HitboxId;
+    use crate::power_profile::PowerProfile;
+
+    fn noop() {}
+
+    /// Every `TermWmAction` variant must render a stable Display string. These
+    /// are the canonical machine-rendered action names used in the Command
+    /// Palette and toasts, so each string is pinned here to keep the two in
+    /// sync (AGENTS.md: Display strings MUST match the Command Palette labels).
+    #[test]
+    fn display_strings_for_all_action_variants() {
+        let key = WindowKey::default();
+        let cases: Vec<(TermWmAction, &str)> = vec![
+            (TermWmAction::Quit, "Quit"),
+            (TermWmAction::CloseHelp, "Close Help / Dialog"),
+            (TermWmAction::CycleNextWindow, "Cycle Next Window"),
+            (TermWmAction::CyclePrevWindow, "Cycle Previous Window"),
+            (TermWmAction::FocusWindow(key), "Focus Window"),
+            (TermWmAction::OpenHelp, "Open Help"),
+            (TermWmAction::FocusNext, "Focus Next"),
+            (TermWmAction::FocusPrev, "Focus Previous"),
+            (TermWmAction::NewTerminal, "New Terminal"),
+            (TermWmAction::HintToggle, "Toggle Hints"),
+            (TermWmAction::MenuUp, "Menu Up"),
+            (TermWmAction::MenuDown, "Menu Down"),
+            (TermWmAction::MenuSelect, "Menu Select"),
+            (TermWmAction::MenuNext, "Menu Next"),
+            (TermWmAction::MenuPrev, "Menu Previous"),
+            (TermWmAction::ConfirmToggle, "Confirm Toggle"),
+            (TermWmAction::ConfirmLeft, "Confirm Left"),
+            (TermWmAction::ConfirmRight, "Confirm Right"),
+            (TermWmAction::ConfirmAccept, "Confirm Accept"),
+            (TermWmAction::ConfirmCancel, "Confirm Cancel"),
+            (TermWmAction::ScrollPageUp, "Scroll Page Up"),
+            (TermWmAction::ScrollPageDown, "Scroll Page Down"),
+            (TermWmAction::ScrollHome, "Scroll to Top"),
+            (TermWmAction::ScrollEnd, "Scroll to End"),
+            (TermWmAction::ScrollUp, "Scroll Up"),
+            (TermWmAction::ScrollDown, "Scroll Down"),
+            (TermWmAction::ToggleSelection, "Toggle Selection"),
+            (TermWmAction::PasteClipboard, "Paste Clipboard"),
+            (TermWmAction::KeyToBytes(vec![1, 2]), "Key to Bytes"),
+            (TermWmAction::Scroll(3), "Scroll"),
+            (TermWmAction::MouseToBytes(vec![1]), "Mouse to Bytes"),
+            (TermWmAction::ClearSelection, "Clear Selection"),
+            (TermWmAction::LinkClicked(7), "Link Clicked"),
+            (TermWmAction::ScrollView(-2), "Scroll View"),
+            (TermWmAction::ScrollToTop, "Scroll View to Top"),
+            (TermWmAction::ScrollToBottom, "Scroll View to Bottom"),
+            (TermWmAction::CloseMenu, "Close Menu"),
+            (TermWmAction::Help, "Help"),
+            (TermWmAction::CloseWindow(key), "Close Window"),
+            (
+                TermWmAction::ReorderWindow { key, index: 2 },
+                "Reorder Window",
+            ),
+            (TermWmAction::ToggleMouseCapture, "Toggle Mouse Capture"),
+            (TermWmAction::ToggleClipboardMode, "Toggle Clipboard Mode"),
+            (
+                TermWmAction::ToggleWindowSelection,
+                "Toggle Window Selection",
+            ),
+            (TermWmAction::MinimizeWindow(key), "Minimize Window"),
+            (TermWmAction::MaximizeWindow(key), "Maximize Window"),
+            (TermWmAction::ToggleMonocle, "Toggle Monocle Mode"),
+            (TermWmAction::ToggleTiling, "Toggle Tiling"),
+            (TermWmAction::ToggleDebugWindow, "Toggle Debug Window"),
+            (TermWmAction::ExitUi, "Exit UI"),
+            (TermWmAction::ToggleSystemPanel, "Toggle System Panel"),
+            (
+                TermWmAction::SendNotification("hi".into()),
+                "Send Notification",
+            ),
+            (
+                TermWmAction::ConfirmAction(ConfirmAction::Confirm),
+                "Confirm Action",
+            ),
+            (TermWmAction::ClipboardPaste("x".into()), "Clipboard Paste"),
+            (TermWmAction::ProcessExited, "Process Exited"),
+            (
+                TermWmAction::ProfileChange(PowerProfile::Interactive),
+                "Profile Change",
+            ),
+            (
+                TermWmAction::RequestKeyboardFocus(HitboxId::default()),
+                "Request Keyboard Focus",
+            ),
+            (TermWmAction::OpenCommandPalette, "Open Command Palette"),
+            (TermWmAction::CloseCommandPalette, "Close Command Palette"),
+            (
+                TermWmAction::ClearCommandPaletteQuery,
+                "Clear Command Palette Query",
+            ),
+            (TermWmAction::BeginTapSwap(key), "Begin Tap-to-Swap"),
+            (TermWmAction::TapSwapTarget(key), "Tap Swap Target"),
+            (TermWmAction::ConfirmSwap, "Confirm Swap"),
+            (TermWmAction::CancelSwap, "Cancel Swap"),
+            (TermWmAction::Callback(noop), "Callback"),
+            (
+                TermWmAction::SendSuperKeyToWindow(key),
+                "Send SUPER Key to Window",
+            ),
+            (
+                TermWmAction::SendSuperKeyToFocusedWindow,
+                "Send SUPER Key to Focused Window",
+            ),
+            (TermWmAction::ZoomIn, "Zoom In"),
+            (TermWmAction::ZoomOut, "Zoom Out"),
+            (TermWmAction::ResetZoom, "Reset Zoom"),
+            (TermWmAction::PanLeft, "Pan Left"),
+            (TermWmAction::PanRight, "Pan Right"),
+            (TermWmAction::PanUp, "Pan Up"),
+            (TermWmAction::PanDown, "Pan Down"),
+            (TermWmAction::CycleViewMode, "Cycle View"),
+            (TermWmAction::Custom(4), "Custom Action"),
+            #[cfg(feature = "session-persistence")]
+            (
+                TermWmAction::SwitchWorkspace("dev".into()),
+                "Switch to Workspace: dev",
+            ),
+            #[cfg(feature = "session-persistence")]
+            (TermWmAction::NewWorkspace, "New Workspace"),
+            #[cfg(feature = "session-persistence")]
+            (TermWmAction::DetachCurrentClient, "Detach Viewer"),
+        ];
+        for (action, expected) in cases {
+            assert_eq!(action.to_string(), expected, "action={action:?}");
+        }
+    }
+
+    /// Workspace actions belong to the `Windows` category so they render under
+    /// the windows section of the Command Palette.
+    #[test]
+    fn workspace_actions_are_windows_category() {
+        #[cfg(feature = "session-persistence")]
+        {
+            assert_eq!(
+                TermWmAction::SwitchWorkspace("dev".into()).category(),
+                Category::Windows
+            );
+            assert_eq!(TermWmAction::NewWorkspace.category(), Category::Windows);
+            assert_eq!(
+                TermWmAction::DetachCurrentClient.category(),
+                Category::Windows
+            );
+        }
+        assert_eq!(TermWmAction::Quit.category(), Category::System);
+        assert_eq!(TermWmAction::FocusNext.category(), Category::Navigation);
+        assert_eq!(TermWmAction::ScrollUp.category(), Category::Scrolling);
+        assert_eq!(TermWmAction::MenuUp.category(), Category::Menu);
+        assert_eq!(
+            TermWmAction::ConfirmAction(ConfirmAction::Cancel).category(),
+            Category::Dialogs
+        );
+        assert_eq!(TermWmAction::ClearSelection.category(), Category::Selection);
+    }
+
+    #[test]
+    fn bottom_hint_priorities_are_stable() {
+        assert_eq!(
+            TermWmAction::OpenCommandPalette.bottom_hint_priority(),
+            Some(100)
+        );
+        assert_eq!(TermWmAction::Quit.bottom_hint_priority(), Some(90));
+        assert_eq!(TermWmAction::OpenHelp.bottom_hint_priority(), Some(80));
+        assert_eq!(TermWmAction::NewTerminal.bottom_hint_priority(), Some(50));
+        assert_eq!(
+            TermWmAction::SendSuperKeyToFocusedWindow.bottom_hint_priority(),
+            Some(45)
+        );
+        assert_eq!(TermWmAction::CloseMenu.bottom_hint_priority(), None);
+    }
+
+    #[test]
+    fn action_layer_routes_palette_and_help() {
+        assert_eq!(
+            TermWmAction::OpenCommandPalette.layer(),
+            ActionLayer::Global
+        );
+        assert_eq!(TermWmAction::OpenHelp.layer(), ActionLayer::Help);
+        assert_eq!(
+            TermWmAction::NewTerminal.layer(),
+            ActionLayer::CommandPalette
+        );
+    }
+
+    #[test]
+    fn event_result_helpers() {
+        let ignored: EventResult<u32> = EventResult::Ignored;
+        assert!(ignored.is_ignored());
+        assert!(!ignored.is_consumed());
+        assert_eq!(ignored.clone().into_action(), None);
+        assert!(matches!(ignored.map(|v| v + 1), EventResult::Ignored));
+
+        let consumed: EventResult<u32> = EventResult::Consumed;
+        assert!(consumed.is_consumed());
+        assert!(matches!(consumed.map(|v| v + 1), EventResult::Consumed));
+
+        let acted: EventResult<u32> = EventResult::Action(41);
+        assert_eq!(acted.clone().into_action(), Some(41));
+        assert!(matches!(acted.map(|v| v + 1), EventResult::Action(42)));
+    }
 }

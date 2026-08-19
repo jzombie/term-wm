@@ -373,6 +373,7 @@ pub fn clamp_floating_to_bounds(
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

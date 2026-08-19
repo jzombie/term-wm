@@ -73,22 +73,30 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         // Build fresh items BEFORE accessing the overlay (borrow checker).
         use crate::components::MenuDisplayItem;
-        let items = self.wm_menu_items();
+        let items = self.wm_menu_items(&self.cached_workspaces, &self.current_workspace);
         let supported = &self.supported_menu_actions;
         let filtered: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = items
             .into_iter()
             .filter(|entry| match entry {
                 MenuDisplayItem::Item(item) => {
-                    supported.contains(&item.action)
-                        || matches!(
-                            item.action,
-                            crate::actions::TermWmAction::FocusWindow(_)
-                                | crate::actions::TermWmAction::MaximizeWindow(_)
-                                | crate::actions::TermWmAction::MinimizeWindow(_)
-                                | crate::actions::TermWmAction::CloseWindow(_)
-                                | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
-                                | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
-                        )
+                    let always_pass = matches!(
+                        item.action,
+                        crate::actions::TermWmAction::FocusWindow(_)
+                            | crate::actions::TermWmAction::MaximizeWindow(_)
+                            | crate::actions::TermWmAction::MinimizeWindow(_)
+                            | crate::actions::TermWmAction::CloseWindow(_)
+                            | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
+                            | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
+                    );
+                    #[cfg(feature = "session-persistence")]
+                    let always_pass = always_pass
+                        || (term_wm_config::runtime::session_persistence_enabled()
+                            && matches!(
+                                item.action,
+                                crate::actions::TermWmAction::SwitchWorkspace(_)
+                                    | crate::actions::TermWmAction::NewWorkspace
+                            ));
+                    supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,
             })

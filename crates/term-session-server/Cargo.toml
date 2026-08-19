@@ -19,6 +19,7 @@ muxio-rpc-service-endpoint = { workspace = true }
 muxio-tokio-rpc-ipc-server = { workspace = true }
 portable-pty = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
+term-wm-config = { workspace = true }
 term-wm-pty-engine = { workspace = true }
 term-wm-vt100 = { workspace = true }
 tokio = { workspace = true }
@@ -30,3 +31,6 @@ windows-sys = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 term-session-mock = { workspace = true }
+
+[lints]
+workspace = true

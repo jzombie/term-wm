@@ -50,6 +50,8 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleTiling,
     TermWmAction::NewTerminal,
     TermWmAction::ToggleDebugWindow,
+    #[cfg(feature = "session-persistence")]
+    TermWmAction::NewWorkspace,
 ];
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
@@ -128,6 +130,13 @@ where
     /// window close/reopen, so titles stay unique even when the window count
     /// drops.
     terminal_counter: usize,
+    /// Cached workspace channel names for the Command Palette.
+    /// Populated by `refresh_workspace_cache()` via short-lived IPC.
+    #[cfg(feature = "session-persistence")]
+    cached_workspaces: Vec<String>,
+    /// Current workspace name for filtering the palette switch list.
+    #[cfg(feature = "session-persistence")]
+    current_workspace: String,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -254,6 +263,10 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             pty_wakeup_tx,
             last_key: Rc::new(RefCell::new(None)),
             terminal_counter: 0,
+            #[cfg(feature = "session-persistence")]
+            cached_workspaces: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            current_workspace: term_session::DEFAULT_WORKSPACE.to_string(),
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) AND the bundled
@@ -262,6 +275,42 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // init_system_windows() itself. Idempotent.
         app.init_system_windows();
         app
+    }
+
+    /// Refresh the cached workspace channel list from the daemon via short-lived IPC.
+    /// Called before opening the Command Palette — never on every keystroke.
+    #[cfg(feature = "session-persistence")]
+    pub fn refresh_workspace_cache(&mut self) {
+        if !term_wm_config::runtime::session_persistence_enabled() {
+            return;
+        }
+        match term_session::list_channels() {
+            Ok(resp) => {
+                self.cached_workspaces = resp
+                    .channels
+                    .iter()
+                    .map(|ch| term_session::ChannelName::parse_workspace(&ch.name).to_string())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                self.cached_workspaces.sort();
+            }
+            Err(e) => {
+                tracing::debug!("Failed to refresh workspace cache: {e}");
+            }
+        }
+    }
+
+    /// Return the cached workspace channel names.
+    #[cfg(feature = "session-persistence")]
+    pub fn cached_workspaces(&self) -> &[String] {
+        &self.cached_workspaces
+    }
+
+    /// Set the current workspace name.
+    #[cfg(feature = "session-persistence")]
+    pub fn set_current_workspace(&mut self, name: String) {
+        self.current_workspace = name;
     }
 
     /// Spawn a fully-wired PTY terminal window in a single call.
@@ -483,7 +532,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // app's wakeup sender at this source's receiver; otherwise typing in a
         // spawned terminal never repaints until the next console event (e.g. a
         // mouse move).
-        let mut input = UnifiedEventSource::new()?;
+        let (mut input, _event_owner) = UnifiedEventSource::new(false)?;
         let tx = input.pty_wakeup_tx();
         self.pty_wakeup_tx = tx.clone();
         // Re-point any terminals spawned before run(): their callbacks captured
@@ -597,23 +646,44 @@ impl<C: Component<TermWmAction> + 'static>
         let anchor = self.wm.take_pending_palette_anchor();
         palette.set_anchor(anchor);
         palette.show();
-        let items = self.wm.wm_menu_items();
+
+        #[cfg(feature = "session-persistence")]
+        {
+            self.wm.cached_workspaces = self.cached_workspaces.clone();
+            self.wm.current_workspace = self.current_workspace.clone();
+        }
+
+        #[cfg(feature = "session-persistence")]
+        let workspaces = &self.cached_workspaces;
+        #[cfg(not(feature = "session-persistence"))]
+        let workspaces: &[String] = &[];
+
+        #[cfg(feature = "session-persistence")]
+        let items = self.wm.wm_menu_items(workspaces, &self.current_workspace);
+        #[cfg(not(feature = "session-persistence"))]
+        let items = self.wm.wm_menu_items(workspaces, "");
         let supported = self.wm.supported_menu_actions();
         // Filter out items not in the supported set; keep separators.
         let items: Vec<_> = items
             .into_iter()
             .filter(|entry| match entry {
                 MenuDisplayItem::Item(item) => {
-                    supported.contains(&item.action)
+                    let always_pass = matches!(
+                        item.action,
+                        TermWmAction::FocusWindow(_)
+                            | TermWmAction::MaximizeWindow(_)
+                            | TermWmAction::MinimizeWindow(_)
+                            | TermWmAction::CloseWindow(_)
+                            | TermWmAction::SendSuperKeyToWindow(_)
+                            | TermWmAction::SendSuperKeyToFocusedWindow
+                    );
+                    #[cfg(feature = "session-persistence")]
+                    let always_pass = always_pass
                         || matches!(
                             item.action,
-                            TermWmAction::FocusWindow(_)
-                                | TermWmAction::MaximizeWindow(_)
-                                | TermWmAction::MinimizeWindow(_)
-                                | TermWmAction::CloseWindow(_)
-                                | TermWmAction::SendSuperKeyToWindow(_)
-                                | TermWmAction::SendSuperKeyToFocusedWindow
-                        )
+                            TermWmAction::SwitchWorkspace(_) | TermWmAction::NewWorkspace
+                        );
+                    supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,
             })
@@ -647,9 +717,11 @@ impl<C: Component<TermWmAction> + 'static>
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// Every construction path must initialize the system windows (debug log,
     /// system panel) and leave them hidden (`Unmapped`).
@@ -681,6 +753,7 @@ mod tests {
     /// It must keep the command-palette actions limited to the allow-list it
     /// configures — never the full default set.
     #[test]
+    #[cfg(feature = "session-persistence")]
     fn new_custom_limits_supported_menu_actions() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         assert_eq!(
@@ -696,6 +769,7 @@ mod tests {
                 TermWmAction::ToggleTiling,
                 TermWmAction::NewTerminal,
                 TermWmAction::ToggleDebugWindow,
+                TermWmAction::NewWorkspace,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );
@@ -815,5 +889,48 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// With session persistence disabled at runtime, `refresh_workspace_cache`
+    /// must return immediately without touching IPC, leaving the cache empty.
+    /// The process-global runtime config is restored afterwards so parallel
+    /// tests observing `session_persistence_enabled()` are unaffected.
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(runtime_config)]
+    fn refresh_workspace_cache_is_noop_when_runtime_disabled() {
+        use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
+        let prev = {
+            // Snapshot the previous config to restore it after the test.
+            let saved = RuntimeConfig {
+                session_persistence: session_persistence_enabled(),
+            };
+            init(RuntimeConfig {
+                session_persistence: false,
+            });
+            saved
+        };
+
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.refresh_workspace_cache();
+        assert!(
+            app.cached_workspaces().is_empty(),
+            "runtime-disabled refresh must not populate the cache"
+        );
+
+        init(prev);
+    }
+
+    /// `set_current_workspace` round-trips the workspace name the binary uses
+    /// for channel resolution. (No IPC: the cache is only populated by
+    /// `refresh_workspace_cache`, which requires a reachable gateway.)
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn current_workspace_accessors_round_trip() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert_eq!(app.current_workspace, term_session::DEFAULT_WORKSPACE);
+        app.set_current_workspace("dev".to_string());
+        assert_eq!(app.current_workspace, "dev");
+        assert!(app.cached_workspaces().is_empty());
     }
 }

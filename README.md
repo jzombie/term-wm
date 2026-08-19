@@ -7,8 +7,8 @@
 **term-wm** is a high-performance terminal window manager and multiplexer featuring asynchronous PTY handling, tree-based tiling, and detachable sessions.
 
 <div align="center">
-  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.1-alpha-linux.png?raw=true" alt="term-wm v0.9.1-alpha on Linux" /><br />
-  <em>pictured: term-wm v0.9.1-alpha on Linux</em>
+  <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.28-alpha-linux.png?raw=true" alt="term-wm v0.9.28-alpha on Linux" /><br />
+  <em>pictured: term-wm v0.9.28-alpha on Linux</em>
 </div>
 <div align="center">
   <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.0-alpha-mac.png?raw=true" alt="term-wm v0.9.0-alpha on macOS" /><br />
@@ -33,7 +33,7 @@ cd term-wm
 cargo run --release
 ```
 
-This opens a new workspace with two terminal windows by default. Pass programs as arguments to open them in new windows:
+This opens a new `default` workspace with two terminal windows by default. On first launch a detached background session daemon is auto-spawned, so workspaces and their sessions persist across terminal restarts and SSH disconnects — inspect or stop it with `--list-channels` / `--stop-daemon`, and pick a different workspace with `-w`. Pass programs as arguments to open them in new windows:
 
 ```sh
 cargo run --release -- vim
@@ -45,8 +45,15 @@ cargo run --release -- -n 4 -r "vim -l" -r "htop" -- git log --oneline  # 4 wind
 
 Options (`term-wm -h`):
 
-- `-n, --count <N>` — number of windows to open (default 2; min 1)
-- `-r, --run <CMD>` — command to run in a window; repeatable, one window per `--run`. A trailing `-- CMD...` runs one command in a window after the `--run` windows. Remaining windows launch default shells.
+- `-n, --count <N>` — number of windows to open (default 2; min 1); only takes effect on new sessions
+- `--scrollback <N>` — scrollback buffer size per terminal window (default 2000); only takes effect on new sessions
+- `-r, --run <CMD>` — command to run in a window; repeatable, one window per `--run`. A trailing `-- CMD...` runs one command in a window after the `--run` windows. Remaining windows launch default shells. Only takes effect on new sessions.
+- `-w, --workspace <NAME>` — workspace to open (default `default`); each workspace maps to its own daemon channel `<workspace>/main` with its own PTY session and window-manager instance
+- `--no-wm` — run without the window manager (headless session client mode)
+- `--stop-daemon` — stop the running background session daemon
+- `--list-channels` — list channels and their sessions/clients, then exit
+- `-f, --force` — force `--stop-daemon` even when sessions/participants are active
+- `--no-session-persistence` — disable session-persistence behavior at runtime (workspaces, gateway, daemon modes); only effective when the `session-persistence` feature is compiled in (it is by default)
 - `-h, --help`, `-V, --version`
 
 New terminal windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
@@ -107,8 +114,9 @@ See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for full compatibility deta
 | `term-wm-console` | Crossterm backend, `DrawPlanRenderer`, screen-space `HitboxRegistry` |
 | `term-wm-render` / `term-wm-events` / `term-wm-crossterm-adapter` | Render backend trait, event types, input translation |
 | `term-wm-ui-components` / `term-wm-sys-ui-components` | Component library + WM system chrome (panels, palette, help) |
+| `term-wm-config` | Std-only leaf crate: `session-persistence` feature gate, process-global runtime config, canonical `TERM_WM_*` env-var constants |
 | `term-clipboard` / `term-sys-io` | Cross-platform clipboard (arboard + OSC 52 backends) and low-level OS FD/handle redirection |
-| `term-session*` (+ `term-size-box`, `term-bench`) | Detachable client/server session protocol (`muxio`), sizing, benchmarks |
+| `term-session*` (+ `term-size-box`, `term-bench`) | Detachable client/server session protocol (`muxio`), workspaces, sizing, benchmarks |
 
 ### Window Lifecycle
 
@@ -134,11 +142,44 @@ The UI event loop runs synchronously on a single thread. Each PTY runs its own r
 
 The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with test doubles (`TestPane`, `TestComponent`), so layout, rendering, and PTY scroll synchronization are verified without a terminal — including property tests for scroll sync.
 
+### Code Coverage
+
+Line coverage is tracked via [Coveralls](https://coveralls.io/github/jzombie/term-wm?branch=main) using `cargo-llvm-cov` (see the CI `coverage` job in `.github/workflows/rust-tests.yml`). A root [`Makefile`](./Makefile) makes the same measurement reproducible locally:
+
+```sh
+make coverage             # clean + full coverage run (workspace, all features) + summary
+make coverage-baseline    # as above, and tees the summary to coverage-baseline.txt
+make coverage-main        # coverage of the `main` branch via a throwaway git worktree (.build/main-worktree)
+make coverage-clean       # remove the worktree and coverage artifacts
+```
+
+Prerequisites (once): `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov` (or `cargo binstall cargo-llvm-cov`). Coverage output is written to `lcov.info` (git-ignored). The workflow mirrors the CI commands exactly, so a local run reproduces the Coveralls numbers up to platform differences.
+
 ### Features
 
 * **Hybrid Layout Engine:** Seamlessly mix Binary Space Partitioning (BSP) and N-ary tree tiling with a free-floating window layer. Floating windows support mouse-driven repositioning, edge-snapping, and Z-index drop shadows. 
 * **Adaptive Viewports:** Quickly switch to **Maximized** mode to fill the workspace with the focused pane, or engage **Monocle** mode to view a single window full-screen—ideal for narrow viewports or mobile SSH sessions.
-* **Detachable Sessions (via `term-session`):** `term-wm` is a pure layout and rendering engine. To achieve persistent, detachable sessions that survive the UI lifecycle, `term-wm` (or any child application) must be executed within the companion [`term-session`](https://crates.io/crates/term-session) daemon.
+* **Self-contained Session Persistence & Workspaces:** `term-wm` embeds both the window manager and a background session daemon (gateway). On first launch a detached gateway is auto-spawned and the UI runs as an inner session-backed process — so windows, layout, and running PTY processes survive terminal-emulator restarts and SSH disconnects. Named **workspaces** (e.g. `default`, `dev`) each map to their own daemon channel (`<workspace>/main`) with an independent PTY session and WM instance; create and switch between them from the Command Palette (**New Workspace**, **Switch to Workspace: `<name>`**), or detach the current viewer without killing its process (**Detach Viewer**). For a standalone, layout-agnostic persistence layer (no window manager), the companion [`term-session`](https://crates.io/crates/term-session) daemon remains available. See [Workspaces & Session Persistence](#workspaces--session-persistence).
+
+## Workspaces & Session Persistence
+
+`term-wm` is a self-contained binary that embeds **both** the window manager and a background session daemon (gateway). On first launch a detached gateway is auto-spawned and the TUI runs as an inner session-backed process, giving you persistent sessions without any external daemon setup.
+
+* **Workspaces:** A workspace is a named channel namespace on top of the session daemon. Each workspace (e.g. `default`, `dev`) maps to a daemon channel `<workspace>/main` with its own PTY session and window-manager instance. Start in a workspace with `-w/--workspace <NAME>`.
+* **Switching workspaces:** From the Command Palette, use **New Workspace** to create one, **Switch to Workspace: `<name>`** to switch without restarting the process (the viewer's IPC is rebound to the target channel, and the previously shown workspace keeps running in the background), and **Detach Viewer** to disconnect the current viewer from its session without terminating the PTY process. Workspace entries appear only when session persistence is active.
+* **Environment-scoped gateway:** The gateway endpoint is `term-wm/<env>/<user>/gateway`. `<env>` defaults to `dev` in debug builds and `prod` in release, and can be overridden with `TERM_WM_ENV=dev|prod|test` — so a development build can never attach to or tear down a production daemon's sessions. `TERM_WM_GATEWAY` overrides the endpoint wholesale. Both `term-wm --help` and `term-session --help` print a `Persistence gateway:` footer showing the resolved endpoint.
+* **Runtime disable:** Pass `--no-session-persistence` (or set `TERM_WM_NO_SESSION_PERSISTENCE`) to disable workspace/session-persistence behavior at runtime, even when the feature is compiled in.
+* **Managing the daemon:** `--list-channels` shows every workspace channel, its session, and its attached clients; `--stop-daemon` shuts the background gateway down (refused while sessions are live unless `-f/--force` is given); `--no-wm` runs a headless session client without the window manager.
+
+### Environment variables
+
+| Variable | Purpose | Default |
+| :--- | :--- | :--- |
+| `TERM_WM_ENV` | Runtime environment (`dev`/`prod`/`test`, case-insensitive); scopes the gateway endpoint. | `dev` in debug builds, `prod` in release |
+| `TERM_WM_GATEWAY` | Wholesale override of the gateway endpoint. | `term-wm/<env>/<user>/gateway` |
+| `TERM_SESSION_CHANNEL` | Session channel override (read by `term-session`). | `default/main` |
+| `TERM_WM_NO_SESSION_PERSISTENCE` | Disables session-persistence behavior at runtime (same as `--no-session-persistence`). | unset (persistence enabled) |
+| `TERM_WM_TRACE_ESC` | Dumps raw PTY→emulator bytes to a file (debugging aid). | off |
 
 ## The "No-Conflict" Philosophy (`Ctrl+A` Super Key)
 
@@ -146,7 +187,7 @@ Traditional terminal multiplexers often collide with the keybindings of the appl
 
 * **The Super Key:** The default modifier is `Ctrl+A` (configurable via `KeyBindings`).
 * **Scrollback Keys:** Outside of Direct Input Mode, the WM also intercepts `PageUp` / `PageDown` / `Home` / `End` (no modifier) for scrollback when a window has scrollback available; arrow keys and other navigation fall through to the child application.
-* **Command Palette:** Press `Ctrl+A` to open the central Command Palette overlay. This fuzzy-searchable menu (powered by `nucleo` with exponential decay scoring for recency) is the primary method for executing actions, opening windows, and altering layouts.
+* **Command Palette:** Press `Ctrl+A` to open the central Command Palette overlay. This fuzzy-searchable menu (powered by `nucleo` with exponential decay scoring for recency) is the primary method for executing actions, opening windows, altering layouts, and managing workspaces (**New Workspace**, **Switch to Workspace: `<name>`**, **Detach Viewer**).
 * **Window Navigation:** While the palette is open, press `Tab` or `Shift+Tab` to instantly cycle focus between active windows. Press `Enter` to activate the selected command.
 * **Key Passthrough:** Pressing `Ctrl+A` while the palette is already open immediately sends the `Ctrl+A` keystroke to the focused child application (`SendSuperKeyToFocusedWindow`).
 

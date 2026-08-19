@@ -3103,7 +3103,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3113,7 +3113,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3126,7 +3126,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3138,6 +3138,7 @@ dependencies = [
  "term-session-mock",
  "term-session-muxio-service-definitions",
  "term-session-server",
+ "term-wm-config",
  "tokio",
  "tracing-subscriber",
  "windows-sys 0.61.2",
@@ -3145,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3174,7 +3175,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3183,17 +3184,19 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
  "libc",
  "muxio-rpc-service",
+ "term-wm-config",
+ "term-wm-events",
 ]
 
 [[package]]
 name = "term-session-server"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3205,6 +3208,7 @@ dependencies = [
  "tempfile",
  "term-session-mock",
  "term-session-muxio-service-definitions",
+ "term-wm-config",
  "term-wm-pty-engine",
  "term-wm-vt100",
  "tokio",
@@ -3214,7 +3218,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3222,7 +3226,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "libc",
  "tracing",
@@ -3230,7 +3234,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3239,6 +3243,8 @@ dependencies = [
  "libc",
  "line-ending",
  "muxio-rpc-service",
+ "muxio-rpc-service-caller",
+ "muxio-rpc-service-endpoint",
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
@@ -3247,11 +3253,13 @@ dependencies = [
  "serial_test",
  "tempfile",
  "term-clipboard",
+ "term-session",
  "term-session-client",
  "term-session-mock",
  "term-session-muxio-service-definitions",
  "term-session-server",
  "term-sys-io",
+ "term-wm-config",
  "term-wm-console",
  "term-wm-core",
  "term-wm-layout-engine",
@@ -3269,8 +3277,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "term-wm-config"
+version = "0.10.0-alpha"
+dependencies = [
+ "serial_test",
+]
+
+[[package]]
 name = "term-wm-console"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3289,7 +3304,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3297,10 +3312,12 @@ dependencies = [
  "linkify",
  "nucleo-matcher",
  "portable-pty",
+ "serial_test",
  "slotmap",
  "smallvec",
  "strum",
  "term-clipboard",
+ "term-wm-config",
  "term-wm-events",
  "term-wm-layout-engine",
  "term-wm-pty-engine",
@@ -3312,7 +3329,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3322,30 +3339,33 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
+ "bitcode",
  "term-wm-layout-engine",
 ]
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
  "libc",
  "line-ending",
  "portable-pty",
+ "serial_test",
  "term-clipboard",
  "term-session-mock",
  "term-sys-io",
+ "term-wm-config",
  "term-wm-events",
  "term-wm-vt100",
  "thiserror 2.0.20",
@@ -3356,11 +3376,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3377,7 +3397,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -3403,7 +3423,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3413,7 +3433,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.9.28-alpha"
+version = "0.10.0-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

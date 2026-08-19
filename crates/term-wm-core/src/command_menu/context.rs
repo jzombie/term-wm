@@ -18,6 +18,7 @@ impl Default for ContextMask {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

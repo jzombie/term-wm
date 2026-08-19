@@ -83,6 +83,7 @@ pub fn set_mouse_capture_with<W: std::io::Write>(
     })
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

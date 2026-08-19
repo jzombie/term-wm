@@ -1,0 +1,23 @@
+[package]
+name = "term-wm-config"
+description = "Central compile-time feature flags and runtime configuration (TERM_WM_* env vars) for term-wm."
+keywords = ["config", "features", "env", "runtime", "cross-platform"]
+categories = ["config", "command-line-interface"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+session-persistence = []
+
+[dependencies]
+
+[dev-dependencies]
+serial_test = { workspace = true }
+
+[lints]
+workspace = true

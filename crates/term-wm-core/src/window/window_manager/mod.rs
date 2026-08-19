@@ -422,6 +422,10 @@ pub struct WindowManager<
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
     /// Tap-swap targeting state
     pub(crate) tap_swap_state: Option<TapSwapState>,
+    /// Cached workspace names for palette rebuild on focus change.
+    pub cached_workspaces: Vec<String>,
+    /// Current workspace name for palette rebuild on focus change.
+    pub current_workspace: String,
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
@@ -932,6 +936,9 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             fab_enabled: true,
             bottom_content: DelayedReleaseBool::new(crate::constants::FAB_RESERVATION_DEBOUNCE),
             tap_swap_state: None,
+            cached_workspaces: Vec::new(),
+            // Leave empty. The outer executable injects the real workspace immediately after instantiation.
+            current_workspace: String::new(),
         }
     }
 
@@ -2947,6 +2954,7 @@ impl Overlay<TermWmAction> for TestOverlay {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2956,6 +2964,7 @@ mod tests {
     use crate::hitbox_registry::HitboxId;
     use crate::layout::Direction;
     use crate::window::test_component::{ActionRecorder, SelComponent, TestComponent};
+    use serial_test::serial;
     use std::collections::VecDeque;
     use term_wm_layout_engine::LayoutRect;
 
@@ -6677,6 +6686,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(wm_menu_items)]
     fn wm_menu_items_disables_close_for_non_closable() {
         use crate::components::{MenuDisplayItem, MenuItem};
         let mut wm = WindowManager::<TestComponent>::with_config(
@@ -6692,7 +6702,7 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items();
+        let items = wm.wm_menu_items(&[], "");
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6760,6 +6770,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(wm_menu_items)]
     fn wm_menu_items_has_single_clipboard_toggle() {
         use crate::components::{MenuDisplayItem, MenuItem};
         let wm = WindowManager::<TestComponent>::with_config(
@@ -6769,7 +6780,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items();
+        let items = wm.wm_menu_items(&[], "");
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {

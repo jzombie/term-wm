@@ -103,6 +103,7 @@ pub fn content_rect(full: Rect, borders_enabled: bool, header_enabled: bool) -> 
 /// | Split      | 1×24    | —           | 24      |
 /// | **Total**  | 80×24   | 1,575       | 345     |
 /// | **Grand**  |         | 1,920       |         |
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

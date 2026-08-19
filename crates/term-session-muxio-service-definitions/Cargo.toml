@@ -15,3 +15,8 @@ bitcode = { workspace = true }
 interprocess = { workspace = true }
 libc = { workspace = true }
 muxio-rpc-service = { workspace = true }
+term-wm-config = { workspace = true }
+term-wm-events = { workspace = true }
+
+[lints]
+workspace = true

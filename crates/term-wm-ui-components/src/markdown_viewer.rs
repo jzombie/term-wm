@@ -428,6 +428,7 @@ fn slugify(text: &str) -> String {
     result
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod markdown_tests {
     use super::*;
