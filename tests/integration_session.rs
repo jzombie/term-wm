@@ -1960,7 +1960,9 @@ fn launcher_exits_immediately_on_nesting_fatal() {
     loop {
         if start.elapsed() > Duration::from_secs(10) {
             let _ = child.kill();
-            panic!("term-wm did not exit within 10s — likely retrying instead of exiting immediately");
+            panic!(
+                "term-wm did not exit within 10s — likely retrying instead of exiting immediately"
+            );
         }
         if let Ok(Some(_)) = child.try_wait() {
             break;

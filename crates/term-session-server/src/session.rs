@@ -67,7 +67,10 @@ impl Session {
         // nested `term-session`/`term-wm` attach can detect same-gateway
         // inception and refuse it (see `run_session`'s nesting guard).
         let active_gateway = gateway_channel_name().to_string();
-        builder.env(term_wm_config::env::SESSION_GATEWAY_ENV_VAR, &active_gateway);
+        builder.env(
+            term_wm_config::env::SESSION_GATEWAY_ENV_VAR,
+            &active_gateway,
+        );
         if let Some(c) = resolved_cwd {
             builder.cwd(c);
         }

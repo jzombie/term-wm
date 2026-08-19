@@ -329,12 +329,9 @@ pub fn run_session(
     // every spawned PTY child). Inception is blocked only when the target socket
     // matches the host gateway — different gateways are isolated and safe.
     // `--allow-nested` opts out.
-    let host_gateway = std::env::var(term_session_muxio_service_definitions::SESSION_GATEWAY_ENV_VAR).ok();
-    if should_block_nesting(
-        host_gateway.as_deref(),
-        socket_path,
-        allow_nested,
-    ) {
+    let host_gateway =
+        std::env::var(term_session_muxio_service_definitions::SESSION_GATEWAY_ENV_VAR).ok();
+    if should_block_nesting(host_gateway.as_deref(), socket_path, allow_nested) {
         return Err(nested_session_fatal_error(app_name));
     }
 
@@ -1025,17 +1022,29 @@ mod tests {
     fn should_block_nesting_truth_table() {
         // Same gateway → block
         assert!(
-            should_block_nesting(Some("term-wm/prod/alice/gateway"), "term-wm/prod/alice/gateway", false),
+            should_block_nesting(
+                Some("term-wm/prod/alice/gateway"),
+                "term-wm/prod/alice/gateway",
+                false
+            ),
             "same gateway, no override -> block"
         );
         // Different gateway → proceed
         assert!(
-            !should_block_nesting(Some("term-wm/prod/alice/gateway"), "term-wm/dev/alice/gateway", false),
+            !should_block_nesting(
+                Some("term-wm/prod/alice/gateway"),
+                "term-wm/dev/alice/gateway",
+                false
+            ),
             "different gateway -> proceed"
         );
         // Same gateway + allow_nested → proceed
         assert!(
-            !should_block_nesting(Some("term-wm/prod/alice/gateway"), "term-wm/prod/alice/gateway", true),
+            !should_block_nesting(
+                Some("term-wm/prod/alice/gateway"),
+                "term-wm/prod/alice/gateway",
+                true
+            ),
             "same gateway, allow -> proceed"
         );
         // No gateway set → proceed
@@ -1055,8 +1064,14 @@ mod tests {
         let err = nested_session_fatal_error("my-app");
         let msg = err.to_string();
         assert!(msg.contains("my-app"), "error must contain app name: {msg}");
-        assert!(msg.contains("--allow-nested"), "error must recommend --allow-nested: {msg}");
-        assert!(msg.starts_with("FATAL:"), "error must start with FATAL: {msg}");
+        assert!(
+            msg.contains("--allow-nested"),
+            "error must recommend --allow-nested: {msg}"
+        );
+        assert!(
+            msg.starts_with("FATAL:"),
+            "error must start with FATAL: {msg}"
+        );
     }
 
     #[test]
@@ -1065,10 +1080,16 @@ mod tests {
         assert!(is_nested_session_fatal(&fatal), "must detect fatal error");
 
         let other = io::Error::other("some other error");
-        assert!(!is_nested_session_fatal(&other), "must not false-positive on other errors");
+        assert!(
+            !is_nested_session_fatal(&other),
+            "must not false-positive on other errors"
+        );
 
         let empty = io::Error::other("");
-        assert!(!is_nested_session_fatal(&empty), "must not false-positive on empty message");
+        assert!(
+            !is_nested_session_fatal(&empty),
+            "must not false-positive on empty message"
+        );
     }
 
     struct TestWriter {
