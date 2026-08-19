@@ -160,7 +160,7 @@ fn attach(channel: Option<String>, cmd: &[String], allow_nested: bool) -> io::Re
     // The argv comes straight from the outer shell (split exactly once);
     // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
-    run_session(&socket_name, &channel.to_string(), cmd, allow_nested).map(|_| ())
+    run_session(&socket_name, &channel.to_string(), cmd, allow_nested, "term-session").map(|_| ())
 }
 
 fn kill(channel: &str, force: bool) -> io::Result<()> {
