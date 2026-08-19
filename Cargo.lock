@@ -33,15 +33,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "android_system_properties"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "anes"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -354,19 +345,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
-name = "chrono"
-version = "0.4.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
-dependencies = [
- "iana-time-zone",
- "js-sys",
- "num-traits",
- "wasm-bindgen",
- "windows-link",
-]
-
-[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -498,12 +476,6 @@ checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
 ]
-
-[[package]]
-name = "core-foundation-sys"
-version = "0.8.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cpufeatures"
@@ -1176,30 +1148,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iana-time-zone"
-version = "0.1.65"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
-dependencies = [
- "android_system_properties",
- "core-foundation-sys",
- "iana-time-zone-haiku",
- "js-sys",
- "log",
- "wasm-bindgen",
- "windows-core",
-]
-
-[[package]]
-name = "iana-time-zone-haiku"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "icu_collections"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1689,20 +1637,19 @@ dependencies = [
 
 [[package]]
 name = "muxio-core"
-version = "0.14.0-alpha"
+version = "0.15.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b78a6c3873637a2511268e89d4b1f0d55fe9f39fdc85284f8b6c87ab4aef1e1f"
+checksum = "4f9b11bd1bb6e19b167da0a9a37fbeb99383761bb26e57b123332d8693303d34"
 dependencies = [
- "chrono",
  "once_cell",
  "tracing",
 ]
 
 [[package]]
 name = "muxio-rpc-service"
-version = "0.14.0-alpha"
+version = "0.15.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef143c5ce85afa3f5e84a3177bc8908731b79433825a140c282d45e204ee9a88"
+checksum = "1e023b3d6ff25a7d8c1dd3b92545f99e4c8108fa59e33552f5a3a640e4385d3e"
 dependencies = [
  "bitcode",
  "num_enum",
@@ -1711,9 +1658,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-caller"
-version = "0.14.0-alpha"
+version = "0.15.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "669c5345e1ffff00c883a380d080010679c1cbd458810c79faf485d9a2b6194d"
+checksum = "e58f0db8f97f5a3e4dda182d8c6e2a5b3de43061438a199d5497080de6f8865a"
 dependencies = [
  "async-trait",
  "futures",
@@ -1725,9 +1672,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-endpoint"
-version = "0.14.0-alpha"
+version = "0.15.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18dc0c8619a81e135f37786f08e5cab09e0be79d8556281f9642e6b86ae39a6d"
+checksum = "69dee75c2e18bd4c10be8ecb501779cb797a29cadbbbe8d25284c55dfc8b89c3"
 dependencies = [
  "async-trait",
  "bitcode",
@@ -1741,9 +1688,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-mpsc-adapter"
-version = "0.14.0-alpha"
+version = "0.15.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afe9b231fd23cffd2c4aed13fce61bcef64175b4eee679ee97e06287c4adc596"
+checksum = "5d25bb0ac208900eb72d299a1c74783a97b21ace38dfb1b50ee335d7919ac7f2"
 dependencies = [
  "async-trait",
  "muxio-core",
@@ -1756,9 +1703,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-client"
-version = "0.14.0-alpha"
+version = "0.15.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ff12804942e841395cdd5740a47e9602f9df02869ec68fc1a93144c055f261e"
+checksum = "f61322d33d74d8808a3a4e3519f4f76bd268dcc528cb8d255d862a61f9786506"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1774,9 +1721,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-server"
-version = "0.14.0-alpha"
+version = "0.15.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ec21be99fb2ff29405fedeb10dd67594fdc8034cf2c0b9d9857d1839756b6e0"
+checksum = "00de0def127d2435d177cf8ffad7bad8ba0f312a8fef282104665fa615bd9fe6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3103,7 +3050,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3113,7 +3060,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3126,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3146,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3175,7 +3122,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3184,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3196,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3218,7 +3165,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3226,7 +3173,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "libc",
  "tracing",
@@ -3234,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3279,14 +3226,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-config"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "serial_test",
 ]
 
 [[package]]
 name = "term-wm-console"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3305,7 +3252,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3330,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3340,7 +3287,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "bitcode",
  "term-wm-layout-engine",
@@ -3348,14 +3295,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3377,11 +3324,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3398,7 +3345,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "crossterm",
  "indoc",
@@ -3424,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3434,7 +3381,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.10.1-alpha"
+version = "0.10.2-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -4199,63 +4146,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement",
- "windows-interface",
- "windows-link",
- "windows-result",
- "windows-strings",
-]
-
-[[package]]
-name = "windows-implement"
-version = "0.60.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "windows-interface"
-version = "0.59.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
-
-[[package]]
-name = "windows-result"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
-dependencies = [
- "windows-link",
-]
-
-[[package]]
-name = "windows-strings"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
-dependencies = [
- "windows-link",
-]
 
 [[package]]
 name = "windows-sys"
