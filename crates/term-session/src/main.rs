@@ -45,6 +45,11 @@ struct Cli {
     /// Gateway name override [or $TERM_WM_GATEWAY]
     #[arg(long)]
     gateway: Option<String>,
+
+    /// Allow attaching when already running inside an active term-session
+    /// (bypass the nesting-inception guard).
+    #[arg(long)]
+    allow_nested: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -83,39 +88,18 @@ enum Command {
 }
 
 fn main() {
-    // Preserve the real stderr before `run_session` may `dup2` it into the
-    // tracing pipe (see `redirect_fd_to_tracing`): a fatal error returned
-    // after the terminal UI has started must still be visible to the user, so
-    // report it through this preserved handle instead of the (possibly
-    // redirected) fd 2. Best-effort: if `dup` fails, fall back to `eprintln!`.
-    #[cfg(unix)]
-    let orig_stderr: Option<std::fs::File> = {
-        use std::os::unix::io::FromRawFd;
-        let fd = unsafe { libc::dup(libc::STDERR_FILENO) };
-        if fd >= 0 {
-            Some(unsafe { std::fs::File::from_raw_fd(fd) })
-        } else {
-            None
-        }
-    };
+    // Route through the shared error formatter so a fatal error prints as
+    // `error: {e}` (Display) to the original stderr and exits 1, uniformly with
+    // the rest of the term-wm family. `run_and_exit` preserves the real stderr
+    // even when `run_session` `dup2`s fd 2 into the tracing pipe.
+    term_session::run_and_exit(run);
+}
 
-    // Print errors as readable messages (Display), not Rust's Debug dump that
-    // `main() -> Result` emits by default (e.g. `Custom { kind: ..., ... }`).
-    if let Err(e) = run() {
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            match orig_stderr {
-                Some(mut f) => {
-                    let _ = writeln!(f, "error: {e}");
-                }
-                None => eprintln!("error: {e}"),
-            }
-        }
-        #[cfg(not(unix))]
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    }
+/// Build the CLI `Command`, decorating the help footer with the resolved
+/// persistence gateway so `--help` (and the bare-run long help) shows the exact
+/// socket this build targets.
+fn cli_command() -> clap::Command {
+    Cli::command().after_help(term_session_muxio_service_definitions::gateway_help_line())
 }
 
 /// Build the CLI `Command`, decorating the help footer with the resolved
@@ -161,7 +145,7 @@ fn run() -> io::Result<()> {
             if cli.channel.is_some() || !cli.cmd.is_empty() {
                 // A channel and/or command was given without a subcommand:
                 // implicit attach.
-                attach(cli.channel, &cli.cmd)
+                attach(cli.channel, &cli.cmd, cli.allow_nested)
             } else {
                 // No subcommand and nothing to attach: show help instead of
                 // auto-connecting (exit code 2, the clap missing-argument
@@ -175,7 +159,7 @@ fn run() -> io::Result<()> {
     }
 }
 
-fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
+fn attach(channel: Option<String>, cmd: &[String], allow_nested: bool) -> io::Result<()> {
     let channel_str = term_session::resolve_channel(channel);
     let channel = ChannelName::parse(&channel_str).map_err(|e| {
         io::Error::new(io::ErrorKind::InvalidInput, format!("Invalid channel: {e}"))
@@ -183,7 +167,11 @@ fn attach(channel: Option<String>, cmd: &[String]) -> io::Result<()> {
     // The argv comes straight from the outer shell (split exactly once);
     // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
+<<<<<<< HEAD
     run_session(&socket_name, &channel.to_string(), cmd).map(|_| ())
+=======
+    run_session(&socket_name, &channel.to_string(), cmd, allow_nested).map(|_| ())
+>>>>>>> main
 }
 
 fn kill(channel: &str, force: bool) -> io::Result<()> {
@@ -297,6 +285,24 @@ mod tests {
             Cli::try_parse_from(["term-session", "--gateway", "term-wm/test/u/gateway", "ls"])
                 .unwrap();
         assert_eq!(cli.gateway.as_deref(), Some("term-wm/test/u/gateway"));
+    }
+
+    #[test]
+    fn cli_parses_allow_nested_flag() {
+        let cli = Cli::try_parse_from([
+            "term-session",
+            "--allow-nested",
+            "--channel",
+            "x",
+            "--",
+            "sh",
+        ])
+        .unwrap();
+        assert!(cli.allow_nested);
+        assert_eq!(cli.channel.as_deref(), Some("x"));
+        assert_eq!(cli.cmd, vec!["sh"]);
+        let cli = Cli::try_parse_from(["term-session", "--channel", "x", "--", "sh"]).unwrap();
+        assert!(!cli.allow_nested, "default must be false");
     }
 
     #[test]
