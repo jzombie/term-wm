@@ -13,6 +13,10 @@ pub const CHANNEL_ENV_VAR: &str = "TERM_SESSION_CHANNEL";
 /// Set by the term-session daemon on every spawned PTY child; read by the
 /// term-session client to detect nesting inception.
 pub const SESSION_ACTIVE_ENV_VAR: &str = "TERM_SESSION_ACTIVE";
+/// Set by the term-session daemon on every spawned PTY child to the active
+/// gateway socket path (e.g. `"term-wm/prod/user/gateway"`). Read by the
+/// term-session client for socket-aware nesting-inception detection.
+pub const SESSION_GATEWAY_ENV_VAR: &str = "TERM_SESSION_GATEWAY";
 /// Enables dumping raw PTY→emulator bytes to a file (debugging). Read by
 /// `term-wm-pty-engine`.
 pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
@@ -51,9 +55,10 @@ impl fmt::Display for Environment {
     }
 }
 
-/// The compile-time default environment: dev in debug builds, prod in release.
+/// The compile-time default environment: dev in debug builds or when Cargo is
+/// driving the binary (`CARGO_MANIFEST_DIR` is set), prod otherwise.
 pub fn default_environment() -> Environment {
-    if cfg!(debug_assertions) {
+    if std::env::var_os("CARGO_MANIFEST_DIR").is_some() || cfg!(debug_assertions) {
         Environment::Dev
     } else {
         Environment::Prod
@@ -120,6 +125,23 @@ mod tests {
             std::env::remove_var(ENVIRONMENT_ENV_VAR);
         }
         assert_eq!(active_environment(), default_environment());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn default_environment_detects_cargo_manifest_dir() {
+        unsafe {
+            std::env::set_var("CARGO_MANIFEST_DIR", "/fake/path");
+        }
+        assert_eq!(default_environment(), Environment::Dev);
+        unsafe {
+            std::env::remove_var("CARGO_MANIFEST_DIR");
+        }
+        if cfg!(debug_assertions) {
+            assert_eq!(default_environment(), Environment::Dev);
+        } else {
+            assert_eq!(default_environment(), Environment::Prod);
+        }
     }
 
     #[test]

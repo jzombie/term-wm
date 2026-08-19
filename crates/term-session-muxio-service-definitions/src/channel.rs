@@ -2,7 +2,9 @@ use std::fmt;
 
 use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
 use term_wm_config::env::active_environment;
-pub use term_wm_config::env::{GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE, SESSION_ACTIVE_ENV_VAR};
+pub use term_wm_config::env::{
+    GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE, SESSION_ACTIVE_ENV_VAR, SESSION_GATEWAY_ENV_VAR,
+};
 
 /// Default workspace name (namespace when no `/` is present).
 pub const DEFAULT_WORKSPACE: &str = "default";

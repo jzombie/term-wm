@@ -1,6 +1,7 @@
 use portable_pty::{CommandBuilder, PtySize};
 use term_session_muxio_service_definitions::ChannelName;
 use term_session_muxio_service_definitions::PathWire;
+use term_session_muxio_service_definitions::gateway_channel_name;
 use term_wm_pty_engine::{Pty, PtyResult, PtyStatus};
 
 pub struct Session {
@@ -62,10 +63,14 @@ impl Session {
         if let Some(ch) = channel {
             builder.env(term_wm_config::env::CHANNEL_ENV_VAR, ch.to_string());
         }
-        // Mark every session child as living inside an active term-session so a
-        // nested `term-session`/`term-wm` attach can detect and refuse inception
-        // (see `run_session`'s nesting guard).
-        builder.env(term_wm_config::env::SESSION_ACTIVE_ENV_VAR, "1");
+        // Mark every session child with the active gateway socket name so a
+        // nested `term-session`/`term-wm` attach can detect same-gateway
+        // inception and refuse it (see `run_session`'s nesting guard).
+        let active_gateway = gateway_channel_name().to_string();
+        builder.env(
+            term_wm_config::env::SESSION_GATEWAY_ENV_VAR,
+            &active_gateway,
+        );
         if let Some(c) = resolved_cwd {
             builder.cwd(c);
         }
@@ -307,13 +312,17 @@ mod tests {
     }
 
     #[test]
-    fn spawn_marks_children_as_in_session() {
-        let var = term_wm_config::env::SESSION_ACTIVE_ENV_VAR;
+    fn spawn_injects_gateway_socket_path() {
+        let var = term_wm_config::env::SESSION_GATEWAY_ENV_VAR;
         let report = spawn_envvar_report(var);
-        assert_eq!(
-            std::str::from_utf8(&report).expect("utf8 report"),
-            format!("{var}=1")
+        let report_str = std::str::from_utf8(&report).expect("utf8 report");
+        // The report must be `TERM_SESSION_GATEWAY=<non-empty-value>`
+        assert!(
+            report_str.starts_with(&format!("{var}=")),
+            "expected {var}=<value>, got: {report_str}"
         );
+        let value = &report_str[var.len() + 1..];
+        assert!(!value.is_empty(), "gateway env var must be non-empty");
     }
 
     /// With `channel = None` the daemon sets no channel env var; this both

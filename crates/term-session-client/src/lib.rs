@@ -102,21 +102,36 @@ const MIN_TERM_ROWS: u16 = 2;
 const FALLBACK_TERM_COLS: u16 = 80;
 const FALLBACK_TERM_ROWS: u16 = 24;
 
-/// Diagnostic printed by [`run_session`]'s nesting guard when a client tries to
-/// start inside an already-active term-session environment. The `term-session`
-/// CLI has no `attach` subcommand (attach is the implicit default), so the
-/// suggested override is a bare `--allow-nested`.
-const NESTED_SESSION_FATAL: &str = "\
-FATAL: Attempted to run term-session inside an existing term-session environment.
-Session inception can cause terminal buffer corruption and accidental gateway stops.
+/// Create a nesting-inception fatal error branded with the given app name.
+pub fn nested_session_fatal_error(app_name: &str) -> io::Error {
+    io::Error::other(format!(
+        "FATAL: Attempted to run {app_name} inside an existing session environment on the same gateway.\n\
+         Session inception can cause terminal buffer corruption and accidental gateway stops.\n\n\
+         To force nested execution, rerun with:\n  \
+         {app_name} --allow-nested [args...]"
+    ))
+}
 
-To force nested execution, rerun with:
-  term-session --allow-nested [args...]";
+/// Returns `true` if an `io::Error` was caused by session inception detection.
+pub fn is_nested_session_fatal(err: &io::Error) -> bool {
+    err.to_string().contains("FATAL: Attempted to run")
+}
 
 /// Whether an attach should be refused because the caller is already inside an
-/// active term-session and nesting was not explicitly allowed.
-fn should_block_nesting(active_in_session: bool, allow_nested: bool) -> bool {
-    active_in_session && !allow_nested
+/// active term-session targeting the same gateway and nesting was not explicitly
+/// allowed.
+fn should_block_nesting(
+    active_gateway: Option<&str>,
+    target_socket: &str,
+    allow_nested: bool,
+) -> bool {
+    if allow_nested {
+        return false;
+    }
+    match active_gateway {
+        Some(active) => active == target_socket,
+        None => false,
+    }
 }
 
 /// Initialize terminal for TUI mode: write startup escape sequences
@@ -307,16 +322,17 @@ pub fn run_session(
     channel: &str,
     cmd: &[String],
     allow_nested: bool,
+    app_name: &str,
 ) -> io::Result<Option<String>> {
     // Reject "session inception": a client started inside an already-active
     // term-session environment (detected via the marker the daemon injects into
-    // every spawned PTY child). Nested sessions corrupt the terminal buffers and
-    // risk accidentally stopping the outer gateway. `--allow-nested` opts out.
-    if should_block_nesting(
-        std::env::var_os(term_session_muxio_service_definitions::SESSION_ACTIVE_ENV_VAR).is_some(),
-        allow_nested,
-    ) {
-        return Err(io::Error::other(NESTED_SESSION_FATAL));
+    // every spawned PTY child). Inception is blocked only when the target socket
+    // matches the host gateway — different gateways are isolated and safe.
+    // `--allow-nested` opts out.
+    let host_gateway =
+        std::env::var(term_session_muxio_service_definitions::SESSION_GATEWAY_ENV_VAR).ok();
+    if should_block_nesting(host_gateway.as_deref(), socket_path, allow_nested) {
+        return Err(nested_session_fatal_error(app_name));
     }
 
     // Windows console hosts default to "QuickEdit" mode: clicking the window
@@ -1004,18 +1020,75 @@ mod tests {
 
     #[test]
     fn should_block_nesting_truth_table() {
+        // Same gateway → block
         assert!(
-            should_block_nesting(true, false),
-            "nested, no override -> block"
+            should_block_nesting(
+                Some("term-wm/prod/alice/gateway"),
+                "term-wm/prod/alice/gateway",
+                false
+            ),
+            "same gateway, no override -> block"
+        );
+        // Different gateway → proceed
+        assert!(
+            !should_block_nesting(
+                Some("term-wm/prod/alice/gateway"),
+                "term-wm/dev/alice/gateway",
+                false
+            ),
+            "different gateway -> proceed"
+        );
+        // Same gateway + allow_nested → proceed
+        assert!(
+            !should_block_nesting(
+                Some("term-wm/prod/alice/gateway"),
+                "term-wm/prod/alice/gateway",
+                true
+            ),
+            "same gateway, allow -> proceed"
+        );
+        // No gateway set → proceed
+        assert!(
+            !should_block_nesting(None, "any-gateway", false),
+            "no gateway set -> proceed"
+        );
+        // No gateway set + allow_nested → proceed
+        assert!(
+            !should_block_nesting(None, "any-gateway", true),
+            "no gateway, allow -> proceed"
+        );
+    }
+
+    #[test]
+    fn nested_session_fatal_error_brands_with_app_name() {
+        let err = nested_session_fatal_error("my-app");
+        let msg = err.to_string();
+        assert!(msg.contains("my-app"), "error must contain app name: {msg}");
+        assert!(
+            msg.contains("--allow-nested"),
+            "error must recommend --allow-nested: {msg}"
         );
         assert!(
-            !should_block_nesting(true, true),
-            "nested, allow -> proceed"
+            msg.starts_with("FATAL:"),
+            "error must start with FATAL: {msg}"
         );
-        assert!(!should_block_nesting(false, false), "not nested -> proceed");
+    }
+
+    #[test]
+    fn is_nested_session_fatal_detects_fatal_errors() {
+        let fatal = nested_session_fatal_error("term-wm");
+        assert!(is_nested_session_fatal(&fatal), "must detect fatal error");
+
+        let other = io::Error::other("some other error");
         assert!(
-            !should_block_nesting(false, true),
-            "not nested + allow -> proceed"
+            !is_nested_session_fatal(&other),
+            "must not false-positive on other errors"
+        );
+
+        let empty = io::Error::other("");
+        assert!(
+            !is_nested_session_fatal(&empty),
+            "must not false-positive on empty message"
         );
     }
 

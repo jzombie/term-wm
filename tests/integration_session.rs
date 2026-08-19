@@ -1918,3 +1918,76 @@ async fn rebind_workspace_to_unknown_source_sends_no_push() {
 
     guard.shutdown().await;
 }
+
+/// The term-wm launcher must exit immediately (no retry loop) when the nesting
+/// guard fires. Spawns `term-wm` inside an environment where
+/// `TERM_SESSION_GATEWAY` matches `TERM_WM_GATEWAY` (same-gateway inception),
+/// and asserts that the process exits non-zero with the FATAL diagnostic
+/// within a short timeout — proving the retry loop was never entered.
+#[test]
+fn launcher_exits_immediately_on_nesting_fatal() {
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    // Use a 2-segment gateway so ChannelName::parse succeeds and both
+    // `connect_or_spawn_server` (which resolves via gateway_channel_name())
+    // and `TERM_SESSION_GATEWAY` (read literally by the nesting guard) agree.
+    let gateway = "test-nesting/launcher-gw";
+
+    // Bind a dummy listener so connect_or_spawn_server's probe succeeds
+    // and returns immediately (instead of trying to spawn a daemon).
+    let name = gateway
+        .to_ns_name::<GenericNamespaced>()
+        .expect("gateway ns name");
+    let _listener = ListenerOptions::new()
+        .name(name)
+        .try_overwrite(true)
+        .create_sync()
+        .expect("bind dummy gateway");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_term-wm"))
+        .env("TERM_WM_GATEWAY", gateway)
+        .env("TERM_SESSION_GATEWAY", gateway)
+        .args(["--workspace", "test-nesting"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn term-wm");
+
+    let start = Instant::now();
+    loop {
+        if start.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!(
+                "term-wm did not exit within 10s — likely retrying instead of exiting immediately"
+            );
+        }
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let elapsed = start.elapsed();
+
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !out.status.success(),
+        "term-wm must exit non-zero on same-gateway nesting"
+    );
+    assert!(
+        stderr.contains("FATAL"),
+        "must print nesting FATAL diagnostic, got stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("term-wm"),
+        "error must mention term-wm, not term-session: {stderr}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "term-wm took {elapsed:?} — likely retrying instead of exiting immediately"
+    );
+}
