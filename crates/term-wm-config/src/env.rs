@@ -13,6 +13,10 @@ pub const CHANNEL_ENV_VAR: &str = "TERM_SESSION_CHANNEL";
 /// Set by the term-session daemon on every spawned PTY child; read by the
 /// term-session client to detect nesting inception.
 pub const SESSION_ACTIVE_ENV_VAR: &str = "TERM_SESSION_ACTIVE";
+/// Set by the term-session daemon on every spawned PTY child to the active
+/// gateway socket path (e.g. `"term-wm/prod/user/gateway"`). Read by the
+/// term-session client for socket-aware nesting-inception detection.
+pub const SESSION_GATEWAY_ENV_VAR: &str = "TERM_SESSION_GATEWAY";
 /// Enables dumping raw PTY→emulator bytes to a file (debugging). Read by
 /// `term-wm-pty-engine`.
 pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";

@@ -1010,11 +1010,11 @@ fn connection_error_is_printed_to_stderr() {
     acceptor.join().expect("acceptor thread failed");
 }
 
-/// A client started inside an active term-session environment (marker present,
-/// no `--allow-nested`) must refuse to attach, print the FATAL diagnostic, and
-/// exit non-zero. A bound dummy gateway makes `connect_or_spawn_server`'s probe
-/// succeed so no real daemon is spawned; the nesting guard fires before any
-/// connect, so the listener is never accepted.
+/// A client started inside an active term-session environment targeting the
+/// same gateway (no `--allow-nested`) must refuse to attach, print the FATAL
+/// diagnostic, and exit non-zero. A bound dummy gateway makes
+/// `connect_or_spawn_server`'s probe succeed so no real daemon is spawned; the
+/// nesting guard fires before any connect, so the listener is never accepted.
 #[test]
 fn attach_inside_nested_env_aborts_without_allow_nested() {
     use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
@@ -1032,7 +1032,7 @@ fn attach_inside_nested_env_aborts_without_allow_nested() {
 
     let out = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .env("TERM_SESSION_ACTIVE", "1")
+        .env("TERM_SESSION_GATEWAY", &gateway)
         .args(["--channel", "test/nested"])
         .output()
         .expect("run client");
@@ -1065,7 +1065,7 @@ async fn attach_inside_nested_env_proceeds_with_allow_nested() {
 
     let mut client = Command::new(bin())
         .env("TERM_WM_GATEWAY", &gateway)
-        .env("TERM_SESSION_ACTIVE", "1")
+        .env("TERM_SESSION_GATEWAY", &gateway)
         .args([
             "--allow-nested",
             "--channel",
@@ -1103,4 +1103,68 @@ async fn attach_inside_nested_env_proceeds_with_allow_nested() {
     ShutdownGateway::call(&*rpc, true).await.unwrap();
     let _ = daemon.kill();
     let _ = daemon.wait();
+}
+
+/// A client inside a prod gateway session targeting a different (dev) gateway
+/// must be allowed to proceed — inception hazards only exist when the inner
+/// process targets the same gateway daemon. `TERM_SESSION_GATEWAY` is set to
+/// the prod gateway while `TERM_WM_GATEWAY` points to the dev gateway.
+/// The guard must NOT fire — the client should attempt to connect (and fail
+/// because no daemon is running, but that's an IPC error, not the nesting
+/// FATAL).
+#[test]
+fn attach_cross_gateway_proceeds_without_allow_nested() {
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
+
+    let host_gateway = unique_gateway("nested-cross-host");
+    let target_gateway = unique_gateway("nested-cross-target");
+
+    // Bind a dummy listener so the target gateway probe succeeds and
+    // connect_or_spawn_server returns the target (instead of spawning a daemon).
+    let target_name = target_gateway
+        .as_str()
+        .to_ns_name::<GenericNamespaced>()
+        .expect("target gateway ns name");
+    let _listener = ListenerOptions::new()
+        .name(target_name)
+        .try_overwrite(true)
+        .create_sync()
+        .expect("bind dummy target gateway");
+
+    let mut child = Command::new(bin())
+        .env("TERM_WM_GATEWAY", &target_gateway)
+        .env("TERM_SESSION_GATEWAY", &host_gateway)
+        .args(["--channel", "test/cross-gateway"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run client");
+
+    // Wait up to 5 seconds — the client should NOT print FATAL (guard passes)
+    // and will hang on the muxio handshake with the dummy listener.
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(5) {
+        if let Ok(Some(_)) = child.try_wait() {
+            // Process exited — check output
+            let out = child.wait_with_output().expect("wait");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                !stderr.contains("FATAL"),
+                "must NOT refuse cross-gateway nesting, got stderr: {stderr}"
+            );
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Timed out waiting — client is hung on the dummy listener (expected).
+    // The key assertion: the guard did NOT fire (no FATAL in any output so far).
+    let _ = child.kill();
+    let out = child.wait_with_output().expect("wait after kill");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("FATAL"),
+        "must NOT refuse cross-gateway nesting, got stderr: {stderr}"
+    );
 }

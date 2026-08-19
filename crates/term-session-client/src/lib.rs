@@ -114,9 +114,20 @@ To force nested execution, rerun with:
   term-session --allow-nested [args...]";
 
 /// Whether an attach should be refused because the caller is already inside an
-/// active term-session and nesting was not explicitly allowed.
-fn should_block_nesting(active_in_session: bool, allow_nested: bool) -> bool {
-    active_in_session && !allow_nested
+/// active term-session targeting the same gateway and nesting was not explicitly
+/// allowed.
+fn should_block_nesting(
+    active_gateway: Option<&str>,
+    target_socket: &str,
+    allow_nested: bool,
+) -> bool {
+    if allow_nested {
+        return false;
+    }
+    match active_gateway {
+        Some(active) => active == target_socket,
+        None => false,
+    }
 }
 
 /// Initialize terminal for TUI mode: write startup escape sequences
@@ -310,10 +321,13 @@ pub fn run_session(
 ) -> io::Result<Option<String>> {
     // Reject "session inception": a client started inside an already-active
     // term-session environment (detected via the marker the daemon injects into
-    // every spawned PTY child). Nested sessions corrupt the terminal buffers and
-    // risk accidentally stopping the outer gateway. `--allow-nested` opts out.
+    // every spawned PTY child). Inception is blocked only when the target socket
+    // matches the host gateway — different gateways are isolated and safe.
+    // `--allow-nested` opts out.
+    let host_gateway = std::env::var(term_session_muxio_service_definitions::SESSION_GATEWAY_ENV_VAR).ok();
     if should_block_nesting(
-        std::env::var_os(term_session_muxio_service_definitions::SESSION_ACTIVE_ENV_VAR).is_some(),
+        host_gateway.as_deref(),
+        socket_path,
         allow_nested,
     ) {
         return Err(io::Error::other(NESTED_SESSION_FATAL));
@@ -1004,18 +1018,30 @@ mod tests {
 
     #[test]
     fn should_block_nesting_truth_table() {
+        // Same gateway → block
         assert!(
-            should_block_nesting(true, false),
-            "nested, no override -> block"
+            should_block_nesting(Some("term-wm/prod/alice/gateway"), "term-wm/prod/alice/gateway", false),
+            "same gateway, no override -> block"
         );
+        // Different gateway → proceed
         assert!(
-            !should_block_nesting(true, true),
-            "nested, allow -> proceed"
+            !should_block_nesting(Some("term-wm/prod/alice/gateway"), "term-wm/dev/alice/gateway", false),
+            "different gateway -> proceed"
         );
-        assert!(!should_block_nesting(false, false), "not nested -> proceed");
+        // Same gateway + allow_nested → proceed
         assert!(
-            !should_block_nesting(false, true),
-            "not nested + allow -> proceed"
+            !should_block_nesting(Some("term-wm/prod/alice/gateway"), "term-wm/prod/alice/gateway", true),
+            "same gateway, allow -> proceed"
+        );
+        // No gateway set → proceed
+        assert!(
+            !should_block_nesting(None, "any-gateway", false),
+            "no gateway set -> proceed"
+        );
+        // No gateway set + allow_nested → proceed
+        assert!(
+            !should_block_nesting(None, "any-gateway", true),
+            "no gateway, allow -> proceed"
         );
     }
 

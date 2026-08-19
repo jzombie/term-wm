@@ -102,13 +102,6 @@ fn cli_command() -> clap::Command {
     Cli::command().after_help(term_session_muxio_service_definitions::gateway_help_line())
 }
 
-/// Build the CLI `Command`, decorating the help footer with the resolved
-/// persistence gateway so `--help` (and the bare-run long help) shows the exact
-/// socket this build targets.
-fn cli_command() -> clap::Command {
-    Cli::command().after_help(term_session_muxio_service_definitions::gateway_help_line())
-}
-
 fn run() -> io::Result<()> {
     let cli = {
         let mut matches = cli_command().get_matches();
@@ -167,11 +160,7 @@ fn attach(channel: Option<String>, cmd: &[String], allow_nested: bool) -> io::Re
     // The argv comes straight from the outer shell (split exactly once);
     // the server spawns it directly, no shell involved there.
     let socket_name = connect_or_spawn_server(None)?;
-<<<<<<< HEAD
-    run_session(&socket_name, &channel.to_string(), cmd).map(|_| ())
-=======
     run_session(&socket_name, &channel.to_string(), cmd, allow_nested).map(|_| ())
->>>>>>> main
 }
 
 fn kill(channel: &str, force: bool) -> io::Result<()> {
