@@ -185,6 +185,7 @@ webbrowser = { workspace = true }
 indoc = { workspace = true }
 
 [dev-dependencies]
+interprocess = { workspace = true }
 muxio-rpc-service = { workspace = true }
 muxio-tokio-mpsc-adapter = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }

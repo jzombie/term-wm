@@ -3240,6 +3240,7 @@ dependencies = [
  "crossbeam-channel",
  "hostname",
  "indoc",
+ "interprocess",
  "libc",
  "line-ending",
  "muxio-rpc-service",
