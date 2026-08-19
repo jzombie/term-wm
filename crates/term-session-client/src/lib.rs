@@ -102,6 +102,23 @@ const MIN_TERM_ROWS: u16 = 2;
 const FALLBACK_TERM_COLS: u16 = 80;
 const FALLBACK_TERM_ROWS: u16 = 24;
 
+/// Diagnostic printed by [`run_session`]'s nesting guard when a client tries to
+/// start inside an already-active term-session environment. The `term-session`
+/// CLI has no `attach` subcommand (attach is the implicit default), so the
+/// suggested override is a bare `--allow-nested`.
+const NESTED_SESSION_FATAL: &str = "\
+FATAL: Attempted to run term-session inside an existing term-session environment.
+Session inception can cause terminal buffer corruption and accidental gateway stops.
+
+To force nested execution, rerun with:
+  term-session --allow-nested [args...]";
+
+/// Whether an attach should be refused because the caller is already inside an
+/// active term-session and nesting was not explicitly allowed.
+fn should_block_nesting(active_in_session: bool, allow_nested: bool) -> bool {
+    active_in_session && !allow_nested
+}
+
 /// Initialize terminal for TUI mode: write startup escape sequences
 /// (alternate screen, hide cursor, bracketed paste, mouse capture) to
 /// the given writer, enable raw mode on stdin, and return a guard that
@@ -285,7 +302,23 @@ fn client_ssh_ip() -> Option<String> {
 /// `channel` is the logical channel to attach to; `cmd` is the command to run
 /// (empty = the gateway's default shell). PTY geometry is read from the real
 /// terminal.
-pub fn run_session(socket_path: &str, channel: &str, cmd: &[String]) -> io::Result<Option<String>> {
+pub fn run_session(
+    socket_path: &str,
+    channel: &str,
+    cmd: &[String],
+    allow_nested: bool,
+) -> io::Result<Option<String>> {
+    // Reject "session inception": a client started inside an already-active
+    // term-session environment (detected via the marker the daemon injects into
+    // every spawned PTY child). Nested sessions corrupt the terminal buffers and
+    // risk accidentally stopping the outer gateway. `--allow-nested` opts out.
+    if should_block_nesting(
+        std::env::var_os(term_session_muxio_service_definitions::SESSION_ACTIVE_ENV_VAR).is_some(),
+        allow_nested,
+    ) {
+        return Err(io::Error::other(NESTED_SESSION_FATAL));
+    }
+
     // Windows console hosts default to "QuickEdit" mode: clicking the window
     // enters text-selection mode, during which the kernel suspends the
     // process's console I/O until the selection is cleared (Esc). A stray
@@ -968,6 +1001,23 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use term_wm_events::{KeyCode, KeyEvent, MouseButton, MouseEvent};
+
+    #[test]
+    fn should_block_nesting_truth_table() {
+        assert!(
+            should_block_nesting(true, false),
+            "nested, no override -> block"
+        );
+        assert!(
+            !should_block_nesting(true, true),
+            "nested, allow -> proceed"
+        );
+        assert!(!should_block_nesting(false, false), "not nested -> proceed");
+        assert!(
+            !should_block_nesting(false, true),
+            "not nested + allow -> proceed"
+        );
+    }
 
     struct TestWriter {
         buf: Arc<Mutex<Vec<u8>>>,

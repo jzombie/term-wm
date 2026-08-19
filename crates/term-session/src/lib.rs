@@ -16,6 +16,49 @@ use term_session_muxio_service_definitions::{
     KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
 };
 
+/// Run a CLI entry point and report any error identically across every
+/// term-wm-family binary, then terminate with the matching exit code.
+///
+/// On success this exits `0`. On error it prints `error: {err}` (the `Display`
+/// form — not Rust's default `Error: {err:?}` debug dump) to the *original*
+/// stderr and exits `1`. The original stderr is preserved because the TUI
+/// client may `dup2` fd 2 into the tracing pipe (see `redirect_fd_to_tracing`);
+/// a fatal error surfaced after the UI has started must still reach the user.
+///
+/// `term-session` and `term-wm` both route their `main()` through this so
+/// fatal-error formatting and exit codes stay uniform.
+pub fn run_and_exit(run: impl FnOnce() -> io::Result<()>) -> ! {
+    // Preserve the real stderr before the entry point may redirect fd 2 into
+    // the tracing pipe. Best-effort: if `dup` fails, fall back to `eprintln!`.
+    #[cfg(unix)]
+    let orig_stderr: Option<std::fs::File> = {
+        use std::os::unix::io::FromRawFd;
+        let fd = unsafe { libc::dup(libc::STDERR_FILENO) };
+        if fd >= 0 {
+            Some(unsafe { std::fs::File::from_raw_fd(fd) })
+        } else {
+            None
+        }
+    };
+
+    if let Err(err) = run() {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            match orig_stderr {
+                Some(mut f) => {
+                    let _ = writeln!(f, "error: {err}");
+                }
+                None => eprintln!("error: {err}"),
+            }
+        }
+        #[cfg(not(unix))]
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
 pub use term_wm_config::env::CHANNEL_ENV_VAR;
 pub const DEFAULT_CHANNEL: &str = "default/main";
 

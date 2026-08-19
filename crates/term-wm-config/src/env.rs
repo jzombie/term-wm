@@ -10,6 +10,9 @@ pub const GATEWAY_NAMESPACE: &str = "term-wm";
 pub const GATEWAY_CHANNEL_ENV_VAR: &str = "TERM_WM_GATEWAY";
 /// Session channel override. Read by `term-session`.
 pub const CHANNEL_ENV_VAR: &str = "TERM_SESSION_CHANNEL";
+/// Set by the term-session daemon on every spawned PTY child; read by the
+/// term-session client to detect nesting inception.
+pub const SESSION_ACTIVE_ENV_VAR: &str = "TERM_SESSION_ACTIVE";
 /// Enables dumping raw PTY→emulator bytes to a file (debugging). Read by
 /// `term-wm-pty-engine`.
 pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
