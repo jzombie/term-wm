@@ -128,7 +128,15 @@ The layout engine builds a tree (BSP or N-ary) over the workspace. `insert_windo
 
 ### Async Threading Model
 
-The UI event loop runs synchronously on a single thread. Each PTY runs its own reader thread (`parser_read_loop`) feeding a unified event channel (input, PTY wakeup, app-exited, direct-input change, signal, tick); a dedicated `Reaper` thread reaps zombie children via SIGHUP→SIGKILL escalation. The UI thread never blocks on I/O.
+The UI event loop runs synchronously on a single thread and never blocks on I/O. All asynchronous work (PTY reading, network IPC, keyboard input) runs on separate threads or Tokio tasks and funnels events into a single `crossbeam-channel`–backed `UnifiedEventSource`.
+
+```text
+[ Muxio / Network IPC ] ──(Tokio Runtime)──┐
+                                           ├──> [ UnifiedEventSource ] ──> [ Centralized UI Loop ]
+[ PTYs & Keyboard Input ] ─(OS Threads)────┘    (crossbeam-channel)         (Single-threaded &mut)
+```
+
+A dedicated `Reaper` thread reaps zombie children via SIGHUP→SIGKILL escalation. The centralized loop drains all pending events per frame, so keyboard shortcuts, PTY output, and remote IPC are all processed with zero polling gaps.
 
 ### Direct Input Mode
 
