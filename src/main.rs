@@ -186,7 +186,9 @@ fn run() -> io::Result<()> {
     // 0. Stop daemon
     #[cfg(feature = "session-persistence")]
     if cli.stop_daemon && term_wm_config::runtime::session_persistence_enabled() {
-        return term_session::stop_gateway(cli.force);
+        term_session::stop_gateway(cli.force)?;
+        println!("Gateway shutdown initiated.");
+        return Ok(());
     }
 
     // 0b. List channels and exit
