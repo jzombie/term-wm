@@ -398,3 +398,33 @@ mod tests {
         assert_eq!(result.tasks[0].label, "twm");
     }
 }
+
+#[cfg(all(test, not(feature = "project-tasks")))]
+mod tests_disabled {
+    use super::*;
+
+    #[test]
+    fn argv_returns_none_when_feature_disabled() {
+        let task = ProjectTaskConfig {
+            label: "any".into(),
+            command: Some("echo hello".into()),
+            args: None,
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            environments: Vec::new(),
+        };
+        assert_eq!(task.argv(), None, "argv() must be None when project-tasks feature is disabled");
+    }
+
+    #[test]
+    fn load_returns_none_when_feature_disabled_even_with_valid_file() {
+        let dir = tempfile::tempdir().expect("tempdir failed");
+        let tasks_path = dir.path().join(TERM_WM_TASKS_PATH);
+        std::fs::create_dir_all(tasks_path.parent().expect("has parent")).expect("mkdir");
+        std::fs::write(&tasks_path, r#"[{"label": "x", "command": "echo"}]"#).expect("write");
+        assert!(
+            load_tasks_for_cwd(dir.path()).is_none(),
+            "load_tasks_for_cwd must be None when feature disabled, even with valid file on disk"
+        );
+    }
+}
