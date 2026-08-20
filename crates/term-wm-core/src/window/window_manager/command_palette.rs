@@ -816,7 +816,7 @@ mod tests {
             vec![
                 ("Detach Viewer".to_string(), false),
                 ("New Workspace".to_string(), false),
-                ("Switch to Workspace: dev".to_string(), true),
+                ("Switch to Workspace: dev (current)".to_string(), true),
                 ("Switch to Workspace: prod".to_string(), false),
             ],
             "workspace group must list all actions, disabling the current workspace"
