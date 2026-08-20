@@ -1,0 +1,22 @@
+[
+  {
+    "label": "dev: Run",
+    "command": "cargo",
+    "args": ["run"]
+  },
+  {
+    "label": "dev: Stop daemon",
+    "command": "cargo",
+    "args": ["run", "--", "--stop-daemon", "--force"]
+  },
+  {
+    "label": "dev: List channels",
+    "command": "cargo",
+    "args": ["run", "--", "--list-channels"]
+  },
+  {
+    "label": "dev: Help",
+    "command": "cargo",
+    "args": ["run", "--", "--help"]
+  }
+]
