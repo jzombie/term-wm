@@ -4,6 +4,7 @@ use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
 
@@ -27,6 +28,10 @@ use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
 use term_wm_sys_ui_components::wm_debug_log::{WmDebugLogComponent, install_panic_hook};
 use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
+
+// Palette polling intervals — extracted per AGENTS.md Magic Strings and Numbers.
+const PALETTE_TICK_INTERVAL: Duration = Duration::from_secs(5);
+const PALETTE_IPC_INTERVAL: Duration = Duration::from_secs(30);
 use term_wm_ui_components::TerminalComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
 use term_wm_ui_components::default_shell_command;
@@ -156,6 +161,11 @@ where
     project_task_windows: HashMap<WindowKey, String>,
     /// Windows that have already been toasted on exit — prevents re-close on duplicate AppExited.
     exited_task_windows: HashSet<WindowKey>,
+    /// Last instant the palette was ticked (1 Hz uptime refresh).
+    palette_tick_last: Option<Instant>,
+    /// Last instant the palette did an IPC workspace refresh (throttled).
+    #[cfg(feature = "session-persistence")]
+    palette_ipc_last: Option<Instant>,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -293,6 +303,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             project_root: None,
             project_task_windows: HashMap::new(),
             exited_task_windows: HashSet::new(),
+            palette_tick_last: None,
+            #[cfg(feature = "session-persistence")]
+            palette_ipc_last: None,
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) and the bundled
@@ -864,6 +877,76 @@ impl<C: Component<TermWmAction> + 'static>
         self.on_terminal_exited(key);
     }
 
+    fn on_user_registry_changed(&mut self) {
+        if !self.wm.command_menu_visible() {
+            return;
+        }
+        #[cfg(feature = "session-persistence")]
+        {
+            self.refresh_workspace_cache();
+            self.wm.cached_workspaces = self.cached_workspaces.clone();
+            self.wm.current_workspace = self.current_workspace.clone();
+            self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+            self.palette_ipc_last = Some(Instant::now());
+        }
+        self.wm.refresh_palette_items();
+        self.palette_tick_last = Some(Instant::now());
+    }
+
+    fn poll_palette_tick(&mut self) {
+        if !self.wm.command_menu_visible() {
+            self.palette_tick_last = None;
+            #[cfg(feature = "session-persistence")]
+            {
+                self.palette_ipc_last = None;
+            }
+            return;
+        }
+        let now = Instant::now();
+        let need_tick = self
+            .palette_tick_last
+            .is_none_or(|last| now.duration_since(last) >= PALETTE_TICK_INTERVAL);
+        #[cfg(feature = "session-persistence")]
+        let need_ipc = self
+            .palette_ipc_last
+            .is_none_or(|last| now.duration_since(last) >= PALETTE_IPC_INTERVAL);
+        #[cfg(not(feature = "session-persistence"))]
+        let need_ipc = false;
+        if !need_tick && !need_ipc {
+            return;
+        }
+        if need_ipc {
+            #[cfg(feature = "session-persistence")]
+            {
+                self.refresh_workspace_cache();
+                self.wm.cached_workspaces = self.cached_workspaces.clone();
+                self.wm.current_workspace = self.current_workspace.clone();
+                self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+                self.palette_ipc_last = Some(now);
+            }
+        }
+        if need_tick || need_ipc {
+            self.wm.refresh_palette_items();
+            self.palette_tick_last = Some(now);
+        }
+    }
+
+    fn palette_tick_deadline(&self) -> Option<Duration> {
+        if !self.wm.command_menu_visible() {
+            return None;
+        }
+        if let Some(last) = self.palette_tick_last {
+            let elapsed = Instant::now().duration_since(last);
+            if elapsed >= PALETTE_TICK_INTERVAL {
+                Some(Duration::from_millis(0))
+            } else {
+                Some(PALETTE_TICK_INTERVAL - elapsed)
+            }
+        } else {
+            Some(PALETTE_TICK_INTERVAL)
+        }
+    }
+
     fn close_window(&mut self, key: WindowKey) {
         TermWmApp::close_window(self, key);
     }
@@ -937,6 +1020,12 @@ impl<C: Component<TermWmAction> + 'static>
         palette.set_items(items);
         self.wm
             .open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
+        let now = Instant::now();
+        self.palette_tick_last = Some(now);
+        #[cfg(feature = "session-persistence")]
+        {
+            self.palette_ipc_last = Some(now);
+        }
     }
 
     fn open_help_overlay(&mut self) {

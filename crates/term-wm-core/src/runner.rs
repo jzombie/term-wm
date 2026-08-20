@@ -93,6 +93,22 @@ pub trait WindowManagerHost<
     fn handle_custom_action(&mut self, _action: &TermWmAction) -> bool {
         false
     }
+
+    /// Called after the user registry is mutated (connect/disconnect/cache
+    /// refresh) so the app can refresh workspace caches and the command
+    /// palette if visible.
+    fn on_user_registry_changed(&mut self) {}
+
+    /// Periodic tick for palette uptime/size polling. Called every loop
+    /// iteration; implementation should throttle to ~1s and no-op when
+    /// palette is not visible.
+    fn poll_palette_tick(&mut self) {}
+
+    /// Deadline until next palette tick. Used to clamp sleep when palette
+    /// is visible so uptime seconds advance.
+    fn palette_tick_deadline(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// Single authoritative action dispatcher. Both the component action queue
@@ -447,6 +463,7 @@ where
                     std::time::Duration::from_secs(3),
                 );
             }
+            let mut user_changed = false;
             for user in driver.take_user_connected() {
                 let label = match &user.ssh_ip {
                     Some(ip) => format!("{}@{} ({}) connected", user.user, user.hostname, ip),
@@ -465,6 +482,7 @@ where
                 );
                 app.wm()
                     .push_notification(label, std::time::Duration::from_secs(3));
+                user_changed = true;
             }
             for conn_id in driver.take_user_disconnected() {
                 let label = if let Some(entry) = app.wm().user_registry.get_by_conn_id(conn_id) {
@@ -475,6 +493,7 @@ where
                 app.wm().user_registry.remove_by_conn_id(conn_id);
                 app.wm()
                     .push_notification(label, std::time::Duration::from_secs(3));
+                user_changed = true;
             }
             if let Some(users) = driver.take_user_cache_refreshed() {
                 app.wm().user_registry.clear();
@@ -491,7 +510,14 @@ where
                         user.pid,
                     );
                 }
+                user_changed = true;
             }
+            if user_changed {
+                app.on_user_registry_changed();
+            }
+
+            // Periodic palette tick for uptime/size polling while open.
+            app.poll_palette_tick();
 
             // Update monocle mode on resize
             if let Some(Event::Resize(width, _height)) = &event {
@@ -532,7 +558,14 @@ where
                 // The app scheduler (callback tasks) is included so a
                 // recurring app task keeps the loop awake when idle.
                 let app_next = app_handle.time_until_next();
-                let deadline = match (fp_deadline, system_handle.time_until_next(), app_next) {
+                let palette_deadline = app.palette_tick_deadline();
+                let app_deadline = match (app_next, palette_deadline) {
+                    (Some(a), Some(p)) => Some(a.min(p)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(p)) => Some(p),
+                    (None, None) => None,
+                };
+                let deadline = match (fp_deadline, system_handle.time_until_next(), app_deadline) {
                     (Some(fp), Some(sys), Some(app)) => Some(fp.min(sys).min(app)),
                     (Some(fp), Some(sys), None) => Some(fp.min(sys)),
                     (Some(fp), None, Some(app)) => Some(fp.min(app)),
