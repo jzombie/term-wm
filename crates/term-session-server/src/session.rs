@@ -62,6 +62,9 @@ impl Session {
         };
         if let Some(ch) = channel {
             builder.env(term_wm_config::env::CHANNEL_ENV_VAR, ch.to_string());
+        } else {
+            // Unset so the child never inherits a stale value from the parent process.
+            builder.env_remove(term_wm_config::env::CHANNEL_ENV_VAR);
         }
         // Mark every session child with the active gateway socket name so a
         // nested `term-session`/`term-wm` attach can detect same-gateway

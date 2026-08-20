@@ -19,6 +19,7 @@ pub mod layout;
 pub mod macros;
 pub mod notification;
 pub mod power_profile;
+pub mod project_tasks;
 pub mod reaper;
 pub mod task_scheduler;
 pub mod term_color;

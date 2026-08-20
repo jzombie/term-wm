@@ -75,6 +75,18 @@ pub trait WindowManagerHost<
         false
     }
 
+    /// Called when a window's PTY child has exited. Default closes the window.
+    /// Apps may override to keep windows open (e.g. project-task runners).
+    fn on_pty_exited(&mut self, key: crate::window::WindowKey) {
+        self.wm().close_window(key);
+    }
+
+    /// Called when a window is closed (e.g. via CloseWindow action).
+    /// Apps may override to purge bookkeeping (e.g. task-window tracking).
+    fn close_window(&mut self, key: crate::window::WindowKey) {
+        self.wm().close_window(key);
+    }
+
     /// Handle an application-specific action that the core WM doesn't know about.
     /// Returns `true` if the action was handled, `false` to fall through to
     /// component update.
@@ -99,7 +111,7 @@ fn dispatch_action<
     match action {
         TermWmAction::Quit | TermWmAction::ExitUi => app.open_exit_confirm(),
         TermWmAction::Help | TermWmAction::OpenHelp => app.open_help_overlay(),
-        TermWmAction::CloseWindow(k) => app.wm().close_window(k),
+        TermWmAction::CloseWindow(k) => app.close_window(k),
         TermWmAction::ReorderWindow { key, index } => app.wm().reorder_window(key, index),
         TermWmAction::NewTerminal => drop(app.wm_new_terminal()),
         TermWmAction::MinimizeWindow(k) => app.wm().minimize_window(k),
@@ -174,6 +186,15 @@ fn dispatch_action<
         | TermWmAction::DetachCurrentClient) => {
             if !app.handle_custom_action(&action) {
                 // Unhandled — forward to component update
+                let ctx = app.wm().component_context_for(true, key);
+                if let Some(comp) = app.wm().component_for_key_mut(key) {
+                    comp.update(action, &ctx, queue);
+                }
+            }
+        }
+        // Project task actions: delegate to the app's custom action handler
+        TermWmAction::RunProjectTask(_) => {
+            if !app.handle_custom_action(&action) {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {
                     comp.update(action, &ctx, queue);
@@ -392,7 +413,7 @@ where
             // Process AppExited notifications — close windows whose PTY child
             // exited.
             for key in driver.take_exited_windows() {
-                app.wm().close_window(key);
+                app.on_pty_exited(key);
             }
             // Process DirectInputChanged notifications — push toasts when apps
             // enter/exit alternate screen, enable mouse tracking, etc.

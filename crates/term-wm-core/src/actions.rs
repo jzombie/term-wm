@@ -177,6 +177,10 @@ pub enum TermWmAction {
     /// Detach the current viewer connection from the session.
     #[cfg(feature = "session-persistence")]
     DetachCurrentClient,
+
+    // --- Project tasks ---
+    /// Run a project task (from a discovered tasks.json) in a new terminal window.
+    RunProjectTask(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -283,6 +287,8 @@ impl TermWmAction {
             TermWmAction::SwitchWorkspace(_)
             | TermWmAction::NewWorkspace
             | TermWmAction::DetachCurrentClient => Category::Windows,
+
+            TermWmAction::RunProjectTask(_) => Category::Windows,
 
             TermWmAction::MenuUp
             | TermWmAction::MenuDown
@@ -430,6 +436,9 @@ impl fmt::Display for TermWmAction {
             TermWmAction::NewWorkspace => "New Workspace",
             #[cfg(feature = "session-persistence")]
             TermWmAction::DetachCurrentClient => "Detach Viewer",
+            TermWmAction::RunProjectTask(label) => {
+                return write!(f, "Run Project Task: {label}");
+            }
         };
         write!(f, "{}", s)
     }
@@ -587,6 +596,10 @@ mod tests {
             (TermWmAction::NewWorkspace, "New Workspace"),
             #[cfg(feature = "session-persistence")]
             (TermWmAction::DetachCurrentClient, "Detach Viewer"),
+            (
+                TermWmAction::RunProjectTask("dev: Run".into()),
+                "Run Project Task: dev: Run",
+            ),
         ];
         for (action, expected) in cases {
             assert_eq!(action.to_string(), expected, "action={action:?}");
@@ -618,6 +631,10 @@ mod tests {
             Category::Dialogs
         );
         assert_eq!(TermWmAction::ClearSelection.category(), Category::Selection);
+        assert_eq!(
+            TermWmAction::RunProjectTask("test".into()).category(),
+            Category::Windows
+        );
     }
 
     #[test]
