@@ -480,6 +480,8 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             .command_builder_for_task(task)
             .ok_or_else(|| io::Error::other("task has no valid command"))?;
         let key = self.spawn_terminal_window(cmd, None, task.label.clone())?;
+        self.wm()
+            .set_window_title_lock(key, task.label.clone(), true);
         self.project_task_windows.insert(key, task.label.clone());
         Ok(key)
     }
