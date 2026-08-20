@@ -1540,20 +1540,6 @@ pub async fn run_gateway(
                 }
                 let req = RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
                 let source = ChannelName::parse(&req.source_channel).map_err(|e| rpc_err(&e))?;
-                let target_name = ChannelName::parse(&req.target).map_err(|e| rpc_err(&e))?;
-                // Workspace entry toast for the destination: fire-and-forget
-                // if the target's internal WM is already subscribed. Cold-start
-                // (caller None) will be handled by Subscribe's fallback.
-                if let Some(ch) = resolve_channel(state.as_ref(), &target_name).await {
-                    let caller = {
-                        let guard = ch.lock().await;
-                        guard.internal_wm_caller.clone()
-                    };
-                    if let Some(caller) = caller {
-                        let ws = target_name.workspace().to_string();
-                        push_workspace_entered(caller, ws);
-                    }
-                }
                 let conns = state.conns.read().await;
                 for entry in conns.values() {
                     if let ConnState::Attached(name) = &entry.state

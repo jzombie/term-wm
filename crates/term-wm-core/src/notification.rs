@@ -144,12 +144,16 @@ mod tests {
 
 // ── NotificationBus — TTL-aware toast queue ─────────────────────────
 
-/// A toast with an expiry deadline.
+/// Time window within which identical notification messages are collapsed into 1× toast.
+const DEDUP_WINDOW: std::time::Duration = std::time::Duration::from_millis(2000);
+
+/// A toast with an expiry deadline and creation timestamp.
 #[derive(Debug, Clone)]
 pub struct Toast {
     pub id: u64,
     pub message: std::sync::Arc<str>,
     pub expires_at: std::time::Instant,
+    pub created_at: std::time::Instant,
 }
 
 /// TTL-aware notification bus. Pure data structure; `tick(now)` evicts expired toasts.
@@ -173,12 +177,23 @@ impl Default for NotificationBus {
 
 impl NotificationBus {
     /// Push a message with a time-to-live. Returns the assigned ID.
+    /// Deduplicates identical messages pushed within `DEDUP_WINDOW`.
     /// Evicts the oldest toast when at max capacity.
     pub fn push(&mut self, message: impl Into<String>, ttl: std::time::Duration) -> u64 {
+        let msg_str: String = message.into();
+        let now = std::time::Instant::now();
+        // Time-Window Deduplication: collapse rapid identical pushes
+        if let Some(existing) = self
+            .toasts
+            .iter()
+            .find(|t| t.message.as_ref() == msg_str && now.saturating_duration_since(t.created_at) < DEDUP_WINDOW)
+        {
+            return existing.id;
+        }
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        let msg: std::sync::Arc<str> = message.into().into();
-        let expires_at = std::time::Instant::now() + ttl;
+        let msg: std::sync::Arc<str> = msg_str.into();
+        let expires_at = now + ttl;
         if self.toasts.len() >= self.max_capacity {
             self.toasts.pop_front();
         }
@@ -186,6 +201,7 @@ impl NotificationBus {
             id,
             message: msg,
             expires_at,
+            created_at: now,
         });
         id
     }
@@ -262,5 +278,21 @@ mod bus_tests {
         assert!(b.dismiss(id));
         assert!(b.is_empty());
         assert!(!b.dismiss(999));
+    }
+
+    #[test]
+    fn bus_deduplicates_rapid_identical_messages() {
+        let mut b = NotificationBus::default();
+        // Rapid burst of 3 identical messages
+        let id1 = b.push("Workspace dev", Duration::from_secs(3));
+        let id2 = b.push("Workspace dev", Duration::from_secs(3));
+        let id3 = b.push("Workspace dev", Duration::from_secs(3));
+        assert_eq!(id1, id2);
+        assert_eq!(id2, id3);
+        assert_eq!(b.len(), 1, "rapid identical pushes must collapse into 1× toast");
+        // Different message in same window is NOT deduplicated
+        let id_other = b.push("Workspace prod", Duration::from_secs(3));
+        assert_ne!(id1, id_other);
+        assert_eq!(b.len(), 2, "different messages must not be deduplicated");
     }
 }
