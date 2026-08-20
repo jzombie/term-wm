@@ -278,7 +278,10 @@ mod tests {
 
     impl ChildKiller for SharedMockChild {
         fn kill(&mut self) -> io::Result<()> {
-            self.inner.lock().unwrap().kill_count += 1;
+            self.inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .kill_count += 1;
             Ok(())
         }
         fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
@@ -288,7 +291,7 @@ mod tests {
 
     impl Child for SharedMockChild {
         fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.exited {
                 Ok(Some(
                     inner
@@ -372,10 +375,10 @@ mod tests {
         let (_child, state) = SharedMockChild::new();
         r.reap(make_shared_zombie(state.clone()));
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 1
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1
         });
         assert!(
-            state.lock().unwrap().kill_count >= 1,
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1,
             "reaper should send SIGHUP (kill) within 2s"
         );
         drop(r);
@@ -385,14 +388,15 @@ mod tests {
     fn reaper_reaps_exited_child() {
         let r = Reaper::new(Duration::from_secs(5));
         let (_child, state) = SharedMockChild::new();
-        state.lock().unwrap().exited = true;
-        state.lock().unwrap().exit_status = Some(ExitStatus::with_exit_code(0));
+        state.lock().unwrap_or_else(|e| e.into_inner()).exited = true;
+        state.lock().unwrap_or_else(|e| e.into_inner()).exit_status =
+            Some(ExitStatus::with_exit_code(0));
         r.reap(make_shared_zombie(state.clone()));
 
         // The reaper should send SIGHUP, then on the next tick see
         // that the child has exited and drop it (removing from its vec).
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 1
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1
         });
         drop(r);
     }
@@ -404,13 +408,13 @@ mod tests {
         r.reap(make_shared_zombie(state.clone()));
 
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 1
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1
         });
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 2
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 2
         });
         assert!(
-            state.lock().unwrap().kill_count >= 2,
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 2,
             "reaper should send SIGKILL after shutdown_timeout elapses"
         );
         drop(r);
