@@ -426,6 +426,8 @@ pub struct WindowManager<
     pub cached_workspaces: Vec<String>,
     /// Current workspace name for palette rebuild on focus change.
     pub current_workspace: String,
+    /// Cached project tasks for palette rebuild on focus change.
+    pub project_tasks: Vec<crate::project_tasks::ProjectTaskConfig>,
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
@@ -939,6 +941,7 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             cached_workspaces: Vec::new(),
             // Leave empty. The outer executable injects the real workspace immediately after instantiation.
             current_workspace: String::new(),
+            project_tasks: Vec::new(),
         }
     }
 
@@ -6702,7 +6705,7 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[]);
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6780,7 +6783,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[]);
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {

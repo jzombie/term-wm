@@ -1,5 +1,7 @@
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -15,6 +17,7 @@ use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::events::{Event, KeyEvent};
 use term_wm_core::io::{EventSource, RenderTarget};
+use term_wm_core::project_tasks::{self, ProjectTaskConfig};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
@@ -137,6 +140,16 @@ where
     /// Current workspace name for filtering the palette switch list.
     #[cfg(feature = "session-persistence")]
     current_workspace: String,
+    /// Working directory captured at app init — the root of tasks.json discovery.
+    launch_cwd: PathBuf,
+    /// Tasks discovered from the nearest .term-wm/.zed tasks.json.
+    project_tasks: Vec<ProjectTaskConfig>,
+    /// Project root dir where the winning tasks.json was found; None when not discovered.
+    project_root: Option<PathBuf>,
+    /// WindowKey → task label for windows spawned by RunProjectTask (keep-open + toast).
+    project_task_windows: HashMap<WindowKey, String>,
+    /// Windows that have already been toasted on exit — prevents re-close on duplicate AppExited.
+    exited_task_windows: HashSet<WindowKey>,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -267,13 +280,19 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             cached_workspaces: Vec::new(),
             #[cfg(feature = "session-persistence")]
             current_workspace: term_session::DEFAULT_WORKSPACE.to_string(),
+            launch_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            project_tasks: Vec::new(),
+            project_root: None,
+            project_task_windows: HashMap::new(),
+            exited_task_windows: HashSet::new(),
         };
         // Every TermWmApp flows through here — the standalone constructors
-        // (new_custom / new_with_config / new_with_actions) AND the bundled
+        // (new_custom / new_with_config / new_with_actions) and the bundled
         // binary's `from_wm` path — so guarantee the system windows (debug log,
         // system panel) exist from construction, without any app needing to call
         // init_system_windows() itself. Idempotent.
         app.init_system_windows();
+        app.refresh_project_tasks();
         app
     }
 
@@ -420,6 +439,116 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         for key in terminal_keys {
             self.wire_pty_callback(key, tx.clone());
         }
+    }
+
+    /// Refresh the cached project tasks from the nearest tasks.json.
+    /// Syncs both `TermWmApp` and `WindowManager::project_tasks` in one call.
+    pub fn refresh_project_tasks(&mut self) {
+        match project_tasks::load_tasks_for_cwd(&self.launch_cwd) {
+            Some(pt) => {
+                self.project_root = Some(pt.root);
+                self.project_tasks = pt.tasks;
+            }
+            None => {
+                self.project_root = None;
+                self.project_tasks.clear();
+            }
+        }
+        self.wm.project_tasks = self.project_tasks.clone();
+    }
+
+    /// Return the cached project tasks.
+    pub fn project_tasks(&self) -> &[ProjectTaskConfig] {
+        &self.project_tasks
+    }
+
+    /// Look up a project task by label.
+    pub fn project_task(&self, label: &str) -> Option<&ProjectTaskConfig> {
+        self.project_tasks.iter().find(|t| t.label == label)
+    }
+
+    /// Close a window, purging any project-task bookkeeping.
+    pub fn close_window(&mut self, key: WindowKey) {
+        self.project_task_windows.remove(&key);
+        self.exited_task_windows.remove(&key);
+        self.wm.close_window(key);
+    }
+
+    /// Spawn a project task in a new terminal window.
+    pub fn spawn_project_task(&mut self, task: &ProjectTaskConfig) -> io::Result<WindowKey> {
+        let cmd = self
+            .command_builder_for_task(task)
+            .ok_or_else(|| io::Error::other("task has no valid command"))?;
+        let key = self.spawn_terminal_window(cmd, None, task.label.clone())?;
+        self.project_task_windows.insert(key, task.label.clone());
+        Ok(key)
+    }
+
+    /// Build a `CommandBuilder` for a project task, resolving cwd and env.
+    fn command_builder_for_task(
+        &self,
+        task: &ProjectTaskConfig,
+    ) -> Option<portable_pty::CommandBuilder> {
+        let argv = task.argv()?;
+        let mut cmd = portable_pty::CommandBuilder::new(&argv[0]);
+        if argv.len() > 1 {
+            cmd.args(&argv[1..]);
+        }
+        let base = self.project_root.as_deref().unwrap_or(&self.launch_cwd);
+        let cwd = match task.cwd.as_deref() {
+            Some(c) => {
+                let p = std::path::Path::new(c);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    base.join(p)
+                }
+            }
+            None => base.to_path_buf(),
+        };
+        cmd.cwd(cwd);
+        for (k, v) in &task.env {
+            cmd.env(k, v);
+        }
+        Some(cmd)
+    }
+
+    /// Handle PTY exit for a window — keep task windows open, close others.
+    pub fn on_terminal_exited(&mut self, key: WindowKey) {
+        // Check if window still exists via window_state (public method).
+        if self.wm().window_state(key).is_none() {
+            self.project_task_windows.remove(&key);
+            self.exited_task_windows.remove(&key);
+            return;
+        }
+        if !self.project_task_windows.contains_key(&key) {
+            self.close_window(key);
+            return;
+        }
+        if self.exited_task_windows.contains(&key) {
+            return;
+        }
+        self.exited_task_windows.insert(key);
+        let label = self
+            .project_task_windows
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        let status = self.wm().component_for_key_mut(key).and_then(|c| match c {
+            AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view)) => {
+                scroll_view.content.borrow().exit_status()
+            }
+            _ => None,
+        });
+        let msg = match status {
+            Some(st) if !st.success() => {
+                format!("Task '{label}' finished (exit {})", st.exit_code())
+            }
+            _ => format!("Task '{label}' finished"),
+        };
+        self.wm()
+            .push_notification(msg, std::time::Duration::from_secs(3));
+        tracing::info!(?key, %label, "project task window kept open after exit");
     }
 
     /// Initialize standard system windows (debug log + system panel).
@@ -640,8 +769,20 @@ impl<C: Component<TermWmAction> + 'static>
         }
     }
 
+    fn on_pty_exited(&mut self, key: WindowKey) {
+        self.on_terminal_exited(key);
+    }
+
+    fn close_window(&mut self, key: WindowKey) {
+        TermWmApp::close_window(self, key);
+    }
+
     fn open_command_palette(&mut self) {
         use term_wm_core::components::MenuDisplayItem;
+
+        // Refresh project tasks and sync to WM cache BEFORE building items.
+        self.refresh_project_tasks();
+
         let mut palette = WmCommandPaletteComponent::new();
         let anchor = self.wm.take_pending_palette_anchor();
         palette.set_anchor(anchor);
@@ -659,9 +800,13 @@ impl<C: Component<TermWmAction> + 'static>
         let workspaces: &[String] = &[];
 
         #[cfg(feature = "session-persistence")]
-        let items = self.wm.wm_menu_items(workspaces, &self.current_workspace);
+        let items =
+            self.wm
+                .wm_menu_items(workspaces, &self.current_workspace, &self.wm.project_tasks);
         #[cfg(not(feature = "session-persistence"))]
-        let items = self.wm.wm_menu_items(workspaces, "");
+        let items = self
+            .wm
+            .wm_menu_items(workspaces, "", &self.wm.project_tasks);
         let supported = self.wm.supported_menu_actions();
         // Filter out items not in the supported set; keep separators.
         let items: Vec<_> = items
@@ -676,6 +821,7 @@ impl<C: Component<TermWmAction> + 'static>
                             | TermWmAction::CloseWindow(_)
                             | TermWmAction::SendSuperKeyToWindow(_)
                             | TermWmAction::SendSuperKeyToFocusedWindow
+                            | TermWmAction::RunProjectTask(_)
                     );
                     #[cfg(feature = "session-persistence")]
                     let always_pass = always_pass

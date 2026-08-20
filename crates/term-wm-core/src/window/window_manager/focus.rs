@@ -73,7 +73,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         // Build fresh items BEFORE accessing the overlay (borrow checker).
         use crate::components::MenuDisplayItem;
-        let items = self.wm_menu_items(&self.cached_workspaces, &self.current_workspace);
+        let items = self.wm_menu_items(
+            &self.cached_workspaces,
+            &self.current_workspace,
+            &self.project_tasks,
+        );
         let supported = &self.supported_menu_actions;
         let filtered: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = items
             .into_iter()
@@ -87,6 +91,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                             | crate::actions::TermWmAction::CloseWindow(_)
                             | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
                             | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
+                            | crate::actions::TermWmAction::RunProjectTask(_)
                     );
                     #[cfg(feature = "session-persistence")]
                     let always_pass = always_pass

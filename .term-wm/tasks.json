@@ -1,0 +1,8 @@
+[
+    { "label": "dev: Run", "command": "cargo", "args": ["run"], "environments": ["dev"] },
+    { "label": "dev: Stop daemon", "command": "cargo", "args": ["run", "--", "--stop-daemon", "--force"], "environments": ["dev"] },
+    { "label": "dev: List channels", "command": "cargo", "args": ["run", "--", "--list-channels"], "environments": ["dev"] },
+    { "label": "dev: Help", "command": "cargo", "args": ["run", "--", "--help"], "environments": ["dev"] },
+    { "label": "dev: cargo udeps", "command": "cargo", "args": ["udeps", "--workspace", "--all-targets", "--all-features"], "environments": ["dev"] },
+    { "label": "dev: cargo clippy", "command": "cargo", "args": ["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"], "environments": ["dev"] }
+]

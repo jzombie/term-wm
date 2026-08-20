@@ -107,6 +107,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         &self,
         workspaces: &[String],
         current_workspace: &str,
+        project_tasks: &[crate::project_tasks::ProjectTaskConfig],
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
         use crate::window::WindowState;
@@ -166,6 +167,21 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             ),
             MenuDisplayItem::Separator,
         ];
+
+        // Project Tasks group — dynamic tasks from .term-wm/tasks.json.
+        let mut any_tasks_added = false;
+        for task in project_tasks.iter().filter(|t| t.argv().is_some()) {
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: task.label.clone().into(),
+                icon: Some("▶"),
+                action: crate::actions::TermWmAction::RunProjectTask(task.label.clone()),
+                disabled: false,
+            }));
+            any_tasks_added = true;
+        }
+        if any_tasks_added {
+            items.push(MenuDisplayItem::Separator);
+        }
 
         // Workspace group — always show "New Workspace"
         #[cfg(feature = "session-persistence")]
@@ -592,7 +608,7 @@ mod tests {
         wm.focus_window_key(key);
         wm.set_window_title(key, "alpha");
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[]);
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
@@ -622,7 +638,7 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[]);
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,
@@ -636,6 +652,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_omits_workspace_group_when_runtime_disabled() {
         use crate::components::{MenuDisplayItem, MenuItem};
@@ -646,7 +663,7 @@ mod tests {
             session_persistence: false,
         });
 
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default");
+        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default", &[]);
 
         // Restore the default so parallel tests see the expected state.
         term_wm_config::runtime::init(term_wm_config::runtime::RuntimeConfig::default());
@@ -670,6 +687,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_shows_workspace_group_when_runtime_enabled() {
         use crate::components::{MenuDisplayItem, MenuItem};
@@ -678,7 +696,7 @@ mod tests {
         // Runtime enabled by default: the workspace group must offer
         // New Workspace, Switch to Workspace entries (current one disabled),
         // and Detach Viewer.
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev");
+        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev", &[]);
 
         let mut workspace: Vec<(String, bool)> = items
             .iter()

@@ -487,6 +487,20 @@ impl App {
             .spawn_terminal_window(cmd, command_to_send, format!("Shell {}", count))?;
         Ok(())
     }
+
+    fn run_project_task(&mut self, label: &str) -> bool {
+        let Some(task) = self.inner.project_task(label).cloned() else {
+            tracing::warn!("Project task not found: {label}");
+            return false;
+        };
+        match self.inner.spawn_project_task(&task) {
+            Ok(_key) => true,
+            Err(e) => {
+                tracing::error!("Failed to spawn project task '{label}': {e}");
+                true
+            }
+        }
+    }
 }
 
 impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for App {
@@ -502,6 +516,10 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn handle_custom_action(&mut self, action: &term_wm_core::actions::TermWmAction) -> bool {
+        // Project tasks must work regardless of the session-persistence toggle.
+        if let term_wm_core::actions::TermWmAction::RunProjectTask(label) = action {
+            return self.run_project_task(label);
+        }
         if !term_wm_config::runtime::session_persistence_enabled() {
             return false;
         }
@@ -592,6 +610,14 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn toggle_system_panel(&mut self) {
         self.inner.toggle_system_panel();
+    }
+
+    fn on_pty_exited(&mut self, key: term_wm_core::window::WindowKey) {
+        self.inner.on_terminal_exited(key);
+    }
+
+    fn close_window(&mut self, key: term_wm_core::window::WindowKey) {
+        self.inner.close_window(key);
     }
 
     fn wm_new_terminal(&mut self) -> io::Result<()> {

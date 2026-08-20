@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- **Project Tasks in the Command Palette:** a new `.term-wm/tasks.json` file defines project-local shell commands that appear under a "Project Tasks" group in the Command Palette. Tasks run as direct PTY children in a new window titled with the task label; on exit the window stays open and a toast fires with the exit status. Discovery walks from the WM launch directory upward through ancestors; the first `.term-wm/tasks.json` found wins; a malformed file stops the walk. Each task accepts `label`, `command`, `args`, `cwd`, `env`, and an `environments` list for environment gating — `"dev"` / `"prod"` / `"test"` values reuse the same `active_environment()` identity (`TERM_WM_ENV` override, `CARGO_MANIFEST_DIR`, `cfg!(debug_assertions)`) that IPC gateway channel scoping uses, so a dev-only task (e.g. `cargo run`) is hidden from installed/release binaries and vice versa. An absent or empty `environments` list means the task is visible in all environments.
+- **`RunProjectTask(String)` action variant:** a new `TermWmAction` carries the task label from the Command Palette to the app's `handle_custom_action`, which looks up the task, builds a `CommandBuilder` from its `argv()`, applies `cwd`/`env`, spawns a terminal window, and tracks it for exit-toasting and cleanup.
+- **`docs/tasks.md` — canonical tasks-file specification:** documents the flat-array schema, argv tokenization rules, environment-gating semantics (reusing `term_wm_config::env::active_environment()`), run/toast behavior, and the explicitly out-of-scope Zed compatibility boundary.
+
 ## [0.10.2-alpha] - 2026-08-19
 
 ### Changed
