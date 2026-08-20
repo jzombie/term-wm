@@ -619,10 +619,22 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
                 let source_channel = term_session::ChannelName::session(source_ws).to_string();
                 let target_channel = term_session::ChannelName::session(target_ws).to_string();
-
-                if let Err(e) =
-                    term_session::request_workspace_rebind(&source_channel, &target_channel)
-                {
+                let follow = self.inner.wm().workspace_follow_enabled;
+                let scope = if follow {
+                    term_session::protocol::RebindScope::AllViewers
+                } else {
+                    term_session::protocol::RebindScope::CallerOnly
+                };
+                let initiator = *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
+                if let Err(e) = term_session::request_workspace_rebind_with_scope(
+                    &source_channel,
+                    &target_channel,
+                    scope,
+                    initiator,
+                ) {
                     tracing::warn!("Failed to request workspace switch: {e}");
                 }
                 true
@@ -639,10 +651,22 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
                 let source_channel = term_session::ChannelName::session(source_ws).to_string();
                 let target_channel = term_session::ChannelName::session(&target_ws).to_string();
-
-                if let Err(e) =
-                    term_session::request_workspace_rebind(&source_channel, &target_channel)
-                {
+                let follow = self.inner.wm().workspace_follow_enabled;
+                let scope = if follow {
+                    term_session::protocol::RebindScope::AllViewers
+                } else {
+                    term_session::protocol::RebindScope::CallerOnly
+                };
+                let initiator = *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
+                if let Err(e) = term_session::request_workspace_rebind_with_scope(
+                    &source_channel,
+                    &target_channel,
+                    scope,
+                    initiator,
+                ) {
                     tracing::error!("Failed to switch to new workspace: {e}");
                 } else {
                     self.inner.refresh_workspace_cache();
@@ -662,6 +686,23 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                         tracing::warn!("Failed to detach viewer: {e}");
                     }
                 }
+                true
+            }
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::ToggleWorkspaceFollow => {
+                let enabled = {
+                    let wm = self.inner.wm();
+                    wm.workspace_follow_enabled = !wm.workspace_follow_enabled;
+                    wm.workspace_follow_enabled
+                };
+                let msg = if enabled {
+                    "Follow Workspaces: Enabled"
+                } else {
+                    "Follow Workspaces: Disabled"
+                };
+                self.inner
+                    .wm()
+                    .push_notification(msg, std::time::Duration::from_secs(3));
                 true
             }
             _ => false,

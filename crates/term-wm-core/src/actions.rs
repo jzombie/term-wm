@@ -177,6 +177,9 @@ pub enum TermWmAction {
     /// Detach the current viewer connection from the session.
     #[cfg(feature = "session-persistence")]
     DetachCurrentClient,
+    /// Toggle global workspace follow mode (linked workspaces).
+    #[cfg(feature = "session-persistence")]
+    ToggleWorkspaceFollow,
 
     // --- Project tasks ---
     /// Run a project task (from a discovered tasks.json) in a new terminal window.
@@ -286,7 +289,8 @@ impl TermWmAction {
             #[cfg(feature = "session-persistence")]
             TermWmAction::SwitchWorkspace(_)
             | TermWmAction::NewWorkspace
-            | TermWmAction::DetachCurrentClient => Category::Windows,
+            | TermWmAction::DetachCurrentClient
+            | TermWmAction::ToggleWorkspaceFollow => Category::Windows,
 
             TermWmAction::RunProjectTask(_) => Category::Windows,
 
@@ -436,6 +440,8 @@ impl fmt::Display for TermWmAction {
             TermWmAction::NewWorkspace => "New Workspace",
             #[cfg(feature = "session-persistence")]
             TermWmAction::DetachCurrentClient => "Detach Viewer",
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::ToggleWorkspaceFollow => "Follow Workspaces",
             TermWmAction::RunProjectTask(label) => {
                 return write!(f, "Run Project Task: {label}");
             }

@@ -405,6 +405,10 @@ pub struct WindowManager<
     notification_queue: NotificationBus,
     /// Centralized registry of connected users for the command palette.
     pub user_registry: UserRegistry,
+    /// Global workspace follow mode (linked workspaces) — when true, switching
+    /// workspaces moves all viewers on the source workspace together.
+    #[cfg(feature = "session-persistence")]
+    pub workspace_follow_enabled: bool,
     /// Per-window pending Direct Input Mode toast. The debouncer buffers the latest
     /// mode per window and arms ONE flush timer on the first transition (the
     /// deadline is never pushed back — leading-edge debounce with a cap).
@@ -932,6 +936,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             layout_dirty: true,
             notification_queue: NotificationBus::default(),
             user_registry: UserRegistry::default(),
+            #[cfg(feature = "session-persistence")]
+            workspace_follow_enabled: false,
             semantic_registry,
             overlays: SlotMap::with_key(),
             system_windows: HashMap::new(),

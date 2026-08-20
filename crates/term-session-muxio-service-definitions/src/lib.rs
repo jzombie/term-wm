@@ -13,7 +13,7 @@ pub use methods::{
     OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected,
     OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, PushOutput,
     RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN,
-    RPC_ERROR_UNATTACHED, RebindWorkspace, RebindWorkspaceRequest, ResizePty,
+    RPC_ERROR_UNATTACHED, RebindScope, RebindWorkspace, RebindWorkspaceRequest, ResizePty,
     STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
     SendAttributedInputRequest, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
     SubscribeInternalInput, SubscribeInternalInputRequest, UserInfo, WriteInput,

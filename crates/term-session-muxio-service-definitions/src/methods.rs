@@ -480,11 +480,20 @@ impl RpcMethodPrebuffered for ShutdownGateway {
 
 // ── RebindWorkspace (client asks server to rebind viewers) ───────────
 
-/// Client request to rebind all viewers on `source_channel` to `target`.
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Default)]
+pub enum RebindScope {
+    #[default]
+    CallerOnly,
+    AllViewers,
+}
+
+/// Client request to rebind viewers on `source_channel` to `target`.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct RebindWorkspaceRequest {
     pub source_channel: String,
     pub target: String,
+    pub scope: RebindScope,
+    pub initiator_conn_id: Option<usize>,
 }
 
 pub struct RebindWorkspace;
@@ -670,12 +679,16 @@ mod tests {
             &RebindWorkspace::encode_request(RebindWorkspaceRequest {
                 source_channel: "dev/main".into(),
                 target: "ws-123/main".into(),
+                scope: RebindScope::CallerOnly,
+                initiator_conn_id: Some(42),
             })
             .unwrap(),
         )
         .unwrap();
         assert_eq!(req.source_channel, "dev/main");
         assert_eq!(req.target, "ws-123/main");
+        assert_eq!(req.scope, RebindScope::CallerOnly);
+        assert_eq!(req.initiator_conn_id, Some(42));
         assert_eq!(RebindWorkspace::decode_response(&[]).unwrap(), ());
     }
 

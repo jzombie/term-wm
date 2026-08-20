@@ -102,6 +102,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 item.action,
                                 crate::actions::TermWmAction::SwitchWorkspace(_)
                                     | crate::actions::TermWmAction::NewWorkspace
+                                    | crate::actions::TermWmAction::ToggleWorkspaceFollow
                             ));
                     supported.contains(&item.action) || always_pass
                 }

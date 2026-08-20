@@ -15,8 +15,9 @@ use term_session_muxio_service_definitions::{
     ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
     OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected,
     OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindWorkspace,
-    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
+    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope,
+    RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID,
+    SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
     SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
     UserInfo, WriteInput,
 };
@@ -1540,27 +1541,48 @@ pub async fn run_gateway(
                 }
                 let req = RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
                 let source = ChannelName::parse(&req.source_channel).map_err(|e| rpc_err(&e))?;
-                let conns = state.conns.read().await;
-                for entry in conns.values() {
-                    if let ConnState::Attached(name) = &entry.state
-                        && name == &source
-                    {
-                        let caller = entry.handle.clone();
-                        let target = req.target.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = OnWorkspaceRebind::call(
-                                &caller,
-                                OnWorkspaceRebindRequest { target },
-                            )
-                            .await
-                            {
-                                tracing::debug!(
-                                    error = ?e,
-                                    "Failed to deliver OnWorkspaceRebind"
-                                );
+                let targets: Vec<RpcIpcConnectionContextHandle> = {
+                    let conns = state.conns.read().await;
+                    match req.scope {
+                        RebindScope::CallerOnly => {
+                            let attached: Vec<_> = conns
+                                .values()
+                                .filter(|e| matches!(&e.state, ConnState::Attached(n) if n == &source))
+                                .collect();
+                            if let Some(init_id) = req.initiator_conn_id {
+                                attached
+                                    .into_iter()
+                                    .filter(|e| e.handle.0.conn_id == init_id)
+                                    .map(|e| e.handle.clone())
+                                    .collect()
+                            } else if attached.len() == 1 {
+                                vec![attached[0].handle.clone()]
+                            } else {
+                                Vec::new()
                             }
-                        });
+                        }
+                        RebindScope::AllViewers => conns
+                            .values()
+                            .filter(|e| matches!(&e.state, ConnState::Attached(n) if n == &source))
+                            .map(|e| e.handle.clone())
+                            .collect(),
                     }
+                };
+                for caller in targets {
+                    let target = req.target.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = OnWorkspaceRebind::call(
+                            &caller,
+                            OnWorkspaceRebindRequest { target },
+                        )
+                        .await
+                        {
+                            tracing::debug!(
+                                error = ?e,
+                                "Failed to deliver OnWorkspaceRebind"
+                            );
+                        }
+                    });
                 }
                 RebindWorkspace::encode_response(()).map_err(boxed_io)
             }

@@ -55,6 +55,8 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleDebugWindow,
     #[cfg(feature = "session-persistence")]
     TermWmAction::NewWorkspace,
+    #[cfg(feature = "session-persistence")]
+    TermWmAction::ToggleWorkspaceFollow,
 ];
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
@@ -902,7 +904,9 @@ impl<C: Component<TermWmAction> + 'static>
                     let always_pass = always_pass
                         || matches!(
                             item.action,
-                            TermWmAction::SwitchWorkspace(_) | TermWmAction::NewWorkspace
+                            TermWmAction::SwitchWorkspace(_)
+                                | TermWmAction::NewWorkspace
+                                | TermWmAction::ToggleWorkspaceFollow
                         );
                     supported.contains(&item.action) || always_pass
                 }
@@ -991,6 +995,7 @@ mod tests {
                 TermWmAction::NewTerminal,
                 TermWmAction::ToggleDebugWindow,
                 TermWmAction::NewWorkspace,
+                TermWmAction::ToggleWorkspaceFollow,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );

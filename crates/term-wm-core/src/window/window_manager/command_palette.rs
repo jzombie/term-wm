@@ -269,6 +269,22 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
+        #[cfg(feature = "session-persistence")]
+        if term_wm_config::runtime::session_persistence_enabled() {
+            let label = if self.workspace_follow_enabled {
+                "Follow Workspaces: Disable"
+            } else {
+                "Follow Workspaces: Enable"
+            };
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon: Some("◎"),
+                action: crate::actions::TermWmAction::ToggleWorkspaceFollow,
+                disabled: false,
+            }));
+            items.push(MenuDisplayItem::Separator);
+        }
+
         // TODO: picks up unused params when session-persistence disabled
         let _ = (workspaces, current_workspace, all_users_by_ws);
 
