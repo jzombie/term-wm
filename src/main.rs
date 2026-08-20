@@ -745,6 +745,14 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
         self.inner.on_user_registry_changed();
     }
 
+    fn poll_palette_tick(&mut self) {
+        self.inner.poll_palette_tick();
+    }
+
+    fn palette_tick_deadline(&self) -> Option<std::time::Duration> {
+        self.inner.palette_tick_deadline()
+    }
+
     fn close_window(&mut self, key: term_wm_core::window::WindowKey) {
         self.inner.close_window(key);
     }

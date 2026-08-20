@@ -4,6 +4,7 @@ use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, bounded};
 
@@ -156,6 +157,8 @@ where
     project_task_windows: HashMap<WindowKey, String>,
     /// Windows that have already been toasted on exit — prevents re-close on duplicate AppExited.
     exited_task_windows: HashSet<WindowKey>,
+    /// Last instant the palette was ticked (for 1s uptime/size polling).
+    palette_tick_last: Option<Instant>,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -293,6 +296,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             project_root: None,
             project_task_windows: HashMap::new(),
             exited_task_windows: HashSet::new(),
+            palette_tick_last: None,
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) and the bundled
@@ -876,6 +880,45 @@ impl<C: Component<TermWmAction> + 'static>
             self.wm.all_users_by_ws = self.all_users_by_ws.clone();
         }
         self.wm.refresh_palette_items();
+        self.palette_tick_last = Some(Instant::now());
+    }
+
+    fn poll_palette_tick(&mut self) {
+        if !self.wm.command_menu_visible() {
+            self.palette_tick_last = None;
+            return;
+        }
+        let now = Instant::now();
+        if let Some(last) = self.palette_tick_last
+            && now.duration_since(last) < Duration::from_secs(1)
+        {
+            return;
+        }
+        self.palette_tick_last = Some(now);
+        #[cfg(feature = "session-persistence")]
+        {
+            self.refresh_workspace_cache();
+            self.wm.cached_workspaces = self.cached_workspaces.clone();
+            self.wm.current_workspace = self.current_workspace.clone();
+            self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+        }
+        self.wm.refresh_palette_items();
+    }
+
+    fn palette_tick_deadline(&self) -> Option<Duration> {
+        if !self.wm.command_menu_visible() {
+            return None;
+        }
+        if let Some(last) = self.palette_tick_last {
+            let elapsed = Instant::now().duration_since(last);
+            if elapsed >= Duration::from_secs(1) {
+                Some(Duration::from_millis(0))
+            } else {
+                Some(Duration::from_secs(1) - elapsed)
+            }
+        } else {
+            Some(Duration::from_secs(1))
+        }
     }
 
     fn close_window(&mut self, key: WindowKey) {
@@ -951,6 +994,7 @@ impl<C: Component<TermWmAction> + 'static>
         palette.set_items(items);
         self.wm
             .open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
+        self.palette_tick_last = Some(Instant::now());
     }
 
     fn open_help_overlay(&mut self) {
