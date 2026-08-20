@@ -28,6 +28,10 @@ use term_wm_sys_ui_components::WmSystemPanelComponent;
 use term_wm_sys_ui_components::wm_command_palette::WmCommandPaletteComponent;
 use term_wm_sys_ui_components::wm_debug_log::{WmDebugLogComponent, install_panic_hook};
 use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
+
+// Palette polling intervals — extracted per AGENTS.md Magic Strings and Numbers.
+const PALETTE_TICK_INTERVAL: Duration = Duration::from_secs(5);
+const PALETTE_IPC_INTERVAL: Duration = Duration::from_secs(30);
 use term_wm_ui_components::TerminalComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
 use term_wm_ui_components::default_shell_command;
@@ -901,11 +905,11 @@ impl<C: Component<TermWmAction> + 'static>
         let now = Instant::now();
         let need_tick = self
             .palette_tick_last
-            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1));
+            .is_none_or(|last| now.duration_since(last) >= PALETTE_TICK_INTERVAL);
         #[cfg(feature = "session-persistence")]
         let need_ipc = self
             .palette_ipc_last
-            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(5));
+            .is_none_or(|last| now.duration_since(last) >= PALETTE_IPC_INTERVAL);
         #[cfg(not(feature = "session-persistence"))]
         let need_ipc = false;
         if !need_tick && !need_ipc {
@@ -933,13 +937,13 @@ impl<C: Component<TermWmAction> + 'static>
         }
         if let Some(last) = self.palette_tick_last {
             let elapsed = Instant::now().duration_since(last);
-            if elapsed >= Duration::from_secs(1) {
+            if elapsed >= PALETTE_TICK_INTERVAL {
                 Some(Duration::from_millis(0))
             } else {
-                Some(Duration::from_secs(1) - elapsed)
+                Some(PALETTE_TICK_INTERVAL - elapsed)
             }
         } else {
-            Some(Duration::from_secs(1))
+            Some(PALETTE_TICK_INTERVAL)
         }
     }
 
