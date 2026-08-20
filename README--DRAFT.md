@@ -40,3 +40,44 @@ The "Why": Traditional multiplexers force developers to constantly fiddle with m
 > [partially true; needs addressing] "I despise prefix chords so much that I built a custom ANSI parser to track state changes in real-time"
 
 > Shatter the assumption that terminals are rigid grids (animated GIF demo)
+
+> Hacker News, Reddit, Product Hunt
+
+To successfully launch `term-wm` (repositioned as a **Terminal Desktop Environment** or **Spatial Terminal Compositor**), your go-to-market strategy targets three key developer-heavy communities. Each platform has a distinct culture, user psychology, and algorithmic pacing, requiring completely customized positioning and launch formats. 
+
+Here is the exact operational and narrative context for launching across **Hacker News**, **Reddit**, and **Product Hunt**:
+
+---
+
+### **1. Hacker News (Show HN): The Technical Deep-Dive**
+*   **The Audience Psychology:** Hacker News readers are notoriously cynical toward marketing adjectives, superficial hype, or standard copy-paste feature lists. They demand objective evidence of engineering craftsmanship, architectural depth, and honest disclosures of system trade-offs and constraints.
+*   **The Narrative Hook:** You must lead with the **technical challenges solved** by your Rust architecture, framing the launch as an intellectual showcase and an invitation for code review. Highlight how you bypassed legacy terminal limitations (like standard prefix chords) using the `PtyStateTracker` and how you engineered a headless spatial compositor on a coarse character-cell grid.
+*   **Target Headline:** 
+    > **"Show HN: term-wm – A zero-prefix spatial desktop compositor for SSH and terminals written in Rust"**
+*   **Key Selling Points to Detail:**
+    *   **The PtyStateTracker & Direct Input Mode:** Explain how it intercepts CSI escapes to autonomously yield input control to interactive TUIs (like Neovim or Htop) without awkward modifier key chords.
+    *   **Persistent Gateway Daemon:** Differentiate yourself from standard tools by detailing the lightweight (~9 MB) background daemon that keeps sessions, layouts, and PTY processes alive across network drops and client exits.
+    *   **Multi-Viewer Collaboration:** Highlight the `muxio` RPC pipeline, specifically emphasizing that session events carry unique connection IDs, allowing hosts to securely manage and evict individual participants without terminating shared environments.
+
+---
+
+### **2. Reddit (r/rust & r/commandline): The Visual-First Showcase**
+*   **The Audience Psychology:** Reddit is highly segmented, and community-specific formatting is crucial. These users are visual, highly practical terminal enthusiasts who want to see immediate proof of your tool’s aesthetic and spatial mechanics.
+*   **The Narrative Hook:** You must use a **visual-first strategy** featuring short, high-framerate looping GIFs (3–5 seconds) embedded directly in the post payload. Let the visuals shatter their deeply ingrained assumption that terminals are strictly rigid, planar character grids.
+*   **Subreddit-Specific Headlines:**
+    *   **r/rust:** *"term-wm 0.5: A zero-cost terminal desktop compositor and persistent session daemon built with Ratatui"*
+    *   **r/commandline:** *"Ditch prefix chords: term-wm brings floating windows, auto-passthrough, and collaborative SSH to your shell"*
+*   **The 3-Second "Aha!" Visual Demos:**
+    1.  **Spatial Mouse Dragging & Ghost Snapping:** Show tiled PTY panes, summon the command palette, spawn a floating window with lerped shadows, drag it, and let it snap cleanly into a tile layout with an edge-snapping preview.
+    2.  **Autonomous Input Transition:** Show standard typing, launching Neovim, the status bar instantly switching to "Direct Input Mode," and navigating without any keyboard-binding collisions.
+    3.  **Adaptive Mobile Layout & FAB Dodging:** Show the wide layout shrinking to a tablet viewport, snapping to Monocle mode, spawning a TUI with a bottom status bar, and demonstrating the Touch Floating Action Button (FAB) dynamically padding the viewport to avoid obscuring app content.
+
+---
+
+### **3. Product Hunt: The "Indie Maker" Narrative**
+*   **The Audience Psychology:** Product Hunt focuses heavily on clean UX, immediate usability, and the story of the "indie creator" modernizing a legacy tech stack. It is less about raw systems engineering and more about product design and out-of-the-box workflow transformation.
+*   **The Launch Strategy & Timing:** 
+    *   **Temporal Target:** Launch precisely at **12:01 AM PST on a Tuesday, Wednesday, or Thursday** to maximize upvote velocity over a full 24-hour cycle. Avoid major tech conference weeks (like WWDC or re:Invent) when user attention is heavily fragmented.
+    *   **Velocity Seeding:** Convert your existing GitHub stargazers and community members into a launch-day waitlist. Upvote velocity in the first four hours dictates Product Hunt’s algorithmic recommendation engine.
+    *   **The Maker Comment:** Post a highly engaging "Maker comment" immediately upon launch. Pay homage to terminal giants (like `tmux` and `screen`) while explaining why `term-wm` charts a brand new category (Terminal Desktop Environment). 
+*   **Execution Focus:** Present a flawless, beautiful gallery of screenshots and visual loops. Be prepared to commit to a 12-to-16 hour window of rapid response, answering technical questions within 15 minutes to keep engagement high.
