@@ -870,6 +870,7 @@ impl<C: Component<TermWmAction> + 'static>
         {
             self.wm.cached_workspaces = self.cached_workspaces.clone();
             self.wm.current_workspace = self.current_workspace.clone();
+            self.wm.all_users_by_ws = self.all_users_by_ws.clone();
         }
 
         #[cfg(feature = "session-persistence")]

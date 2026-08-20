@@ -435,6 +435,8 @@ pub struct WindowManager<
     pub current_workspace: String,
     /// Cached project tasks for palette rebuild on focus change.
     pub project_tasks: Vec<crate::project_tasks::ProjectTaskConfig>,
+    /// Cached connected users by workspace for palette rebuild on focus change.
+    pub all_users_by_ws: std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
@@ -955,6 +957,7 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             // Leave empty. The outer executable injects the real workspace immediately after instantiation.
             current_workspace: String::new(),
             project_tasks: Vec::new(),
+            all_users_by_ws: std::collections::BTreeMap::new(),
         }
     }
 
