@@ -296,8 +296,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         app
     }
 
-    /// Refresh the cached workspace channel list from the daemon via short-lived IPC.
+    /// Refresh the cached workspace channel list and all workspace users from the daemon via short-lived IPC.
     /// Called before opening the Command Palette — never on every keystroke.
+    /// Single `list_channels()` pass populates both `cached_workspaces` and `wm.all_workspaces_users`.
     #[cfg(feature = "session-persistence")]
     pub fn refresh_workspace_cache(&mut self) {
         if !term_wm_config::runtime::session_persistence_enabled() {
@@ -305,17 +306,34 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         }
         match term_session::list_channels() {
             Ok(resp) => {
-                self.cached_workspaces = resp
-                    .channels
-                    .iter()
-                    .map(|ch| term_session::ChannelName::parse_workspace(&ch.name).to_string())
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect();
+                let mut workspaces = std::collections::HashSet::new();
+                let mut users_by_ws: std::collections::BTreeMap<
+                    String,
+                    Vec<term_wm_core::user_registry::UserEntry>,
+                > = std::collections::BTreeMap::new();
+                for ch in resp.channels {
+                    let ws = term_session::ChannelName::parse_workspace(&ch.name).to_string();
+                    workspaces.insert(ws.clone());
+                    for c in ch.clients {
+                        users_by_ws.entry(ws.clone()).or_default().push(
+                            term_wm_core::user_registry::UserEntry {
+                                conn_id: c.conn_id,
+                                user: c.user,
+                                hostname: c.hostname,
+                                ssh_ip: c.ssh_ip,
+                            },
+                        );
+                    }
+                }
+                for v in users_by_ws.values_mut() {
+                    v.sort_by(|a, b| a.user.cmp(&b.user).then_with(|| a.hostname.cmp(&b.hostname)));
+                }
+                self.cached_workspaces = workspaces.into_iter().collect();
                 self.cached_workspaces.sort();
+                self.wm.all_workspaces_users = users_by_ws;
             }
             Err(e) => {
-                tracing::debug!("Failed to refresh workspace cache: {e}");
+                tracing::debug!("Failed to refresh workspace/user cache: {e}");
             }
         }
     }

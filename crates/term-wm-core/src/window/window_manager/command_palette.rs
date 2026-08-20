@@ -211,30 +211,61 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             items.push(MenuDisplayItem::Separator);
         }
 
-        // Connected Users section
+        // Connected Users section — global grouped view
         #[cfg(feature = "session-persistence")]
-        if term_wm_config::runtime::session_persistence_enabled() && !self.user_registry.is_empty()
-        {
-            items.push(MenuDisplayItem::Item(MenuItem {
-                label: format!("Connected Users ({})", self.user_registry.len()).into(),
-                icon: Some("●"),
-                action: crate::actions::TermWmAction::CloseMenu,
-                disabled: true,
-            }));
-            for (_key, user) in self.user_registry.iter() {
-                let label = if let Some(ip) = &user.ssh_ip {
-                    format!("  {}@{} ({})", user.user, user.hostname, ip)
-                } else {
-                    format!("  {}@{}", user.user, user.hostname)
-                };
+        if term_wm_config::runtime::session_persistence_enabled() {
+            if !self.all_workspaces_users.is_empty() {
+                let total: usize = self.all_workspaces_users.values().map(|v| v.len()).sum();
                 items.push(MenuDisplayItem::Item(MenuItem {
-                    label: label.into(),
-                    icon: None,
+                    label: format!("Connected Users ({total})").into(),
+                    icon: Some("●"),
                     action: crate::actions::TermWmAction::CloseMenu,
                     disabled: true,
                 }));
+                for (ws, users) in &self.all_workspaces_users {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("  {ws} ({})", users.len()).into(),
+                        icon: None,
+                        action: crate::actions::TermWmAction::CloseMenu,
+                        disabled: true,
+                    }));
+                    for u in users {
+                        let label = if let Some(ip) = &u.ssh_ip {
+                            format!("    {}@{} ({})", u.user, u.hostname, ip)
+                        } else {
+                            format!("    {}@{}", u.user, u.hostname)
+                        };
+                        items.push(MenuDisplayItem::Item(MenuItem {
+                            label: label.into(),
+                            icon: None,
+                            action: crate::actions::TermWmAction::CloseMenu,
+                            disabled: true,
+                        }));
+                    }
+                }
+                items.push(MenuDisplayItem::Separator);
+            } else if !self.user_registry.is_empty() {
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Connected Users ({})", self.user_registry.len()).into(),
+                    icon: Some("●"),
+                    action: crate::actions::TermWmAction::CloseMenu,
+                    disabled: true,
+                }));
+                for (_key, user) in self.user_registry.iter() {
+                    let label = if let Some(ip) = &user.ssh_ip {
+                        format!("  {}@{} ({})", user.user, user.hostname, ip)
+                    } else {
+                        format!("  {}@{}", user.user, user.hostname)
+                    };
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: label.into(),
+                        icon: None,
+                        action: crate::actions::TermWmAction::CloseMenu,
+                        disabled: true,
+                    }));
+                }
+                items.push(MenuDisplayItem::Separator);
             }
-            items.push(MenuDisplayItem::Separator);
         }
 
         // TODO: Comment why this is needed

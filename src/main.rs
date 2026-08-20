@@ -678,10 +678,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn open_command_palette(&mut self) {
         #[cfg(feature = "session-persistence")]
-        {
-            self.inner.refresh_workspace_cache();
-            self.inner.refresh_user_cache();
-        }
+        self.inner.refresh_workspace_cache();
         self.inner.open_command_palette();
     }
 

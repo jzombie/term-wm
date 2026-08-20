@@ -405,6 +405,9 @@ pub struct WindowManager<
     notification_queue: NotificationBus,
     /// Centralized registry of connected users for the command palette.
     pub user_registry: UserRegistry,
+    /// All workspace users grouped by workspace for global palette listing.
+    #[cfg(feature = "session-persistence")]
+    pub all_workspaces_users: std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
     /// Per-window pending Direct Input Mode toast. The debouncer buffers the latest
     /// mode per window and arms ONE flush timer on the first transition (the
     /// deadline is never pushed back — leading-edge debounce with a cap).
@@ -932,6 +935,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             layout_dirty: true,
             notification_queue: NotificationBus::default(),
             user_registry: UserRegistry::default(),
+            #[cfg(feature = "session-persistence")]
+            all_workspaces_users: std::collections::BTreeMap::new(),
             semantic_registry,
             overlays: SlotMap::with_key(),
             system_windows: HashMap::new(),
