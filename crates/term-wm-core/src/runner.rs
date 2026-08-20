@@ -386,7 +386,13 @@ where
     event_loop.run(|driver, event| {
         let handler = || -> io::Result<ControlFlow> {
             // Process expired system tasks (super-passthrough, drag-snap)
+            // Track whether any system task actually fired — only arm the
+            // FramePacer via request_redraw when state mutated. Input events
+            // arm the pacer directly at line 587 (Some(event) branch), so
+            // gating here only affects the None (idle) poll path.
+            let mut state_changed = false;
             for (_id, task) in system_handle.drain_expired() {
+                state_changed = true;
                 match task {
                     SystemTask::DragSnap => {
                         app.wm().apply_drag_snap_if_pending();
@@ -412,13 +418,16 @@ where
 
             // Drain app-level callback tasks (each carries its own closure).
             for (_id, task) in app_handle.drain_expired() {
+                state_changed = true;
                 task.run(app);
             }
 
-            // System tasks may have mutated state (notifications, tab outline,
-            // drag snap, temporal dwell) — request a redraw so the None branch
-            // arms the FramePacer even without a crossterm input event.
-            driver.request_redraw();
+            // Only request redraw when system tasks actually mutated state.
+            // The None branch checks take_redraw_request() to arm the pacer;
+            // the Some(event) branch arms directly via notify_pending.
+            if state_changed {
+                driver.request_redraw();
+            }
 
             if debug_event_flags::take_panic_pending() {
                 app.on_panic();
@@ -429,7 +438,8 @@ where
 
             // Process AppExited notifications — close windows whose PTY child
             // exited.
-            for key in driver.take_exited_windows() {
+            let exited = driver.take_exited_windows();
+            for key in exited.iter().copied() {
                 app.on_pty_exited(key);
             }
             // Process DirectInputChanged notifications — push toasts when apps
@@ -438,7 +448,7 @@ where
             if !transitions.is_empty() {
                 tracing::info!("[STAGE 4] Draining {} transitions", transitions.len());
             }
-            for (key, mode) in transitions {
+            for (key, mode) in transitions.iter().copied() {
                 // Debounced toast — coalesces rapid sub-mode transitions
                 // (e.g. vim's alt-screen + mouse-tracking startup pair) into a
                 // single notification with the combined access phrase.
@@ -451,8 +461,10 @@ where
                     ));
                 }
             }
-            // PTY child exit removed a window — redraw the layout.
-            driver.request_redraw();
+            // PTY child exit or direct-input transition mutated layout — redraw.
+            if !exited.is_empty() || !transitions.is_empty() {
+                driver.request_redraw();
+            }
 
             // Centralized notification bus: tick expiries and drain workspace/
             // presence events unconditionally (not only in Some(event) branch).
