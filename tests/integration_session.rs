@@ -1676,6 +1676,7 @@ async fn list_channels_reports_client_identity() {
             user: "alice".to_string(),
             version: "9.9.9".to_string(),
             ssh_ip: Some("192.168.1.50".to_string()),
+            ssh_port: Some(54321),
         },
     )
     .await

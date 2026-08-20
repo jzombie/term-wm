@@ -93,6 +93,7 @@ async fn attach_to(
             user: "test-user".to_string(),
             version: "test-version".to_string(),
             ssh_ip: None,
+            ssh_port: None,
         },
     )
     .await
@@ -758,6 +759,7 @@ async fn cli_list_renders_client_identity() {
             user: "bob".to_string(),
             version: "v7".to_string(),
             ssh_ip: Some("203.0.113.9".to_string()),
+            ssh_port: Some(2222),
         },
     )
     .await

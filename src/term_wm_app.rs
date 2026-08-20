@@ -329,6 +329,10 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                                 user: c.user,
                                 hostname: c.hostname,
                                 ssh_ip: c.ssh_ip,
+                                ssh_port: None,
+                                cols: c.cols,
+                                rows: c.rows,
+                                connected_at_unix: c.connected_at_unix,
                             },
                         );
                     }
@@ -373,9 +377,16 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             Ok(resp) => {
                 self.wm.user_registry.clear();
                 for u in resp.users {
-                    self.wm
-                        .user_registry
-                        .upsert(u.conn_id, u.user, u.hostname, u.ssh_ip);
+                    self.wm.user_registry.upsert(
+                        u.conn_id,
+                        u.user,
+                        u.hostname,
+                        u.ssh_ip,
+                        u.ssh_port,
+                        u.cols,
+                        u.rows,
+                        u.connected_at_unix,
+                    );
                 }
             }
             Err(e) => {

@@ -33,6 +33,8 @@ pub struct AttachRequest {
     pub version: String,
     /// Remote peer IP for SSH attaches; `None` for local attaches.
     pub ssh_ip: Option<String>,
+    /// Remote peer source port for SSH attaches; `None` for local attaches.
+    pub ssh_port: Option<u16>,
 }
 
 #[derive(Encode, Decode)]
@@ -807,6 +809,14 @@ pub struct UserInfo {
     pub user: String,
     pub hostname: String,
     pub ssh_ip: Option<String>,
+    /// SSH client source port; `None` for local attaches.
+    pub ssh_port: Option<u16>,
+    /// Terminal columns reported by the client at spawn.
+    pub cols: u16,
+    /// Terminal rows reported by the client at spawn.
+    pub rows: u16,
+    /// Unix timestamp (seconds) when the client connected.
+    pub connected_at_unix: u64,
 }
 
 /// Server pushes to the active `internal_wm_caller` when a new viewer joins.

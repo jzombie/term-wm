@@ -452,9 +452,16 @@ where
                     Some(ip) => format!("{}@{} ({}) connected", user.user, user.hostname, ip),
                     None => format!("{}@{} connected", user.user, user.hostname),
                 };
-                app.wm()
-                    .user_registry
-                    .upsert(user.conn_id, user.user, user.hostname, user.ssh_ip);
+                app.wm().user_registry.upsert(
+                    user.conn_id,
+                    user.user,
+                    user.hostname,
+                    user.ssh_ip,
+                    user.ssh_port,
+                    user.cols,
+                    user.rows,
+                    user.connected_at_unix,
+                );
                 app.wm()
                     .push_notification(label, std::time::Duration::from_secs(3));
             }
@@ -476,6 +483,10 @@ where
                         user.user,
                         user.hostname,
                         user.ssh_ip,
+                        user.ssh_port,
+                        user.cols,
+                        user.rows,
+                        user.connected_at_unix,
                     );
                 }
             }
