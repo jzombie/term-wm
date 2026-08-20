@@ -1,65 +1,59 @@
+// Project Tasks — `.term-wm/tasks.json` (JSONC: `//` and `/* */` comments allowed)
+// See `docs/tasks.md` for full schema.
+//
+// `command` is tokenized via `shell-words` (POSIX shell word splitting, respecting
+// quotes and escapes). You can put the full invocation in one string — no separate
+// `args` array needed:
+//
+//   { "label": "dev: Run", "command": "cargo run" }
+//   { "label": "dev: Help", "command": "cargo run -- --help" }
+//   { "label": "quoted",  "command": "echo 'hello world'" }
+//
+// Equivalent split form (also supported — `args` are appended after `command` tokens):
+//
+//   { "label": "dev: Run", "command": "cargo", "args": ["run"] }
+//
+// Other optional fields: `cwd` (string, absolute or relative to project root),
+// `env` (object), `environments` (e.g. ["dev"] / ["prod"] / ["test"]).
 [
     {
         "label": "dev: Run",
-        "command": "cargo",
-        "args": ["run"],
+        "command": "cargo run",
         "environments": ["dev"]
     },
     {
         "label": "dev: Stop daemon",
-        "command": "cargo",
-        "args": ["run", "--", "--stop-daemon", "--force"],
+        "command": "cargo run -- --stop-daemon --force",
         "environments": ["dev"]
     },
     {
         "label": "dev: List channels",
-        "command": "cargo",
-        "args": ["run", "--", "--list-channels"],
+        "command": "cargo run -- --list-channels",
         "environments": ["dev"]
     },
     {
         "label": "dev: Help",
-        "command": "cargo",
-        "args": ["run", "--", "--help"],
+        "command": "cargo run -- --help",
         "environments": ["dev"]
     },
     {
         "label": "dev: cargo udeps",
-        "command": "cargo",
-        "args": ["udeps", "--workspace", "--all-targets", "--all-features"],
+        "command": "cargo udeps --workspace --all-targets --all-features",
         "environments": ["dev"]
     },
     {
         "label": "dev: cargo clippy",
-        "command": "cargo",
-        "args": [
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--all-features",
-            "--",
-            "-D",
-            "warnings"
-        ],
+        "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
         "environments": ["dev"]
     },
     {
         "label": "dev: cargo fmt",
-        "command": "cargo",
-        "args": [
-            "fmt",
-            "--all"
-        ],
+        "command": "cargo fmt --all",
         "environments": ["dev"]
     },
     {
         "label": "dev: cargo test all features",
-        "command": "cargo",
-        "args": [
-            "test",
-            "--workspace",
-            "--all-features"
-        ],
+        "command": "cargo test --workspace --all-features",
         "environments": ["dev"]
     }
 ]
