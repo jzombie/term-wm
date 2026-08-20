@@ -32,6 +32,7 @@ use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
 // Palette polling intervals — extracted per AGENTS.md Magic Strings and Numbers.
 const PALETTE_TICK_INTERVAL: Duration = Duration::from_secs(5);
 const PALETTE_IPC_INTERVAL: Duration = Duration::from_secs(30);
+const USER_REGISTRY_DEBOUNCE: Duration = Duration::from_secs(2);
 use term_wm_ui_components::TerminalComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
 use term_wm_ui_components::default_shell_command;
@@ -161,11 +162,10 @@ where
     project_task_windows: HashMap<WindowKey, String>,
     /// Windows that have already been toasted on exit — prevents re-close on duplicate AppExited.
     exited_task_windows: HashSet<WindowKey>,
-    /// Last instant the palette was ticked (1 Hz uptime refresh).
-    palette_tick_last: Option<Instant>,
-    /// Last instant the palette did an IPC workspace refresh (throttled).
+    palette_tick_ticker: term_wm_core::utils::PeriodicTicker,
     #[cfg(feature = "session-persistence")]
-    palette_ipc_last: Option<Instant>,
+    palette_ipc_ticker: term_wm_core::utils::PeriodicTicker,
+    user_registry_debouncer: term_wm_core::utils::Debouncer,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -303,9 +303,12 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             project_root: None,
             project_task_windows: HashMap::new(),
             exited_task_windows: HashSet::new(),
-            palette_tick_last: None,
+            palette_tick_ticker:
+                term_wm_core::utils::PeriodicTicker::new_suppressed(PALETTE_TICK_INTERVAL),
             #[cfg(feature = "session-persistence")]
-            palette_ipc_last: None,
+            palette_ipc_ticker:
+                term_wm_core::utils::PeriodicTicker::new_suppressed(PALETTE_IPC_INTERVAL),
+            user_registry_debouncer: term_wm_core::utils::Debouncer::new(USER_REGISTRY_DEBOUNCE),
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) and the bundled
@@ -879,37 +882,36 @@ impl<C: Component<TermWmAction> + 'static>
 
     fn on_user_registry_changed(&mut self) {
         if !self.wm.command_menu_visible() {
+            self.user_registry_debouncer.reset();
             return;
         }
-        #[cfg(feature = "session-persistence")]
-        {
-            self.refresh_workspace_cache();
-            self.wm.cached_workspaces = self.cached_workspaces.clone();
-            self.wm.current_workspace = self.current_workspace.clone();
-            self.wm.all_users_by_ws = self.all_users_by_ws.clone();
-            self.palette_ipc_last = Some(Instant::now());
-        }
-        self.wm.refresh_palette_items();
-        self.palette_tick_last = Some(Instant::now());
+        self.user_registry_debouncer.trigger();
     }
 
     fn poll_palette_tick(&mut self) {
         if !self.wm.command_menu_visible() {
-            self.palette_tick_last = None;
+            self.palette_tick_ticker.reset();
             #[cfg(feature = "session-persistence")]
             {
-                self.palette_ipc_last = None;
+                self.palette_ipc_ticker.reset();
             }
+            self.user_registry_debouncer.reset();
             return;
         }
-        let now = Instant::now();
-        let need_tick = self
-            .palette_tick_last
-            .is_none_or(|last| now.duration_since(last) >= PALETTE_TICK_INTERVAL);
+        // Flush pending registry updates (trailing-edge debounce)
+        if self.user_registry_debouncer.poll() {
+            #[cfg(feature = "session-persistence")]
+            {
+                self.refresh_workspace_cache();
+                self.wm.cached_workspaces = self.cached_workspaces.clone();
+                self.wm.current_workspace = self.current_workspace.clone();
+                self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+            }
+            self.wm.refresh_palette_items();
+        }
+        let need_tick = self.palette_tick_ticker.poll();
         #[cfg(feature = "session-persistence")]
-        let need_ipc = self
-            .palette_ipc_last
-            .is_none_or(|last| now.duration_since(last) >= PALETTE_IPC_INTERVAL);
+        let need_ipc = self.palette_ipc_ticker.poll();
         #[cfg(not(feature = "session-persistence"))]
         let need_ipc = false;
         if !need_tick && !need_ipc {
@@ -922,12 +924,10 @@ impl<C: Component<TermWmAction> + 'static>
                 self.wm.cached_workspaces = self.cached_workspaces.clone();
                 self.wm.current_workspace = self.current_workspace.clone();
                 self.wm.all_users_by_ws = self.all_users_by_ws.clone();
-                self.palette_ipc_last = Some(now);
             }
         }
         if need_tick || need_ipc {
             self.wm.refresh_palette_items();
-            self.palette_tick_last = Some(now);
         }
     }
 
@@ -935,16 +935,19 @@ impl<C: Component<TermWmAction> + 'static>
         if !self.wm.command_menu_visible() {
             return None;
         }
-        if let Some(last) = self.palette_tick_last {
-            let elapsed = Instant::now().duration_since(last);
-            if elapsed >= PALETTE_TICK_INTERVAL {
-                Some(Duration::from_millis(0))
-            } else {
-                Some(PALETTE_TICK_INTERVAL - elapsed)
-            }
-        } else {
-            Some(PALETTE_TICK_INTERVAL)
+        let now = Instant::now();
+        let mut candidates: Vec<Duration> = Vec::new();
+        if let Some(d) = self.palette_tick_ticker.remaining_at(now) {
+            candidates.push(d);
         }
+        #[cfg(feature = "session-persistence")]
+        if let Some(d) = self.palette_ipc_ticker.remaining_at(now) {
+            candidates.push(d);
+        }
+        if let Some(d) = self.user_registry_debouncer.remaining_at(now) {
+            candidates.push(d);
+        }
+        candidates.into_iter().min()
     }
 
     fn close_window(&mut self, key: WindowKey) {
@@ -1020,12 +1023,14 @@ impl<C: Component<TermWmAction> + 'static>
         palette.set_items(items);
         self.wm
             .open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
-        let now = Instant::now();
-        self.palette_tick_last = Some(now);
+        self.palette_tick_ticker =
+            term_wm_core::utils::PeriodicTicker::new_suppressed(PALETTE_TICK_INTERVAL);
         #[cfg(feature = "session-persistence")]
         {
-            self.palette_ipc_last = Some(now);
+            self.palette_ipc_ticker =
+                term_wm_core::utils::PeriodicTicker::new_suppressed(PALETTE_IPC_INTERVAL);
         }
+        self.user_registry_debouncer.reset();
     }
 
     fn open_help_overlay(&mut self) {
