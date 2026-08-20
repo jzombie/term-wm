@@ -10,9 +10,10 @@ repository.workspace = true
 license.workspace = true
 
 [features]
-default = ["pty"]
+default = ["pty", "project-tasks"]
 pty = ["portable-pty"]
 session-persistence = ["term-wm-config/session-persistence"]
+project-tasks = ["dep:shell-words", "dep:serde_json"]
 
 [dependencies]
 bitflags = { workspace = true }
@@ -22,8 +23,8 @@ linkify = { workspace = true }
 nucleo-matcher = { workspace = true }
 portable-pty = { workspace = true, optional = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-shell-words = { workspace = true }
+serde_json = { workspace = true, optional = true }
+shell-words = { workspace = true, optional = true }
 slotmap = { workspace = true }
 smallvec = { workspace = true }
 strum = { workspace = true, features = ["derive"] }

@@ -192,13 +192,20 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             crate::actions::TermWmAction::NewTerminal,
         ));
 
-        for task in project_tasks.iter().filter(|t| t.argv().is_some()) {
-            items.push(MenuDisplayItem::Item(MenuItem {
-                label: task.label.clone().into(),
-                icon: Some("▶"),
-                action: crate::actions::TermWmAction::RunProjectTask(task.label.clone()),
-                disabled: false,
-            }));
+        #[cfg(feature = "project-tasks")]
+        {
+            for task in project_tasks.iter().filter(|t| t.argv().is_some()) {
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: task.label.clone().into(),
+                    icon: Some("▶"),
+                    action: crate::actions::TermWmAction::RunProjectTask(task.label.clone()),
+                    disabled: false,
+                }));
+            }
+        }
+        #[cfg(not(feature = "project-tasks"))]
+        {
+            let _ = project_tasks;
         }
         items.push(MenuDisplayItem::Separator);
 
@@ -820,6 +827,186 @@ mod tests {
                 ("Switch to Workspace: prod".to_string(), false),
             ],
             "workspace group must list all actions, disabling the current workspace"
+        );
+    }
+
+    #[test]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_renders_5_titled_section_headers() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        use crate::window::WindowState;
+        let mut wm = make_wm::<TestOverlay>();
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+
+        let headers: Vec<String> = items
+            .iter()
+            .filter_map(|entry| match entry {
+                MenuDisplayItem::Item(MenuItem {
+                    label,
+                    disabled: true,
+                    ..
+                }) if label.starts_with("── ") => Some(label.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(headers.contains(&"── QUICK ACTIONS ──".to_string()));
+        #[cfg(feature = "session-persistence")]
+        assert!(headers.contains(&"── WORKSPACES & COLLABORATION ──".to_string()));
+        assert!(headers.contains(&"── WINDOW MANAGEMENT ──".to_string()));
+        assert!(headers.contains(&"── VIEW & LAYOUT ──".to_string()));
+        assert!(headers.contains(&"── SETTINGS & SYSTEM ──".to_string()));
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_nests_users_under_workspaces() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+
+        let mut users_by_ws = std::collections::BTreeMap::new();
+        users_by_ws.insert(
+            "dev".to_string(),
+            vec![crate::user_registry::UserEntry {
+                conn_id: 1,
+                user: "alice".to_string(),
+                hostname: "host-a".to_string(),
+                ssh_ip: Some("192.168.1.50".to_string()),
+            }],
+        );
+
+        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+
+        let ws_idx = items.iter().position(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)"
+        )).expect("workspace entry found");
+
+        let user_item = &items[ws_idx + 1];
+        assert!(
+            matches!(user_item, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ alice@host-a (192.168.1.50)"),
+            "connected user must be nested directly beneath the workspace entry"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_user_registry_fallback_nested() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut wm = make_wm::<TestOverlay>();
+        wm.user_registry.upsert(
+            1,
+            "bob".to_string(),
+            "host-b".to_string(),
+            Some("10.0.0.1".to_string()),
+        );
+
+        // Empty all_users_by_ws map forces fallback to local user_registry for current_workspace
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
+
+        let ws_idx = items.iter().position(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)"
+        )).expect("workspace entry found");
+
+        let user_item = &items[ws_idx + 1];
+        assert!(
+            matches!(user_item, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ bob@host-b (10.0.0.1)"),
+            "local user registry fallback must render nested under current workspace"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_workspace_follow_toggle_state() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut wm = make_wm::<TestOverlay>();
+
+        wm.workspace_follow_enabled = false;
+        let items_off = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        assert!(items_off.iter().any(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, icon: Some("○"), action: TermWmAction::ToggleWorkspaceFollow, .. })
+                if label == "Follow Workspaces: Enable"
+        )));
+
+        wm.workspace_follow_enabled = true;
+        let items_on = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        assert!(items_on.iter().any(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, icon: Some("◎"), action: TermWmAction::ToggleWorkspaceFollow, .. })
+                if label == "Follow Workspaces: Disable"
+        )));
+    }
+
+    #[test]
+    #[cfg(not(feature = "project-tasks"))]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_hides_project_tasks_when_feature_disabled() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+        let tasks = vec![crate::project_tasks::ProjectTaskConfig {
+            label: "should-be-hidden".into(),
+            command: Some("echo hello".into()),
+            args: None,
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            environments: Vec::new(),
+        }];
+        let items = wm.wm_menu_items(&[], "", &tasks, &std::collections::BTreeMap::new());
+        assert!(
+            !items.iter().any(|entry| matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem {
+                    action: TermWmAction::RunProjectTask(_),
+                    ..
+                })
+            )),
+            "RunProjectTask must be hidden when project-tasks feature is disabled"
+        );
+        // No separator leak after Quick Actions when tasks are hidden
+        let quick_actions_sep_idx = items
+            .iter()
+            .position(|e| matches!(e, MenuDisplayItem::Separator))
+            .expect("at least one separator");
+        assert!(
+            quick_actions_sep_idx < 5,
+            "first separator should be after Quick Actions, not leaked from tasks"
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "session-persistence"))]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_hides_workspaces_when_feature_disabled_at_compile_time() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+        let mut users_by_ws = std::collections::BTreeMap::new();
+        users_by_ws.insert(
+            "dev".to_string(),
+            vec![crate::user_registry::UserEntry {
+                conn_id: 1,
+                user: "alice".to_string(),
+                hostname: "host".to_string(),
+                ssh_ip: None,
+            }],
+        );
+        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+        assert!(
+            !items.iter().any(|e| matches!(e, MenuDisplayItem::Item(MenuItem { label, .. }) if label.contains("Workspace") || label.contains("Follow Workspaces"))),
+            "workspace UI must be hidden when session-persistence feature is disabled at compile time"
         );
     }
 }

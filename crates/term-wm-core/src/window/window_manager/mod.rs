@@ -931,7 +931,10 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             synthetic_event: None,
             clipboard,
             power_profile: PowerProfile::PowerSaver,
+            #[cfg(feature = "pty")]
             reaper: Reaper::default(),
+            #[cfg(not(feature = "pty"))]
+            reaper: Reaper,
             quit_requested: false,
             layout_dirty: true,
             notification_queue: NotificationBus::default(),
