@@ -211,6 +211,31 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             items.push(MenuDisplayItem::Separator);
         }
 
+        // Connected Users section
+        #[cfg(feature = "session-persistence")]
+        if term_wm_config::runtime::session_persistence_enabled() && !self.user_registry.is_empty() {
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: format!("Connected Users ({})", self.user_registry.len()).into(),
+                icon: Some("●"),
+                action: crate::actions::TermWmAction::CloseMenu,
+                disabled: true,
+            }));
+            for (_key, user) in self.user_registry.iter() {
+                let label = if let Some(ip) = &user.ssh_ip {
+                    format!("  {}@{} ({})", user.user, user.hostname, ip)
+                } else {
+                    format!("  {}@{}", user.user, user.hostname)
+                };
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: label.into(),
+                    icon: None,
+                    action: crate::actions::TermWmAction::CloseMenu,
+                    disabled: true,
+                }));
+            }
+            items.push(MenuDisplayItem::Separator);
+        }
+
         // TODO: Comment why this is needed
         let _ = (workspaces, current_workspace);
 

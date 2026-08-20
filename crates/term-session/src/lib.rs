@@ -241,6 +241,16 @@ pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Resul
     .map_err(|e| io::Error::other(format!("rebind workspace: {e}")))
 }
 
+/// List connected users on a channel.
+pub fn list_users(channel: &str) -> io::Result<term_session_muxio_service_definitions::ListUsersResponse> {
+    let ch = channel.to_string();
+    with_gateway(move |client| async move {
+        use term_session_muxio_service_definitions::ListUsers;
+        ListUsers::call(&*client, ch).await
+    })?
+    .map_err(|e| io::Error::other(format!("list users: {e}")))
+}
+
 /// Stop the gateway daemon.
 ///
 /// The daemon refuses to shut down while any live session is running unless

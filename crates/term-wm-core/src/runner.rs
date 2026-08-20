@@ -437,6 +437,45 @@ where
             // PTY child exit removed a window — redraw the layout.
             driver.request_redraw();
 
+            // Centralized notification bus: tick expiries and drain workspace/
+            // presence events unconditionally (not only in Some(event) branch).
+            app.wm().tick_notifications();
+            for ws in driver.take_workspace_entered() {
+                app.wm().push_notification(
+                    format!("Workspace {ws}"),
+                    std::time::Duration::from_secs(3),
+                );
+            }
+            for user in driver.take_user_connected() {
+                let label = match &user.ssh_ip {
+                    Some(ip) => format!("{}@{} ({}) connected", user.user, user.hostname, ip),
+                    None => format!("{}@{} connected", user.user, user.hostname),
+                };
+                app.wm()
+                    .user_registry
+                    .upsert(user.conn_id, user.user, user.hostname, user.ssh_ip);
+                app.wm()
+                    .push_notification(label, std::time::Duration::from_secs(3));
+            }
+            for conn_id in driver.take_user_disconnected() {
+                let label = if let Some(entry) = app.wm().user_registry.get_by_conn_id(conn_id) {
+                    format!("{}@{} disconnected", entry.user, entry.hostname)
+                } else {
+                    format!("User (conn {conn_id}) disconnected")
+                };
+                app.wm().user_registry.remove_by_conn_id(conn_id);
+                app.wm()
+                    .push_notification(label, std::time::Duration::from_secs(3));
+            }
+            if let Some(users) = driver.take_user_cache_refreshed() {
+                app.wm().user_registry.clear();
+                for user in users {
+                    app.wm()
+                        .user_registry
+                        .upsert(user.conn_id, user.user, user.hostname, user.ssh_ip);
+                }
+            }
+
             // Update monocle mode on resize
             if let Some(Event::Resize(width, _height)) = &event {
                 app.wm().update_monocle_mode(*width);

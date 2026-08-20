@@ -307,7 +307,7 @@ fn run() -> io::Result<()> {
                     return;
                 }
             };
-            // Register handler BEFORE subscribing to avoid race
+            // Register handlers BEFORE subscribing to avoid race
             {
                 let tx = tx.clone();
                 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
@@ -332,12 +332,78 @@ fn run() -> io::Result<()> {
                     .await
                     .expect("register OnAttributedInput");
             }
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                use term_session::protocol::OnUserConnected;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnUserConnected::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let info = OnUserConnected::decode_request(&payload).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                            let _ = tx.try_send(UnifiedEvent::UserConnected(info));
+                            OnUserConnected::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnUserConnected");
+            }
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                use term_session::protocol::OnUserDisconnected;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnUserDisconnected::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let conn_id = OnUserDisconnected::decode_request(&payload).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                            let _ = tx.try_send(UnifiedEvent::UserDisconnected(conn_id));
+                            OnUserDisconnected::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnUserDisconnected");
+            }
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                use term_session::protocol::OnWorkspaceEntered;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnWorkspaceEntered::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let ws = OnWorkspaceEntered::decode_request(&payload).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                            let _ = tx.try_send(UnifiedEvent::WorkspaceEntered(ws));
+                            OnWorkspaceEntered::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnWorkspaceEntered");
+            }
             // Subscribe
             use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+            let channel_for_sub = channel.clone();
             let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
             if let Err(e) = term_session::protocol::SubscribeInternalInput::call(
                 client_ref,
-                SubscribeInternalInputRequest { channel },
+                SubscribeInternalInputRequest {
+                    channel: channel_for_sub,
+                },
             )
             .await
             {
@@ -345,6 +411,25 @@ fn run() -> io::Result<()> {
                 return;
             }
             tracing::info!("Attributed input listener subscribed");
+            // Async refresh of user cache after subscribe
+            {
+                let tx = tx.clone();
+                let client = client.clone();
+                let channel = channel.clone();
+                tokio::spawn(async move {
+                    use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+                    use term_session::protocol::ListUsers;
+                    let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
+                    match ListUsers::call(client_ref, channel).await {
+                        Ok(resp) => {
+                            let _ = tx.try_send(UnifiedEvent::UserCacheRefreshed(resp.users));
+                        }
+                        Err(e) => {
+                            tracing::debug!("ListUsers refresh failed: {e:?}");
+                        }
+                    }
+                });
+            }
             // Keep the connection alive so the endpoint keeps processing RPCs.
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
@@ -560,10 +645,6 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                     tracing::error!("Failed to switch to new workspace: {e}");
                 } else {
                     self.inner.refresh_workspace_cache();
-                    self.inner.wm().push_notification(
-                        format!("Created workspace: {target_ws}"),
-                        std::time::Duration::from_secs(3),
-                    );
                 }
                 true
             }
@@ -596,7 +677,10 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn open_command_palette(&mut self) {
         #[cfg(feature = "session-persistence")]
-        self.inner.refresh_workspace_cache();
+        {
+            self.inner.refresh_workspace_cache();
+            self.inner.refresh_user_cache();
+        }
         self.inner.open_command_palette();
     }
 

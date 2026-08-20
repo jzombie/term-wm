@@ -332,6 +332,26 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         self.current_workspace = name;
     }
 
+    /// Refresh the cached user registry via `ListUsers`.
+    #[cfg(feature = "session-persistence")]
+    pub fn refresh_user_cache(&mut self) {
+        if !term_wm_config::runtime::session_persistence_enabled() {
+            return;
+        }
+        let channel = term_session::ChannelName::session(&self.current_workspace).to_string();
+        match term_session::list_users(&channel) {
+            Ok(resp) => {
+                self.wm.user_registry.clear();
+                for u in resp.users {
+                    self.wm.user_registry.upsert(u.conn_id, u.user, u.hostname, u.ssh_ip);
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Failed to refresh user cache: {e}");
+            }
+        }
+    }
+
     /// Spawn a fully-wired PTY terminal window in a single call.
     ///
     /// Handles PTY creation, status callback wiring (`PtyWakeup`, `AppExited`,

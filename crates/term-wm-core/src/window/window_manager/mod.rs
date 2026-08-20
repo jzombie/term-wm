@@ -40,8 +40,9 @@ use crate::hitbox_registry::HitboxRegistry;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
-use crate::notification::NotificationQueue;
+use crate::notification::NotificationBus;
 use crate::power_profile::PowerProfile;
+use crate::user_registry::UserRegistry;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
 use crate::utils::DelayedReleaseBool;
@@ -400,8 +401,10 @@ pub struct WindowManager<
     quit_requested: bool,
     /// Flag indicating the layout has changed and needs re-projection
     layout_dirty: bool,
-    /// Active toast notifications
-    notification_queue: NotificationQueue,
+    /// Active toast notifications (TTL-aware bus, ticked each frame)
+    notification_queue: NotificationBus,
+    /// Centralized registry of connected users for the command palette.
+    pub user_registry: UserRegistry,
     /// Per-window pending Direct Input Mode toast. The debouncer buffers the latest
     /// mode per window and arms ONE flush timer on the first transition (the
     /// deadline is never pushed back — leading-edge debounce with a cap).
@@ -927,7 +930,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             reaper: Reaper::default(),
             quit_requested: false,
             layout_dirty: true,
-            notification_queue: NotificationQueue::default(),
+            notification_queue: NotificationBus::default(),
+            user_registry: UserRegistry::default(),
             semantic_registry,
             overlays: SlotMap::with_key(),
             system_windows: HashMap::new(),
@@ -2711,9 +2715,12 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         &self.supported_menu_actions
     }
 
-    /// Push a notification and schedule its auto-dismiss via the system task scheduler.
+    /// Push a notification with a TTL. The notification is evicted by
+    /// `tick_notifications` on the next frame after its deadline. No
+    /// `TaskScheduler` is used — `NotificationBus::tick` is the single source
+    /// of truth for expiry.
     pub fn push_notification(&mut self, message: impl Into<String>, ttl: Duration) -> u64 {
-        let id = self.notification_queue.push(message);
+        let id = self.notification_queue.push(message, ttl);
         tracing::info!(
             "push_notification: id={}, queue_len={}",
             id,
@@ -2721,10 +2728,17 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         );
         // Mark layout dirty so the draw plan regenerates with notification regions
         self.mark_layout_dirty();
-        if let Some(handle) = &self.system_task_handle {
-            handle.schedule_once(ttl, SystemTask::DismissNotification(id));
-        }
         id
+    }
+
+    /// Evict expired toasts. Called at the top of the runner loop each frame.
+    pub fn tick_notifications(&mut self) {
+        let now = Instant::now();
+        let before = self.notification_queue.len();
+        self.notification_queue.tick(now);
+        if self.notification_queue.len() != before {
+            self.mark_layout_dirty();
+        }
     }
 
     /// Dismiss a notification by ID.
@@ -2768,8 +2782,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         self.push_notification(message, DIRECT_MODE_TOAST_TTL);
     }
 
-    /// Read-only access to the notification queue.
-    pub fn notifications(&self) -> &NotificationQueue {
+    /// Read-only access to the notification queue (TTL-aware bus).
+    pub fn notifications(&self) -> &NotificationBus {
         &self.notification_queue
     }
 

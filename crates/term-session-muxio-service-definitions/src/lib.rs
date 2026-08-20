@@ -9,12 +9,14 @@ pub use channel::{
 };
 pub use methods::{
     Attach, AttachRequest, ChannelInfo, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
+    ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
+    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected, OnWorkspaceEntered,
     OnWorkspaceRebind, OnWorkspaceRebindRequest, PushOutput, RPC_ERROR_LIVE_PARTICIPANTS,
     RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindWorkspace,
     RebindWorkspaceRequest, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
     SendAttributedInput, SendAttributedInputRequest, SessionInfo, ShutdownGateway, Spawn,
-    SpawnRequest, SpawnResponse, SubscribeInternalInput, SubscribeInternalInputRequest, WriteInput,
+    SpawnRequest, SpawnResponse, SubscribeInternalInput, SubscribeInternalInputRequest, UserInfo,
+    WriteInput,
 };
 pub use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 pub use path_wire::PathWire;
