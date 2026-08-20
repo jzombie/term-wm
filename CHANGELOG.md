@@ -11,6 +11,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **Project Tasks in the Command Palette:** a new `.term-wm/tasks.json` file defines project-local shell commands that appear under a "Project Tasks" group in the Command Palette. Tasks run as direct PTY children in a new window titled with the task label; on exit the window stays open and a toast fires with the exit status. Discovery walks from the WM launch directory upward through ancestors; the first `.term-wm/tasks.json` found wins; a malformed file stops the walk. Each task accepts `label`, `command`, `args`, `cwd`, `env`, and an `environments` list for environment gating — `"dev"` / `"prod"` / `"test"` values reuse the same `active_environment()` identity (`TERM_WM_ENV` override, `CARGO_MANIFEST_DIR`, `cfg!(debug_assertions)`) that IPC gateway channel scoping uses, so a dev-only task (e.g. `cargo run`) is hidden from installed/release binaries and vice versa. An absent or empty `environments` list means the task is visible in all environments.
 - **`RunProjectTask(String)` action variant:** a new `TermWmAction` carries the task label from the Command Palette to the app's `handle_custom_action`, which looks up the task, builds a `CommandBuilder` from its `argv()`, applies `cwd`/`env`, spawns a terminal window, and tracks it for exit-toasting and cleanup.
 - **`docs/tasks.md` — canonical tasks-file specification:** documents the flat-array schema, argv tokenization rules, environment-gating semantics (reusing `term_wm_config::env::active_environment()`), run/toast behavior, and the explicitly out-of-scope Zed compatibility boundary.
+- **Streamlined Command Palette:** The palette now shows 5 clearly labeled sections — Quick Actions, Workspaces & Collaboration, Window Management, View & Layout, and Settings & System. Workspaces, follow mode, and who’s in each workspace are together in one place: create or switch workspaces and see connected users right under each workspace name.
+- **Follow Workspaces toggle:** A simple on/off switch in the Workspaces section. When off (default), switching workspaces moves only you. When on, everyone on that workspace follows together — great for pairing or presentations. Toggle it anytime from the palette; it takes effect immediately.
+- **Smarter workspace notifications:** Switching workspaces now reliably shows a single “Workspace <name>” message, whether the workspace is new or already open, and rapid switches no longer flood you with duplicates.
+
+### Changed
+
+- **Palette shows live workspace and user info when you open it:** Opening the palette does a quick check of all workspaces and who’s in them, then builds the whole menu.
+- **Workspace notifications:** Whether you create a new workspace or jump to one that’s already open, you’ll get a single notification for that workspace, even if multiple events race. The follow setting decides whether only you move or everyone moves together.
+
+### Fixed
+
+- **No more duplicate or missing workspace notifications:** Switching workspaces now always shows one notification, whether the workspace is new or already open, and rapid switches no longer spam you.
+- **Follow toggle now actually works:** Tapping “Follow Workspaces: Enable” now correctly switches to “Disable” and changes whether everyone follows you or just you move. Previously it looked like it worked but never actually toggled.
+- **Palette no longer loses its headers:** Custom palette setups no longer accidentally hide section titles or user lists.
+- **Palette no longer leaks memory or shows the wrong current workspace:** Fixed labels and the “(current)” indicator, plus now works cleanly even when built without session features.
 
 ## [0.10.2-alpha] - 2026-08-19
 
