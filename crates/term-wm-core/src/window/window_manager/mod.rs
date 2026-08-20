@@ -405,9 +405,6 @@ pub struct WindowManager<
     notification_queue: NotificationBus,
     /// Centralized registry of connected users for the command palette.
     pub user_registry: UserRegistry,
-    /// All workspace users grouped by workspace for global palette listing.
-    #[cfg(feature = "session-persistence")]
-    pub all_workspaces_users: std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
     /// Per-window pending Direct Input Mode toast. The debouncer buffers the latest
     /// mode per window and arms ONE flush timer on the first transition (the
     /// deadline is never pushed back — leading-edge debounce with a cap).
@@ -935,8 +932,6 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             layout_dirty: true,
             notification_queue: NotificationBus::default(),
             user_registry: UserRegistry::default(),
-            #[cfg(feature = "session-persistence")]
-            all_workspaces_users: std::collections::BTreeMap::new(),
             semantic_registry,
             overlays: SlotMap::with_key(),
             system_windows: HashMap::new(),
@@ -6724,7 +6719,7 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items(&[], "", &[]);
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6802,7 +6797,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items(&[], "", &[]);
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {

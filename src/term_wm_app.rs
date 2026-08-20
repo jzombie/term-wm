@@ -140,6 +140,9 @@ where
     /// Current workspace name for filtering the palette switch list.
     #[cfg(feature = "session-persistence")]
     current_workspace: String,
+    /// All workspace users grouped by workspace for palette listing (app-owned).
+    #[cfg(feature = "session-persistence")]
+    all_users_by_ws: std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
     /// Working directory captured at app init — the root of tasks.json discovery.
     launch_cwd: PathBuf,
     /// Tasks discovered from the nearest .term-wm/.zed tasks.json.
@@ -280,6 +283,8 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             cached_workspaces: Vec::new(),
             #[cfg(feature = "session-persistence")]
             current_workspace: term_session::DEFAULT_WORKSPACE.to_string(),
+            #[cfg(feature = "session-persistence")]
+            all_users_by_ws: std::collections::BTreeMap::new(),
             launch_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             project_tasks: Vec::new(),
             project_root: None,
@@ -298,7 +303,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
 
     /// Refresh the cached workspace channel list and all workspace users from the daemon via short-lived IPC.
     /// Called before opening the Command Palette — never on every keystroke.
-    /// Single `list_channels()` pass populates both `cached_workspaces` and `wm.all_workspaces_users`.
+    /// Single `list_channels()` pass populates both `cached_workspaces` and `all_users_by_ws` (app-owned, pass-by-ref to WM).
     #[cfg(feature = "session-persistence")]
     pub fn refresh_workspace_cache(&mut self) {
         if !term_wm_config::runtime::session_persistence_enabled() {
@@ -330,7 +335,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                 }
                 self.cached_workspaces = workspaces.into_iter().collect();
                 self.cached_workspaces.sort();
-                self.wm.all_workspaces_users = users_by_ws;
+                self.all_users_by_ws = users_by_ws;
             }
             Err(e) => {
                 tracing::debug!("Failed to refresh workspace/user cache: {e}");
@@ -840,13 +845,19 @@ impl<C: Component<TermWmAction> + 'static>
         let workspaces: &[String] = &[];
 
         #[cfg(feature = "session-persistence")]
-        let items =
-            self.wm
-                .wm_menu_items(workspaces, &self.current_workspace, &self.wm.project_tasks);
+        let items = self.wm.wm_menu_items(
+            workspaces,
+            &self.current_workspace,
+            &self.wm.project_tasks,
+            &self.all_users_by_ws,
+        );
         #[cfg(not(feature = "session-persistence"))]
-        let items = self
-            .wm
-            .wm_menu_items(workspaces, "", &self.wm.project_tasks);
+        let items = self.wm.wm_menu_items(
+            workspaces,
+            "",
+            &self.wm.project_tasks,
+            &std::collections::BTreeMap::new(),
+        );
         let supported = self.wm.supported_menu_actions();
         // Filter out items not in the supported set; keep separators.
         let items: Vec<_> = items

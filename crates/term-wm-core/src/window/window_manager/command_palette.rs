@@ -108,6 +108,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         workspaces: &[String],
         current_workspace: &str,
         project_tasks: &[crate::project_tasks::ProjectTaskConfig],
+        all_users_by_ws: &std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
         use crate::window::WindowState;
@@ -211,18 +212,18 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             items.push(MenuDisplayItem::Separator);
         }
 
-        // Connected Users section — global grouped view
+        // Connected Users section — global grouped view (app-owned, pass-by-ref)
         #[cfg(feature = "session-persistence")]
         if term_wm_config::runtime::session_persistence_enabled() {
-            if !self.all_workspaces_users.is_empty() {
-                let total: usize = self.all_workspaces_users.values().map(|v| v.len()).sum();
+            if !all_users_by_ws.is_empty() {
+                let total: usize = all_users_by_ws.values().map(|v| v.len()).sum();
                 items.push(MenuDisplayItem::Item(MenuItem {
                     label: format!("Connected Users ({total})").into(),
                     icon: Some("●"),
                     action: crate::actions::TermWmAction::CloseMenu,
                     disabled: true,
                 }));
-                for (ws, users) in &self.all_workspaces_users {
+                for (ws, users) in all_users_by_ws {
                     items.push(MenuDisplayItem::Item(MenuItem {
                         label: format!("  {ws} ({})", users.len()).into(),
                         icon: None,
@@ -268,8 +269,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             }
         }
 
-        // TODO: Comment why this is needed
-        let _ = (workspaces, current_workspace);
+        // TODO: picks up unused params when session-persistence disabled
+        let _ = (workspaces, current_workspace, all_users_by_ws);
 
         // Window management group (directly below top group)
         {
@@ -665,7 +666,7 @@ mod tests {
         wm.focus_window_key(key);
         wm.set_window_title(key, "alpha");
 
-        let items = wm.wm_menu_items(&[], "", &[]);
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
@@ -695,7 +696,7 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "", &[]);
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,
@@ -720,7 +721,7 @@ mod tests {
             session_persistence: false,
         });
 
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default", &[]);
+        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default", &[], &std::collections::BTreeMap::new());
 
         // Restore the default so parallel tests see the expected state.
         term_wm_config::runtime::init(term_wm_config::runtime::RuntimeConfig::default());
@@ -753,7 +754,7 @@ mod tests {
         // Runtime enabled by default: the workspace group must offer
         // New Workspace, Switch to Workspace entries (current one disabled),
         // and Detach Viewer.
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev", &[]);
+        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev", &[], &std::collections::BTreeMap::new());
 
         let mut workspace: Vec<(String, bool)> = items
             .iter()
