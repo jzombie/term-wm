@@ -104,7 +104,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                     | crate::actions::TermWmAction::NewWorkspace
                                     | crate::actions::TermWmAction::ToggleWorkspaceFollow
                             ));
-                    supported.contains(&item.action) || always_pass
+                    item.disabled || supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,
             })

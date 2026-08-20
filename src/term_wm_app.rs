@@ -908,7 +908,7 @@ impl<C: Component<TermWmAction> + 'static>
                                 | TermWmAction::NewWorkspace
                                 | TermWmAction::ToggleWorkspaceFollow
                         );
-                    supported.contains(&item.action) || always_pass
+                    item.disabled || supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,
             })
