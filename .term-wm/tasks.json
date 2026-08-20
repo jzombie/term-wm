@@ -51,5 +51,15 @@
             "--all"
         ],
         "environments": ["dev"]
+    },
+    {
+        "label": "dev: cargo test all features",
+        "command": "cargo",
+        "args": [
+            "test",
+            "--workspace",
+            "--all-features"
+        ],
+        "environments": ["dev"]
     }
 ]
