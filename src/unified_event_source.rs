@@ -178,13 +178,13 @@ impl UnifiedEventSource {
                 pending_work: false,
                 max_sleep_duration: None,
                 event_owner: event_owner.clone(),
-    #[cfg(feature = "session-persistence")]
+                #[cfg(feature = "session-persistence")]
                 workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+                #[cfg(feature = "session-persistence")]
                 user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+                #[cfg(feature = "session-persistence")]
                 user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+                #[cfg(feature = "session-persistence")]
                 user_cache_refreshed: None,
             },
             event_owner,
@@ -1093,13 +1093,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1192,13 +1192,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1283,13 +1283,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1340,13 +1340,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1407,13 +1407,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         assert_eq!(
@@ -1446,13 +1446,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: true,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         assert_eq!(
@@ -1483,13 +1483,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: true,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         assert_eq!(
@@ -1530,13 +1530,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1581,13 +1581,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1624,13 +1624,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1685,13 +1685,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         console_tx.send(key_evt(KeyCode::Char('a'))).unwrap();
@@ -1731,13 +1731,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         for i in 0..5u8 {
@@ -1787,13 +1787,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         for _ in 0..3 {
@@ -1838,13 +1838,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         // Disconnect the console channel.
@@ -1895,13 +1895,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -2004,13 +2004,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -2067,13 +2067,13 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             workspace_entered: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_connected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
-    #[cfg(feature = "session-persistence")]
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 

@@ -142,7 +142,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             "System: Enable Panel"
         };
 
-        let mi = |label: &'static str, icon: Option<&'static str>, action: crate::actions::TermWmAction| {
+        let mi = |label: &'static str,
+                  icon: Option<&'static str>,
+                  action: crate::actions::TermWmAction| {
             MenuDisplayItem::Item(MenuItem {
                 label: label.into(),
                 icon,
@@ -179,7 +181,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         // 1. QUICK ACTIONS & TASKS
         // ─────────────────────────────────────────────────────────
         items.push(header("QUICK ACTIONS"));
-        items.push(mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu));
+        items.push(mi(
+            "Resume",
+            Some("▶"),
+            crate::actions::TermWmAction::CloseMenu,
+        ));
         items.push(mi(
             "New Terminal",
             Some("+"),
@@ -351,10 +357,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         } else {
             "View: Tile Windows"
         };
-        let mut tile_item = mi(layout_label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
-        if self.is_monocle() && let MenuDisplayItem::Item(ref mut item) = tile_item {
-                item.disabled = true;
-            }
+        let mut tile_item = mi(
+            layout_label,
+            Some("⊞"),
+            crate::actions::TermWmAction::ToggleTiling,
+        );
+        if self.is_monocle()
+            && let MenuDisplayItem::Item(ref mut item) = tile_item
+        {
+            item.disabled = true;
+        }
         items.push(tile_item);
         items.push(MenuDisplayItem::Separator);
 
@@ -384,7 +396,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             Some("■"),
             crate::actions::TermWmAction::ToggleClipboardMode,
         ));
-        items.push(mi("Paste", Some("■"), crate::actions::TermWmAction::PasteClipboard));
+        items.push(mi(
+            "Paste",
+            Some("■"),
+            crate::actions::TermWmAction::PasteClipboard,
+        ));
 
         let debug_log_visible = self
             .get_system_window::<system_tags::DebugLog>()
@@ -404,11 +420,23 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             "System: Enable Panel"
         };
 
-        items.push(mi(debug_label, Some("≣"), crate::actions::TermWmAction::ToggleDebugWindow));
-        items.push(mi(panel_label, Some("*"), crate::actions::TermWmAction::ToggleSystemPanel));
+        items.push(mi(
+            debug_label,
+            Some("≣"),
+            crate::actions::TermWmAction::ToggleDebugWindow,
+        ));
+        items.push(mi(
+            panel_label,
+            Some("*"),
+            crate::actions::TermWmAction::ToggleSystemPanel,
+        ));
 
         items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
-        items.push(mi("Exit UI", Some("⏻"), crate::actions::TermWmAction::ExitUi));
+        items.push(mi(
+            "Exit UI",
+            Some("⏻"),
+            crate::actions::TermWmAction::ExitUi,
+        ));
 
         items
     }
@@ -677,7 +705,9 @@ mod tests {
         assert!(idx > 0, "Switch to should not be first item");
         // 5-section layout: Switch to is after MinimizeWindow, not necessarily after Separator
         assert!(
-            items[..idx].iter().any(|e| matches!(e, MenuDisplayItem::Separator)),
+            items[..idx]
+                .iter()
+                .any(|e| matches!(e, MenuDisplayItem::Separator)),
             "at least one separator must precede Switch to list"
         );
     }
@@ -719,7 +749,12 @@ mod tests {
             session_persistence: false,
         });
 
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &["dev".into(), "prod".into()],
+            "default",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
 
         // Restore the default so parallel tests see the expected state.
         term_wm_config::runtime::init(term_wm_config::runtime::RuntimeConfig::default());
@@ -752,7 +787,12 @@ mod tests {
         // Runtime enabled by default: the workspace group must offer
         // New Workspace, Switch to Workspace entries (current one disabled),
         // and Detach Viewer.
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &["dev".into(), "prod".into()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
 
         let mut workspace: Vec<(String, bool)> = items
             .iter()

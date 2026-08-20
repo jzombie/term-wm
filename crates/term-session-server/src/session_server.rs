@@ -16,10 +16,9 @@ use term_session_muxio_service_definitions::{
     OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected,
     OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
     RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope,
-    RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
-    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
-    UserInfo, WriteInput,
+    RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    SendAttributedInput, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
+    SubscribeInternalInput, UserInfo, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -1547,7 +1546,9 @@ pub async fn run_gateway(
                         RebindScope::CallerOnly => {
                             let attached: Vec<_> = conns
                                 .values()
-                                .filter(|e| matches!(&e.state, ConnState::Attached(n) if n == &source))
+                                .filter(
+                                    |e| matches!(&e.state, ConnState::Attached(n) if n == &source),
+                                )
                                 .collect();
                             if let Some(init_id) = req.initiator_conn_id {
                                 attached
@@ -1571,11 +1572,9 @@ pub async fn run_gateway(
                 for caller in targets {
                     let target = req.target.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = OnWorkspaceRebind::call(
-                            &caller,
-                            OnWorkspaceRebindRequest { target },
-                        )
-                        .await
+                        if let Err(e) =
+                            OnWorkspaceRebind::call(&caller, OnWorkspaceRebindRequest { target })
+                                .await
                         {
                             tracing::debug!(
                                 error = ?e,

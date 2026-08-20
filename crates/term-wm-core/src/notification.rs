@@ -183,11 +183,10 @@ impl NotificationBus {
         let msg_str: String = message.into();
         let now = std::time::Instant::now();
         // Time-Window Deduplication: collapse rapid identical pushes
-        if let Some(existing) = self
-            .toasts
-            .iter()
-            .find(|t| t.message.as_ref() == msg_str && now.saturating_duration_since(t.created_at) < DEDUP_WINDOW)
-        {
+        if let Some(existing) = self.toasts.iter().find(|t| {
+            t.message.as_ref() == msg_str
+                && now.saturating_duration_since(t.created_at) < DEDUP_WINDOW
+        }) {
             return existing.id;
         }
         let id = self.next_id;
@@ -289,7 +288,11 @@ mod bus_tests {
         let id3 = b.push("Workspace dev", Duration::from_secs(3));
         assert_eq!(id1, id2);
         assert_eq!(id2, id3);
-        assert_eq!(b.len(), 1, "rapid identical pushes must collapse into 1× toast");
+        assert_eq!(
+            b.len(),
+            1,
+            "rapid identical pushes must collapse into 1× toast"
+        );
         // Different message in same window is NOT deduplicated
         let id_other = b.push("Workspace prod", Duration::from_secs(3));
         assert_ne!(id1, id_other);

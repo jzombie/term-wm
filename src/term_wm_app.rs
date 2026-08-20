@@ -144,7 +144,8 @@ where
     current_workspace: String,
     /// All workspace users grouped by workspace for palette listing (app-owned).
     #[cfg(feature = "session-persistence")]
-    all_users_by_ws: std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
+    all_users_by_ws:
+        std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
     /// Working directory captured at app init — the root of tasks.json discovery.
     launch_cwd: PathBuf,
     /// Tasks discovered from the nearest .term-wm/.zed tasks.json.
@@ -333,7 +334,11 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                     }
                 }
                 for v in users_by_ws.values_mut() {
-                    v.sort_by(|a, b| a.user.cmp(&b.user).then_with(|| a.hostname.cmp(&b.hostname)));
+                    v.sort_by(|a, b| {
+                        a.user
+                            .cmp(&b.user)
+                            .then_with(|| a.hostname.cmp(&b.hostname))
+                    });
                 }
                 self.cached_workspaces = workspaces.into_iter().collect();
                 self.cached_workspaces.sort();

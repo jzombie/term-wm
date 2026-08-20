@@ -1001,7 +1001,7 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         #[cfg(unix)]
         wake_read_fd,
         #[cfg(unix)]
-        _wake_keepalive: _,
+            _wake_keepalive: _,
         shutdown,
     } = args;
     let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
