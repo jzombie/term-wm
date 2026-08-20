@@ -8886,4 +8886,132 @@ mod tests {
             "full_region (frame) at area.y must satisfy the window_at_top gate"
         );
     }
+
+    // ── Title lock tests ────────────────────────────────────────────────────
+
+    fn make_wm_for_titles() -> WindowManager<TestComponent> {
+        WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn set_window_title_bogus_key_is_noop() {
+        let mut wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        wm.set_window_title(bogus, "x");
+        assert!(wm.window(bogus).is_none());
+    }
+
+    #[test]
+    fn window_title_bogus_key_falls_back_to_debug() {
+        let wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        assert_eq!(wm.window_title(bogus), format!("{:?}", bogus));
+    }
+
+    #[test]
+    fn window_titles_empty_when_no_windows() {
+        let wm = make_wm_for_titles();
+        assert!(wm.window_titles().is_empty());
+    }
+
+    #[test]
+    fn set_window_title_lock_bogus_key_is_noop() {
+        let mut wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        wm.set_window_title_lock(bogus, "Label", true);
+        assert!(!wm.is_window_title_locked(bogus));
+    }
+
+    #[test]
+    fn is_window_title_locked_missing_key_is_false() {
+        let wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        assert!(!wm.is_window_title_locked(bogus));
+    }
+
+    #[test]
+    fn set_window_title_lock_pins_title() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title_lock(key, "Label", true);
+        assert_eq!(wm.window_title(key), "Label");
+        assert!(wm.is_window_title_locked(key));
+        wm.set_window_title(key, "overwrite");
+        assert_eq!(
+            wm.window_title(key),
+            "Label",
+            "locked window must ignore subsequent set_window_title"
+        );
+    }
+
+    #[test]
+    fn set_window_title_lock_not_sticky_when_unlocked() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title_lock(key, "Label", false);
+        assert!(!wm.is_window_title_locked(key));
+        wm.set_window_title(key, "overwrite");
+        assert_eq!(
+            wm.window_title(key),
+            "overwrite",
+            "unlocked window must accept overwrites"
+        );
+    }
+
+    #[test]
+    fn set_window_title_lock_preserves_seq_order() {
+        let mut wm = make_wm_for_titles();
+        let keys = make_keys(&mut wm, 3);
+        for &k in &keys {
+            wm.managed_draw_order.push(k);
+        }
+        wm.set_window_title(keys[0], "Label");
+        wm.set_window_title(keys[1], "Label");
+        wm.set_window_title(keys[2], "Other");
+        let titles: Vec<String> = wm.window_titles().into_iter().map(|(_, t)| t).collect();
+        assert_eq!(titles[0], "Label (1)");
+        assert_eq!(titles[1], "Label (2)");
+        assert_eq!(titles[2], "Other");
+    }
+
+    #[test]
+    fn set_window_title_lock_same_title_no_seq_bump() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title(key, "Label");
+        let order_before = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        wm.set_window_title_lock(key, "Label", true);
+        let order_after = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        assert_eq!(
+            order_before, order_after,
+            "same-title lock must not bump title_set_order"
+        );
+        assert!(wm.is_window_title_locked(key));
+    }
+
+    #[test]
+    fn set_window_title_locked_toggles_flag_only() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title(key, "Label");
+        let order_before = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        wm.set_window_title_locked(key, true);
+        assert!(wm.is_window_title_locked(key));
+        assert_eq!(wm.window_title(key), "Label");
+        let order_after = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        assert_eq!(
+            order_before, order_after,
+            "lock toggle must not change title_set_order"
+        );
+        wm.set_window_title_locked(key, false);
+        assert!(!wm.is_window_title_locked(key));
+        wm.set_window_title(key, "NewLabel");
+        assert_eq!(wm.window_title(key), "NewLabel");
+    }
 }
