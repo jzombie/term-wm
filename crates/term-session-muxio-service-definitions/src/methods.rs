@@ -838,7 +838,9 @@ impl RpcMethodPrebuffered for OnUserDisconnected {
     type Output = ();
 
     fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
-        Ok(bitcode::encode(&OnUserDisconnectedRequest { conn_id: input }))
+        Ok(bitcode::encode(&OnUserDisconnectedRequest {
+            conn_id: input,
+        }))
     }
 
     fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {

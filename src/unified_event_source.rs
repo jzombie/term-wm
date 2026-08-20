@@ -1049,10 +1049,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         // Send 10 input events into the channel
@@ -1144,10 +1144,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         // Send: Press, Release, Repeat, Press
@@ -1231,10 +1231,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         // Send only Release events (filtered on all platforms)
@@ -1284,10 +1284,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         // Baseline: no input, no dirty → PowerSaver
@@ -1347,10 +1347,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
         assert_eq!(
             source.current_profile(),
@@ -1382,10 +1382,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: true,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
         assert_eq!(
             source.current_profile(),
@@ -1415,10 +1415,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: true,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
         assert_eq!(
             source2.current_profile(),
@@ -1458,10 +1458,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         // Call through the trait, not an inherent method. Would return
@@ -1505,10 +1505,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         // Call through the trait, not an inherent method. Would return
@@ -1544,10 +1544,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         #[cfg(not(target_os = "windows"))]
@@ -1601,10 +1601,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
         console_tx.send(key_evt(KeyCode::Char('a'))).unwrap();
 
@@ -1643,10 +1643,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
         for i in 0..5u8 {
             console_tx
@@ -1695,10 +1695,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
         for _ in 0..3 {
             console_tx
@@ -1742,10 +1742,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
         // Disconnect the console channel.
         drop(console_tx);
@@ -1795,10 +1795,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         // Remote viewer key (conn_id 7) followed by a local console key.
@@ -1900,10 +1900,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         let key = WindowKey::default();
@@ -1959,10 +1959,10 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
-                workspace_entered: Vec::new(),
-                user_connected: Vec::new(),
-                user_disconnected: Vec::new(),
-                user_cache_refreshed: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
         };
 
         tx.send(UnifiedEvent::Input {

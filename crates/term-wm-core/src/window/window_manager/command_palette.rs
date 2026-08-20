@@ -213,7 +213,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
 
         // Connected Users section
         #[cfg(feature = "session-persistence")]
-        if term_wm_config::runtime::session_persistence_enabled() && !self.user_registry.is_empty() {
+        if term_wm_config::runtime::session_persistence_enabled() && !self.user_registry.is_empty()
+        {
             items.push(MenuDisplayItem::Item(MenuItem {
                 label: format!("Connected Users ({})", self.user_registry.len()).into(),
                 icon: Some("●"),

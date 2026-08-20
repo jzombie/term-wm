@@ -470,9 +470,12 @@ where
             if let Some(users) = driver.take_user_cache_refreshed() {
                 app.wm().user_registry.clear();
                 for user in users {
-                    app.wm()
-                        .user_registry
-                        .upsert(user.conn_id, user.user, user.hostname, user.ssh_ip);
+                    app.wm().user_registry.upsert(
+                        user.conn_id,
+                        user.user,
+                        user.hostname,
+                        user.ssh_ip,
+                    );
                 }
             }
 

@@ -14,11 +14,11 @@ use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
     ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
     OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected,
-    OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest,
-    RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN,
-    RPC_ERROR_UNATTACHED, RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID,
-    SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput, SessionInfo, ShutdownGateway, Spawn,
-    SpawnRequest, SpawnResponse, SubscribeInternalInput, UserInfo, WriteInput,
+    OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
+    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindWorkspace,
+    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
+    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
+    UserInfo, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -688,10 +688,7 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
 
 /// Push `OnWorkspaceEntered` to the channel's `internal_wm_caller` if present.
 /// Fire-and-forget: spawns a detached task, logs on failure.
-fn push_workspace_entered(
-    caller: RpcIpcConnectionContextHandle,
-    workspace: String,
-) {
+fn push_workspace_entered(caller: RpcIpcConnectionContextHandle, workspace: String) {
     tokio::spawn(async move {
         if let Err(e) = OnWorkspaceEntered::call(&caller, workspace).await {
             tracing::debug!(error = ?e, "Failed to deliver OnWorkspaceEntered");
@@ -700,11 +697,7 @@ fn push_workspace_entered(
 }
 
 #[allow(dead_code)]
-async fn notify_user_connected(
-    state: &ServerState,
-    channel: &ChannelName,
-    info: UserInfo,
-) {
+async fn notify_user_connected(state: &ServerState, channel: &ChannelName, info: UserInfo) {
     let caller = {
         let Some(ch) = resolve_channel(state, channel).await else {
             return;
@@ -725,11 +718,7 @@ async fn notify_user_connected(
 }
 
 /// Notify the `internal_wm_caller` that a user disconnected.
-async fn notify_user_disconnected(
-    state: &ServerState,
-    channel: &ChannelName,
-    conn_id: usize,
-) {
+async fn notify_user_disconnected(state: &ServerState, channel: &ChannelName, conn_id: usize) {
     let caller = {
         let Some(ch) = resolve_channel(state, channel).await else {
             return;
@@ -875,7 +864,10 @@ pub async fn run_gateway(
                 {
                     let (caller, ws) = {
                         let guard = ch.lock().await;
-                        (guard.internal_wm_caller.clone(), parsed.workspace().to_string())
+                        (
+                            guard.internal_wm_caller.clone(),
+                            parsed.workspace().to_string(),
+                        )
                     };
                     if let Some(caller) = caller {
                         push_workspace_entered(caller, ws);
@@ -1548,8 +1540,7 @@ pub async fn run_gateway(
                 }
                 let req = RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
                 let source = ChannelName::parse(&req.source_channel).map_err(|e| rpc_err(&e))?;
-                let target_name =
-                    ChannelName::parse(&req.target).map_err(|e| rpc_err(&e))?;
+                let target_name = ChannelName::parse(&req.target).map_err(|e| rpc_err(&e))?;
                 // Workspace entry toast for the destination: fire-and-forget
                 // if the target's internal WM is already subscribed. Cold-start
                 // (caller None) will be handled by Subscribe's fallback.
@@ -1602,40 +1593,38 @@ pub async fn run_gateway(
                 }
                 let req = SubscribeInternalInput::decode_request(&payload).map_err(boxed_io)?;
                 let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
-                let workspace_to_push = if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
-                    let mut guard = ch.lock().await;
-                    // Set input mode on the channel (source of truth)
-                    guard.input_mode = InputMode::AttributedIpc {
-                        wm_conn_id: ctx.conn_id,
-                    };
-                    // Store caller on ChannelState (not Session) so it
-                    // survives session spawn/restart — eliminates race.
-                    guard.internal_wm_caller = Some(RpcIpcConnectionContextHandle(ctx.clone()));
-                    guard.internal_wm_conn_id = Some(ctx.conn_id);
-                    // Mark channel as internal for StreamInput suppression
-                    {
-                        let mut channels = state
-                            .internal_channels
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        channels.insert(name.to_string());
-                    }
-                    // Cold-start fallback: if viewers already attached before
-                    // Subscribe (Attach raced ahead), push workspace now.
-                    if !guard.clients.is_empty() {
-                        Some((
-                            guard
-                                .internal_wm_caller
-                                .clone()
-                                .expect("caller just set"),
-                            name.workspace().to_string(),
-                        ))
+                let workspace_to_push =
+                    if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                        let mut guard = ch.lock().await;
+                        // Set input mode on the channel (source of truth)
+                        guard.input_mode = InputMode::AttributedIpc {
+                            wm_conn_id: ctx.conn_id,
+                        };
+                        // Store caller on ChannelState (not Session) so it
+                        // survives session spawn/restart — eliminates race.
+                        guard.internal_wm_caller = Some(RpcIpcConnectionContextHandle(ctx.clone()));
+                        guard.internal_wm_conn_id = Some(ctx.conn_id);
+                        // Mark channel as internal for StreamInput suppression
+                        {
+                            let mut channels = state
+                                .internal_channels
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            channels.insert(name.to_string());
+                        }
+                        // Cold-start fallback: if viewers already attached before
+                        // Subscribe (Attach raced ahead), push workspace now.
+                        if !guard.clients.is_empty() {
+                            Some((
+                                guard.internal_wm_caller.clone().expect("caller just set"),
+                                name.workspace().to_string(),
+                            ))
+                        } else {
+                            None
+                        }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
                 if let Some((caller, ws)) = workspace_to_push {
                     push_workspace_entered(caller, ws);
                 }

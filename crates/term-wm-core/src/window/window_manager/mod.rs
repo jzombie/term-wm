@@ -42,9 +42,9 @@ use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
 use crate::notification::NotificationBus;
 use crate::power_profile::PowerProfile;
-use crate::user_registry::UserRegistry;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
+use crate::user_registry::UserRegistry;
 use crate::utils::DelayedReleaseBool;
 use crate::utils::KeyedTaskDebouncer;
 #[cfg(test)]

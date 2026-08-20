@@ -343,7 +343,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             Ok(resp) => {
                 self.wm.user_registry.clear();
                 for u in resp.users {
-                    self.wm.user_registry.upsert(u.conn_id, u.user, u.hostname, u.ssh_ip);
+                    self.wm
+                        .user_registry
+                        .upsert(u.conn_id, u.user, u.hostname, u.ssh_ip);
                 }
             }
             Err(e) => {

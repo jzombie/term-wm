@@ -362,9 +362,10 @@ fn run() -> io::Result<()> {
                     .register_prebuffered(OnUserDisconnected::METHOD_ID, move |payload, _ctx| {
                         let tx = tx.clone();
                         async move {
-                            let conn_id = OnUserDisconnected::decode_request(&payload).map_err(|e| {
-                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-                            })?;
+                            let conn_id =
+                                OnUserDisconnected::decode_request(&payload).map_err(|e| {
+                                    Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                                })?;
                             let _ = tx.try_send(UnifiedEvent::UserDisconnected(conn_id));
                             OnUserDisconnected::encode_response(()).map_err(|e| {
                                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
