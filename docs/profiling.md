@@ -1,11 +1,19 @@
+## Profiling without the daemon
+
+```bash
+samply record --save-only -o samply.json ./target/debug/term-wm --no-session-persistence
+```
+
 ## Profiling with `term-bench` (single-pane)
 
 ```bash
 cd crates/term-bench && cargo build --release && cd ../..
 ```
 
+> _Note: This also skips running the daemon._
+
 ```bash
-samply record --save-only -o samply.json ./target/release/term-wm -n 1 "./target/release/term-bench"
+samply record --save-only -o samply.json ./target/release/term-wm --no-session-persistence -n 1 "./target/release/term-bench"
 ```
 
 ---
@@ -16,9 +24,14 @@ samply record --save-only -o samply.json ./target/release/term-wm -n 1 "./target
 cargo build --release
 ```
 
+> _Note: This also skips running the daemon._
+
 ```bash
-samply record --save-only -o samply.json ./target/release/term-wm -n 2 "cat /dev/random" "cat /dev/random"
+samply record --save-only -o samply.json ./target/release/term-wm --no-session-persistence -n 2 "cat /dev/random" "cat /dev/random"
 ```
+
+
+
 
 ---
 
