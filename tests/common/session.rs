@@ -115,6 +115,7 @@ pub async fn attach_client(client: &RpcIpcClient, channel: &ChannelName) -> usiz
             user: "test-user".to_string(),
             version: "test-version".to_string(),
             ssh_ip: None,
+            ssh_port: None,
         },
     )
     .await

@@ -95,6 +95,8 @@ struct ConnEntry {
     version: String,
     /// Remote peer IP for SSH attaches; `None` for local (reported at Attach).
     ssh_ip: Option<String>,
+    /// Remote peer source port for SSH attaches; `None` for local (reported at Attach).
+    ssh_port: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -106,6 +108,7 @@ struct ClientEntry {
     user: String,
     version: String,
     ssh_ip: Option<String>,
+    ssh_port: Option<u16>,
     cols: u16,
     rows: u16,
 }
@@ -826,6 +829,7 @@ pub async fn run_gateway(
                     user: String::new(),
                     version: String::new(),
                     ssh_ip: None,
+                    ssh_port: None,
                 });
                 let channel_str = name.to_string();
                 entry.state = ConnState::Attached(name);
@@ -835,6 +839,7 @@ pub async fn run_gateway(
                 entry.user = req.user;
                 entry.version = req.version;
                 entry.ssh_ip = req.ssh_ip;
+                entry.ssh_port = req.ssh_port;
                 // Update conn_to_channel routing table
                 {
                     let mut map = state
@@ -929,6 +934,7 @@ pub async fn run_gateway(
                             .map(|c| c.version.clone())
                             .unwrap_or_default(),
                         ssh_ip: conn_meta.as_ref().and_then(|c| c.ssh_ip.clone()),
+                        ssh_port: conn_meta.as_ref().and_then(|c| c.ssh_port),
                         cols,
                         rows,
                     });
@@ -947,6 +953,11 @@ pub async fn run_gateway(
                                 user: c.user,
                                 hostname: c.hostname,
                                 ssh_ip: c.ssh_ip,
+                                ssh_port: c.ssh_port,
+                                cols: c.cols,
+                                rows: c.rows,
+                                connected_at_unix: c.connected_at_unix,
+                                pid: c.pid,
                             },
                         )
                     })
@@ -1323,6 +1334,11 @@ pub async fn run_gateway(
                             user: c.user.clone(),
                             hostname: c.hostname.clone(),
                             ssh_ip: c.ssh_ip.clone(),
+                            ssh_port: c.ssh_port,
+                            cols: c.cols,
+                            rows: c.rows,
+                            connected_at_unix: c.connected_at_unix,
+                            pid: c.pid,
                         })
                         .collect()
                 } else {
@@ -1704,6 +1720,7 @@ pub async fn run_gateway(
                         user: String::new(),
                         version: String::new(),
                         ssh_ip: None,
+                        ssh_port: None,
                     });
                 }
                 RpcIpcServerEvent::ClientDisconnected(conn_id) => {
@@ -1769,6 +1786,7 @@ mod tests {
             user: String::new(),
             version: String::new(),
             ssh_ip: None,
+            ssh_port: None,
         };
         let mut conns = HashMap::new();
         conns.insert(1, conn);

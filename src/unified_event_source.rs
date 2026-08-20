@@ -1013,6 +1013,11 @@ impl EventSource for UnifiedEventSource {
                 user: info.user,
                 hostname: info.hostname,
                 ssh_ip: info.ssh_ip,
+                ssh_port: info.ssh_port,
+                cols: info.cols,
+                rows: info.rows,
+                connected_at_unix: info.connected_at_unix,
+                pid: info.pid,
             })
             .collect()
     }
@@ -1032,6 +1037,11 @@ impl EventSource for UnifiedEventSource {
                     user: info.user,
                     hostname: info.hostname,
                     ssh_ip: info.ssh_ip,
+                    ssh_port: info.ssh_port,
+                    cols: info.cols,
+                    rows: info.rows,
+                    connected_at_unix: info.connected_at_unix,
+                    pid: info.pid,
                 })
                 .collect()
         })

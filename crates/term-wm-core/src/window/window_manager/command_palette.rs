@@ -4,6 +4,26 @@ use std::time::{Duration, Instant};
 use term_wm_layout_engine::LayoutRect;
 
 use super::{OverlayKey, WindowManager};
+
+// TODO: Dedupe in codebase (term-session has a similar version)
+/// Format a `connected_at_unix` timestamp into a compact uptime string.
+#[cfg(feature = "session-persistence")]
+fn format_uptime(connected_at_unix: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(connected_at_unix);
+    let diff = now.saturating_sub(connected_at_unix);
+    if diff < 60 {
+        format!("{diff}s")
+    } else if diff < 3_600 {
+        format!("{}m", diff / 60)
+    } else if diff < 86_400 {
+        format!("{}h", diff / 3_600)
+    } else {
+        format!("{}d {}h", diff / 86_400, (diff % 86_400) / 3_600)
+    }
+}
 use crate::actions::{EventResult, TermWmAction, WmInputMode};
 use crate::components::{Component, Overlay, WmComponent};
 use crate::events::Event;
@@ -261,21 +281,53 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         disabled: is_current,
                     }));
 
-                    let render_user = |u: &crate::user_registry::UserEntry| {
+                    let render_primary = |u: &crate::user_registry::UserEntry| {
+                        let mut label = format!("    └ {}@{}", u.user, u.hostname);
                         if let Some(ip) = &u.ssh_ip {
-                            format!("    └ {}@{} ({})", u.user, u.hostname, ip)
+                            if let Some(port) = u.ssh_port {
+                                label.push_str(&format!(" ({}:{})", ip, port));
+                            } else {
+                                label.push_str(&format!(" ({})", ip));
+                            }
+                        }
+                        label
+                    };
+                    let render_detail = |u: &crate::user_registry::UserEntry| -> Option<String> {
+                        let mut parts = Vec::new();
+                        if u.cols > 0 && u.rows > 0 {
+                            parts.push(format!("{}×{}", u.cols, u.rows));
+                        }
+                        if u.connected_at_unix > 0 {
+                            parts.push(format_uptime(u.connected_at_unix));
+                        }
+                        // conn_id is the strongest discriminator for same user+IP
+                        parts.push(format!("#{}", u.conn_id));
+                        if u.pid != 0 {
+                            parts.push(format!("pid {}", u.pid));
+                        }
+                        if parts.is_empty() {
+                            None
                         } else {
-                            format!("    └ {}@{}", u.user, u.hostname)
+                            Some(format!("      {}", parts.join(" · ")))
+                        }
+                    };
+                    let push_user = |u: &crate::user_registry::UserEntry,
+                                     items: &mut Vec<
+                        crate::components::MenuDisplayItem<crate::actions::TermWmAction>,
+                    >| {
+                        items.push(info_item(render_primary(u)));
+                        if let Some(detail) = render_detail(u) {
+                            items.push(info_item(detail));
                         }
                     };
                     let users_exist = all_users_by_ws.get(ws).is_some_and(|u| !u.is_empty());
                     if users_exist {
                         for u in &all_users_by_ws[ws] {
-                            items.push(info_item(render_user(u)));
+                            push_user(u, &mut items);
                         }
                     } else if ws == current_workspace && !self.user_registry.is_empty() {
                         for (_key, u) in self.user_registry.iter() {
-                            items.push(info_item(render_user(u)));
+                            push_user(u, &mut items);
                         }
                     }
                 }
@@ -877,6 +929,11 @@ mod tests {
                 user: "alice".to_string(),
                 hostname: "host-a".to_string(),
                 ssh_ip: Some("192.168.1.50".to_string()),
+                ssh_port: Some(54321),
+                cols: 0,
+                rows: 0,
+                connected_at_unix: 0,
+                pid: 4242,
             }],
         );
 
@@ -887,10 +944,15 @@ mod tests {
             MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)"
         )).expect("workspace entry found");
 
-        let user_item = &items[ws_idx + 1];
+        let primary = &items[ws_idx + 1];
         assert!(
-            matches!(user_item, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ alice@host-a (192.168.1.50)"),
-            "connected user must be nested directly beneath the workspace entry"
+            matches!(primary, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ alice@host-a (192.168.1.50:54321)"),
+            "primary user line must be nested directly beneath the workspace entry"
+        );
+        let detail = &items[ws_idx + 2];
+        assert!(
+            matches!(detail, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label.contains("#1") && label.contains("pid 4242")),
+            "detail line must contain discriminator (#conn and pid): {detail:?}"
         );
     }
 
@@ -905,6 +967,11 @@ mod tests {
             "bob".to_string(),
             "host-b".to_string(),
             Some("10.0.0.1".to_string()),
+            None,
+            0,
+            0,
+            0,
+            0,
         );
 
         // Empty all_users_by_ws map forces fallback to local user_registry for current_workspace
@@ -1001,6 +1068,11 @@ mod tests {
                 user: "alice".to_string(),
                 hostname: "host".to_string(),
                 ssh_ip: None,
+                ssh_port: None,
+                cols: 0,
+                rows: 0,
+                connected_at_unix: 0,
+                pid: 0,
             }],
         );
         let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
@@ -1008,5 +1080,104 @@ mod tests {
             !items.iter().any(|e| matches!(e, MenuDisplayItem::Item(MenuItem { label, .. }) if label.contains("Workspace") || label.contains("Follow Workspaces"))),
             "workspace UI must be hidden when session-persistence feature is disabled at compile time"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_user_renders_size_and_uptime() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Connected 90 seconds ago -> should show "1m" (or close)
+        let connected_at = now.saturating_sub(90);
+        let mut users_by_ws = std::collections::BTreeMap::new();
+        users_by_ws.insert(
+            "dev".to_string(),
+            vec![crate::user_registry::UserEntry {
+                conn_id: 1,
+                user: "alice".to_string(),
+                hostname: "host-a".to_string(),
+                ssh_ip: None,
+                ssh_port: None,
+                cols: 80,
+                rows: 24,
+                connected_at_unix: connected_at,
+                pid: 1234,
+            }],
+        );
+        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+        let ws_idx = items
+            .iter()
+            .position(|entry| {
+                matches!(entry, MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)")
+            })
+            .expect("workspace entry found");
+        // Primary line
+        let primary = &items[ws_idx + 1];
+        match primary {
+            MenuDisplayItem::Item(MenuItem {
+                label,
+                disabled: true,
+                ..
+            }) => {
+                assert!(
+                    label.contains("alice@host-a"),
+                    "primary must contain user@host: {label}"
+                );
+                // size/uptime moved to detail line, primary must not be overly long
+                assert!(label.len() < 40, "primary line must stay compact: {label}");
+            }
+            other => panic!("unexpected primary item: {other:?}"),
+        }
+        // Detail line contains size, uptime, discriminator
+        let detail = &items[ws_idx + 2];
+        match detail {
+            MenuDisplayItem::Item(MenuItem {
+                label,
+                disabled: true,
+                ..
+            }) => {
+                assert!(
+                    label.contains("80×24"),
+                    "detail must contain terminal size: {label}"
+                );
+                assert!(
+                    label.contains('m') || label.contains('s'),
+                    "detail must contain uptime: {label}"
+                );
+                assert!(label.contains("#1"), "detail must contain conn id: {label}");
+                assert!(
+                    label.contains("pid 1234"),
+                    "detail must contain pid: {label}"
+                );
+            }
+            other => panic!("unexpected detail item: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn format_uptime_produces_expected_strings() {
+        // Zero diff
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(format_uptime(now), "0s");
+        // 45s ago
+        assert_eq!(format_uptime(now.saturating_sub(45)), "45s");
+        // 5 minutes ago
+        let five_min = format_uptime(now.saturating_sub(300));
+        assert_eq!(five_min, "5m");
+        // 2 hours ago
+        let two_hours = format_uptime(now.saturating_sub(7200));
+        assert_eq!(two_hours, "2h");
+        // 1 day 2 hours ago
+        let day = format_uptime(now.saturating_sub(86400 + 7200));
+        assert_eq!(day, "1d 2h");
     }
 }

@@ -11,6 +11,11 @@ pub struct UserEntry {
     pub user: String,
     pub hostname: String,
     pub ssh_ip: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub cols: u16,
+    pub rows: u16,
+    pub connected_at_unix: u64,
+    pub pid: u64,
 }
 
 /// Centralized registry of connected users visible in the current workspace.
@@ -34,12 +39,18 @@ impl UserRegistry {
 
     /// Insert or update a user by `conn_id`. If an entry already exists for
     /// this `conn_id`, it is updated in place; otherwise a new slot is allocated.
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert(
         &mut self,
         conn_id: usize,
         user: String,
         hostname: String,
         ssh_ip: Option<String>,
+        ssh_port: Option<u16>,
+        cols: u16,
+        rows: u16,
+        connected_at_unix: u64,
+        pid: u64,
     ) -> UserKey {
         if let Some(&key) = self.by_conn_id.get(&conn_id)
             && let Some(entry) = self.users.get_mut(key)
@@ -47,6 +58,11 @@ impl UserRegistry {
             entry.user = user;
             entry.hostname = hostname;
             entry.ssh_ip = ssh_ip;
+            entry.ssh_port = ssh_port;
+            entry.cols = cols;
+            entry.rows = rows;
+            entry.connected_at_unix = connected_at_unix;
+            entry.pid = pid;
             return key;
         }
         let key = self.users.insert(UserEntry {
@@ -54,6 +70,11 @@ impl UserRegistry {
             user,
             hostname,
             ssh_ip,
+            ssh_port,
+            cols,
+            rows,
+            connected_at_unix,
+            pid,
         });
         self.by_conn_id.insert(conn_id, key);
         key
@@ -109,7 +130,7 @@ mod tests {
     #[test]
     fn upsert_and_get_by_conn_id() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "alice".into(), "host-a".into(), None);
+        r.upsert(1, "alice".into(), "host-a".into(), None, None, 0, 0, 0, 0);
         let entry = r.get_by_conn_id(1).expect("must exist");
         assert_eq!(entry.user, "alice");
         assert_eq!(r.len(), 1);
@@ -118,19 +139,34 @@ mod tests {
     #[test]
     fn upsert_updates_existing() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "alice".into(), "host-a".into(), None);
-        r.upsert(1, "alice2".into(), "host-b".into(), Some("1.2.3.4".into()));
+        r.upsert(1, "alice".into(), "host-a".into(), None, None, 0, 0, 0, 0);
+        r.upsert(
+            1,
+            "alice2".into(),
+            "host-b".into(),
+            Some("1.2.3.4".into()),
+            Some(54321),
+            80,
+            24,
+            1_700_000_000,
+            4242,
+        );
         assert_eq!(r.len(), 1);
         let entry = r.get_by_conn_id(1).expect("must exist");
         assert_eq!(entry.user, "alice2");
         assert_eq!(entry.hostname, "host-b");
         assert_eq!(entry.ssh_ip.as_deref(), Some("1.2.3.4"));
+        assert_eq!(entry.ssh_port, Some(54321));
+        assert_eq!(entry.cols, 80);
+        assert_eq!(entry.rows, 24);
+        assert_eq!(entry.connected_at_unix, 1_700_000_000);
+        assert_eq!(entry.pid, 4242);
     }
 
     #[test]
     fn remove_by_conn_id() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "bob".into(), "host".into(), None);
+        r.upsert(1, "bob".into(), "host".into(), None, None, 0, 0, 0, 0);
         assert!(r.remove_by_conn_id(1));
         assert!(r.is_empty());
         assert!(!r.remove_by_conn_id(1));
@@ -139,8 +175,8 @@ mod tests {
     #[test]
     fn clear_removes_all() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "a".into(), "h".into(), None);
-        r.upsert(2, "b".into(), "h".into(), None);
+        r.upsert(1, "a".into(), "h".into(), None, None, 0, 0, 0, 0);
+        r.upsert(2, "b".into(), "h".into(), None, None, 0, 0, 0, 0);
         r.clear();
         assert!(r.is_empty());
         assert!(r.get_by_conn_id(1).is_none());
@@ -149,8 +185,18 @@ mod tests {
     #[test]
     fn iter_yields_all() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "a".into(), "h1".into(), None);
-        r.upsert(2, "b".into(), "h2".into(), Some("ip".into()));
+        r.upsert(1, "a".into(), "h1".into(), None, None, 0, 0, 0, 0);
+        r.upsert(
+            2,
+            "b".into(),
+            "h2".into(),
+            Some("ip".into()),
+            None,
+            0,
+            0,
+            0,
+            0,
+        );
         let mut users: Vec<_> = r.iter().map(|(_, e)| e.user.clone()).collect();
         users.sort();
         assert_eq!(users, ["a", "b"]);
