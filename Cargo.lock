@@ -3358,6 +3358,7 @@ dependencies = [
 name = "term-wm-ui-components"
 version = "0.10.2-alpha"
 dependencies = [
+ "criterion",
  "crossterm",
  "indoc",
  "linkify",
