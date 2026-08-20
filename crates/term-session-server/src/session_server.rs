@@ -957,6 +957,7 @@ pub async fn run_gateway(
                                 cols: c.cols,
                                 rows: c.rows,
                                 connected_at_unix: c.connected_at_unix,
+                                pid: c.pid,
                             },
                         )
                     })
@@ -1337,6 +1338,7 @@ pub async fn run_gateway(
                             cols: c.cols,
                             rows: c.rows,
                             connected_at_unix: c.connected_at_unix,
+                            pid: c.pid,
                         })
                         .collect()
                 } else {

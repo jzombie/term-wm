@@ -817,6 +817,8 @@ pub struct UserInfo {
     pub rows: u16,
     /// Unix timestamp (seconds) when the client connected.
     pub connected_at_unix: u64,
+    /// Client process PID (reported at Attach).
+    pub pid: u64,
 }
 
 /// Server pushes to the active `internal_wm_caller` when a new viewer joins.

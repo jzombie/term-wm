@@ -461,6 +461,7 @@ where
                     user.cols,
                     user.rows,
                     user.connected_at_unix,
+                    user.pid,
                 );
                 app.wm()
                     .push_notification(label, std::time::Duration::from_secs(3));
@@ -487,6 +488,7 @@ where
                         user.cols,
                         user.rows,
                         user.connected_at_unix,
+                        user.pid,
                     );
                 }
             }

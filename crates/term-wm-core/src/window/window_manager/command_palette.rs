@@ -281,7 +281,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         disabled: is_current,
                     }));
 
-                    let render_user = |u: &crate::user_registry::UserEntry| {
+                    let render_primary = |u: &crate::user_registry::UserEntry| {
                         let mut label = format!("    └ {}@{}", u.user, u.hostname);
                         if let Some(ip) = &u.ssh_ip {
                             if let Some(port) = u.ssh_port {
@@ -290,22 +290,44 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                                 label.push_str(&format!(" ({})", ip));
                             }
                         }
+                        label
+                    };
+                    let render_detail = |u: &crate::user_registry::UserEntry| -> Option<String> {
+                        let mut parts = Vec::new();
                         if u.cols > 0 && u.rows > 0 {
-                            label.push_str(&format!(" {}x{}", u.cols, u.rows));
+                            parts.push(format!("{}×{}", u.cols, u.rows));
                         }
                         if u.connected_at_unix > 0 {
-                            label.push_str(&format!(" {}", format_uptime(u.connected_at_unix)));
+                            parts.push(format_uptime(u.connected_at_unix));
                         }
-                        label
+                        // conn_id is the strongest discriminator for same user+IP
+                        parts.push(format!("#{}", u.conn_id));
+                        if u.pid != 0 {
+                            parts.push(format!("pid {}", u.pid));
+                        }
+                        if parts.is_empty() {
+                            None
+                        } else {
+                            Some(format!("      {}", parts.join(" · ")))
+                        }
+                    };
+                    let push_user = |u: &crate::user_registry::UserEntry,
+                                     items: &mut Vec<
+                        crate::components::MenuDisplayItem<crate::actions::TermWmAction>,
+                    >| {
+                        items.push(info_item(render_primary(u)));
+                        if let Some(detail) = render_detail(u) {
+                            items.push(info_item(detail));
+                        }
                     };
                     let users_exist = all_users_by_ws.get(ws).is_some_and(|u| !u.is_empty());
                     if users_exist {
                         for u in &all_users_by_ws[ws] {
-                            items.push(info_item(render_user(u)));
+                            push_user(u, &mut items);
                         }
                     } else if ws == current_workspace && !self.user_registry.is_empty() {
                         for (_key, u) in self.user_registry.iter() {
-                            items.push(info_item(render_user(u)));
+                            push_user(u, &mut items);
                         }
                     }
                 }
@@ -911,6 +933,7 @@ mod tests {
                 cols: 0,
                 rows: 0,
                 connected_at_unix: 0,
+                pid: 4242,
             }],
         );
 
@@ -921,10 +944,15 @@ mod tests {
             MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)"
         )).expect("workspace entry found");
 
-        let user_item = &items[ws_idx + 1];
+        let primary = &items[ws_idx + 1];
         assert!(
-            matches!(user_item, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ alice@host-a (192.168.1.50:54321)"),
-            "connected user must be nested directly beneath the workspace entry"
+            matches!(primary, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ alice@host-a (192.168.1.50:54321)"),
+            "primary user line must be nested directly beneath the workspace entry"
+        );
+        let detail = &items[ws_idx + 2];
+        assert!(
+            matches!(detail, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label.contains("#1") && label.contains("pid 4242")),
+            "detail line must contain discriminator (#conn and pid): {detail:?}"
         );
     }
 
@@ -940,6 +968,7 @@ mod tests {
             "host-b".to_string(),
             Some("10.0.0.1".to_string()),
             None,
+            0,
             0,
             0,
             0,
@@ -1043,6 +1072,7 @@ mod tests {
                 cols: 0,
                 rows: 0,
                 connected_at_unix: 0,
+                pid: 0,
             }],
         );
         let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
@@ -1076,6 +1106,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 connected_at_unix: connected_at,
+                pid: 1234,
             }],
         );
         let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
@@ -1085,8 +1116,9 @@ mod tests {
                 matches!(entry, MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)")
             })
             .expect("workspace entry found");
-        let user_item = &items[ws_idx + 1];
-        match user_item {
+        // Primary line
+        let primary = &items[ws_idx + 1];
+        match primary {
             MenuDisplayItem::Item(MenuItem {
                 label,
                 disabled: true,
@@ -1094,19 +1126,36 @@ mod tests {
             }) => {
                 assert!(
                     label.contains("alice@host-a"),
-                    "label must contain user@host: {label}"
+                    "primary must contain user@host: {label}"
                 );
+                // size/uptime moved to detail line, primary must not be overly long
                 assert!(
-                    label.contains("80x24"),
-                    "label must contain terminal size: {label}"
-                );
-                // Uptime should be present (at least contains 'm' or 's')
-                assert!(
-                    label.contains('m') || label.contains('s'),
-                    "label must contain uptime: {label}"
+                    label.len() < 40,
+                    "primary line must stay compact: {label}"
                 );
             }
-            other => panic!("unexpected user item: {other:?}"),
+            other => panic!("unexpected primary item: {other:?}"),
+        }
+        // Detail line contains size, uptime, discriminator
+        let detail = &items[ws_idx + 2];
+        match detail {
+            MenuDisplayItem::Item(MenuItem {
+                label,
+                disabled: true,
+                ..
+            }) => {
+                assert!(
+                    label.contains("80×24"),
+                    "detail must contain terminal size: {label}"
+                );
+                assert!(
+                    label.contains('m') || label.contains('s'),
+                    "detail must contain uptime: {label}"
+                );
+                assert!(label.contains("#1"), "detail must contain conn id: {label}");
+                assert!(label.contains("pid 1234"), "detail must contain pid: {label}");
+            }
+            other => panic!("unexpected detail item: {other:?}"),
         }
     }
 

@@ -333,6 +333,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                                 cols: c.cols,
                                 rows: c.rows,
                                 connected_at_unix: c.connected_at_unix,
+                                pid: c.pid,
                             },
                         );
                     }
@@ -386,6 +387,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                         u.cols,
                         u.rows,
                         u.connected_at_unix,
+                        u.pid,
                     );
                 }
             }

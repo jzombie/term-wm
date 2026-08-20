@@ -15,6 +15,7 @@ pub struct UserEntry {
     pub cols: u16,
     pub rows: u16,
     pub connected_at_unix: u64,
+    pub pid: u64,
 }
 
 /// Centralized registry of connected users visible in the current workspace.
@@ -49,6 +50,7 @@ impl UserRegistry {
         cols: u16,
         rows: u16,
         connected_at_unix: u64,
+        pid: u64,
     ) -> UserKey {
         if let Some(&key) = self.by_conn_id.get(&conn_id)
             && let Some(entry) = self.users.get_mut(key)
@@ -60,6 +62,7 @@ impl UserRegistry {
             entry.cols = cols;
             entry.rows = rows;
             entry.connected_at_unix = connected_at_unix;
+            entry.pid = pid;
             return key;
         }
         let key = self.users.insert(UserEntry {
@@ -71,6 +74,7 @@ impl UserRegistry {
             cols,
             rows,
             connected_at_unix,
+            pid,
         });
         self.by_conn_id.insert(conn_id, key);
         key
@@ -126,7 +130,7 @@ mod tests {
     #[test]
     fn upsert_and_get_by_conn_id() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "alice".into(), "host-a".into(), None, None, 0, 0, 0);
+        r.upsert(1, "alice".into(), "host-a".into(), None, None, 0, 0, 0, 0);
         let entry = r.get_by_conn_id(1).expect("must exist");
         assert_eq!(entry.user, "alice");
         assert_eq!(r.len(), 1);
@@ -135,7 +139,17 @@ mod tests {
     #[test]
     fn upsert_updates_existing() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "alice".into(), "host-a".into(), None, None, 0, 0, 0);
+        r.upsert(
+            1,
+            "alice".into(),
+            "host-a".into(),
+            None,
+            None,
+            0,
+            0,
+            0,
+            0,
+        );
         r.upsert(
             1,
             "alice2".into(),
@@ -145,6 +159,7 @@ mod tests {
             80,
             24,
             1_700_000_000,
+            4242,
         );
         assert_eq!(r.len(), 1);
         let entry = r.get_by_conn_id(1).expect("must exist");
@@ -155,12 +170,13 @@ mod tests {
         assert_eq!(entry.cols, 80);
         assert_eq!(entry.rows, 24);
         assert_eq!(entry.connected_at_unix, 1_700_000_000);
+        assert_eq!(entry.pid, 4242);
     }
 
     #[test]
     fn remove_by_conn_id() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "bob".into(), "host".into(), None, None, 0, 0, 0);
+        r.upsert(1, "bob".into(), "host".into(), None, None, 0, 0, 0, 0);
         assert!(r.remove_by_conn_id(1));
         assert!(r.is_empty());
         assert!(!r.remove_by_conn_id(1));
@@ -169,8 +185,8 @@ mod tests {
     #[test]
     fn clear_removes_all() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "a".into(), "h".into(), None, None, 0, 0, 0);
-        r.upsert(2, "b".into(), "h".into(), None, None, 0, 0, 0);
+        r.upsert(1, "a".into(), "h".into(), None, None, 0, 0, 0, 0);
+        r.upsert(2, "b".into(), "h".into(), None, None, 0, 0, 0, 0);
         r.clear();
         assert!(r.is_empty());
         assert!(r.get_by_conn_id(1).is_none());
@@ -179,8 +195,8 @@ mod tests {
     #[test]
     fn iter_yields_all() {
         let mut r = UserRegistry::new();
-        r.upsert(1, "a".into(), "h1".into(), None, None, 0, 0, 0);
-        r.upsert(2, "b".into(), "h2".into(), Some("ip".into()), None, 0, 0, 0);
+        r.upsert(1, "a".into(), "h1".into(), None, None, 0, 0, 0, 0);
+        r.upsert(2, "b".into(), "h2".into(), Some("ip".into()), None, 0, 0, 0, 0);
         let mut users: Vec<_> = r.iter().map(|(_, e)| e.user.clone()).collect();
         users.sort();
         assert_eq!(users, ["a", "b"]);

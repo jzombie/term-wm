@@ -1017,6 +1017,7 @@ impl EventSource for UnifiedEventSource {
                 cols: info.cols,
                 rows: info.rows,
                 connected_at_unix: info.connected_at_unix,
+                pid: info.pid,
             })
             .collect()
     }
@@ -1040,6 +1041,7 @@ impl EventSource for UnifiedEventSource {
                     cols: info.cols,
                     rows: info.rows,
                     connected_at_unix: info.connected_at_unix,
+                    pid: info.pid,
                 })
                 .collect()
         })
