@@ -183,7 +183,8 @@ fn dispatch_action<
         #[cfg(feature = "session-persistence")]
         action @ (TermWmAction::SwitchWorkspace(_)
         | TermWmAction::NewWorkspace
-        | TermWmAction::DetachCurrentClient) => {
+        | TermWmAction::DetachCurrentClient
+        | TermWmAction::ToggleWorkspaceFollow) => {
             if !app.handle_custom_action(&action) {
                 // Unhandled — forward to component update
                 let ctx = app.wm().component_context_for(true, key);
