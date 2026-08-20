@@ -1,3 +1,14 @@
+//! TerminalComponent render benchmark — guards against O(rows*cols*row) regressions.
+//!
+//! Run with:
+//!   cargo bench -p term-wm-ui-components --bench terminal_render
+//! or all benches:
+//!   cargo bench
+//!
+//! First run is slow (criterion warmup). Subsequent runs compare against
+//! `target/criterion/` baseline. If 320×100 is ~16× slower than 80×24
+//! instead of ~4×, the `visible_row()` hoist has regressed.
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::sync::{Arc, Mutex};
 use term_wm_core::components::{Component, ComponentContext};
