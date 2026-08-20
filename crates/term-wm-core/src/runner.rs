@@ -75,6 +75,18 @@ pub trait WindowManagerHost<
         false
     }
 
+    /// Called when a window's PTY child has exited. Default closes the window.
+    /// Apps may override to keep windows open (e.g. project-task runners).
+    fn on_pty_exited(&mut self, key: crate::window::WindowKey) {
+        self.wm().close_window(key);
+    }
+
+    /// Called when a window is closed (e.g. via CloseWindow action).
+    /// Apps may override to purge bookkeeping (e.g. task-window tracking).
+    fn close_window(&mut self, key: crate::window::WindowKey) {
+        self.wm().close_window(key);
+    }
+
     /// Handle an application-specific action that the core WM doesn't know about.
     /// Returns `true` if the action was handled, `false` to fall through to
     /// component update.
@@ -99,7 +111,7 @@ fn dispatch_action<
     match action {
         TermWmAction::Quit | TermWmAction::ExitUi => app.open_exit_confirm(),
         TermWmAction::Help | TermWmAction::OpenHelp => app.open_help_overlay(),
-        TermWmAction::CloseWindow(k) => app.wm().close_window(k),
+        TermWmAction::CloseWindow(k) => app.close_window(k),
         TermWmAction::ReorderWindow { key, index } => app.wm().reorder_window(key, index),
         TermWmAction::NewTerminal => drop(app.wm_new_terminal()),
         TermWmAction::MinimizeWindow(k) => app.wm().minimize_window(k),
@@ -171,9 +183,19 @@ fn dispatch_action<
         #[cfg(feature = "session-persistence")]
         action @ (TermWmAction::SwitchWorkspace(_)
         | TermWmAction::NewWorkspace
-        | TermWmAction::DetachCurrentClient) => {
+        | TermWmAction::DetachCurrentClient
+        | TermWmAction::ToggleWorkspaceFollow) => {
             if !app.handle_custom_action(&action) {
                 // Unhandled — forward to component update
+                let ctx = app.wm().component_context_for(true, key);
+                if let Some(comp) = app.wm().component_for_key_mut(key) {
+                    comp.update(action, &ctx, queue);
+                }
+            }
+        }
+        // Project task actions: delegate to the app's custom action handler
+        TermWmAction::RunProjectTask(_) => {
+            if !app.handle_custom_action(&action) {
                 let ctx = app.wm().component_context_for(true, key);
                 if let Some(comp) = app.wm().component_for_key_mut(key) {
                     comp.update(action, &ctx, queue);
@@ -392,7 +414,7 @@ where
             // Process AppExited notifications — close windows whose PTY child
             // exited.
             for key in driver.take_exited_windows() {
-                app.wm().close_window(key);
+                app.on_pty_exited(key);
             }
             // Process DirectInputChanged notifications — push toasts when apps
             // enter/exit alternate screen, enable mouse tracking, etc.
@@ -415,6 +437,48 @@ where
             }
             // PTY child exit removed a window — redraw the layout.
             driver.request_redraw();
+
+            // Centralized notification bus: tick expiries and drain workspace/
+            // presence events unconditionally (not only in Some(event) branch).
+            app.wm().tick_notifications();
+            for ws in driver.take_workspace_entered() {
+                app.wm().push_notification(
+                    format!("Workspace {ws}"),
+                    std::time::Duration::from_secs(3),
+                );
+            }
+            for user in driver.take_user_connected() {
+                let label = match &user.ssh_ip {
+                    Some(ip) => format!("{}@{} ({}) connected", user.user, user.hostname, ip),
+                    None => format!("{}@{} connected", user.user, user.hostname),
+                };
+                app.wm()
+                    .user_registry
+                    .upsert(user.conn_id, user.user, user.hostname, user.ssh_ip);
+                app.wm()
+                    .push_notification(label, std::time::Duration::from_secs(3));
+            }
+            for conn_id in driver.take_user_disconnected() {
+                let label = if let Some(entry) = app.wm().user_registry.get_by_conn_id(conn_id) {
+                    format!("{}@{} disconnected", entry.user, entry.hostname)
+                } else {
+                    format!("User (conn {conn_id}) disconnected")
+                };
+                app.wm().user_registry.remove_by_conn_id(conn_id);
+                app.wm()
+                    .push_notification(label, std::time::Duration::from_secs(3));
+            }
+            if let Some(users) = driver.take_user_cache_refreshed() {
+                app.wm().user_registry.clear();
+                for user in users {
+                    app.wm().user_registry.upsert(
+                        user.conn_id,
+                        user.user,
+                        user.hostname,
+                        user.ssh_ip,
+                    );
+                }
+            }
 
             // Update monocle mode on resize
             if let Some(Event::Resize(width, _height)) = &event {

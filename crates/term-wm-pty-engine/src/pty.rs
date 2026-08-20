@@ -428,6 +428,8 @@ impl Pty {
                 pending_resize: reader_pending_resize,
                 #[cfg(unix)]
                 wake_read_fd,
+                #[cfg(unix)]
+                _wake_keepalive: None,
                 shutdown: reader_shutdown,
             })
         });
@@ -966,6 +968,11 @@ struct ParserReadLoopArgs {
     /// Read end of the resize wake self-pipe (polled alongside the PTY fd).
     #[cfg(unix)]
     wake_read_fd: RawFd,
+    /// Keeps the `ResizeWake` pipe alive for the reader thread's lifetime.
+    /// `Some` in tests (where there is no `Pty` to own it); `None` in
+    /// production where `Pty::resize_wake` holds the owner.
+    #[cfg(unix)]
+    _wake_keepalive: Option<ResizeWake>,
     /// Set by `into_parts`/`Drop`: the reader exits its loop ASAP. On Windows
     /// in particular the blocking ConPTY read is otherwise uninterruptible.
     shutdown: Arc<AtomicBool>,
@@ -993,6 +1000,8 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
         pending_resize,
         #[cfg(unix)]
         wake_read_fd,
+        #[cfg(unix)]
+            _wake_keepalive: _,
         shutdown,
     } = args;
     let mut prev_tail: [u8; HISTORY_TAIL_LEN] = [0; HISTORY_TAIL_LEN];
@@ -1613,11 +1622,10 @@ mod tests {
         let master = Arc::new(Mutex::new(pair.master));
         drop(pair.slave);
         #[cfg(unix)]
-        let wake_read_fd = {
-            // Keep the wake pipe alive for the reader's poll set; dropping it
-            // here would close the fd and make `poll` return POLLNVAL (busy-spin).
-            let wake = Box::leak(Box::new(ResizeWake::new().expect("resize wake")));
-            wake.read_fd()
+        let (wake_read_fd, wake_keepalive) = {
+            let wake = ResizeWake::new().expect("resize wake");
+            let fd = wake.read_fd();
+            (fd, Some(wake))
         };
         ParserReadLoopArgs {
             reader,
@@ -1645,6 +1653,8 @@ mod tests {
             pending_resize: Arc::new(Mutex::new(None)),
             #[cfg(unix)]
             wake_read_fd,
+            #[cfg(unix)]
+            _wake_keepalive: wake_keepalive,
             shutdown: Arc::new(AtomicBool::new(false)),
         }
     }

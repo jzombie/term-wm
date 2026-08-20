@@ -1852,6 +1852,8 @@ async fn rebind_workspace_pushes_target_to_attached_viewer() {
     RebindWorkspace::call(
         &*client,
         RebindWorkspaceRequest {
+            scope: term_session_muxio_service_definitions::RebindScope::CallerOnly,
+            initiator_conn_id: None,
             source_channel: source.to_string(),
             target: "ws-123/main".to_string(),
         },
@@ -1903,6 +1905,8 @@ async fn rebind_workspace_to_unknown_source_sends_no_push() {
     RebindWorkspace::call(
         &*client,
         RebindWorkspaceRequest {
+            scope: term_session_muxio_service_definitions::RebindScope::CallerOnly,
+            initiator_conn_id: None,
             source_channel: "test/rebind-nobody".to_string(),
             target: "ws-123/main".to_string(),
         },

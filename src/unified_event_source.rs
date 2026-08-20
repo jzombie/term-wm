@@ -38,6 +38,18 @@ pub enum UnifiedEvent {
     Signal,
     /// Periodic tick for timing.
     Tick,
+    /// Workspace entered notification (server pushed `OnWorkspaceEntered`).
+    #[cfg(feature = "session-persistence")]
+    WorkspaceEntered(String),
+    /// A remote user connected to the current workspace.
+    #[cfg(feature = "session-persistence")]
+    UserConnected(term_session::protocol::UserInfo),
+    /// A remote user disconnected.
+    #[cfg(feature = "session-persistence")]
+    UserDisconnected(usize),
+    /// Fresh snapshot of connected users from `ListUsers`.
+    #[cfg(feature = "session-persistence")]
+    UserCacheRefreshed(Vec<term_session::protocol::UserInfo>),
 }
 
 /// A unified event source that multiplexes console input, PTY wakeups,
@@ -102,6 +114,18 @@ pub struct UnifiedEventSource {
     /// Shared event owner — updated when an event is popped from the buffer.
     /// Cloned into `App` for action attribution.
     event_owner: Arc<Mutex<Option<usize>>>,
+    /// Accumulated workspace-entered notifications.
+    #[cfg(feature = "session-persistence")]
+    workspace_entered: Vec<String>,
+    /// Accumulated user-connected events.
+    #[cfg(feature = "session-persistence")]
+    user_connected: Vec<term_session::protocol::UserInfo>,
+    /// Accumulated user-disconnected events.
+    #[cfg(feature = "session-persistence")]
+    user_disconnected: Vec<usize>,
+    /// Latest user cache snapshot.
+    #[cfg(feature = "session-persistence")]
+    user_cache_refreshed: Option<Vec<term_session::protocol::UserInfo>>,
 }
 
 /// Outcome of processing one unified-channel event during `poll`.
@@ -154,6 +178,14 @@ impl UnifiedEventSource {
                 pending_work: false,
                 max_sleep_duration: None,
                 event_owner: event_owner.clone(),
+                #[cfg(feature = "session-persistence")]
+                workspace_entered: Vec::new(),
+                #[cfg(feature = "session-persistence")]
+                user_connected: Vec::new(),
+                #[cfg(feature = "session-persistence")]
+                user_disconnected: Vec::new(),
+                #[cfg(feature = "session-persistence")]
+                user_cache_refreshed: None,
             },
             event_owner,
         ))
@@ -209,6 +241,22 @@ impl UnifiedEventSource {
                 }
                 Ok(UnifiedEvent::Tick) => {
                     // No-op — tick is implicit in the event-cycle loop.
+                }
+                #[cfg(feature = "session-persistence")]
+                Ok(UnifiedEvent::WorkspaceEntered(ws)) => {
+                    self.workspace_entered.push(ws);
+                }
+                #[cfg(feature = "session-persistence")]
+                Ok(UnifiedEvent::UserConnected(info)) => {
+                    self.user_connected.push(info);
+                }
+                #[cfg(feature = "session-persistence")]
+                Ok(UnifiedEvent::UserDisconnected(conn_id)) => {
+                    self.user_disconnected.push(conn_id);
+                }
+                #[cfg(feature = "session-persistence")]
+                Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
+                    self.user_cache_refreshed = Some(users);
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => break,
@@ -300,6 +348,30 @@ impl UnifiedEventSource {
                     UnifiedPoll::Continue
                 }
             }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::WorkspaceEntered(ws) => {
+                self.workspace_entered.push(ws);
+                self.frame_pacer.notify_pending(Instant::now());
+                UnifiedPoll::RenderDue
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserConnected(info) => {
+                self.user_connected.push(info);
+                self.frame_pacer.notify_pending(Instant::now());
+                UnifiedPoll::RenderDue
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserDisconnected(conn_id) => {
+                self.user_disconnected.push(conn_id);
+                self.frame_pacer.notify_pending(Instant::now());
+                UnifiedPoll::RenderDue
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserCacheRefreshed(users) => {
+                self.user_cache_refreshed = Some(users);
+                self.frame_pacer.notify_pending(Instant::now());
+                UnifiedPoll::RenderDue
+            }
         }
     }
 
@@ -347,6 +419,26 @@ impl UnifiedEventSource {
                     .lock()
                     .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                 self.normalizer.normalize(event)
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::WorkspaceEntered(ws) => {
+                self.workspace_entered.push(ws);
+                None
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserConnected(info) => {
+                self.user_connected.push(info);
+                None
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserDisconnected(conn_id) => {
+                self.user_disconnected.push(conn_id);
+                None
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserCacheRefreshed(users) => {
+                self.user_cache_refreshed = Some(users);
+                None
             }
         }
     }
@@ -610,6 +702,22 @@ impl EventSource for UnifiedEventSource {
                         }
                         Ok(UnifiedEvent::Signal) => self.signal_received = true,
                         Ok(UnifiedEvent::Tick) => {}
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::WorkspaceEntered(ws)) => {
+                            self.workspace_entered.push(ws);
+                        }
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserConnected(info)) => {
+                            self.user_connected.push(info);
+                        }
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserDisconnected(id)) => {
+                            self.user_disconnected.push(id);
+                        }
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
+                            self.user_cache_refreshed = Some(users);
+                        }
                         Err(_) => {
                             return Err(io::Error::new(
                                 io::ErrorKind::BrokenPipe,
@@ -652,6 +760,22 @@ impl EventSource for UnifiedEventSource {
                     }
                     Ok(UnifiedEvent::Signal) => self.signal_received = true,
                     Ok(UnifiedEvent::Tick) => {}
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::WorkspaceEntered(ws)) => {
+                        self.workspace_entered.push(ws);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserConnected(info)) => {
+                        self.user_connected.push(info);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserDisconnected(id)) => {
+                        self.user_disconnected.push(id);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
+                        self.user_cache_refreshed = Some(users);
+                    }
                     Err(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::BrokenPipe,
@@ -722,6 +846,22 @@ impl EventSource for UnifiedEventSource {
                         }
                         Ok(UnifiedEvent::Signal) => self.signal_received = true,
                         Ok(UnifiedEvent::Tick) => {}
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::WorkspaceEntered(ws)) => {
+                            self.workspace_entered.push(ws);
+                        }
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserConnected(info)) => {
+                            self.user_connected.push(info);
+                        }
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserDisconnected(id)) => {
+                            self.user_disconnected.push(id);
+                        }
+                        #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
+                            self.user_cache_refreshed = Some(users);
+                        }
                         Err(_) => {
                             return Err(io::Error::new(
                                 io::ErrorKind::BrokenPipe,
@@ -764,6 +904,22 @@ impl EventSource for UnifiedEventSource {
                     }
                     Ok(UnifiedEvent::Signal) => self.signal_received = true,
                     Ok(UnifiedEvent::Tick) => {}
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::WorkspaceEntered(ws)) => {
+                        self.workspace_entered.push(ws);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserConnected(info)) => {
+                        self.user_connected.push(info);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserDisconnected(id)) => {
+                        self.user_disconnected.push(id);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
+                        self.user_cache_refreshed = Some(users);
+                    }
                     Err(_) => {
                         return Err(io::Error::new(
                             io::ErrorKind::BrokenPipe,
@@ -842,6 +998,44 @@ impl EventSource for UnifiedEventSource {
     fn take_redraw_request(&mut self) -> bool {
         std::mem::replace(&mut self.pending_redraw, false)
     }
+
+    #[cfg(feature = "session-persistence")]
+    fn take_workspace_entered(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.workspace_entered)
+    }
+
+    #[cfg(feature = "session-persistence")]
+    fn take_user_connected(&mut self) -> Vec<term_wm_core::user_registry::UserEntry> {
+        self.user_connected
+            .drain(..)
+            .map(|info| term_wm_core::user_registry::UserEntry {
+                conn_id: info.conn_id,
+                user: info.user,
+                hostname: info.hostname,
+                ssh_ip: info.ssh_ip,
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "session-persistence")]
+    fn take_user_disconnected(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.user_disconnected)
+    }
+
+    #[cfg(feature = "session-persistence")]
+    fn take_user_cache_refreshed(&mut self) -> Option<Vec<term_wm_core::user_registry::UserEntry>> {
+        self.user_cache_refreshed.take().map(|users| {
+            users
+                .into_iter()
+                .map(|info| term_wm_core::user_registry::UserEntry {
+                    conn_id: info.conn_id,
+                    user: info.user,
+                    hostname: info.hostname,
+                    ssh_ip: info.ssh_ip,
+                })
+                .collect()
+        })
+    }
 }
 
 #[allow(clippy::unwrap_used)]
@@ -899,6 +1093,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         // Send 10 input events into the channel
@@ -990,6 +1192,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         // Send: Press, Release, Repeat, Press
@@ -1073,6 +1283,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         // Send only Release events (filtered on all platforms)
@@ -1122,6 +1340,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         // Baseline: no input, no dirty → PowerSaver
@@ -1181,6 +1407,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
         assert_eq!(
             source.current_profile(),
@@ -1212,6 +1446,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: true,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
         assert_eq!(
             source.current_profile(),
@@ -1241,6 +1483,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: true,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
         assert_eq!(
             source2.current_profile(),
@@ -1280,6 +1530,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         // Call through the trait, not an inherent method. Would return
@@ -1323,6 +1581,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         // Call through the trait, not an inherent method. Would return
@@ -1358,6 +1624,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         #[cfg(not(target_os = "windows"))]
@@ -1411,6 +1685,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
         console_tx.send(key_evt(KeyCode::Char('a'))).unwrap();
 
@@ -1449,6 +1731,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
         for i in 0..5u8 {
             console_tx
@@ -1497,6 +1787,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
         for _ in 0..3 {
             console_tx
@@ -1540,6 +1838,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
         // Disconnect the console channel.
         drop(console_tx);
@@ -1589,6 +1895,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         // Remote viewer key (conn_id 7) followed by a local console key.
@@ -1690,6 +2004,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         let key = WindowKey::default();
@@ -1745,6 +2067,14 @@ mod tests {
             frame_pacer: FramePacer::new(),
             pending_work: false,
             max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
         };
 
         tx.send(UnifiedEvent::Input {

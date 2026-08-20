@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- **Project Tasks in the Command Palette:** Define local commands in `.term-wm/tasks.json` and run them from the palette under “Project Tasks.” Put the file in your project root and it's found automatically. Each task opens in a new terminal window. You can set a working directory, environment variables, and limit tasks to `dev`, `prod`, or `test`.
+- **`docs/tasks.md` — canonical tasks-file specification:** documents the flat-array schema, argv tokenization rules, environment-gating semantics (reusing `term_wm_config::env::active_environment()`), run/toast behavior, and the explicitly out-of-scope Zed compatibility boundary.
+- **Streamlined Command Palette:** The palette now shows 5 clearly labeled sections — Quick Actions, Workspaces & Collaboration, Window Management, View & Layout, and Settings & System. Workspaces, follow mode, and who’s in each workspace are together in one place: create or switch workspaces and see connected users right under each workspace name.
+- **Follow Workspaces toggle:** A simple on/off switch in the Workspaces section. When off (default), switching workspaces moves only you. When on, everyone on that workspace follows together — great for pairing or presentations. Toggle it anytime from the palette; it takes effect immediately.
+- **Workspace notifications:** You’ll get a “Workspace <name>” toast when you create or switch workspaces.
+
 ## [0.10.2-alpha] - 2026-08-19
 
 ### Changed

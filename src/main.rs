@@ -307,7 +307,7 @@ fn run() -> io::Result<()> {
                     return;
                 }
             };
-            // Register handler BEFORE subscribing to avoid race
+            // Register handlers BEFORE subscribing to avoid race
             {
                 let tx = tx.clone();
                 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
@@ -332,12 +332,79 @@ fn run() -> io::Result<()> {
                     .await
                     .expect("register OnAttributedInput");
             }
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                use term_session::protocol::OnUserConnected;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnUserConnected::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let info = OnUserConnected::decode_request(&payload).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                            let _ = tx.try_send(UnifiedEvent::UserConnected(info));
+                            OnUserConnected::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnUserConnected");
+            }
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                use term_session::protocol::OnUserDisconnected;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnUserDisconnected::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let conn_id =
+                                OnUserDisconnected::decode_request(&payload).map_err(|e| {
+                                    Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                                })?;
+                            let _ = tx.try_send(UnifiedEvent::UserDisconnected(conn_id));
+                            OnUserDisconnected::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnUserDisconnected");
+            }
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                use term_session::protocol::OnWorkspaceEntered;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnWorkspaceEntered::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let ws = OnWorkspaceEntered::decode_request(&payload).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                            let _ = tx.try_send(UnifiedEvent::WorkspaceEntered(ws));
+                            OnWorkspaceEntered::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnWorkspaceEntered");
+            }
             // Subscribe
             use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+            let channel_for_sub = channel.clone();
             let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
             if let Err(e) = term_session::protocol::SubscribeInternalInput::call(
                 client_ref,
-                SubscribeInternalInputRequest { channel },
+                SubscribeInternalInputRequest {
+                    channel: channel_for_sub,
+                },
             )
             .await
             {
@@ -345,6 +412,25 @@ fn run() -> io::Result<()> {
                 return;
             }
             tracing::info!("Attributed input listener subscribed");
+            // Async refresh of user cache after subscribe
+            {
+                let tx = tx.clone();
+                let client = client.clone();
+                let channel = channel.clone();
+                tokio::spawn(async move {
+                    use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+                    use term_session::protocol::ListUsers;
+                    let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
+                    match ListUsers::call(client_ref, channel).await {
+                        Ok(resp) => {
+                            let _ = tx.try_send(UnifiedEvent::UserCacheRefreshed(resp.users));
+                        }
+                        Err(e) => {
+                            tracing::debug!("ListUsers refresh failed: {e:?}");
+                        }
+                    }
+                });
+            }
             // Keep the connection alive so the endpoint keeps processing RPCs.
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
@@ -487,6 +573,20 @@ impl App {
             .spawn_terminal_window(cmd, command_to_send, format!("Shell {}", count))?;
         Ok(())
     }
+
+    fn run_project_task(&mut self, label: &str) -> bool {
+        let Some(task) = self.inner.project_task(label).cloned() else {
+            tracing::warn!("Project task not found: {label}");
+            return false;
+        };
+        match self.inner.spawn_project_task(&task) {
+            Ok(_key) => true,
+            Err(e) => {
+                tracing::error!("Failed to spawn project task '{label}': {e}");
+                true
+            }
+        }
+    }
 }
 
 impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for App {
@@ -502,6 +602,10 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
     }
 
     fn handle_custom_action(&mut self, action: &term_wm_core::actions::TermWmAction) -> bool {
+        // Project tasks must work regardless of the session-persistence toggle.
+        if let term_wm_core::actions::TermWmAction::RunProjectTask(label) = action {
+            return self.run_project_task(label);
+        }
         if !term_wm_config::runtime::session_persistence_enabled() {
             return false;
         }
@@ -515,10 +619,22 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
                 let source_channel = term_session::ChannelName::session(source_ws).to_string();
                 let target_channel = term_session::ChannelName::session(target_ws).to_string();
-
-                if let Err(e) =
-                    term_session::request_workspace_rebind(&source_channel, &target_channel)
-                {
+                let follow = self.inner.wm().workspace_follow_enabled;
+                let scope = if follow {
+                    term_session::protocol::RebindScope::AllViewers
+                } else {
+                    term_session::protocol::RebindScope::CallerOnly
+                };
+                let initiator = *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
+                if let Err(e) = term_session::request_workspace_rebind_with_scope(
+                    &source_channel,
+                    &target_channel,
+                    scope,
+                    initiator,
+                ) {
                     tracing::warn!("Failed to request workspace switch: {e}");
                 }
                 true
@@ -535,17 +651,25 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
                 let source_channel = term_session::ChannelName::session(source_ws).to_string();
                 let target_channel = term_session::ChannelName::session(&target_ws).to_string();
-
-                if let Err(e) =
-                    term_session::request_workspace_rebind(&source_channel, &target_channel)
-                {
+                let follow = self.inner.wm().workspace_follow_enabled;
+                let scope = if follow {
+                    term_session::protocol::RebindScope::AllViewers
+                } else {
+                    term_session::protocol::RebindScope::CallerOnly
+                };
+                let initiator = *self
+                    .event_owner
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
+                if let Err(e) = term_session::request_workspace_rebind_with_scope(
+                    &source_channel,
+                    &target_channel,
+                    scope,
+                    initiator,
+                ) {
                     tracing::error!("Failed to switch to new workspace: {e}");
                 } else {
                     self.inner.refresh_workspace_cache();
-                    self.inner.wm().push_notification(
-                        format!("Created workspace: {target_ws}"),
-                        std::time::Duration::from_secs(3),
-                    );
                 }
                 true
             }
@@ -562,6 +686,23 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                         tracing::warn!("Failed to detach viewer: {e}");
                     }
                 }
+                true
+            }
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::ToggleWorkspaceFollow => {
+                let enabled = {
+                    let wm = self.inner.wm();
+                    wm.workspace_follow_enabled = !wm.workspace_follow_enabled;
+                    wm.workspace_follow_enabled
+                };
+                let msg = if enabled {
+                    "Follow Workspaces: Enabled"
+                } else {
+                    "Follow Workspaces: Disabled"
+                };
+                self.inner
+                    .wm()
+                    .push_notification(msg, std::time::Duration::from_secs(3));
                 true
             }
             _ => false,
@@ -592,6 +733,14 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn toggle_system_panel(&mut self) {
         self.inner.toggle_system_panel();
+    }
+
+    fn on_pty_exited(&mut self, key: term_wm_core::window::WindowKey) {
+        self.inner.on_terminal_exited(key);
+    }
+
+    fn close_window(&mut self, key: term_wm_core::window::WindowKey) {
+        self.inner.close_window(key);
     }
 
     fn wm_new_terminal(&mut self) -> io::Result<()> {

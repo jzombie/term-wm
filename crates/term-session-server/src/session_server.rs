@@ -12,12 +12,13 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
-    OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindWorkspace,
-    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
-    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
-    WriteInput,
+    ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
+    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected,
+    OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
+    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope,
+    RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
+    SendAttributedInput, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
+    SubscribeInternalInput, UserInfo, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -640,7 +641,8 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     guard.clients.remove(&conn_id);
     guard.subscribers.retain(|s| s.conn_id != conn_id);
     // If the disconnected client was the internal WM, revert to RawPty mode
-    if guard.internal_wm_conn_id == Some(conn_id) {
+    let is_internal = guard.internal_wm_conn_id == Some(conn_id);
+    if is_internal {
         guard.internal_wm_caller = None;
         guard.internal_wm_conn_id = None;
         guard.input_mode = InputMode::RawPty;
@@ -654,6 +656,8 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
         channels.remove(&channel_name);
     } else {
         drop(guard);
+        // Viewer left — notify remaining internal WM about the disconnect
+        notify_user_disconnected(state, &channel, conn_id).await;
     }
     // Remove from conn_to_channel routing table
     {
@@ -679,6 +683,55 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     if let Some(ch) = resolve_channel(state, &channel).await {
         let guard = ch.lock().await;
         guard.notify_clients(&targets, ncols, nrows);
+    }
+}
+
+/// Push `OnWorkspaceEntered` to the channel's `internal_wm_caller` if present.
+/// Fire-and-forget: spawns a detached task, logs on failure.
+fn push_workspace_entered(caller: RpcIpcConnectionContextHandle, workspace: String) {
+    tokio::spawn(async move {
+        if let Err(e) = OnWorkspaceEntered::call(&caller, workspace).await {
+            tracing::debug!(error = ?e, "Failed to deliver OnWorkspaceEntered");
+        }
+    });
+}
+
+#[allow(dead_code)]
+async fn notify_user_connected(state: &ServerState, channel: &ChannelName, info: UserInfo) {
+    let caller = {
+        let Some(ch) = resolve_channel(state, channel).await else {
+            return;
+        };
+        let guard = ch.lock().await;
+        if guard.clients.len() <= 1 {
+            return;
+        }
+        guard.internal_wm_caller.clone()
+    };
+    if let Some(caller) = caller {
+        tokio::spawn(async move {
+            if let Err(e) = OnUserConnected::call(&caller, info).await {
+                tracing::debug!(error = ?e, "Failed to deliver OnUserConnected");
+            }
+        });
+    }
+}
+
+/// Notify the `internal_wm_caller` that a user disconnected.
+async fn notify_user_disconnected(state: &ServerState, channel: &ChannelName, conn_id: usize) {
+    let caller = {
+        let Some(ch) = resolve_channel(state, channel).await else {
+            return;
+        };
+        let guard = ch.lock().await;
+        guard.internal_wm_caller.clone()
+    };
+    if let Some(caller) = caller {
+        tokio::spawn(async move {
+            if let Err(e) = OnUserDisconnected::call(&caller, conn_id).await {
+                tracing::debug!(error = ?e, "Failed to deliver OnUserDisconnected");
+            }
+        });
     }
 }
 
@@ -800,7 +853,24 @@ pub async fn run_gateway(
                             .internal_channels
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
-                        channels.insert(channel_str);
+                        channels.insert(channel_str.clone());
+                    }
+                }
+                // Workspace entry toast for existing workspaces: if the internal
+                // WM is already subscribed, push directly. Cold-start (caller None)
+                // will be handled by Subscribe's !clients.is_empty() fallback.
+                if let Ok(parsed) = ChannelName::parse(&channel_str)
+                    && let Some(ch) = resolve_channel(state.as_ref(), &parsed).await
+                {
+                    let (caller, ws) = {
+                        let guard = ch.lock().await;
+                        (
+                            guard.internal_wm_caller.clone(),
+                            parsed.workspace().to_string(),
+                        )
+                    };
+                    if let Some(caller) = caller {
+                        push_workspace_entered(caller, ws);
                     }
                 }
                 Attach::encode_response(conn_id).map_err(boxed_io)
@@ -865,6 +935,25 @@ pub async fn run_gateway(
                 entry.cols = cols;
                 entry.rows = rows;
 
+                // Prepare user-connected notification (sole-user suppressed)
+                let pending_user_connected = if guard.clients.len() > 1 {
+                    let caller = guard.internal_wm_caller.clone();
+                    let c = guard.clients.get(&ctx.conn_id).cloned();
+                    caller.zip(c).map(|(caller, c)| {
+                        (
+                            caller,
+                            UserInfo {
+                                conn_id: ctx.conn_id,
+                                user: c.user,
+                                hostname: c.hostname,
+                                ssh_ip: c.ssh_ip,
+                            },
+                        )
+                    })
+                } else {
+                    None
+                };
+
                 // If a session already exists and hasn't exited, reuse it.
                 if guard.session.as_ref().is_some_and(|s| !s.exited) {
                     guard.recalculate_pty_size();
@@ -875,6 +964,13 @@ pub async fn run_gateway(
                     let cols = session.cols;
                     let rows = session.rows;
                     drop(guard);
+                    if let Some((caller, info)) = pending_user_connected {
+                        tokio::spawn(async move {
+                            if let Err(e) = OnUserConnected::call(&caller, info).await {
+                                tracing::debug!(error = ?e, "Failed to deliver OnUserConnected");
+                            }
+                        });
+                    }
                     if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
                         let g = ch.lock().await;
                         g.notify_clients(&targets, ncols, nrows);
@@ -915,6 +1011,13 @@ pub async fn run_gateway(
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
                 let (ncols, nrows) = (scol, srow);
                 drop(guard);
+                if let Some((caller, info)) = pending_user_connected {
+                    tokio::spawn(async move {
+                        if let Err(e) = OnUserConnected::call(&caller, info).await {
+                            tracing::debug!(error = ?e, "Failed to deliver OnUserConnected");
+                        }
+                    });
+                }
                 if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
                     let g = ch.lock().await;
                     g.notify_clients(&targets, ncols, nrows);
@@ -1202,6 +1305,35 @@ pub async fn run_gateway(
         .await
         .map_err(|e| format!("register ListChannels: {e:?}"))?;
 
+    // ── ListUsers ────────────────────────────────────────────────────
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ListUsers::METHOD_ID, move |payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let channel_str = ListUsers::decode_request(&payload).map_err(boxed_io)?;
+                let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
+                let users = if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let guard = ch.lock().await;
+                    guard
+                        .clients
+                        .iter()
+                        .map(|(conn_id, c)| UserInfo {
+                            conn_id: *conn_id,
+                            user: c.user.clone(),
+                            hostname: c.hostname.clone(),
+                            ssh_ip: c.ssh_ip.clone(),
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                ListUsers::encode_response(ListUsersResponse { users }).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ListUsers: {e:?}"))?;
+
     // ── KillChannel ──────────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
@@ -1306,7 +1438,11 @@ pub async fn run_gateway(
                     guard.recalculate_pty_size();
                     let session_size = guard.session.as_ref().map(|s| (s.cols, s.rows));
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
+                    let was_present = guard.clients.contains_key(&conn_id) || true; // we just removed, so notify
                     drop(guard);
+                    // Notify remaining internal WM about the disconnect
+                    let _ = was_present;
+                    notify_user_disconnected(state.as_ref(), &bound, conn_id).await;
                     if let (Some((ncols, nrows)), Some(ch)) =
                         (session_size, resolve_channel(state.as_ref(), &bound).await)
                     {
@@ -1404,27 +1540,48 @@ pub async fn run_gateway(
                 }
                 let req = RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
                 let source = ChannelName::parse(&req.source_channel).map_err(|e| rpc_err(&e))?;
-                let conns = state.conns.read().await;
-                for entry in conns.values() {
-                    if let ConnState::Attached(name) = &entry.state
-                        && name == &source
-                    {
-                        let caller = entry.handle.clone();
-                        let target = req.target.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = OnWorkspaceRebind::call(
-                                &caller,
-                                OnWorkspaceRebindRequest { target },
-                            )
-                            .await
-                            {
-                                tracing::debug!(
-                                    error = ?e,
-                                    "Failed to deliver OnWorkspaceRebind"
-                                );
+                let targets: Vec<RpcIpcConnectionContextHandle> = {
+                    let conns = state.conns.read().await;
+                    match req.scope {
+                        RebindScope::CallerOnly => {
+                            let attached: Vec<_> = conns
+                                .values()
+                                .filter(
+                                    |e| matches!(&e.state, ConnState::Attached(n) if n == &source),
+                                )
+                                .collect();
+                            if let Some(init_id) = req.initiator_conn_id {
+                                attached
+                                    .into_iter()
+                                    .filter(|e| e.handle.0.conn_id == init_id)
+                                    .map(|e| e.handle.clone())
+                                    .collect()
+                            } else if attached.len() == 1 {
+                                vec![attached[0].handle.clone()]
+                            } else {
+                                Vec::new()
                             }
-                        });
+                        }
+                        RebindScope::AllViewers => conns
+                            .values()
+                            .filter(|e| matches!(&e.state, ConnState::Attached(n) if n == &source))
+                            .map(|e| e.handle.clone())
+                            .collect(),
                     }
+                };
+                for caller in targets {
+                    let target = req.target.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            OnWorkspaceRebind::call(&caller, OnWorkspaceRebindRequest { target })
+                                .await
+                        {
+                            tracing::debug!(
+                                error = ?e,
+                                "Failed to deliver OnWorkspaceRebind"
+                            );
+                        }
+                    });
                 }
                 RebindWorkspace::encode_response(()).map_err(boxed_io)
             }
@@ -1443,26 +1600,40 @@ pub async fn run_gateway(
                 }
                 let req = SubscribeInternalInput::decode_request(&payload).map_err(boxed_io)?;
                 let name = ChannelName::parse(&req.channel).map_err(|e| rpc_err(&e))?;
-                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
-                    let mut guard = ch.lock().await;
-                    // Set input mode on the channel (source of truth)
-                    guard.input_mode = InputMode::AttributedIpc {
-                        wm_conn_id: ctx.conn_id,
+                let workspace_to_push =
+                    if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                        let mut guard = ch.lock().await;
+                        // Set input mode on the channel (source of truth)
+                        guard.input_mode = InputMode::AttributedIpc {
+                            wm_conn_id: ctx.conn_id,
+                        };
+                        // Store caller on ChannelState (not Session) so it
+                        // survives session spawn/restart — eliminates race.
+                        guard.internal_wm_caller = Some(RpcIpcConnectionContextHandle(ctx.clone()));
+                        guard.internal_wm_conn_id = Some(ctx.conn_id);
+                        // Mark channel as internal for StreamInput suppression
+                        {
+                            let mut channels = state
+                                .internal_channels
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            channels.insert(name.to_string());
+                        }
+                        // Cold-start fallback: if viewers already attached before
+                        // Subscribe (Attach raced ahead), push workspace now.
+                        if !guard.clients.is_empty() {
+                            Some((
+                                guard.internal_wm_caller.clone().expect("caller just set"),
+                                name.workspace().to_string(),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
                     };
-                    // Store caller on ChannelState (not Session) so it
-                    // survives session spawn/restart — eliminates race.
-                    guard.internal_wm_caller = Some(RpcIpcConnectionContextHandle(ctx.clone()));
-                    guard.internal_wm_conn_id = Some(ctx.conn_id);
-                    // Mark channel as internal for StreamInput suppression
-                    {
-                        let mut channels = state
-                            .internal_channels
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        channels.insert(name.to_string());
-                    }
-                    // All existing conn_ids are already in conn_to_channel
-                    // (added by Attach handler). No additional update needed.
+                if let Some((caller, ws)) = workspace_to_push {
+                    push_workspace_entered(caller, ws);
                 }
                 SubscribeInternalInput::encode_response(()).map_err(boxed_io)
             }

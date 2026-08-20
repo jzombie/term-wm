@@ -91,6 +91,9 @@ impl ModeChromeConfig {
 pub struct Window {
     title: Option<String>,
     title_set_order: Option<usize>,
+    /// Whether this window's title is pinned and immune to per-frame PTY/OSC
+    /// overwrites. Set for project-task windows whose label must remain stable.
+    title_locked: bool,
 
     /// Canonical lifecycle state (Realized, Mapped, Unmapped, Iconic, Shaded).
     state: WindowState,
@@ -130,6 +133,7 @@ impl Window {
         Self {
             title: None,
             title_set_order: None,
+            title_locked: false,
             state: WindowState::Realized,
             floating_rect: None,
             prev_floating_rect: None,
@@ -162,6 +166,19 @@ impl Window {
 
     pub fn set_title_set_order(&mut self, order: Option<usize>) {
         self.title_set_order = order;
+    }
+
+    pub fn is_title_locked(&self) -> bool {
+        self.title_locked
+    }
+
+    pub fn set_title_locked(&mut self, title: Option<String>, locked: bool) {
+        self.title = title;
+        self.title_locked = locked;
+    }
+
+    pub fn set_title_locked_flag(&mut self, locked: bool) {
+        self.title_locked = locked;
     }
 
     pub fn title_or_default(&self, key: super::WindowKey) -> String {

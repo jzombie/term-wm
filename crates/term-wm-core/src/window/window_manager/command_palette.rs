@@ -107,6 +107,8 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         &self,
         workspaces: &[String],
         current_workspace: &str,
+        project_tasks: &[crate::project_tasks::ProjectTaskConfig],
+        all_users_by_ws: &std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
         use crate::window::WindowState;
@@ -119,6 +121,260 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .get_system_window::<system_tags::SystemPanel>()
             .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
 
+        let _mouse_label = if self.mouse_capture_enabled {
+            "Mouse: Disable Capture"
+        } else {
+            "Mouse: Enable Capture"
+        };
+        let _clipboard_label = if self.clipboard_enabled {
+            "Clipboard: Disable"
+        } else {
+            "Clipboard: Enable"
+        };
+        let _debug_label = if debug_log_visible {
+            "System: Disable Debug Log"
+        } else {
+            "System: Enable Debug Log"
+        };
+        let _panel_label = if system_panel_visible {
+            "System: Disable Panel"
+        } else {
+            "System: Enable Panel"
+        };
+
+        let mi = |label: &'static str,
+                  icon: Option<&'static str>,
+                  action: crate::actions::TermWmAction| {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon,
+                action,
+                disabled: false,
+            })
+        };
+
+        let header = |title: &'static str| {
+            MenuDisplayItem::Item(MenuItem {
+                label: format!("── {} ──", title).into(),
+                icon: None,
+                action: crate::actions::TermWmAction::CloseMenu,
+                disabled: true,
+            })
+        };
+
+        #[cfg(feature = "session-persistence")]
+        let info_item = |label: String| {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon: None,
+                action: crate::actions::TermWmAction::CloseMenu,
+                disabled: true,
+            })
+        };
+
+        let focused = self.focused_window();
+        let has_active = self.windows.contains_key(focused);
+
+        let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = Vec::new();
+
+        // ─────────────────────────────────────────────────────────
+        // 1. QUICK ACTIONS & TASKS
+        // ─────────────────────────────────────────────────────────
+        items.push(header("QUICK ACTIONS"));
+        items.push(mi(
+            "Resume",
+            Some("▶"),
+            crate::actions::TermWmAction::CloseMenu,
+        ));
+        items.push(mi(
+            "New Terminal",
+            Some("+"),
+            crate::actions::TermWmAction::NewTerminal,
+        ));
+
+        for task in project_tasks.iter().filter(|t| t.argv().is_some()) {
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: task.label.clone().into(),
+                icon: Some("▶"),
+                action: crate::actions::TermWmAction::RunProjectTask(task.label.clone()),
+                disabled: false,
+            }));
+        }
+        items.push(MenuDisplayItem::Separator);
+
+        // ─────────────────────────────────────────────────────────
+        // 2. WORKSPACES & COLLABORATION (Consolidated)
+        // ─────────────────────────────────────────────────────────
+        #[cfg(feature = "session-persistence")]
+        if term_wm_config::runtime::session_persistence_enabled() {
+            items.push(header("WORKSPACES & COLLABORATION"));
+            items.push(mi(
+                "New Workspace",
+                Some("+"),
+                crate::actions::TermWmAction::NewWorkspace,
+            ));
+
+            let follow_label = if self.workspace_follow_enabled {
+                "Follow Workspaces: Disable"
+            } else {
+                "Follow Workspaces: Enable"
+            };
+            let follow_icon = if self.workspace_follow_enabled {
+                Some("◎")
+            } else {
+                Some("○")
+            };
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: follow_label.into(),
+                icon: follow_icon,
+                action: crate::actions::TermWmAction::ToggleWorkspaceFollow,
+                disabled: false,
+            }));
+
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: "Detach Viewer".into(),
+                icon: Some("-"),
+                action: crate::actions::TermWmAction::DetachCurrentClient,
+                disabled: false,
+            }));
+
+            if !workspaces.is_empty() {
+                for ws in workspaces {
+                    let is_current = ws == current_workspace;
+                    let label = if is_current {
+                        format!("Switch to Workspace: {ws} (current)")
+                    } else {
+                        format!("Switch to Workspace: {ws}")
+                    };
+
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: label.into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
+                        disabled: is_current,
+                    }));
+
+                    let render_user = |u: &crate::user_registry::UserEntry| {
+                        if let Some(ip) = &u.ssh_ip {
+                            format!("    └ {}@{} ({})", u.user, u.hostname, ip)
+                        } else {
+                            format!("    └ {}@{}", u.user, u.hostname)
+                        }
+                    };
+                    let users_exist = all_users_by_ws.get(ws).is_some_and(|u| !u.is_empty());
+                    if users_exist {
+                        for u in &all_users_by_ws[ws] {
+                            items.push(info_item(render_user(u)));
+                        }
+                    } else if ws == current_workspace && !self.user_registry.is_empty() {
+                        for (_key, u) in self.user_registry.iter() {
+                            items.push(info_item(render_user(u)));
+                        }
+                    }
+                }
+            }
+            items.push(MenuDisplayItem::Separator);
+        }
+
+        let _ = (workspaces, current_workspace, all_users_by_ws);
+
+        // ─────────────────────────────────────────────────────────
+        // 3. WINDOW MANAGEMENT
+        // ─────────────────────────────────────────────────────────
+        if has_active {
+            items.push(header("WINDOW MANAGEMENT"));
+            let raw_title = self.window_title(focused);
+            let title = crate::utils::truncate_with_ellipsis(&raw_title, 25);
+            let super_key = self
+                .keybindings()
+                .combos_for(crate::actions::TermWmAction::OpenCommandPalette)
+                .first()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "Super".to_string());
+
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: format!("Send {} to {}", super_key, title).into(),
+                icon: Some("A"),
+                action: crate::actions::TermWmAction::SendSuperKeyToWindow(focused),
+                disabled: false,
+            }));
+
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: format!("Close {}", title).into(),
+                icon: Some("X"),
+                action: crate::actions::TermWmAction::CloseWindow(focused),
+                disabled: !self.window(focused).is_some_and(|w| w.closable()),
+            }));
+
+            let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
+            if !self.is_monocle() {
+                let max_label = if is_maxed {
+                    format!("Restore {}", title)
+                } else {
+                    format!("Maximize {}", title)
+                };
+                let max_icon = if is_maxed { "─" } else { "▢" };
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: max_label.into(),
+                    icon: Some(max_icon),
+                    action: crate::actions::TermWmAction::MaximizeWindow(focused),
+                    disabled: false,
+                }));
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Minimize {}", title).into(),
+                    icon: Some("_"),
+                    action: crate::actions::TermWmAction::MinimizeWindow(focused),
+                    disabled: false,
+                }));
+            }
+
+            let switch_titles = self.window_titles();
+            if !switch_titles.is_empty() {
+                for (key, switch_title) in switch_titles {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Switch to: {}", switch_title).into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::FocusWindow(key),
+                        disabled: key == focused,
+                    }));
+                }
+            }
+            items.push(MenuDisplayItem::Separator);
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // 4. VIEW & LAYOUT
+        // ─────────────────────────────────────────────────────────
+        items.push(header("VIEW & LAYOUT"));
+        items.push(mi(
+            self.monocle_mode.action_label(),
+            Some("▢"),
+            crate::actions::TermWmAction::ToggleMonocle,
+        ));
+
+        let layout_label = if self.managed_layout.is_some() {
+            "View: Float Windows"
+        } else {
+            "View: Tile Windows"
+        };
+        let mut tile_item = mi(
+            layout_label,
+            Some("⊞"),
+            crate::actions::TermWmAction::ToggleTiling,
+        );
+        if self.is_monocle()
+            && let MenuDisplayItem::Item(ref mut item) = tile_item
+        {
+            item.disabled = true;
+        }
+        items.push(tile_item);
+        items.push(MenuDisplayItem::Separator);
+
+        // ─────────────────────────────────────────────────────────
+        // 5. SETTINGS & SYSTEM
+        // ─────────────────────────────────────────────────────────
+        items.push(header("SETTINGS & SYSTEM"));
+
         let mouse_label = if self.mouse_capture_enabled {
             "Mouse: Disable Capture"
         } else {
@@ -129,6 +385,30 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         } else {
             "Clipboard: Enable"
         };
+
+        items.push(mi(
+            mouse_label,
+            Some("◆"),
+            crate::actions::TermWmAction::ToggleMouseCapture,
+        ));
+        items.push(mi(
+            clipboard_label,
+            Some("■"),
+            crate::actions::TermWmAction::ToggleClipboardMode,
+        ));
+        items.push(mi(
+            "Paste",
+            Some("■"),
+            crate::actions::TermWmAction::PasteClipboard,
+        ));
+
+        let debug_log_visible = self
+            .get_system_window::<system_tags::DebugLog>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+        let system_panel_visible = self
+            .get_system_window::<system_tags::SystemPanel>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+
         let debug_label = if debug_log_visible {
             "System: Disable Debug Log"
         } else {
@@ -140,201 +420,23 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             "System: Enable Panel"
         };
 
-        fn mi(
-            label: &'static str,
-            icon: Option<&'static str>,
-            action: crate::actions::TermWmAction,
-        ) -> MenuDisplayItem<crate::actions::TermWmAction> {
-            MenuDisplayItem::Item(MenuItem {
-                label: label.into(),
-                icon,
-                action,
-                disabled: false,
-            })
-        }
+        items.push(mi(
+            debug_label,
+            Some("≣"),
+            crate::actions::TermWmAction::ToggleDebugWindow,
+        ));
+        items.push(mi(
+            panel_label,
+            Some("*"),
+            crate::actions::TermWmAction::ToggleSystemPanel,
+        ));
 
-        let focused = self.focused_window();
-        let has_active = self.windows.contains_key(focused);
-
-        let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = vec![
-            // Top group
-            mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
-            mi(
-                "New Terminal",
-                Some("+"),
-                crate::actions::TermWmAction::NewTerminal,
-            ),
-            MenuDisplayItem::Separator,
-        ];
-
-        // Workspace group — always show "New Workspace"
-        #[cfg(feature = "session-persistence")]
-        if term_wm_config::runtime::session_persistence_enabled() {
-            items.push(mi(
-                "New Workspace",
-                Some("+"),
-                crate::actions::TermWmAction::NewWorkspace,
-            ));
-
-            if !workspaces.is_empty() {
-                for ws in workspaces {
-                    items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Switch to Workspace: {ws}").into(),
-                        icon: Some("→"),
-                        action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
-                        disabled: ws == current_workspace,
-                    }));
-                }
-            }
-            items.push(MenuDisplayItem::Item(MenuItem {
-                label: "Detach Viewer".into(),
-                icon: Some("-"),
-                action: crate::actions::TermWmAction::DetachCurrentClient,
-                disabled: false,
-            }));
-            items.push(MenuDisplayItem::Separator);
-        }
-
-        // TODO: Comment why this is needed
-        let _ = (workspaces, current_workspace);
-
-        // Window management group (directly below top group)
-        {
-            if has_active {
-                let raw_title = self.window_title(focused);
-                let title = crate::utils::truncate_with_ellipsis(&raw_title, 25);
-                let super_key = self
-                    .keybindings()
-                    .combos_for(crate::actions::TermWmAction::OpenCommandPalette)
-                    .first()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "Super".to_string());
-
-                // Send SUPER key to window
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Send {} to {}", super_key, title).into(),
-                    icon: Some("A"),
-                    action: crate::actions::TermWmAction::SendSuperKeyToWindow(focused),
-                    disabled: false,
-                }));
-
-                // Close window (disabled for non-closable windows)
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Close {}", title).into(),
-                    icon: Some("X"),
-                    action: crate::actions::TermWmAction::CloseWindow(focused),
-                    disabled: !self.window(focused).is_some_and(|w| w.closable()),
-                }));
-
-                // Maximize / Restore
-                let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
-                if !self.is_monocle() {
-                    items.push(MenuDisplayItem::Item(MenuItem {
-                        label: (if is_maxed {
-                            format!("Restore {}", title)
-                        } else {
-                            format!("Maximize {}", title)
-                        })
-                        .into(),
-                        icon: Some(if is_maxed { "─" } else { "▢" }),
-                        action: crate::actions::TermWmAction::MaximizeWindow(focused),
-                        disabled: false,
-                    }));
-                    items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Minimize {}", title).into(),
-                        icon: Some("_"),
-                        action: crate::actions::TermWmAction::MinimizeWindow(focused),
-                        disabled: false,
-                    }));
-                }
-
-                // Switch to windows
-                let switch_titles = self.window_titles();
-                if !switch_titles.is_empty() {
-                    items.push(MenuDisplayItem::Separator);
-                    for (key, switch_title) in switch_titles {
-                        items.push(MenuDisplayItem::Item(MenuItem {
-                            label: format!("Switch to: {}", switch_title).into(),
-                            icon: Some("→"),
-                            action: crate::actions::TermWmAction::FocusWindow(key),
-                            disabled: key == focused,
-                        }));
-                    }
-                }
-            }
-        }
-
-        // View group
-        {
-            items.push(MenuDisplayItem::Separator);
-            items.push(mi(
-                self.monocle_mode.action_label(),
-                Some("▢"),
-                crate::actions::TermWmAction::ToggleMonocle,
-            ));
-            {
-                let label = if self.managed_layout.is_some() {
-                    "View: Float Windows"
-                } else {
-                    "View: Tile Windows"
-                };
-                let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
-                if self.is_monocle()
-                    && let MenuDisplayItem::Item(ref mut mi) = item
-                {
-                    mi.disabled = true;
-                }
-                items.push(item);
-            }
-        }
-
-        // Settings groups
-        {
-            {
-                items.push(MenuDisplayItem::Separator);
-                items.push(mi(
-                    mouse_label,
-                    Some("◆"),
-                    crate::actions::TermWmAction::ToggleMouseCapture,
-                ));
-                items.push(mi(
-                    clipboard_label,
-                    Some("■"),
-                    crate::actions::TermWmAction::ToggleClipboardMode,
-                ));
-                items.push(mi(
-                    "Paste",
-                    Some("■"),
-                    crate::actions::TermWmAction::PasteClipboard,
-                ));
-            }
-
-            items.push(MenuDisplayItem::Separator);
-
-            {
-                items.push(mi(
-                    debug_label,
-                    Some("≣"),
-                    crate::actions::TermWmAction::ToggleDebugWindow,
-                ));
-                items.push(mi(
-                    panel_label,
-                    Some("*"),
-                    crate::actions::TermWmAction::ToggleSystemPanel,
-                ));
-            }
-        }
-
-        // Help/Exit as last group
-        {
-            items.push(MenuDisplayItem::Separator);
-            items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
-            items.push(mi(
-                "Exit UI",
-                Some("⏻"),
-                crate::actions::TermWmAction::ExitUi,
-            ));
-        }
+        items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
+        items.push(mi(
+            "Exit UI",
+            Some("⏻"),
+            crate::actions::TermWmAction::ExitUi,
+        ));
 
         items
     }
@@ -592,7 +694,7 @@ mod tests {
         wm.focus_window_key(key);
         wm.set_window_title(key, "alpha");
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
@@ -600,13 +702,13 @@ mod tests {
             )
         });
         let idx = switcher_idx.expect("Switch to entry present");
+        assert!(idx > 0, "Switch to should not be first item");
+        // 5-section layout: Switch to is after MinimizeWindow, not necessarily after Separator
         assert!(
-            matches!(&items[idx - 1], MenuDisplayItem::Separator),
-            "separator must precede the Switch to list"
-        );
-        assert!(
-            matches!(&items[idx - 2], MenuDisplayItem::Item(_)),
-            "window controls must precede the separator"
+            items[..idx]
+                .iter()
+                .any(|e| matches!(e, MenuDisplayItem::Separator)),
+            "at least one separator must precede Switch to list"
         );
     }
 
@@ -622,7 +724,7 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,
@@ -636,6 +738,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_omits_workspace_group_when_runtime_disabled() {
         use crate::components::{MenuDisplayItem, MenuItem};
@@ -646,7 +749,12 @@ mod tests {
             session_persistence: false,
         });
 
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default");
+        let items = wm.wm_menu_items(
+            &["dev".into(), "prod".into()],
+            "default",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
 
         // Restore the default so parallel tests see the expected state.
         term_wm_config::runtime::init(term_wm_config::runtime::RuntimeConfig::default());
@@ -670,6 +778,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_shows_workspace_group_when_runtime_enabled() {
         use crate::components::{MenuDisplayItem, MenuItem};
@@ -678,7 +787,12 @@ mod tests {
         // Runtime enabled by default: the workspace group must offer
         // New Workspace, Switch to Workspace entries (current one disabled),
         // and Detach Viewer.
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev");
+        let items = wm.wm_menu_items(
+            &["dev".into(), "prod".into()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
 
         let mut workspace: Vec<(String, bool)> = items
             .iter()
@@ -702,7 +816,7 @@ mod tests {
             vec![
                 ("Detach Viewer".to_string(), false),
                 ("New Workspace".to_string(), false),
-                ("Switch to Workspace: dev".to_string(), true),
+                ("Switch to Workspace: dev (current)".to_string(), true),
                 ("Switch to Workspace: prod".to_string(), false),
             ],
             "workspace group must list all actions, disabling the current workspace"

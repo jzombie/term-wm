@@ -480,11 +480,20 @@ impl RpcMethodPrebuffered for ShutdownGateway {
 
 // ── RebindWorkspace (client asks server to rebind viewers) ───────────
 
-/// Client request to rebind all viewers on `source_channel` to `target`.
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Default)]
+pub enum RebindScope {
+    #[default]
+    CallerOnly,
+    AllViewers,
+}
+
+/// Client request to rebind viewers on `source_channel` to `target`.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct RebindWorkspaceRequest {
     pub source_channel: String,
     pub target: String,
+    pub scope: RebindScope,
+    pub initiator_conn_id: Option<usize>,
 }
 
 pub struct RebindWorkspace;
@@ -670,12 +679,16 @@ mod tests {
             &RebindWorkspace::encode_request(RebindWorkspaceRequest {
                 source_channel: "dev/main".into(),
                 target: "ws-123/main".into(),
+                scope: RebindScope::CallerOnly,
+                initiator_conn_id: Some(42),
             })
             .unwrap(),
         )
         .unwrap();
         assert_eq!(req.source_channel, "dev/main");
         assert_eq!(req.target, "ws-123/main");
+        assert_eq!(req.scope, RebindScope::CallerOnly);
+        assert_eq!(req.initiator_conn_id, Some(42));
         assert_eq!(RebindWorkspace::decode_response(&[]).unwrap(), ());
     }
 
@@ -782,5 +795,160 @@ impl RpcMethodPrebuffered for OnPtyResized {
 
     fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
         Ok(())
+    }
+}
+
+// ── UserInfo + presence notifications ─────────────────────────────
+
+/// Presence info for a connected user, shared via `OnUserConnected` and `ListUsers`.
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+pub struct UserInfo {
+    pub conn_id: usize,
+    pub user: String,
+    pub hostname: String,
+    pub ssh_ip: Option<String>,
+}
+
+/// Server pushes to the active `internal_wm_caller` when a new viewer joins.
+pub struct OnUserConnected;
+
+impl RpcMethodPrebuffered for OnUserConnected {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_user_connected");
+
+    type Input = UserInfo;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&input))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        bitcode::decode::<UserInfo>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+#[derive(Encode, Decode)]
+struct OnUserDisconnectedRequest {
+    pub conn_id: usize,
+}
+
+/// Server pushes to `internal_wm_caller` when a viewer leaves.
+pub struct OnUserDisconnected;
+
+impl RpcMethodPrebuffered for OnUserDisconnected {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_user_disconnected");
+
+    type Input = usize;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&OnUserDisconnectedRequest {
+            conn_id: input,
+        }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<OnUserDisconnectedRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(r.conn_id)
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+#[derive(Encode, Decode)]
+struct OnWorkspaceEnteredRequest {
+    pub workspace: String,
+}
+
+/// Server pushes to `internal_wm_caller` when the viewer lands on a workspace.
+pub struct OnWorkspaceEntered;
+
+impl RpcMethodPrebuffered for OnWorkspaceEntered {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_workspace_entered");
+
+    type Input = String;
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&OnWorkspaceEnteredRequest {
+            workspace: input,
+        }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<OnWorkspaceEnteredRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(r.workspace)
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+/// Response for `ListUsers`: snapshot of connected users on a channel.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct ListUsersResponse {
+    pub users: Vec<UserInfo>,
+}
+
+#[derive(Encode, Decode)]
+struct ListUsersRequest {
+    pub channel: String,
+}
+
+#[derive(Encode, Decode)]
+struct ListUsersResponseWire {
+    pub users: Vec<UserInfo>,
+}
+
+pub struct ListUsers;
+
+impl RpcMethodPrebuffered for ListUsers {
+    const METHOD_ID: u64 = rpc_method_id!("session.list_users");
+
+    type Input = String;
+    type Output = ListUsersResponse;
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&ListUsersRequest { channel: input }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<ListUsersRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(r.channel)
+    }
+
+    fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&ListUsersResponseWire {
+            users: output.users,
+        }))
+    }
+
+    fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        let r = bitcode::decode::<ListUsersResponseWire>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(ListUsersResponse { users: r.users })
     }
 }

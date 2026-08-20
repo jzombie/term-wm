@@ -1,5 +1,7 @@
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -15,6 +17,7 @@ use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::events::{Event, KeyEvent};
 use term_wm_core::io::{EventSource, RenderTarget};
+use term_wm_core::project_tasks::{self, ProjectTaskConfig};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
@@ -52,6 +55,8 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleDebugWindow,
     #[cfg(feature = "session-persistence")]
     TermWmAction::NewWorkspace,
+    #[cfg(feature = "session-persistence")]
+    TermWmAction::ToggleWorkspaceFollow,
 ];
 
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
@@ -137,6 +142,20 @@ where
     /// Current workspace name for filtering the palette switch list.
     #[cfg(feature = "session-persistence")]
     current_workspace: String,
+    /// All workspace users grouped by workspace for palette listing (app-owned).
+    #[cfg(feature = "session-persistence")]
+    all_users_by_ws:
+        std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
+    /// Working directory captured at app init — the root of tasks.json discovery.
+    launch_cwd: PathBuf,
+    /// Tasks discovered from the nearest .term-wm/.zed tasks.json.
+    project_tasks: Vec<ProjectTaskConfig>,
+    /// Project root dir where the winning tasks.json was found; None when not discovered.
+    project_root: Option<PathBuf>,
+    /// WindowKey → task label for windows spawned by RunProjectTask (keep-open + toast).
+    project_task_windows: HashMap<WindowKey, String>,
+    /// Windows that have already been toasted on exit — prevents re-close on duplicate AppExited.
+    exited_task_windows: HashSet<WindowKey>,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -267,18 +286,27 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             cached_workspaces: Vec::new(),
             #[cfg(feature = "session-persistence")]
             current_workspace: term_session::DEFAULT_WORKSPACE.to_string(),
+            #[cfg(feature = "session-persistence")]
+            all_users_by_ws: std::collections::BTreeMap::new(),
+            launch_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            project_tasks: Vec::new(),
+            project_root: None,
+            project_task_windows: HashMap::new(),
+            exited_task_windows: HashSet::new(),
         };
         // Every TermWmApp flows through here — the standalone constructors
-        // (new_custom / new_with_config / new_with_actions) AND the bundled
+        // (new_custom / new_with_config / new_with_actions) and the bundled
         // binary's `from_wm` path — so guarantee the system windows (debug log,
         // system panel) exist from construction, without any app needing to call
         // init_system_windows() itself. Idempotent.
         app.init_system_windows();
+        app.refresh_project_tasks();
         app
     }
 
-    /// Refresh the cached workspace channel list from the daemon via short-lived IPC.
+    /// Refresh the cached workspace channel list and all workspace users from the daemon via short-lived IPC.
     /// Called before opening the Command Palette — never on every keystroke.
+    /// Single `list_channels()` pass populates both `cached_workspaces` and `all_users_by_ws` (app-owned, pass-by-ref to WM).
     #[cfg(feature = "session-persistence")]
     pub fn refresh_workspace_cache(&mut self) {
         if !term_wm_config::runtime::session_persistence_enabled() {
@@ -286,17 +314,38 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         }
         match term_session::list_channels() {
             Ok(resp) => {
-                self.cached_workspaces = resp
-                    .channels
-                    .iter()
-                    .map(|ch| term_session::ChannelName::parse_workspace(&ch.name).to_string())
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect();
+                let mut workspaces = std::collections::HashSet::new();
+                let mut users_by_ws: std::collections::BTreeMap<
+                    String,
+                    Vec<term_wm_core::user_registry::UserEntry>,
+                > = std::collections::BTreeMap::new();
+                for ch in resp.channels {
+                    let ws = term_session::ChannelName::parse_workspace(&ch.name).to_string();
+                    workspaces.insert(ws.clone());
+                    for c in ch.clients {
+                        users_by_ws.entry(ws.clone()).or_default().push(
+                            term_wm_core::user_registry::UserEntry {
+                                conn_id: c.conn_id,
+                                user: c.user,
+                                hostname: c.hostname,
+                                ssh_ip: c.ssh_ip,
+                            },
+                        );
+                    }
+                }
+                for v in users_by_ws.values_mut() {
+                    v.sort_by(|a, b| {
+                        a.user
+                            .cmp(&b.user)
+                            .then_with(|| a.hostname.cmp(&b.hostname))
+                    });
+                }
+                self.cached_workspaces = workspaces.into_iter().collect();
                 self.cached_workspaces.sort();
+                self.all_users_by_ws = users_by_ws;
             }
             Err(e) => {
-                tracing::debug!("Failed to refresh workspace cache: {e}");
+                tracing::debug!("Failed to refresh workspace/user cache: {e}");
             }
         }
     }
@@ -311,6 +360,28 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     #[cfg(feature = "session-persistence")]
     pub fn set_current_workspace(&mut self, name: String) {
         self.current_workspace = name;
+    }
+
+    /// Refresh the cached user registry via `ListUsers`.
+    #[cfg(feature = "session-persistence")]
+    pub fn refresh_user_cache(&mut self) {
+        if !term_wm_config::runtime::session_persistence_enabled() {
+            return;
+        }
+        let channel = term_session::ChannelName::session(&self.current_workspace).to_string();
+        match term_session::list_users(&channel) {
+            Ok(resp) => {
+                self.wm.user_registry.clear();
+                for u in resp.users {
+                    self.wm
+                        .user_registry
+                        .upsert(u.conn_id, u.user, u.hostname, u.ssh_ip);
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Failed to refresh user cache: {e}");
+            }
+        }
     }
 
     /// Spawn a fully-wired PTY terminal window in a single call.
@@ -420,6 +491,142 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         for key in terminal_keys {
             self.wire_pty_callback(key, tx.clone());
         }
+    }
+
+    /// Refresh the cached project tasks from the nearest tasks.json.
+    /// Syncs both `TermWmApp` and `WindowManager::project_tasks` in one call.
+    pub fn refresh_project_tasks(&mut self) {
+        match project_tasks::load_tasks_for_cwd(&self.launch_cwd) {
+            Some(pt) => {
+                self.project_root = Some(pt.root);
+                self.project_tasks = pt.tasks;
+            }
+            None => {
+                self.project_root = None;
+                self.project_tasks.clear();
+            }
+        }
+        self.wm.project_tasks = self.project_tasks.clone();
+    }
+
+    /// Return the cached project tasks.
+    pub fn project_tasks(&self) -> &[ProjectTaskConfig] {
+        &self.project_tasks
+    }
+
+    /// Look up a project task by label.
+    pub fn project_task(&self, label: &str) -> Option<&ProjectTaskConfig> {
+        self.project_tasks.iter().find(|t| t.label == label)
+    }
+
+    /// Close a window, purging any project-task bookkeeping.
+    pub fn close_window(&mut self, key: WindowKey) {
+        self.project_task_windows.remove(&key);
+        self.exited_task_windows.remove(&key);
+        self.wm.close_window(key);
+    }
+
+    /// Spawn a project task in a new terminal window.
+    pub fn spawn_project_task(&mut self, task: &ProjectTaskConfig) -> io::Result<WindowKey> {
+        let cmd = self
+            .command_builder_for_task(task)
+            .ok_or_else(|| io::Error::other("task has no valid command"))?;
+        let key = self.spawn_terminal_window(cmd, None, task.label.clone())?;
+        self.wm()
+            .set_window_title_lock(key, task.label.clone(), true);
+        self.project_task_windows.insert(key, task.label.clone());
+        Ok(key)
+    }
+
+    /// Build a `CommandBuilder` for a project task, resolving cwd and env.
+    fn command_builder_for_task(
+        &self,
+        task: &ProjectTaskConfig,
+    ) -> Option<portable_pty::CommandBuilder> {
+        let argv = task.argv()?;
+        let mut cmd = portable_pty::CommandBuilder::new(&argv[0]);
+        if argv.len() > 1 {
+            cmd.args(&argv[1..]);
+        }
+        let base = self.project_root.as_deref().unwrap_or(&self.launch_cwd);
+        let cwd = match task.cwd.as_deref() {
+            Some(c) => {
+                let p = std::path::Path::new(c);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    base.join(p)
+                }
+            }
+            None => base.to_path_buf(),
+        };
+        cmd.cwd(cwd);
+        for (k, v) in &task.env {
+            cmd.env(k, v);
+        }
+        Some(cmd)
+    }
+
+    /// Handle PTY exit for a window — keep task windows open, close others.
+    pub fn on_terminal_exited(&mut self, key: WindowKey) {
+        // Check if window still exists via window_state (public method).
+        if self.wm().window_state(key).is_none() {
+            self.project_task_windows.remove(&key);
+            self.exited_task_windows.remove(&key);
+            return;
+        }
+        if !self.project_task_windows.contains_key(&key) {
+            self.close_window(key);
+            return;
+        }
+        if self.exited_task_windows.contains(&key) {
+            return;
+        }
+        self.exited_task_windows.insert(key);
+        let label = self
+            .project_task_windows
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+
+        // 1. Capture focus BEFORE mutable component borrows
+        let is_focused = self.wm().focused_window() == key;
+
+        // 2. Fetch process exit status
+        let status = self.wm().component_for_key_mut(key).and_then(|c| match c {
+            AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view)) => {
+                scroll_view.content.borrow().exit_status()
+            }
+            _ => None,
+        });
+
+        // 3. Inject in-buffer completion marker directly into VT100 parser
+        if let Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) =
+            self.wm().component_for_key_mut(key)
+        {
+            scroll_view
+                .content
+                .borrow_mut()
+                .append_process_exit(status.as_ref());
+        }
+        // Layout must be invalidated AFTER the component borrow is released to
+        // avoid overlapping &mut borrows of self.wm().
+        self.wm().mark_layout_dirty();
+
+        // 4. Fire notifications only when window is NOT focused
+        if !is_focused {
+            let notif_body = match status {
+                Some(st) if !st.success() => {
+                    format!("Task '{label}' completed with exit code {}", st.exit_code())
+                }
+                _ => format!("Task '{label}' completed"),
+            };
+
+            self.wm()
+                .push_notification(&notif_body, std::time::Duration::from_secs(3));
+        }
+
+        tracing::info!(?key, %label, "project task window kept open after exit");
     }
 
     /// Initialize standard system windows (debug log + system panel).
@@ -640,8 +847,20 @@ impl<C: Component<TermWmAction> + 'static>
         }
     }
 
+    fn on_pty_exited(&mut self, key: WindowKey) {
+        self.on_terminal_exited(key);
+    }
+
+    fn close_window(&mut self, key: WindowKey) {
+        TermWmApp::close_window(self, key);
+    }
+
     fn open_command_palette(&mut self) {
         use term_wm_core::components::MenuDisplayItem;
+
+        // Refresh project tasks and sync to WM cache BEFORE building items.
+        self.refresh_project_tasks();
+
         let mut palette = WmCommandPaletteComponent::new();
         let anchor = self.wm.take_pending_palette_anchor();
         palette.set_anchor(anchor);
@@ -659,9 +878,19 @@ impl<C: Component<TermWmAction> + 'static>
         let workspaces: &[String] = &[];
 
         #[cfg(feature = "session-persistence")]
-        let items = self.wm.wm_menu_items(workspaces, &self.current_workspace);
+        let items = self.wm.wm_menu_items(
+            workspaces,
+            &self.current_workspace,
+            &self.wm.project_tasks,
+            &self.all_users_by_ws,
+        );
         #[cfg(not(feature = "session-persistence"))]
-        let items = self.wm.wm_menu_items(workspaces, "");
+        let items = self.wm.wm_menu_items(
+            workspaces,
+            "",
+            &self.wm.project_tasks,
+            &std::collections::BTreeMap::new(),
+        );
         let supported = self.wm.supported_menu_actions();
         // Filter out items not in the supported set; keep separators.
         let items: Vec<_> = items
@@ -676,14 +905,17 @@ impl<C: Component<TermWmAction> + 'static>
                             | TermWmAction::CloseWindow(_)
                             | TermWmAction::SendSuperKeyToWindow(_)
                             | TermWmAction::SendSuperKeyToFocusedWindow
+                            | TermWmAction::RunProjectTask(_)
                     );
                     #[cfg(feature = "session-persistence")]
                     let always_pass = always_pass
                         || matches!(
                             item.action,
-                            TermWmAction::SwitchWorkspace(_) | TermWmAction::NewWorkspace
+                            TermWmAction::SwitchWorkspace(_)
+                                | TermWmAction::NewWorkspace
+                                | TermWmAction::ToggleWorkspaceFollow
                         );
-                    supported.contains(&item.action) || always_pass
+                    item.disabled || supported.contains(&item.action) || always_pass
                 }
                 MenuDisplayItem::Separator => true,
             })
@@ -770,6 +1002,7 @@ mod tests {
                 TermWmAction::NewTerminal,
                 TermWmAction::ToggleDebugWindow,
                 TermWmAction::NewWorkspace,
+                TermWmAction::ToggleWorkspaceFollow,
             ],
             "new_custom must expose exactly its configured allow-list, not the full default set"
         );
