@@ -157,8 +157,11 @@ where
     project_task_windows: HashMap<WindowKey, String>,
     /// Windows that have already been toasted on exit — prevents re-close on duplicate AppExited.
     exited_task_windows: HashSet<WindowKey>,
-    /// Last instant the palette was ticked (for 1s uptime/size polling).
+    /// Last instant the palette was ticked (1 Hz uptime refresh).
     palette_tick_last: Option<Instant>,
+    /// Last instant the palette did an IPC workspace refresh (throttled).
+    #[cfg(feature = "session-persistence")]
+    palette_ipc_last: Option<Instant>,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -297,6 +300,8 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             project_task_windows: HashMap::new(),
             exited_task_windows: HashSet::new(),
             palette_tick_last: None,
+            #[cfg(feature = "session-persistence")]
+            palette_ipc_last: None,
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) and the bundled
@@ -878,6 +883,7 @@ impl<C: Component<TermWmAction> + 'static>
             self.wm.cached_workspaces = self.cached_workspaces.clone();
             self.wm.current_workspace = self.current_workspace.clone();
             self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+            self.palette_ipc_last = Some(Instant::now());
         }
         self.wm.refresh_palette_items();
         self.palette_tick_last = Some(Instant::now());
@@ -886,23 +892,39 @@ impl<C: Component<TermWmAction> + 'static>
     fn poll_palette_tick(&mut self) {
         if !self.wm.command_menu_visible() {
             self.palette_tick_last = None;
+            #[cfg(feature = "session-persistence")]
+            {
+                self.palette_ipc_last = None;
+            }
             return;
         }
         let now = Instant::now();
-        if let Some(last) = self.palette_tick_last
-            && now.duration_since(last) < Duration::from_secs(1)
-        {
+        let need_tick = self
+            .palette_tick_last
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1));
+        #[cfg(feature = "session-persistence")]
+        let need_ipc = self
+            .palette_ipc_last
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(5));
+        #[cfg(not(feature = "session-persistence"))]
+        let need_ipc = false;
+        if !need_tick && !need_ipc {
             return;
         }
-        self.palette_tick_last = Some(now);
-        #[cfg(feature = "session-persistence")]
-        {
-            self.refresh_workspace_cache();
-            self.wm.cached_workspaces = self.cached_workspaces.clone();
-            self.wm.current_workspace = self.current_workspace.clone();
-            self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+        if need_ipc {
+            #[cfg(feature = "session-persistence")]
+            {
+                self.refresh_workspace_cache();
+                self.wm.cached_workspaces = self.cached_workspaces.clone();
+                self.wm.current_workspace = self.current_workspace.clone();
+                self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+                self.palette_ipc_last = Some(now);
+            }
         }
-        self.wm.refresh_palette_items();
+        if need_tick || need_ipc {
+            self.wm.refresh_palette_items();
+            self.palette_tick_last = Some(now);
+        }
     }
 
     fn palette_tick_deadline(&self) -> Option<Duration> {
@@ -994,7 +1016,12 @@ impl<C: Component<TermWmAction> + 'static>
         palette.set_items(items);
         self.wm
             .open_command_palette_overlay(OverlayComponent::CommandPalette(palette));
-        self.palette_tick_last = Some(Instant::now());
+        let now = Instant::now();
+        self.palette_tick_last = Some(now);
+        #[cfg(feature = "session-persistence")]
+        {
+            self.palette_ipc_last = Some(now);
+        }
     }
 
     fn open_help_overlay(&mut self) {
