@@ -1,4 +1,14 @@
-//! Centralized `TERM_WM_*` environment variables and the gateway namespace.
+//! Centralized `TERM_WM_*` environment variables, environment resolution, and the gateway namespace.
+//!
+//! [`active_environment()`] serves as the **single source of truth** for which environment
+//! the current process behaves as. It is consumed consistently across the entire codebase:
+//! - **IPC / Gateway Scoping:** `gateway_channel_name()` in `term-session-muxio-service-definitions`
+//!   uses it to scope socket endpoints (`term-wm/<env>/<user>/gateway`).
+//! - **Project Task Gating:** `ProjectTaskConfig::visible_in()` in `term-wm-core` uses it to
+//!   filter tasks declared in `.term-wm/tasks.json` by environment.
+//!
+//! Any new subsystem requiring environment gating must query [`active_environment()`] rather than
+//! inspecting `CARGO_MANIFEST_DIR` or `cfg!(debug_assertions)` directly.
 
 use std::fmt;
 
@@ -25,7 +35,7 @@ pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
 pub const NO_SESSION_PERSISTENCE_ENV_VAR: &str = "TERM_WM_NO_SESSION_PERSISTENCE";
 
 /// Active environment override (`dev`/`prod`/`test`, case-insensitive).
-/// Read by `term-session-muxio-service-definitions` to scope the gateway.
+/// Read by [`active_environment()`] to override compile-time defaults.
 pub const ENVIRONMENT_ENV_VAR: &str = "TERM_WM_ENV";
 
 /// Supported runtime environments. [`active_environment`] normalizes the
@@ -55,8 +65,11 @@ impl fmt::Display for Environment {
     }
 }
 
-/// The compile-time default environment: dev in debug builds or when Cargo is
-/// driving the binary (`CARGO_MANIFEST_DIR` is set), prod otherwise.
+/// The compile-time default environment:
+/// - [`Environment::Dev`]: when Cargo is driving the binary (`CARGO_MANIFEST_DIR` is set,
+///   including `cargo run --release`) or debug assertions are enabled (`cfg!(debug_assertions)`).
+/// - [`Environment::Prod`]: installed/standalone release builds running outside Cargo
+///   without debug assertions.
 pub fn default_environment() -> Environment {
     if std::env::var_os("CARGO_MANIFEST_DIR").is_some() || cfg!(debug_assertions) {
         Environment::Dev
@@ -76,8 +89,12 @@ pub fn parse_environment(raw: &str) -> Option<Environment> {
     }
 }
 
-/// The environment this build should behave as: `TERM_WM_ENV` when set and
-/// valid, else [`default_environment`].
+/// The single-source environment this build behaves as: [`ENVIRONMENT_ENV_VAR`] (`TERM_WM_ENV`)
+/// when set and valid, else [`default_environment()`].
+///
+/// Shared by both IPC gateway socket resolution (`gateway_channel_name()`) and project task
+/// filtering (`load_tasks_for_cwd()`). To force a specific environment when running via Cargo,
+/// set `TERM_WM_ENV` explicitly (e.g. `TERM_WM_ENV=prod cargo run --release`).
 pub fn active_environment() -> Environment {
     std::env::var(ENVIRONMENT_ENV_VAR)
         .ok()
