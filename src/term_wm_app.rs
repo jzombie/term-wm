@@ -534,20 +534,44 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             .get(&key)
             .cloned()
             .unwrap_or_default();
+
+        // 1. Capture focus BEFORE mutable component borrows
+        let is_focused = self.wm().focused_window() == key;
+
+        // 2. Fetch process exit status
         let status = self.wm().component_for_key_mut(key).and_then(|c| match c {
             AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view)) => {
                 scroll_view.content.borrow().exit_status()
             }
             _ => None,
         });
-        let msg = match status {
-            Some(st) if !st.success() => {
-                format!("Task '{label}' finished (exit {})", st.exit_code())
-            }
-            _ => format!("Task '{label}' finished"),
-        };
-        self.wm()
-            .push_notification(msg, std::time::Duration::from_secs(3));
+
+        // 3. Inject in-buffer completion marker directly into VT100 parser
+        if let Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) =
+            self.wm().component_for_key_mut(key)
+        {
+            scroll_view
+                .content
+                .borrow_mut()
+                .append_process_exit(status.as_ref());
+        }
+        // Layout must be invalidated AFTER the component borrow is released to
+        // avoid overlapping &mut borrows of self.wm().
+        self.wm().mark_layout_dirty();
+
+        // 4. Fire notifications only when window is NOT focused
+        if !is_focused {
+            let notif_body = match status {
+                Some(st) if !st.success() => {
+                    format!("Task '{label}' completed with exit code {}", st.exit_code())
+                }
+                _ => format!("Task '{label}' completed"),
+            };
+
+            self.wm()
+                .push_notification(&notif_body, std::time::Duration::from_secs(3));
+        }
+
         tracing::info!(?key, %label, "project task window kept open after exit");
     }
 

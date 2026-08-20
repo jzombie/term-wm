@@ -42,6 +42,12 @@ fn force_native_selection(modifiers: KeyModifiers) -> bool {
     modifiers.shift || (cfg!(target_os = "macos") && modifiers.alt)
 }
 
+/// SGR escape that dims the process-completion marker to bright black. The
+/// formatting for the exit status line lives only here — never in the app layer.
+const SGR_BRIGHT_BLACK: &str = "\x1b[90m";
+/// SGR escape that resets all attributes after the completion marker.
+const SGR_RESET: &str = "\x1b[0m";
+
 pub struct TerminalComponent {
     hitbox_id: HitboxId,
     pane: RefCell<Box<dyn Pane>>,
@@ -389,6 +395,21 @@ impl TerminalComponent {
             window_key: None,
             word_extra_chars: DEFAULT_WORD_EXTRA_CHARS.to_string(),
         }
+    }
+
+    /// Append a dimmed process-completion marker directly into the VT100 buffer.
+    /// Safe to call after the child has exited (bypasses the closed PTY master).
+    pub fn append_process_exit(&mut self, status: Option<&portable_pty::ExitStatus>) {
+        let msg = match status {
+            Some(st) if !st.success() => format!(
+                "\r\n{SGR_BRIGHT_BLACK}[Process completed with exit code: {}]{SGR_RESET}\r\n",
+                st.exit_code()
+            ),
+            _ => format!("\r\n{SGR_BRIGHT_BLACK}[Process completed]{SGR_RESET}\r\n"),
+        };
+        let parser_arc = self.pane.borrow_mut().shared_parser();
+        let mut parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
+        parser.process(msg.as_bytes());
     }
 
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
@@ -3278,6 +3299,44 @@ mod tests {
         assert!(
             count < 2,
             "marker must not be duplicated (got {count} occurrences, expected 0 or 1)"
+        );
+    }
+
+    #[test]
+    fn append_process_exit_success_shows_completed_label() {
+        use portable_pty::ExitStatus;
+
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        let status = ExitStatus::with_exit_code(0);
+        term.append_process_exit(Some(&status));
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process completed]"),
+            "success exit must show '[Process completed]', got: {screen}"
+        );
+        assert!(
+            !screen.contains("exit code"),
+            "success exit must NOT show exit code, got: {screen}"
+        );
+    }
+
+    #[test]
+    fn append_process_exit_failure_shows_exit_code() {
+        use portable_pty::ExitStatus;
+
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        let status = ExitStatus::with_exit_code(3);
+        term.append_process_exit(Some(&status));
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process completed with exit code: 3]"),
+            "non-zero exit must show exit code, got: {screen}"
         );
     }
 
