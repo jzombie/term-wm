@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -5,20 +6,25 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "pty")]
 use crossbeam_channel::{Sender, bounded};
 
 /// Capacity of the channel between `reaper.reap()` calls and the background
 /// reaper thread.
+#[cfg(feature = "pty")]
 const REAPER_CHANNEL_CAPACITY: usize = 64;
 
 /// How long the reaper thread blocks when there are no zombies (essentially
 /// idle sleep — the thread serves only as a canary).
+#[cfg(feature = "pty")]
 const REAPER_IDLE_TIMEOUT: Duration = Duration::from_secs(3600);
 
 /// How aggressively the reaper polls when zombies are present (50 ms).
+#[cfg(feature = "pty")]
 const REAPER_ACTIVE_TICK: Duration = Duration::from_millis(50);
 
 /// Grace period before escalating from SIGHUP to SIGKILL.
+#[cfg(feature = "pty")]
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A zombie child process and its reader thread, moved out of a closed `Window`.
@@ -59,12 +65,17 @@ impl ZombieChild {
 ///
 /// On Drop, the reaper thread is signalled to shut down. It force-kills
 /// all remaining children and joins all reader threads.
+#[cfg(feature = "pty")]
 pub struct Reaper {
     tx: Sender<ZombieChild>,
     _handle: JoinHandle<()>,
     shutdown: Arc<AtomicBool>,
 }
 
+#[cfg(not(feature = "pty"))]
+pub struct Reaper;
+
+#[cfg(feature = "pty")]
 impl Reaper {
     pub fn new(shutdown_timeout: Duration) -> Self {
         let (tx, rx) = bounded::<ZombieChild>(REAPER_CHANNEL_CAPACITY);
@@ -153,6 +164,7 @@ impl Reaper {
     }
 }
 
+#[cfg(feature = "pty")]
 impl Default for Reaper {
     fn default() -> Self {
         Self::new(DEFAULT_SHUTDOWN_TIMEOUT)
@@ -160,13 +172,31 @@ impl Default for Reaper {
 }
 
 impl Drop for Reaper {
+    #[cfg(feature = "pty")]
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
+    }
+    #[cfg(not(feature = "pty"))]
+    fn drop(&mut self) {}
+}
+
+#[cfg(not(feature = "pty"))]
+impl Reaper {
+    pub fn new(_: Duration) -> Self {
+        Reaper
+    }
+    pub fn reap(&self, _: ()) {}
+}
+
+#[cfg(not(feature = "pty"))]
+impl Default for Reaper {
+    fn default() -> Self {
+        Reaper
     }
 }
 
 #[allow(clippy::unwrap_used)]
-#[cfg(test)]
+#[cfg(all(test, feature = "pty"))]
 mod tests {
     use super::*;
     use portable_pty::{Child, ChildKiller, ExitStatus};

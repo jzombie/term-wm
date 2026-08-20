@@ -192,13 +192,20 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             crate::actions::TermWmAction::NewTerminal,
         ));
 
-        for task in project_tasks.iter().filter(|t| t.argv().is_some()) {
-            items.push(MenuDisplayItem::Item(MenuItem {
-                label: task.label.clone().into(),
-                icon: Some("▶"),
-                action: crate::actions::TermWmAction::RunProjectTask(task.label.clone()),
-                disabled: false,
-            }));
+        #[cfg(feature = "project-tasks")]
+        {
+            for task in project_tasks.iter().filter(|t| t.argv().is_some()) {
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: task.label.clone().into(),
+                    icon: Some("▶"),
+                    action: crate::actions::TermWmAction::RunProjectTask(task.label.clone()),
+                    disabled: false,
+                }));
+            }
+        }
+        #[cfg(not(feature = "project-tasks"))]
+        {
+            let _ = project_tasks;
         }
         items.push(MenuDisplayItem::Separator);
 

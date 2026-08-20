@@ -1,8 +1,11 @@
 use std::collections::HashMap;
+#[cfg(feature = "project-tasks")]
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use term_wm_config::env::{Environment, active_environment, parse_environment};
+use term_wm_config::env::{Environment, parse_environment};
+#[cfg(feature = "project-tasks")]
+use term_wm_config::env::active_environment;
 
 /// The sole task file path, resolved from the WM launch directory.
 pub const TERM_WM_TASKS_PATH: &str = ".term-wm/tasks.json";
@@ -39,21 +42,25 @@ impl ProjectTaskConfig {
     ///   returns `args` directly (args-only form).
     /// - Returns `None` on empty/malformed results.
     pub fn argv(&self) -> Option<Vec<String>> {
-        let command = self.command.as_deref().filter(|s| !s.trim().is_empty());
-        let mut argv: Vec<String> = Vec::new();
-
-        if let Some(cmd) = command {
-            match shell_words::split(cmd) {
-                Ok(tokens) if !tokens.is_empty() => argv = tokens,
-                _ => return None,
+        #[cfg(feature = "project-tasks")]
+        {
+            let command = self.command.as_deref().filter(|s| !s.trim().is_empty());
+            let mut argv: Vec<String> = Vec::new();
+            if let Some(cmd) = command {
+                match shell_words::split(cmd) {
+                    Ok(tokens) if !tokens.is_empty() => argv = tokens,
+                    _ => return None,
+                }
             }
+            if let Some(args) = &self.args {
+                argv.extend(args.iter().cloned());
+            }
+            if argv.is_empty() { None } else { Some(argv) }
         }
-
-        if let Some(args) = &self.args {
-            argv.extend(args.iter().cloned());
+        #[cfg(not(feature = "project-tasks"))]
+        {
+            None
         }
-
-        if argv.is_empty() { None } else { Some(argv) }
     }
 
     /// Whether this task should be visible in the given runtime environment.
@@ -73,47 +80,64 @@ impl ProjectTaskConfig {
 /// if found and parsed (possibly with zero tasks after environment gating),
 /// `None` if not found or malformed.
 pub fn load_tasks_for_cwd(cwd: &Path) -> Option<ProjectTasks> {
-    let active = active_environment();
-    let mut current = Some(cwd);
-    while let Some(dir) = current {
-        let path = dir.join(TERM_WM_TASKS_PATH);
-        if path.is_file() {
-            match parse_tasks_file(&path) {
-                Some(tasks) => {
-                    return Some(ProjectTasks {
-                        root: dir.to_path_buf(),
-                        tasks: tasks.into_iter().filter(|t| t.visible_in(active)).collect(),
-                    });
-                }
-                None => {
-                    tracing::warn!("Failed to parse tasks file: {}", path.display());
-                    return None;
+    #[cfg(feature = "project-tasks")]
+    {
+        let active = active_environment();
+        let mut current = Some(cwd);
+        while let Some(dir) = current {
+            let path = dir.join(TERM_WM_TASKS_PATH);
+            if path.is_file() {
+                match parse_tasks_file(&path) {
+                    Some(tasks) => {
+                        return Some(ProjectTasks {
+                            root: dir.to_path_buf(),
+                            tasks: tasks.into_iter().filter(|t| t.visible_in(active)).collect(),
+                        });
+                    }
+                    None => {
+                        tracing::warn!("Failed to parse tasks file: {}", path.display());
+                        return None;
+                    }
                 }
             }
+            current = dir.parent();
         }
-        current = dir.parent();
+        None
     }
-    None
+    #[cfg(not(feature = "project-tasks"))]
+    {
+        let _ = cwd;
+        None
+    }
 }
 
+#[allow(dead_code)]
 fn parse_tasks_file(path: &Path) -> Option<Vec<ProjectTaskConfig>> {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("Failed to read {}: {e}", path.display());
-            return None;
+    #[cfg(feature = "project-tasks")]
+    {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Failed to read {}: {e}", path.display());
+                return None;
+            }
+        };
+        match serde_json::from_str::<Vec<ProjectTaskConfig>>(&content) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!("Failed to parse {}: {e}", path.display());
+                None
+            }
         }
-    };
-    match serde_json::from_str::<Vec<ProjectTaskConfig>>(&content) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            tracing::warn!("Failed to parse {}: {e}", path.display());
-            None
-        }
+    }
+    #[cfg(not(feature = "project-tasks"))]
+    {
+        let _ = path;
+        None
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "project-tasks"))]
 mod tests {
     use super::*;
     use serial_test::serial;
