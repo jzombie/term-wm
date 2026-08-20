@@ -845,8 +845,11 @@ mod tests {
         let headers: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {
-                MenuDisplayItem::Item(MenuItem { label, disabled: true, .. })
-                    if label.starts_with("── ") => Some(label.to_string()),
+                MenuDisplayItem::Item(MenuItem {
+                    label,
+                    disabled: true,
+                    ..
+                }) if label.starts_with("── ") => Some(label.to_string()),
                 _ => None,
             })
             .collect();
@@ -905,7 +908,12 @@ mod tests {
         );
 
         // Empty all_users_by_ws map forces fallback to local user_registry for current_workspace
-        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
 
         let ws_idx = items.iter().position(|entry| matches!(
             entry,
@@ -961,13 +969,22 @@ mod tests {
         assert!(
             !items.iter().any(|entry| matches!(
                 entry,
-                MenuDisplayItem::Item(MenuItem { action: TermWmAction::RunProjectTask(_), .. })
+                MenuDisplayItem::Item(MenuItem {
+                    action: TermWmAction::RunProjectTask(_),
+                    ..
+                })
             )),
             "RunProjectTask must be hidden when project-tasks feature is disabled"
         );
         // No separator leak after Quick Actions when tasks are hidden
-        let quick_actions_sep_idx = items.iter().position(|e| matches!(e, MenuDisplayItem::Separator)).expect("at least one separator");
-        assert!(quick_actions_sep_idx < 5, "first separator should be after Quick Actions, not leaked from tasks");
+        let quick_actions_sep_idx = items
+            .iter()
+            .position(|e| matches!(e, MenuDisplayItem::Separator))
+            .expect("at least one separator");
+        assert!(
+            quick_actions_sep_idx < 5,
+            "first separator should be after Quick Actions, not leaked from tasks"
+        );
     }
 
     #[test]

@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use term_wm_config::env::{Environment, parse_environment};
 #[cfg(feature = "project-tasks")]
 use term_wm_config::env::active_environment;
+use term_wm_config::env::{Environment, parse_environment};
 
 /// The sole task file path, resolved from the WM launch directory.
 pub const TERM_WM_TASKS_PATH: &str = ".term-wm/tasks.json";
@@ -413,7 +413,11 @@ mod tests_disabled {
             env: std::collections::HashMap::new(),
             environments: Vec::new(),
         };
-        assert_eq!(task.argv(), None, "argv() must be None when project-tasks feature is disabled");
+        assert_eq!(
+            task.argv(),
+            None,
+            "argv() must be None when project-tasks feature is disabled"
+        );
     }
 
     #[test]
