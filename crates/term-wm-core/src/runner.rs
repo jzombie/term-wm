@@ -93,6 +93,11 @@ pub trait WindowManagerHost<
     fn handle_custom_action(&mut self, _action: &TermWmAction) -> bool {
         false
     }
+
+    /// Called after the user registry is mutated (connect/disconnect/cache
+    /// refresh) so the app can refresh workspace caches and the command
+    /// palette if visible.
+    fn on_user_registry_changed(&mut self) {}
 }
 
 /// Single authoritative action dispatcher. Both the component action queue
@@ -447,6 +452,7 @@ where
                     std::time::Duration::from_secs(3),
                 );
             }
+            let mut user_changed = false;
             for user in driver.take_user_connected() {
                 let label = match &user.ssh_ip {
                     Some(ip) => format!("{}@{} ({}) connected", user.user, user.hostname, ip),
@@ -465,6 +471,7 @@ where
                 );
                 app.wm()
                     .push_notification(label, std::time::Duration::from_secs(3));
+                user_changed = true;
             }
             for conn_id in driver.take_user_disconnected() {
                 let label = if let Some(entry) = app.wm().user_registry.get_by_conn_id(conn_id) {
@@ -475,6 +482,7 @@ where
                 app.wm().user_registry.remove_by_conn_id(conn_id);
                 app.wm()
                     .push_notification(label, std::time::Duration::from_secs(3));
+                user_changed = true;
             }
             if let Some(users) = driver.take_user_cache_refreshed() {
                 app.wm().user_registry.clear();
@@ -491,6 +499,10 @@ where
                         user.pid,
                     );
                 }
+                user_changed = true;
+            }
+            if user_changed {
+                app.on_user_registry_changed();
             }
 
             // Update monocle mode on resize

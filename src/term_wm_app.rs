@@ -864,6 +864,20 @@ impl<C: Component<TermWmAction> + 'static>
         self.on_terminal_exited(key);
     }
 
+    fn on_user_registry_changed(&mut self) {
+        if !self.wm.command_menu_visible() {
+            return;
+        }
+        #[cfg(feature = "session-persistence")]
+        {
+            self.refresh_workspace_cache();
+            self.wm.cached_workspaces = self.cached_workspaces.clone();
+            self.wm.current_workspace = self.current_workspace.clone();
+            self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+        }
+        self.wm.refresh_palette_items();
+    }
+
     fn close_window(&mut self, key: WindowKey) {
         TermWmApp::close_window(self, key);
     }

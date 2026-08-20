@@ -636,6 +636,8 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                     initiator,
                 ) {
                     tracing::warn!("Failed to request workspace switch: {e}");
+                } else {
+                    self.inner.on_user_registry_changed();
                 }
                 true
             }
@@ -669,7 +671,7 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                 ) {
                     tracing::error!("Failed to switch to new workspace: {e}");
                 } else {
-                    self.inner.refresh_workspace_cache();
+                    self.inner.on_user_registry_changed();
                 }
                 true
             }
@@ -737,6 +739,10 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 
     fn on_pty_exited(&mut self, key: term_wm_core::window::WindowKey) {
         self.inner.on_terminal_exited(key);
+    }
+
+    fn on_user_registry_changed(&mut self) {
+        self.inner.on_user_registry_changed();
     }
 
     fn close_window(&mut self, key: term_wm_core::window::WindowKey) {
