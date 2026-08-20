@@ -1129,10 +1129,7 @@ mod tests {
                     "primary must contain user@host: {label}"
                 );
                 // size/uptime moved to detail line, primary must not be overly long
-                assert!(
-                    label.len() < 40,
-                    "primary line must stay compact: {label}"
-                );
+                assert!(label.len() < 40, "primary line must stay compact: {label}");
             }
             other => panic!("unexpected primary item: {other:?}"),
         }
@@ -1153,7 +1150,10 @@ mod tests {
                     "detail must contain uptime: {label}"
                 );
                 assert!(label.contains("#1"), "detail must contain conn id: {label}");
-                assert!(label.contains("pid 1234"), "detail must contain pid: {label}");
+                assert!(
+                    label.contains("pid 1234"),
+                    "detail must contain pid: {label}"
+                );
             }
             other => panic!("unexpected detail item: {other:?}"),
         }

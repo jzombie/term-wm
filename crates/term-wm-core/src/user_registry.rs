@@ -139,17 +139,7 @@ mod tests {
     #[test]
     fn upsert_updates_existing() {
         let mut r = UserRegistry::new();
-        r.upsert(
-            1,
-            "alice".into(),
-            "host-a".into(),
-            None,
-            None,
-            0,
-            0,
-            0,
-            0,
-        );
+        r.upsert(1, "alice".into(), "host-a".into(), None, None, 0, 0, 0, 0);
         r.upsert(
             1,
             "alice2".into(),
@@ -196,7 +186,17 @@ mod tests {
     fn iter_yields_all() {
         let mut r = UserRegistry::new();
         r.upsert(1, "a".into(), "h1".into(), None, None, 0, 0, 0, 0);
-        r.upsert(2, "b".into(), "h2".into(), Some("ip".into()), None, 0, 0, 0, 0);
+        r.upsert(
+            2,
+            "b".into(),
+            "h2".into(),
+            Some("ip".into()),
+            None,
+            0,
+            0,
+            0,
+            0,
+        );
         let mut users: Vec<_> = r.iter().map(|(_, e)| e.user.clone()).collect();
         users.sort();
         assert_eq!(users, ["a", "b"]);
