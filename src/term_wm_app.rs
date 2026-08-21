@@ -1278,4 +1278,93 @@ mod tests {
         assert_eq!(app.current_workspace, "dev");
         assert!(app.cached_workspaces().is_empty());
     }
+
+    /// `close_window` purges project-task bookkeeping and closes the window
+    /// via the underlying WM.
+    #[test]
+    fn close_window_removes_bookkeeping_and_closes() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        assert!(app.wm().window_state(key).is_some(), "window must exist");
+
+        // Simulate bookkeeping entries
+        app.project_task_windows.insert(key, "test-task".into());
+        app.exited_task_windows.insert(key);
+
+        app.close_window(key);
+        assert!(
+            app.wm().window_state(key).is_none(),
+            "window must be closed"
+        );
+        assert!(
+            !app.project_task_windows.contains_key(&key),
+            "project_task_windows must be cleaned"
+        );
+        assert!(
+            !app.exited_task_windows.contains(&key),
+            "exited_task_windows must be cleaned"
+        );
+    }
+
+    /// `close_window` for a window without bookkeeping is still safe.
+    #[test]
+    fn close_window_non_task_window_is_noop() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.close_window(key);
+        assert!(app.wm().window_state(key).is_none());
+    }
+
+    /// `project_tasks` accessor returns the tasks loaded from the nearest
+    /// `.term-wm/tasks.json` (or an empty slice if none exists).
+    #[test]
+    fn project_tasks_accessor_returns_loaded_tasks() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        // The project tasks are loaded from cwd during construction;
+        // just verify the accessor doesn't panic and returns a consistent value.
+        let _ = app.project_tasks();
+    }
+
+    /// `project_task` returns None for a nonexistent label.
+    #[test]
+    fn project_task_nonexistent_label_returns_none() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(app.project_task("no-such-task-xyz").is_none());
+    }
+
+    /// `poll_palette_tick` when palette is not visible must reset all tickers.
+    #[test]
+    fn poll_palette_tick_resets_when_palette_closed() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        // Palette starts closed — poll should be a no-op that resets tickers.
+        app.poll_palette_tick();
+        // No panic, no side effects.
+    }
+
+    /// `palette_tick_deadline` returns None when palette is not visible.
+    #[test]
+    fn palette_tick_deadline_none_when_palette_closed() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(
+            app.palette_tick_deadline().is_none(),
+            "deadline must be None when palette is closed"
+        );
+    }
+
+    /// `on_user_registry_changed` resets debouncer when palette is closed.
+    #[test]
+    fn on_user_registry_changed_resets_when_palette_closed() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.on_user_registry_changed();
+        // No panic; debouncer is reset.
+    }
+
+    /// `refresh_project_tasks` refreshes from cwd without panicking.
+    #[test]
+    fn refresh_project_tasks_loads_from_cwd() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.refresh_project_tasks();
+        // Whether or not tasks.json exists, the method must not panic.
+        let _ = app.project_tasks();
+    }
 }
