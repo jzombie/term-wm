@@ -111,6 +111,13 @@ pub fn load_tasks_for_cwd(cwd: &Path) -> Option<ProjectTasks> {
     }
 }
 
+#[cfg(feature = "project-tasks")]
+fn parse_tasks_str(content: &str) -> Result<Vec<ProjectTaskConfig>, serde_json::Error> {
+    use json_comments::StripComments;
+    let stripped = StripComments::new(content.as_bytes());
+    serde_json::from_reader::<_, Vec<ProjectTaskConfig>>(stripped)
+}
+
 #[allow(dead_code)]
 fn parse_tasks_file(path: &Path) -> Option<Vec<ProjectTaskConfig>> {
     #[cfg(feature = "project-tasks")]
@@ -122,7 +129,7 @@ fn parse_tasks_file(path: &Path) -> Option<Vec<ProjectTaskConfig>> {
                 return None;
             }
         };
-        match serde_json::from_str::<Vec<ProjectTaskConfig>>(&content) {
+        match parse_tasks_str(&content) {
             Ok(v) => Some(v),
             Err(e) => {
                 tracing::warn!("Failed to parse {}: {e}", path.display());
@@ -396,6 +403,98 @@ mod tests {
         assert_eq!(result.root, dir.path());
         assert_eq!(result.tasks.len(), 1);
         assert_eq!(result.tasks[0].label, "twm");
+    }
+
+    // ── JSON with comments (JSONC) ─────────────────────────────────────
+
+    #[test]
+    fn strips_line_comments() {
+        let json = r#"
+            // header comment
+            [
+                // task comment
+                {"label": "a", "command": "echo hi"} // trailing comment
+            ]
+            // footer comment
+        "#;
+        let tasks = parse_tasks_str(json).expect("should parse with line comments");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].label, "a");
+    }
+
+    #[test]
+    fn strips_block_comments() {
+        let json = r#"
+            /* header block */
+            [
+                /* inline */ {"label": "b", "command": "echo hi"} /* trailing */
+            ]
+        "#;
+        let tasks = parse_tasks_str(json).expect("should parse with block comments");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].label, "b");
+    }
+
+    #[test]
+    fn preserves_comment_like_content_inside_strings() {
+        let json = r#"[
+            {"label": "url", "command": "echo \"https://example.com\""},
+            {"label": "slash", "command": "echo // not a comment"},
+            {"label": "block", "command": "echo /* not a comment */"}
+        ]"#;
+        // Wrapping is unnecessary here; parse_tasks_str with these values
+        // should preserve the string contents exactly.
+        let tasks = parse_tasks_str(json).expect("strings with // or /* */ must survive");
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[1].command.as_deref(), Some("echo // not a comment"));
+        assert_eq!(
+            tasks[2].command.as_deref(),
+            Some("echo /* not a comment */")
+        );
+    }
+
+    #[test]
+    fn strips_comments_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir failed");
+        let tasks_path = dir.path().join(TERM_WM_TASKS_PATH);
+        fs::create_dir_all(tasks_path.parent().expect("has parent")).expect("mkdir");
+        fs::write(
+            &tasks_path,
+            r#"
+            // Project tasks with comments
+            [
+                {"label": "commented", "command": "echo hello"} // inline
+                /* block comment */
+            ]
+            "#,
+        )
+        .expect("write");
+        let result = load_tasks_for_cwd(dir.path()).expect("load with comments");
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.tasks[0].label, "commented");
+    }
+
+    #[test]
+    fn single_string_command_with_shell_words() {
+        // The `command` field is shell-words tokenized, so the full invocation
+        // can live in one string without a separate `args` array.
+        let task = ProjectTaskConfig {
+            label: "run".into(),
+            command: Some("cargo run -- --help".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+        };
+        assert_eq!(
+            task.argv(),
+            Some(vec![
+                "cargo".into(),
+                "run".into(),
+                "--".into(),
+                "--help".into()
+            ])
+        );
     }
 }
 

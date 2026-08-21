@@ -1,6 +1,11 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(test)]
+static VISIBLE_ROW_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
@@ -655,12 +660,28 @@ impl TerminalComponent {
                 if viewport_row >= viewport_height {
                     continue;
                 }
+                #[cfg(test)]
+                {
+                    VISIBLE_ROW_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+                }
+                let Some(vt_row) = screen.visible_row(row) else {
+                    // No row data — fill with spaces
+                    let mut line = String::with_capacity(visible.width as usize);
+                    let mut offsets = Vec::with_capacity(visible.width as usize + 1);
+                    offsets.push(0);
+                    for _ in start_col..start_col + visible.width {
+                        line.push(' ');
+                        offsets.push(line.len());
+                    }
+                    row_data.push((viewport_row, start_col as usize, line, offsets));
+                    continue;
+                };
                 let mut line = String::with_capacity(visible.width as usize);
                 let mut offsets = Vec::with_capacity(visible.width as usize + 1);
                 offsets.push(0);
                 for col in start_col..start_col + visible.width {
-                    let ch = screen
-                        .cell(row, col)
+                    let ch = vt_row
+                        .get(col)
                         .and_then(|cell| cell.contents().chars().next())
                         .unwrap_or(' ');
                     line.push(ch);
@@ -683,13 +704,20 @@ impl TerminalComponent {
 
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
+            let cell_y = area.y.saturating_add(row);
+            let viewport_row = row.saturating_sub(start_row) as usize;
+            #[cfg(test)]
+            {
+                VISIBLE_ROW_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+            let Some(vt_row) = screen.visible_row(row) else {
+                continue;
+            };
             for col in start_col..start_col + visible.width {
                 let cell_x = area.x.saturating_add(col);
-                let cell_y = area.y.saturating_add(row);
-                let viewport_row = row.saturating_sub(start_row) as usize;
                 let viewport_col = col.saturating_sub(start_col) as usize;
 
-                if let Some(cell) = screen.cell(row, col) {
+                if let Some(cell) = vt_row.get(col) {
                     let mut symbol = cell.contents().chars().next().unwrap_or(' ');
                     let (fg, bg) = resolve_colors_with_defaults(cell, default_fg, default_bg);
                     let mut style = Style::default();
@@ -3583,6 +3611,43 @@ mod tests {
             term.selection_text(),
             Some("foo-bar".to_string()),
             "with '-' configured, kebab-case selects as one word"
+        );
+    }
+
+    #[test]
+    fn test_visible_row_lookup_is_hoisted() {
+        use std::sync::atomic::Ordering;
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap();
+        let rows = 24;
+        let cols = 80;
+        super::VISIBLE_ROW_CALL_COUNT.store(0, Ordering::SeqCst);
+        let (mut term, _rb) =
+            make_term_with_content(cols, rows, 1000, &"X".repeat(cols as usize * rows as usize));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: cols,
+            height: rows,
+        };
+        let rect = ratatui::layout::Rect::new(0, 0, cols, rows);
+        let buffer = ratatui::buffer::Buffer::empty(rect);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+        let ctx =
+            term_wm_core::component_context::ComponentContext::new(true).with_screen_area(area);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        term.render(&mut backend, area, &ctx, &mut registry);
+        let calls = super::VISIBLE_ROW_CALL_COUNT.load(Ordering::SeqCst);
+        // Two loops (link overlay + cell render) each hoisted to once per row
+        let expected = rows as usize * 2;
+        assert_eq!(
+            calls, expected,
+            "visible_row() was called {calls} times instead of {expected}. Hoisting regression detected!"
+        );
+        // Ensure not quadratic (rows*cols = 1920 would indicate per-cell lookup)
+        assert!(
+            calls < rows as usize * 3,
+            "visible_row() calls {calls} suggest per-cell lookup (quadratic)"
         );
     }
 }

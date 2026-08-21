@@ -70,6 +70,8 @@ pub struct CommandPaletteComponent {
     last_display_sel: usize,
     last_viewport_rows: usize,
     last_list_area: LayoutRect,
+    cached_menu_items: Vec<MenuDisplayItem<TermWmAction>>,
+    items_dirty: bool,
 }
 
 /// Internal cache entry parallel to `active_nodes`.
@@ -130,6 +132,8 @@ impl CommandPaletteComponent {
             last_display_sel: 0,
             last_viewport_rows: 0,
             last_list_area: LayoutRect::default(),
+            cached_menu_items: Vec::new(),
+            items_dirty: true,
         }
     }
 
@@ -217,6 +221,7 @@ impl CommandPaletteComponent {
         self.display_cache = collapsed;
         self.data_dirty = false;
         self.query_dirty = true;
+        self.items_dirty = true;
     }
 
     pub fn rerank(&mut self, fmatch: &mut FuzzyMatch, mru: &MruRanker) {
@@ -341,6 +346,7 @@ impl CommandPaletteComponent {
                 .collect();
         }
         self.query_dirty = false;
+        self.items_dirty = true;
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
@@ -475,6 +481,7 @@ impl CommandPaletteComponent {
                 .collect();
         }
         self.query_dirty = false;
+        self.items_dirty = true;
     }
 
     fn render_search_bar(
@@ -568,23 +575,27 @@ impl Component<TermWmAction> for CommandPaletteComponent {
         }
 
         // Build MenuDisplayItems from display_nodes and set on the inner MenuComponent
-        let menu_items: Vec<MenuDisplayItem<TermWmAction>> = self
-            .display_nodes
-            .iter()
-            .map(|node| match node {
-                PaletteDisplayNode::Item(p) => MenuDisplayItem::Item(MenuItem {
-                    icon: p.icon,
-                    label: Cow::Owned(p.display_name.clone()),
-                    action: p.action.clone(),
-                    disabled: p.disabled,
-                }),
-                PaletteDisplayNode::Separator => MenuDisplayItem::Separator,
-            })
-            .collect();
-        self.list_scroll
-            .content
-            .borrow_mut()
-            .set_display_items(menu_items);
+        // Cache the conversion — only rebuild when display_nodes changed (items_dirty).
+        if self.items_dirty {
+            self.cached_menu_items = self
+                .display_nodes
+                .iter()
+                .map(|node| match node {
+                    PaletteDisplayNode::Item(p) => MenuDisplayItem::Item(MenuItem {
+                        icon: p.icon,
+                        label: Cow::Owned(p.display_name.clone()),
+                        action: p.action.clone(),
+                        disabled: p.disabled,
+                    }),
+                    PaletteDisplayNode::Separator => MenuDisplayItem::Separator,
+                })
+                .collect();
+            self.items_dirty = false;
+            self.list_scroll
+                .content
+                .borrow_mut()
+                .set_display_items(self.cached_menu_items.clone());
+        }
         let display_sel = self.display_index(self.selected);
         self.list_scroll
             .content

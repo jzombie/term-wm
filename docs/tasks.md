@@ -14,10 +14,19 @@ style lives in [UI-STYLE.md](./UI-STYLE.md).
   return `None` (no tasks). Do NOT keep walking upward.
 - **No file anywhere:** silent `None` (no tasks group in the Command Palette).
 
+## JSONC — Comments
+
+The file is parsed as **JSONC**: standard JSON plus `//` line comments and
+`/* … */` block comments (stripped before parsing, respecting string
+literals). Use comments to document tasks in-file — for example a header
+explaining the `command` shell-words form at the top of `tasks.json`.
+Comment-like sequences inside `"strings"` (e.g. `"https://example.com"` or
+`"echo // not a comment"`) are preserved verbatim.
+
 ## Schema
 
-Top-level JSON **array** — no envelope, no version field. Each element is a task
-object:
+Top-level JSON **array** (JSONC) — no envelope, no version field. Each element
+is a task object:
 
 | Field          | Type       | Default | Notes |
 |----------------|------------|---------|-------|
@@ -30,13 +39,19 @@ object:
 
 ### argv Rules
 
-1. If `command` is present and non-empty: tokenize via `shell_words::split` (no
-   subcommand truncation). On split error or empty token list → task is invalid
-   (not shown in palette, not runnable).
+1. If `command` is present and non-empty: tokenize the **entire** string via
+   `shell_words::split` (POSIX shell word splitting — quotes and escapes
+   respected, no subcommand truncation). On split error or empty token list →
+   task is invalid (not shown in palette, not runnable).
 2. Append `args` entries after the command tokens.
 3. If `command` is omitted or whitespace-only and `args` is present: argv = `args`
    directly.
 4. If argv is empty → task is invalid.
+
+`command` alone can carry the full invocation — `"command": "cargo run -- --help"`
+is equivalent to `"command": "cargo", "args": ["run", "--", "--help"]` and is
+the preferred short form. Keep `args` for programmatic composition or when you
+prefer split arrays.
 
 Callers must always guard with `let Some(argv) = task.argv() else { ... }`. Never
 index `argv[0]` without the non-empty check.
@@ -103,12 +118,25 @@ When resolving environment identity:
 
 ## Canonical Example
 
+Preferred short form — full invocation in `command` (shell-words tokenized, no
+separate `args` needed):
+
+```jsonc
+// `command` is shell-words tokenized — args can live inline:
+[
+    { "label": "dev: Run", "command": "cargo run", "environments": ["dev"] },
+    { "label": "dev: Help", "command": "cargo run -- --help", "environments": ["dev"] },
+    { "label": "ci: Lint", "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings" },
+    { "label": "dev: udeps", "command": "cargo udeps --workspace --all-targets --all-features", "environments": ["dev"] }
+]
+```
+
+Split form is also supported (`args` appended after `command`):
+
 ```json
 [
     { "label": "dev: Run", "command": "cargo", "args": ["run"], "environments": ["dev"] },
-    { "label": "dev: Help", "command": "cargo", "args": ["run", "--", "--help"], "environments": ["dev"] },
-    { "label": "ci: Lint", "command": "cargo", "args": ["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"] },
-    { "label": "dev: udeps", "command": "cargo", "args": ["udeps", "--workspace", "--all-targets", "--all-features"], "environments": ["dev"] }
+    { "label": "dev: Help", "command": "cargo", "args": ["run", "--", "--help"], "environments": ["dev"] }
 ]
 ```
 

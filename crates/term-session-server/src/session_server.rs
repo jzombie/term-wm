@@ -35,7 +35,7 @@ const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_
 
 /// How often the output polling task wakes to re-check the session's exit
 /// status, as a fallback for a missed or raced PTY EOF notification.
-const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Upper bound on the per-channel `output_cache` retained when a session exits
 /// with no subscribers attached. Only the last `MAX_RETAINED_OUTPUT_BYTES` of

@@ -151,6 +151,40 @@ const PROC_NAME_BUF_SIZE: usize = 64;
 
 /// How often to check the foreground process group for title changes.
 const FOREGROUND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Interval-based rate-limiter for periodic background work.
+struct PeriodicTicker {
+    interval: std::time::Duration,
+    last_tick: Option<Instant>,
+}
+
+impl PeriodicTicker {
+    fn new_suppressed(interval: std::time::Duration) -> Self {
+        Self {
+            interval,
+            last_tick: Some(Instant::now()),
+        }
+    }
+
+    fn poll(&mut self) -> bool {
+        self.poll_at(Instant::now())
+    }
+
+    fn poll_at(&mut self, now: Instant) -> bool {
+        match self.last_tick {
+            Some(last) if now.saturating_duration_since(last) >= self.interval => {
+                self.last_tick = Some(now);
+                true
+            }
+            None => {
+                self.last_tick = Some(now);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 use crate::PtyStatus;
 use crate::title::extract_osc_title;
 
@@ -205,7 +239,7 @@ pub struct Pty {
     pending_title: Arc<Mutex<Option<String>>>,
     foreground_title: Arc<Mutex<Option<String>>>,
     last_fg_pid: u32,
-    last_fg_check: Instant,
+    fg_poll_ticker: PeriodicTicker,
     /// Parsed screen shared between the reader thread and the main thread.
     /// The reader parses bytes into this parser in-place. The main thread
     /// locks it to read cells directly — zero clones.
@@ -444,7 +478,7 @@ impl Pty {
             pending_title,
             foreground_title,
             last_fg_pid: 0,
-            last_fg_check: Instant::now(),
+            fg_poll_ticker: PeriodicTicker::new_suppressed(FOREGROUND_POLL_INTERVAL),
             shared_parser,
             dirty,
             dirty_cond,
@@ -620,18 +654,16 @@ impl Pty {
     }
 
     fn poll_foreground(&mut self) {
-        if self.last_fg_check.elapsed() >= FOREGROUND_POLL_INTERVAL {
-            self.last_fg_check = Instant::now();
-            if let Some(fg_pid) = self.foreground_pid()
-                && fg_pid != self.last_fg_pid
-            {
-                self.last_fg_pid = fg_pid;
-                let name = get_process_name(fg_pid);
-                *self
-                    .foreground_title
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner()) = name;
-            }
+        if self.fg_poll_ticker.poll()
+            && let Some(fg_pid) = self.foreground_pid()
+            && fg_pid != self.last_fg_pid
+        {
+            self.last_fg_pid = fg_pid;
+            let name = get_process_name(fg_pid);
+            *self
+                .foreground_title
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = name;
         }
     }
 

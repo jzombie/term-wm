@@ -122,6 +122,59 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.close_command_palette();
     }
 
+    /// Rebuild the command palette's action list from current WM state and
+    /// apply it to the overlay if visible. Used to refresh a stale palette
+    /// when users connect/disconnect, workspaces change, or focus shifts.
+    pub fn refresh_palette_items(&mut self) {
+        if !self.command_menu_visible() {
+            return;
+        }
+        let Some(palette_key) = self.get_overlay::<system_tags::CommandPalette>() else {
+            return;
+        };
+
+        use crate::components::MenuDisplayItem;
+        let items = self.wm_menu_items(
+            &self.cached_workspaces,
+            &self.current_workspace,
+            &self.project_tasks,
+            &self.all_users_by_ws,
+        );
+        let supported = &self.supported_menu_actions;
+        let filtered: Vec<MenuDisplayItem<TermWmAction>> = items
+            .into_iter()
+            .filter(|entry| match entry {
+                MenuDisplayItem::Item(item) => {
+                    let always_pass = matches!(
+                        item.action,
+                        TermWmAction::FocusWindow(_)
+                            | TermWmAction::MaximizeWindow(_)
+                            | TermWmAction::MinimizeWindow(_)
+                            | TermWmAction::CloseWindow(_)
+                            | TermWmAction::SendSuperKeyToWindow(_)
+                            | TermWmAction::SendSuperKeyToFocusedWindow
+                            | TermWmAction::RunProjectTask(_)
+                    );
+                    #[cfg(feature = "session-persistence")]
+                    let always_pass = always_pass
+                        || (term_wm_config::runtime::session_persistence_enabled()
+                            && matches!(
+                                item.action,
+                                TermWmAction::SwitchWorkspace(_)
+                                    | TermWmAction::NewWorkspace
+                                    | TermWmAction::ToggleWorkspaceFollow
+                            ));
+                    item.disabled || supported.contains(&item.action) || always_pass
+                }
+                MenuDisplayItem::Separator => true,
+            })
+            .collect();
+
+        if let Some(overlay) = self.overlays.get_mut(palette_key) {
+            overlay.set_menu_items(filtered);
+        }
+    }
+
     // TODO: Workspaces & current_workspace should be derived from context, I think
     pub fn wm_menu_items(
         &self,
