@@ -2965,7 +2965,8 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(
-            pty.size().cols, 100,
+            pty.size().cols,
+            100,
             "resize during burst must be applied, not deadlocked"
         );
     }

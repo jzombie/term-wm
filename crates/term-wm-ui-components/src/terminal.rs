@@ -3680,8 +3680,7 @@ mod tests {
             Arc,
             atomic::{AtomicBool, Ordering},
         };
-        let (mut term, _rb) =
-            make_term_with_content(80, 24, 1000, &"X".repeat(80 * 24));
+        let (mut term, _rb) = make_term_with_content(80, 24, 1000, &"X".repeat(80 * 24));
         let parser_arc = term.pane.borrow_mut().shared_parser();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
@@ -3704,20 +3703,24 @@ mod tests {
         for _ in 0..100 {
             let buffer = Buffer::empty(rect);
             let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
-            let ctx = term_wm_core::component_context::ComponentContext::new(true)
-                .with_screen_area(area);
+            let ctx =
+                term_wm_core::component_context::ComponentContext::new(true).with_screen_area(area);
             let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
             term.render(&mut backend, area, &ctx, &mut registry);
             // Simulate ToggleTiling resize storm (80x24 -> 100x30 -> back)
-            let _ = term
-                .pane
-                .borrow_mut()
-                .resize(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 });
+            let _ = term.pane.borrow_mut().resize(PtySize {
+                rows: 30,
+                cols: 100,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
             term.pane.borrow_mut().sync_screen();
-            let _ = term
-                .pane
-                .borrow_mut()
-                .resize(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 });
+            let _ = term.pane.borrow_mut().resize(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
             term.pane.borrow_mut().sync_screen();
             if start.elapsed() > std::time::Duration::from_secs(2) {
                 break;
