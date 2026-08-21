@@ -6,6 +6,7 @@
 //! enforcement and falls back to CPU transparently.
 
 pub mod camera;
+pub mod edges;
 pub mod image;
 pub mod lens;
 pub mod models;
@@ -58,6 +59,15 @@ impl FrameInput<'_> {
 pub trait Renderer {
     fn render(&mut self, frame: &FrameInput) -> &[TermCell];
     fn name(&self) -> &'static str;
+    /// Owned copy of the last rendered RGB buffer + dimensions.
+    fn frame_snapshot(&self) -> (Vec<u8>, usize, usize);
+    /// Synchronous diagnostic dump of the last rendered frame + cell grid.
+    fn dump_to(
+        &self,
+        cells: &[TermCell],
+        cols: usize,
+        dir: &std::path::Path,
+    ) -> std::io::Result<()>;
 }
 
 /// Create the best available backend: GPU-first, hardware-enforced.
@@ -222,9 +232,43 @@ impl CpuBackend {
     }
 }
 
+impl CpuBackend {
+    /// Owned copy of the current frame's RGB + dimensions (for dumps).
+    pub fn frame_snapshot(&self) -> (Vec<u8>, usize, usize) {
+        (self.img.rgb.clone(), self.img.w, self.img.h)
+    }
+
+    /// Synchronous diagnostic dump of the last rendered frame.
+    pub fn dump_to(
+        &self,
+        cells: &[TermCell],
+        cols: usize,
+        dir: &std::path::Path,
+    ) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        self.img.write_ppm(&dir.join("frame_rgb.ppm"))?;
+        crate::render::image::write_cells_txt(cells, cols, &dir.join("frame_cells.txt"))
+    }
+}
+
 impl Renderer for CpuBackend {
     fn name(&self) -> &'static str {
         "CPU"
+    }
+
+    fn frame_snapshot(&self) -> (Vec<u8>, usize, usize) {
+        (self.img.rgb.clone(), self.img.w, self.img.h)
+    }
+
+    fn dump_to(
+        &self,
+        cells: &[TermCell],
+        cols: usize,
+        dir: &std::path::Path,
+    ) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        self.img.write_ppm(&dir.join("frame_rgb.ppm"))?;
+        crate::render::image::write_cells_txt(cells, cols, &dir.join("frame_cells.txt"))
     }
 
     fn render(&mut self, frame: &FrameInput) -> &[TermCell] {
@@ -248,7 +292,14 @@ impl Renderer for CpuBackend {
         self.terrain.buf.clear();
         let op = Projector::new_from(&proj, ow, oh);
         sky::render_sky(&mut self.terrain.buf, &op, frame.world.noise(), frame.env.elapsed);
-        march_columns(&mut self.terrain.buf, &op, frame.world, &self.shadows);
+        let static_boost = if frame.player.kmh() < 1 { 1.25 } else { 1.0 };
+        march_columns(
+            &mut self.terrain.buf,
+            &op,
+            frame.world,
+            &self.shadows,
+            static_boost,
+        );
         rotate_into(&self.terrain.buf, frame.cam.roll, &mut self.img);
 
         // Stage 3: meshes through the rolled matrix, painter-ordered,
@@ -259,9 +310,17 @@ impl Renderer for CpuBackend {
         }
         self.quad_scratch = casters;
 
-        // Stage 4: bounded virtual lens, then quantize to braille cells.
-        let k_eff = lens_k_bounded(self.img.w);
-        apply_lens(&self.img, &mut self.scratch, k_eff);
+        // Stage 5: distance-normalized edge contours, then bounded virtual
+        // lens (skipped while shaking), then quantize to braille cells.
+        edges::apply_edge_contours(&mut self.img);
+        let shaking =
+            frame.player.offroad || frame.cam.heave.abs() > SHAKE_BYPASS_M;
+        if !shaking {
+            let k_eff = lens_k_bounded(self.img.w);
+            apply_lens(&self.img, &mut self.scratch, k_eff);
+        } else {
+            std::mem::swap(&mut self.img, &mut self.scratch);
+        }
         encode(
             &self.scratch,
             &self.noise_table,
@@ -310,7 +369,20 @@ pub mod gpu {
     }
 
     impl Renderer for GpuBackend {
-        fn render(&mut self, _frame: &super::FrameInput) -> &[TermCell] {
+        fn render(&mut self, _frame: &super::FrameInput) -> &'static [TermCell] {
+            unimplemented!("GPU path lands in milestone G2")
+        }
+
+        fn frame_snapshot(&self) -> (Vec<u8>, usize, usize) {
+            unimplemented!("GPU path lands in milestone G2")
+        }
+
+        fn dump_to(
+            &self,
+            _cells: &[TermCell],
+            _cols: usize,
+            _dir: &std::path::Path,
+        ) -> std::io::Result<()> {
             unimplemented!("GPU path lands in milestone G2")
         }
 
@@ -500,5 +572,79 @@ mod m0_tests {
             cam.pitch
         );
         assert!(cam.pitch > 0.05, "climbing should pitch up");
+    }
+}
+
+#[cfg(test)]
+mod m05_tests {
+    use super::*;
+    use crate::config::ROLL_OFFROAD_MAX;
+
+    #[test]
+    fn offroad_roll_clamps_to_15deg() {
+        let (world, mut player, _t, mut cam, _e) = tests::scene();
+        player.offroad = true;
+        // Extreme steer at speed would otherwise exceed the cap.
+        player.steer_sm = 1.0;
+        player.speed = 40.0;
+        let slope = crate::render::camera::terrain_slope(&world, player.x, player.z, player.heading);
+        for _ in 0..120 {
+            cam.update(&player, SIM_TICK_DT, world.height_at(cam.x, cam.z), slope);
+        }
+        assert!(
+            cam.roll.abs() <= ROLL_OFFROAD_MAX + 0.02,
+            "off-road roll {} exceeds cap {ROLL_OFFROAD_MAX}",
+            cam.roll
+        );
+    }
+
+    #[test]
+    fn lens_bypassed_while_shaking() {
+        let (world, mut player, traffic, cam, env) = tests::scene();
+        player.offroad = true;
+        player.bob_phase = 3.0; // drives heave
+        let (world, player, traffic, cam, env) = (world, player, traffic, cam, env);
+        let mut backend = CpuBackend::new();
+        let frame = FrameInput {
+            world: &world,
+            cam: &cam,
+            player: &player,
+            traffic: &traffic,
+            env: &env,
+            cells_w: 48,
+            cells_h: 14,
+        };
+        // Must not panic and must produce a full grid while shaking.
+        let cells = backend.render(&frame);
+        assert_eq!(cells.len(), 48 * 14);
+    }
+}
+
+#[cfg(test)]
+mod dump_tests {
+    use super::*;
+
+    /// M0.6: dump_to writes both artifacts headlessly (no terminal needed).
+    #[test]
+    fn dump_writes_ppm_and_cells() {
+        let (world, player, traffic, cam, env) = tests::scene();
+        let mut backend = CpuBackend::new();
+        let frame = FrameInput {
+            world: &world,
+            cam: &cam,
+            player: &player,
+            traffic: &traffic,
+            env: &env,
+            cells_w: 40,
+            cells_h: 12,
+        };
+        let cells = backend.render(&frame).to_vec();
+        let dir = std::env::temp_dir().join("opencar_dump_test");
+        backend.dump_to(&cells, 40, &dir).expect("dump");
+        let ppm = std::fs::read(dir.join("frame_rgb.ppm")).expect("ppm exists");
+        assert!(ppm.starts_with(b"P6\n"));
+        let txt = std::fs::read_to_string(dir.join("frame_cells.txt")).expect("txt exists");
+        assert_eq!(txt.lines().count(), 12);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -98,7 +98,7 @@ impl HudState {
                 "[{}] WASD drive · Space brake · C cam · M map · P pause · Q quit",
                 backend_name
             );
-            draw_ascii(cells, cols, 1, 0, &hint, dim);
+            draw_ascii(cells, cols, 0, 0, &hint, dim);
         }
 
         if self.show_minimap {
@@ -122,5 +122,40 @@ impl HudState {
                 draw_ascii(cells, cols, x0 + 2, y0 + i as u16 + 1, line, bright);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::braille::TermCell;
+
+    /// SEV-2 regression: backend tag anchors at x=0 with no truncation.
+    #[test]
+    fn hud_row0_tag_anchoring() {
+        let cols = 60u16;
+        let rows = 20u16;
+        let mut cells = vec![TermCell::BLANK; (cols * rows) as usize];
+        let player = Vehicle::new(0.0, 0.0, 0.0);
+        let world = World::new(7);
+        let traffic = TrafficSystem::new(&player, &world);
+        let hud = HudState { show_hud: true, show_minimap: false };
+        hud.draw(
+            &mut cells,
+            cols,
+            rows,
+            &player,
+            &traffic,
+            &world,
+            "CPU",
+            false,
+        );
+        // Row 0, columns 0..5 must read "[CPU]".
+        let expect = ['[', 'C', 'P', 'U', ']'];
+        for (i, ch) in expect.iter().enumerate() {
+            assert_eq!(cells[i].ch, *ch, "col {i}");
+        }
+        // And the hint continues immediately after.
+        assert_eq!(cells[5].ch, ' ');
     }
 }

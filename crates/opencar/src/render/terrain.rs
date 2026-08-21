@@ -64,6 +64,7 @@ fn surface_base(world: &World, x: f32, z: f32, mat: u8) -> [f32; 3] {
 ///
 /// Forward evaluation: the exact world point `(x, h, z)` is natively known
 /// here, so the sun map is sampled directly — no screen-space reconstruction.
+#[allow(clippy::too_many_arguments)]
 fn shade(
     world: &World,
     sm: &ShadowMap,
@@ -72,6 +73,7 @@ fn shade(
     h: f32,
     mat: u8,
     t_fwd: f32,
+    contrast_boost: f32,
 ) -> (u8, u8, u8) {
     let eps = NORMAL_EPS;
     let hx0 = world.height_at(x - eps, z);
@@ -83,7 +85,19 @@ fn shade(
     let inv_len = 1.0 / (nx * nx + 1.0 + nz * nz).sqrt();
     let lambert = (-nx * SUN_DIR[0] + SUN_DIR[1] - nz * SUN_DIR[2]) * inv_len;
 
-    let base = surface_base(world, x, z, mat);
+    let mut base = surface_base(world, x, z, mat);
+    // Static-frame readability: parked cars still see the road — widen the
+    // brightness gap between asphalt-family surfaces and vegetation.
+    if crate::config::is_drivable_surface(mat) {
+        base[0] *= contrast_boost;
+        base[1] *= contrast_boost;
+        base[2] *= contrast_boost;
+    } else {
+        let dim = 2.0 - contrast_boost; // 0.75 when parked
+        base[0] *= dim;
+        base[1] *= dim;
+        base[2] *= dim;
+    }
 
     // Forward PCF shadow factor at the exact world point + normal-offset.
     let n_len = inv_len;
@@ -125,7 +139,13 @@ fn shade(
 /// unrolled basis, and paint visible spans into a per-column y-top buffer.
 /// Flat ground converges to the vanishing point; per-span forward depths
 /// synchronize the mesh z-test.
-pub fn march_columns(buf: &mut ImageBuffer, op: &Projector, world: &World, sm: &ShadowMap) {
+pub fn march_columns(
+    buf: &mut ImageBuffer,
+    op: &Projector,
+    world: &World,
+    sm: &ShadowMap,
+    contrast_boost: f32,
+) {
     let ow = buf.w;
     let oh = buf.h;
     for col in 0..ow {
@@ -167,11 +187,11 @@ pub fn march_columns(buf: &mut ImageBuffer, op: &Projector, world: &World, sm: &
                 let pz_n = dir[0];
                 let mat_a = world.material_at(sx_t + px_n * spread, sz_t + pz_n * spread);
                 let mat_b = world.material_at(sx_t - px_n * spread, sz_t - pz_n * spread);
-                let rgb_a = shade(world, sm, sx_t, sz_t, h, mat_a, fwd_d);
+                let rgb_a = shade(world, sm, sx_t, sz_t, h, mat_a, fwd_d, contrast_boost);
                 let rgb = if mat_a == mat_b {
                     rgb_a
                 } else {
-                    let rgb_b = shade(world, sm, sx_t, sz_t, h, mat_b, fwd_d);
+                    let rgb_b = shade(world, sm, sx_t, sz_t, h, mat_b, fwd_d, contrast_boost);
                     blend_rgb(rgb_a, rgb_b, 0.5)
                 };
                 fill(buf, col, row, y_top.saturating_sub(1), rgb, fwd_d + TERRAIN_DEPTH_MARGIN);
@@ -246,11 +266,9 @@ pub fn rotate_into(src: &ImageBuffer, roll: f32, dst: &mut ImageBuffer) {
         for dx in 0..dst.w {
             let vx = dx as f32 - cx_d;
             let vy = dy as f32 - cy_d;
-            let sxp = vx * cr - vy * sr + cx_s;
-            let syp = vx * sr + vy * cr + cy_s;
-            if sxp < 0.0 || syp < 0.0 || sxp >= src.w as f32 || syp >= src.h as f32 {
-                continue; // overscan coverage guarantees this stays empty
-            }
+            // Edge-clamp rotated lookups — never zero-fill OOB regions.
+            let sxp = (vx * cr - vy * sr + cx_s).clamp(0.0, src.w as f32 - 1.0);
+            let syp = (vx * sr + vy * cr + cy_s).clamp(0.0, src.h as f32 - 1.0);
             let x0 = sxp.floor() as usize;
             let y0 = syp.floor() as usize;
             let x1 = (x0 + 1).min(src.w - 1);
@@ -322,5 +340,40 @@ mod tests {
         assert!(samples > 40);
         // Converges near mid-frame (horizon), not the bottom.
         assert!(prev_row < proj.pixel_h as f32 * 0.60, "final row {prev_row}");
+    }
+}
+
+#[cfg(test)]
+mod rotate_tests {
+    use super::*;
+    use crate::render::image::ImageBuffer;
+
+    #[test]
+    fn oob_rotation_returns_sky() {
+        let mut src = ImageBuffer::new();
+        src.resize_if_needed(4, 4);
+        for y in 0..4 {
+            for x in 0..4 {
+                src.put_pixel(x, y, 200, 200, 200, 5.0);
+            }
+        }
+        let mut dst = ImageBuffer::new();
+        dst.resize_if_needed(4, 4);
+        // Extreme roll forces most lookups out of bounds.
+        rotate_into(&src, 1.2, &mut dst);
+        let hr = PALETTE[PAL_SKY_HORIZON as usize];
+        for py in 0..dst.h {
+            for px in 0..dst.w {
+                let o = (py * dst.w + px) * 3;
+                let is_sky = dst.rgb[o] == hr[0]
+                    && dst.rgb[o + 1] == hr[1]
+                    && dst.rgb[o + 2] == hr[2];
+                let is_src = {
+                    let idx = py * dst.w + px;
+                    dst.z[idx].is_finite()
+                };
+                assert!(is_sky || is_src, "OOB pixel must be sky, never black");
+            }
+        }
     }
 }

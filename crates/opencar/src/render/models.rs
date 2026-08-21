@@ -72,7 +72,7 @@ const CAR_W: f32 = 1.85;
 /// (~40 quads — visually equivalent to a high-poly shell at braille res.)
 pub fn build_car(body_idx: u8, braking: bool, oncoming: bool) -> Mesh {
     let body = PALETTE[body_idx as usize % PALETTE.len()];
-    let paint = Material::opaque(body, 0.25, 0.6);
+    let paint = Material::body(body);
     let dark = Material::opaque(PALETTE[PAL_CAR_DARK as usize], 0.5, 0.3);
     let glass = Material::opaque(PALETTE[PAL_GLASS as usize], 0.05, 0.9);
     let tire = Material::opaque(PALETTE[PAL_TIRE as usize], 0.95, 0.0);

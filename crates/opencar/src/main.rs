@@ -12,7 +12,7 @@ use opencar::app::{App, Mode};
 use opencar::config::*;
 use opencar::display::TermDisplay;
 
-pub fn run(seed: u32) -> io::Result<()> {
+pub fn run(seed: u32, debug_frame: Option<usize>) -> io::Result<()> {
     let mut stdout = io::stdout();
     terminal::enable_raw_mode()?;
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
@@ -29,7 +29,7 @@ pub fn run(seed: u32) -> io::Result<()> {
         )?;
     }
 
-    let result = drive(&mut stdout, seed, kitty);
+    let result = drive(&mut stdout, seed, kitty, debug_frame);
 
     // Teardown runs no matter how the loop ended.
     if kitty {
@@ -54,8 +54,14 @@ fn show_message(stdout: &mut impl Write, cols: u16, rows: u16) -> io::Result<()>
     stdout.flush()
 }
 
-fn drive(stdout: &mut impl Write, seed: u32, kitty: bool) -> io::Result<()> {
+fn drive(
+    stdout: &mut impl Write,
+    seed: u32,
+    kitty: bool,
+    debug_frame: Option<usize>,
+) -> io::Result<()> {
     let mut app = App::new(seed, kitty);
+    let mut frame_n = 0usize;
     let mut display = TermDisplay::new();
     let mut backend = opencar::render::create_backend().map_err(io::Error::other)?;
     let mut last = Instant::now();
@@ -115,14 +121,44 @@ fn drive(stdout: &mut impl Write, seed: u32, kitty: bool) -> io::Result<()> {
             owned
         };
         display.present(stdout, &cells)?;
+
+        // ── Diagnostics: synchronous dump + clean exit on --debug-frame=N ──
+        frame_n += 1;
+        if debug_frame == Some(frame_n) {
+            backend.dump_to(&cells, cols as usize, std::path::Path::new("/tmp"))?;
+            eprintln!("opencar: dumped frame {frame_n} to /tmp");
+            return Ok(());
+        }
+
+        // ── Diagnostics (K key): detached writer thread ──
+        if app.dump_request {
+            app.dump_request = false;
+            let (rgb, w, h) = backend.frame_snapshot();
+            let cols_usize = cols as usize;
+            let cells_clone = cells.clone();
+            std::thread::spawn(move || {
+                use opencar::render::image::{write_cells_txt, ImageBuffer};
+                let img = ImageBuffer {
+                    w,
+                    h,
+                    rgb,
+                    z: Vec::new(),
+                };
+                let dir = std::path::Path::new("/tmp");
+                let _ = img.write_ppm(&dir.join("frame_rgb.ppm"));
+                let _ = write_cells_txt(&cells_clone, cols_usize, &dir.join("frame_cells.txt"));
+            });
+        }
     }
 }
 
 fn main() -> io::Result<()> {
-    // Optional seed as argv[1]; deterministic default otherwise.
     let seed = std::env::args()
         .nth(1)
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(1337);
-    run(seed)
+    let debug_frame = std::env::args()
+        .find(|a| a.starts_with("--debug-frame"))
+        .and_then(|a| a.split('=').nth(1).and_then(|n| n.parse::<usize>().ok()));
+    run(seed, debug_frame)
 }

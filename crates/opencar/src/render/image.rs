@@ -77,3 +77,61 @@ impl Default for ImageBuffer {
         Self::new()
     }
 }
+
+use std::io::Write as _;
+use std::path::Path;
+
+impl ImageBuffer {
+    /// Byte-exact binary P6 dump: `P6\n{w} {h}\n255\n` + raw RGB.
+    /// Zero intermediate allocations beyond the BufWriter.
+    pub fn write_ppm(&self, path: &Path) -> std::io::Result<()> {
+        let file = std::fs::File::create(path)?;
+        let mut w = std::io::BufWriter::new(file);
+        write!(w, "P6\n{} {}\n255\n", self.w, self.h)?;
+        w.write_all(&self.rgb)?;
+        w.flush()
+    }
+}
+
+/// ASCII art of the quantized cell grid (mask glyphs + HUD chars).
+pub fn write_cells_txt(
+    cells: &[crate::braille::TermCell],
+    cols: usize,
+    path: &Path,
+) -> std::io::Result<()> {
+    let mut s = String::with_capacity(cells.len() + cells.len() / cols + 2);
+    for (i, c) in cells.iter().enumerate() {
+        if i > 0 && i % cols == 0 {
+            s.push('\n');
+        }
+        if c.ch != '\0' {
+            s.push(c.ch);
+        } else {
+            let g = char::from_u32(0x2800 + u32::from(c.mask)).unwrap_or(' ');
+            s.push(g);
+        }
+    }
+    s.push('\n');
+    std::fs::write(path, s)
+}
+
+#[cfg(test)]
+mod ppm_tests {
+    use super::*;
+
+    #[test]
+    fn ppm_header_and_byte_count() {
+        let mut img = ImageBuffer::new();
+        img.resize_if_needed(4, 3);
+        for i in 0..12 {
+            img.rgb[i * 3] = (i * 7) as u8;
+        }
+        let path = std::env::temp_dir().join("opencar_test_frame.ppm");
+        img.write_ppm(&path).expect("write");
+        let bytes = std::fs::read(&path).expect("read");
+        let _ = std::fs::remove_file(&path);
+        let header = b"P6\n4 3\n255\n";
+        assert!(bytes.starts_with(&header[..]));
+        assert_eq!(bytes.len(), header.len() + 4 * 3 * 3);
+    }
+}

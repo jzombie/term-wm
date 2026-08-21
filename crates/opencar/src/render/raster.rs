@@ -23,17 +23,24 @@ pub struct Material {
     pub albedo: [u8; 3],
     pub roughness: f32,
     pub metallic: f32,
+    /// Additive self-light so vehicle bodies read as solid shapes.
+    pub self_light: f32,
     /// Emissive faces (lights) bypass lighting entirely.
     pub emissive: bool,
 }
 
 impl Material {
     pub const fn opaque(albedo: [u8; 3], roughness: f32, metallic: f32) -> Self {
-        Self { albedo, roughness, metallic, emissive: false }
+        Self { albedo, roughness, metallic, self_light: 0.0, emissive: false }
+    }
+
+    /// Vehicle-paint material with an additive luma floor.
+    pub const fn body(albedo: [u8; 3]) -> Self {
+        Self { albedo, roughness: 0.25, metallic: 0.6, self_light: SELF_LIGHT, emissive: false }
     }
 
     pub const fn emissive(albedo: [u8; 3]) -> Self {
-        Self { albedo, roughness: 1.0, metallic: 0.0, emissive: true }
+        Self { albedo, roughness: 1.0, metallic: 0.0, self_light: 1.0, emissive: true }
     }
 }
 
@@ -235,12 +242,13 @@ fn draw_tri(
             r *= boost;
             g *= boost;
             bl *= boost;
-            // Distance fog.
+            // Distance fog, then SATURATING clamp before u8 (self_light +
+            // specular must never wrap/invert channels).
             let fog = 1.0 - (-depth / FOG_DIST).exp();
             let hr = sky_horizon_rgb;
-            img.rgb[o] = (r + (hr[0] as f32 - r) * fog) as u8;
-            img.rgb[o + 1] = (g + (hr[1] as f32 - g) * fog) as u8;
-            img.rgb[o + 2] = (bl + (hr[2] as f32 - bl) * fog) as u8;
+            img.rgb[o] = (r + (hr[0] as f32 - r) * fog).clamp(0.0, 255.0) as u8;
+            img.rgb[o + 1] = (g + (hr[1] as f32 - g) * fog).clamp(0.0, 255.0) as u8;
+            img.rgb[o + 2] = (bl + (hr[2] as f32 - bl) * fog).clamp(0.0, 255.0) as u8;
             let _ = view_dir;
         }
     }

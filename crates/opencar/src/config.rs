@@ -141,7 +141,7 @@ pub const SLOPE_LOOK: f32 = 2.2;
 /// Slight negative barrel distortion coefficient of the virtual lens.
 /// Slight negative barrel distortion, BOUNDED at startup by
 /// `LENS_MAX_EDGE_CELLS` (see render::lens).
-pub const LENS_K: f32 = -0.045;
+pub const LENS_K: f32 = 0.0;
 /// Hard cap: distortion displacement at the screen edge ≤ this many cells.
 pub const LENS_MAX_EDGE_CELLS: f32 = 1.0;
 /// Terrain z-writes are pushed back this far so meshes clear the voxel
@@ -158,7 +158,7 @@ pub const SHADOW_MIN_LIGHT: f32 = 0.42;
 pub const FLAT_RANGE_EPS: f32 = 12.0;
 /// Minimum halftone coverage for flat cells — shadowed terrain keeps a
 /// sparse 1–2 dot pattern instead of collapsing to empty glyphs.
-pub const LUMA_FLOOR_COVERAGE: f32 = 0.08;
+pub const LUMA_FLOOR_COVERAGE: f32 = 0.12;
 /// Cells whose mean luma is below this are allowed to go fully dark.
 pub const DARK_CELL_FLOOR_LUMA: f32 = 16.0;
 /// Distance-scaled boost for thin bright features (lane paint, rails) so
@@ -168,6 +168,19 @@ pub const DETAIL_NEAR_M: f32 = 40.0;
 pub const DETAIL_FAR_M: f32 = 420.0;
 /// Only features at least this bright get the distance boost.
 pub const DETAIL_LUMA_MIN: f32 = 170.0;
+/// Epsilon guarding the Sobel depth-normalization division.
+pub const SOBEL_EPSILON: f32 = 0.001;
+/// Distance-normalized gradient threshold for edge contours.
+pub const EDGE_DEPTH_GRAD: f32 = 0.18;
+/// Off-road roll cap (radians) — keeps frustum within overscan capacity.
+pub const ROLL_OFFROAD_MAX: f32 = 0.2618; // 15°
+/// Lens bypass threshold: chassis vibration above this disables the
+/// radial remap for the frame (discrete cells can't resolve it in motion).
+pub const SHAKE_BYPASS_M: f32 = 0.01;
+/// Additive self-light on vehicle bodies so cars read as solid shapes.
+pub const SELF_LIGHT: f32 = 0.45;
+/// Edge contours are restricted to near/mid-field geometry.
+pub const EDGE_MAX_Z: f32 = 220.0;
 /// Near plane for mesh clipping (camera space).
 pub const Z_NEAR: f32 = 0.1;
 pub const FOG_DIST: f32 = 470.0;

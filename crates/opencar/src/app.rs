@@ -92,6 +92,8 @@ pub struct App {
     pub hud: crate::hud::HudState,
     keys: HeldKeys,
     accumulator: f32,
+    /// Set by the K key; consumed by the render loop for diagnostics.
+    pub dump_request: bool,
 }
 
 impl App {
@@ -128,6 +130,7 @@ impl App {
             hud: crate::hud::HudState::new(),
             keys: HeldKeys::new(kitty),
             accumulator: 0.0,
+            dump_request: false,
         }
     }
 
@@ -145,6 +148,7 @@ impl App {
             KeyCode::Char('c') | KeyCode::Char('C') => self.cam.cycle_preset(),
             KeyCode::Char('m') | KeyCode::Char('M') => self.hud.show_minimap = !self.hud.show_minimap,
             KeyCode::Char('h') | KeyCode::Char('H') => self.hud.show_hud = !self.hud.show_hud,
+            KeyCode::Char('k') | KeyCode::Char('K') => self.dump_request = true,
             _ => {}
         }
         if let Some(ctrl) = control_of(ev.code) {
