@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **Follow Workspaces toggle:** A simple on/off switch in the Workspaces section. When off (default), switching workspaces moves only you. When on, everyone on that workspace follows together — great for pairing or presentations. Toggle it anytime from the palette; it takes effect immediately.
 - **Workspace notifications:** You’ll get a “Workspace <name>” toast when you create or switch workspaces.
 - **JSONC in `.term-wm/tasks.json`:** `tasks.json` now accepts `//` line and `/* */` block comments (via `json_comments::StripComments`). Content inside strings (e.g. URLs, `//` / `/* */` literals) is preserved.
+- **Command Palette section-aware search:** typing in the palette now matches against section titles (e.g., "Window Management", "Quick Actions") in addition to action names. Section headers are also skipped during keyboard navigation so Up/Down always lands on a selectable action.
 
 ### Fixed
 
