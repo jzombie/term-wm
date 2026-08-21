@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 #[cfg(test)]
 thread_local! {
-    static VISIBLE_ROW_CALL_COUNT: std::cell::Cell<usize> = std::cell::Cell::new(0);
+    static VISIBLE_ROW_CALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
