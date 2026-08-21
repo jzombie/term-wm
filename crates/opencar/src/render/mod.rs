@@ -1,0 +1,415 @@
+//! Renderer abstraction + the CPU software backend.
+//!
+//! `Renderer` is the dual-backend seam: both the CPU pipeline (always
+//! available) and the experimental wgpu pipeline (`feature = "gpu"`) emit the
+//! same `TermCell` array. Backend selection tries GPU first with hardware
+//! enforcement and falls back to CPU transparently.
+
+pub mod camera;
+pub mod image;
+pub mod lens;
+pub mod models;
+pub mod raster;
+pub mod shadows;
+pub mod sky;
+pub mod terrain;
+
+use crate::braille::{encode, make_noise_table, TermCell};
+use crate::config::*;
+use crate::render::camera::Projector;
+use crate::render::image::ImageBuffer;
+use crate::render::lens::apply_lens;
+use crate::render::models::{build_car, build_sign, build_tree, instance};
+use crate::render::raster::draw_quad;
+use crate::render::shadows::{apply_deferred, ShadowMap};
+use crate::render::terrain::{march_columns, rotate_into, TerrainPass};
+use crate::sim::car::Vehicle;
+use crate::sim::traffic::TrafficSystem;
+use crate::world::World;
+
+/// Per-frame environment state.
+#[derive(Clone, Copy)]
+pub struct Environment {
+    pub elapsed: f32,
+    /// Re-randomized every frame: temporal grain offset.
+    pub noise_offset: (u16, u16),
+}
+
+/// Everything a backend needs for one frame.
+pub struct FrameInput<'a> {
+    pub world: &'a World,
+    pub cam: &'a camera::CameraState,
+    pub player: &'a Vehicle,
+    pub traffic: &'a TrafficSystem,
+    pub env: &'a Environment,
+    /// Terminal cell grid size.
+    pub cells_w: u16,
+    pub cells_h: u16,
+}
+
+impl FrameInput<'_> {
+    #[inline]
+    pub fn world_cells(&self) -> (usize, usize) {
+        (self.cells_w as usize, self.cells_h as usize)
+    }
+}
+
+/// The dual-backend seam.
+pub trait Renderer {
+    fn render(&mut self, frame: &FrameInput) -> &[TermCell];
+    fn name(&self) -> &'static str;
+}
+
+/// Create the best available backend: GPU-first, hardware-enforced.
+pub fn create_backend() -> Result<Box<dyn Renderer>, String> {
+    #[cfg(feature = "gpu")]
+    {
+        match crate::render::gpu::GpuBackend::try_new() {
+            Ok(b) => return Ok(Box::new(b)),
+            Err(err) => {
+                eprintln!("opencar: GPU backend unavailable ({err}); using CPU renderer");
+            }
+        }
+    }
+    Ok(Box::new(CpuBackend::new()))
+}
+
+/// The CPU software pipeline.
+pub struct CpuBackend {
+    img: ImageBuffer,
+    scratch: ImageBuffer,
+    terrain: TerrainPass,
+    shadows: ShadowMap,
+    noise_table: Vec<u8>,
+    cells: Vec<TermCell>,
+    quad_scratch: Vec<crate::render::raster::Quad>,
+}
+
+impl Default for CpuBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CpuBackend {
+    pub fn new() -> Self {
+        Self {
+            img: ImageBuffer::new(),
+            scratch: ImageBuffer::new(),
+            terrain: TerrainPass::new(),
+            shadows: ShadowMap::new(),
+            noise_table: make_noise_table(0xC0FFEE),
+            cells: Vec::new(),
+            quad_scratch: Vec::new(),
+        }
+    }
+
+    fn collect_scene_quads(
+        &mut self,
+        world: &World,
+        proj: &Projector,
+        player: &Vehicle,
+        traffic: &TrafficSystem,
+    ) {
+        self.quad_scratch.clear();
+        let noise = *world.noise();
+        let roads = *world.roads();
+        let cam_fwd = [proj.fwd_r[0], proj.fwd_r[2]];
+
+        // ── Player car ──
+        let braking = player.brake > 0.1 || player.handbrake;
+        let player_mesh = build_car(PAL_CAR_RED, braking, false);
+        for q in instance(
+            &player_mesh,
+            player.x,
+            player.y,
+            player.z,
+            player.heading,
+        ) {
+            self.quad_scratch.push(q);
+        }
+
+        // ── NPC cars ──
+        for npc in &traffic.cars {
+            let (pos, tan) = npc.pose(&roads, &noise);
+            let gy = world.height_at(pos[0], pos[1]);
+            // Oncoming when its travel direction opposes the view direction.
+            let oncoming = tan[0] * cam_fwd[0] + tan[1] * cam_fwd[1] < -0.3;
+            let yaw = tan[0].atan2(tan[1]);
+            let mesh = build_car(npc.body, npc.braking, oncoming);
+            for q in instance(&mesh, pos[0], gy, pos[1], yaw) {
+                self.quad_scratch.push(q);
+            }
+        }
+
+        // ── Curve signs near the player ──
+        for s in world.signs_near(player.x, player.z, SIGN_NEAR_RANGE) {
+            let gy = world.height_at(s.x, s.z);
+            for q in instance(&build_sign(), s.x, gy, s.z, 0.0) {
+                self.quad_scratch.push(q);
+            }
+        }
+
+        // ── Deterministic roadside trees ──
+        let cs = CHUNK_SIZE_I32 as f32;
+        let pcx = (player.x / cs).floor() as i32;
+        let pcz = (player.z / cs).floor() as i32;
+        const PROP_STEP: f32 = 24.0;
+        let per_chunk = (cs / PROP_STEP) as i32;
+        let mut placed = 0usize;
+        'outer: for dz in -2..=2 {
+            for dx in -2..=2 {
+                let ckx = pcx + dx;
+                let ckz = pcz + dz;
+                for iz in 0..per_chunk {
+                    for ix in 0..per_chunk {
+                        if placed >= TREE_CAP {
+                            break 'outer;
+                        }
+                        let h = (ckx.wrapping_mul(73856093))
+                            ^ (ckz.wrapping_mul(19349663))
+                            ^ ((ix * 31 + iz * 17).wrapping_mul(83492791));
+                        let h = h as u32;
+                        if h % 100 >= TREE_CHANCE_PCT {
+                            continue;
+                        }
+                        let wx = (ckx as f32) * cs + ix as f32 * PROP_STEP + (h % 13) as f32;
+                        let wz = (ckz as f32) * cs + iz as f32 * PROP_STEP + (h % 7) as f32;
+                        // Keep trees off the roads.
+                        let lat_ew = roads.ew().lateral(wx, wz, &noise).abs();
+                        let lat_ns = roads.ns().lateral(wx, wz, &noise).abs();
+                        if lat_ew < ROAD_HALF_WIDTH + SHOULDER_WIDTH + 2.5
+                            || lat_ns < ROAD_HALF_WIDTH + SHOULDER_WIDTH + 2.5
+                        {
+                            continue;
+                        }
+                        let mat = world.material_at(wx, wz);
+                        if mat != MAT_GRASS && mat != MAT_GRASS_DARK && mat != MAT_GRASS_DRY {
+                            continue;
+                        }
+                        let gy = world.height_at(wx, wz);
+                        let dist2 = (wx - proj.cam[0]).powi(2) + (wz - proj.cam[2]).powi(2);
+                        if dist2 > SPRITE_FAR * SPRITE_FAR {
+                            continue;
+                        }
+                        for q in instance(&build_tree(h), wx, gy, wz, (h % 360) as f32 * 0.0174) {
+                            self.quad_scratch.push(q);
+                        }
+                        placed += 1;
+                    }
+                }
+            }
+        }
+
+        // Sort far → near by centroid depth (painter order under z-test).
+        let depths: Vec<f32> = self
+            .quad_scratch
+            .iter()
+            .map(|q| {
+                let c = centroid(&q.v.map(|vv| vv.pos));
+                let rel = [
+                    c[0] - proj.cam[0],
+                    c[1] - proj.cam[1],
+                    c[2] - proj.cam[2],
+                ];
+                dot3(rel, proj.fwd_r)
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..self.quad_scratch.len()).collect();
+        order.sort_by(|a, b| depths[*b].total_cmp(&depths[*a]));
+        let sorted: Vec<_> = order.iter().map(|i| self.quad_scratch[*i]).collect();
+        self.quad_scratch = sorted;
+    }
+}
+
+impl Renderer for CpuBackend {
+    fn name(&self) -> &'static str {
+        "CPU"
+    }
+
+    fn render(&mut self, frame: &FrameInput) -> &[TermCell] {
+        let pw = frame.world_cells().0 * 2;
+        let ph = frame.world_cells().1 * 4;
+        self.img.resize_if_needed(pw, ph);
+        self.img.clear();
+        let proj = Projector::new(frame.cam, pw, ph);
+
+        // Stage 1+2: sky into overscan, march columns, rotate by roll.
+        let (ow, oh) = Projector::overscan_dims(pw, ph, frame.cam.roll.abs());
+        self.terrain.buf.resize_if_needed(ow, oh);
+        self.terrain.buf.clear();
+        let op = Projector::new_from(&proj, ow, oh);
+        sky::render_sky(&mut self.terrain.buf, &op, frame.world.noise(), frame.env.elapsed);
+        march_columns(&mut self.terrain.buf, &op, frame.world);
+        rotate_into(&self.terrain.buf, frame.cam.roll, &mut self.img);
+
+        // Stage 3: meshes through the rolled matrix, painter-ordered.
+        self.collect_scene_quads(frame.world, &proj, frame.player, frame.traffic);
+        let horizon_rgb = PALETTE[PAL_SKY_HORIZON as usize];
+        let quads = std::mem::take(&mut self.quad_scratch);
+        for q in &quads {
+            draw_quad(&mut self.img, &proj, q, horizon_rgb);
+        }
+        self.quad_scratch = quads;
+
+        // Stage 4: deferred PCF shadows over the completed depth buffer.
+        self.shadows.begin_frame(frame.player.x, frame.player.z);
+        self.shadows.rasterize_mesh(&self.quad_scratch);
+        apply_deferred(&mut self.img, &proj, &self.shadows);
+
+        // Stage 5: virtual lens, then quantize to braille cells.
+        apply_lens(&self.img, &mut self.scratch);
+        encode(
+            &self.scratch,
+            &self.noise_table,
+            frame.env.noise_offset,
+            DEFAULT_CELL_ASPECT,
+            &mut self.cells,
+        );
+        &self.cells
+    }
+}
+
+fn centroid(pts: &[[f32; 3]; 4]) -> [f32; 3] {
+    let mut out = [0.0f32; 3];
+    for p in pts {
+        for k in 0..3 {
+            out[k] += p[k];
+        }
+    }
+    [out[0] / 4.0, out[1] / 4.0, out[2] / 4.0]
+}
+
+#[inline]
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+const SIGN_NEAR_RANGE: f32 = 140.0;
+const TREE_CAP: usize = 48;
+const TREE_CHANCE_PCT: u32 = 30;
+
+// ── GPU backend (feature-gated) ─────────────────────────────────────────
+#[cfg(feature = "gpu")]
+pub mod gpu {
+    use super::{Renderer, TermCell};
+
+    /// Hardware wgpu backend (G2 milestone).
+    ///
+    /// Adapter policy: hardware only — `DeviceType::Cpu` (llvmpipe/WARP) is
+    /// rejected so VMs fall back to the CPU renderer instead of crawling.
+    pub struct GpuBackend;
+
+    impl GpuBackend {
+        pub fn try_new() -> Result<Self, String> {
+            Err("wgpu pipeline not yet wired (milestone G2)".to_string())
+        }
+    }
+
+    impl Renderer for GpuBackend {
+        fn render(&mut self, _frame: &super::FrameInput) -> &[TermCell] {
+            unimplemented!("GPU path lands in milestone G2")
+        }
+
+        fn name(&self) -> &'static str {
+            "GPU"
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::camera::CameraState;
+    use crate::sim::car::VehicleInput;
+
+    fn scene() -> (World, Vehicle, TrafficSystem, CameraState, Environment) {
+        let mut world = World::new(7);
+        let noise = *world.noise();
+        let start = world.roads().ew().point(0.0, LANE_OFFSETS[0], &noise);
+        let tan = world.roads().ew().tangent(0.0, &noise);
+        world.ensure_chunks_around(start.0, start.1, usize::MAX);
+        let mut player = Vehicle::new(start.0, start.1, tan.0.atan2(tan.1));
+        player.update(SIM_TICK_DT, VehicleInput::default(), &world);
+        let traffic = TrafficSystem::new(&player, &world);
+        let mut cam = CameraState::new();
+        let ground = world.height_at(player.x, player.z);
+        cam.update(&player, SIM_TICK_DT, ground);
+        let env = Environment { elapsed: 1.0, noise_offset: (3, 4) };
+        (world, player, traffic, cam, env)
+    }
+
+    #[test]
+    fn render_smoke_deterministic() {
+        let (world, player, traffic, cam, env) = scene();
+        let mut backend = CpuBackend::new();
+
+        let make_frame = || FrameInput {
+            world: &world,
+            cam: &cam,
+            player: &player,
+            traffic: &traffic,
+            env: &env,
+            cells_w: 80,
+            cells_h: 25,
+        };
+
+        let cells_a: Vec<TermCell> = backend.render(&make_frame()).to_vec();
+        let cells_b: Vec<TermCell> = backend.render(&make_frame()).to_vec();
+        assert_eq!(cells_a.len(), 80 * 25);
+        assert_eq!(cells_a, cells_b, "fixed pose must be deterministic");
+
+        // A real scene should light up a healthy share of cells.
+        let lit = cells_a.iter().filter(|c| c.mask != 0).count();
+        assert!(lit > cells_a.len() / 8, "too few lit cells: {lit}");
+    }
+
+    #[test]
+    fn camera_inside_mesh_does_not_panic() {
+        let (world, player, traffic, mut cam, env) = scene();
+        // Put the camera exactly at the car — worst near-plane case.
+        cam.x = player.x;
+        cam.y = player.y + 1.0;
+        cam.z = player.z;
+        let (world, player, traffic, cam, env) = (world, player, traffic, cam, env);
+        let mut backend = CpuBackend::new();
+        let frame = FrameInput {
+            world: &world,
+            cam: &cam,
+            player: &player,
+            traffic: &traffic,
+            env: &env,
+            cells_w: 40,
+            cells_h: 12,
+        };
+        let _ = backend.render(&frame); // must not panic
+    }
+
+    #[test]
+    fn roll_pipeline_covers_corners() {
+        let (world, player, traffic, mut cam, env) = scene();
+        cam.roll = 0.25; // hard cornering
+        let (world, player, traffic, cam, env) = (world, player, traffic, cam, env);
+        let mut backend = CpuBackend::new();
+        let frame = FrameInput {
+            world: &world,
+            cam: &cam,
+            player: &player,
+            traffic: &traffic,
+            env: &env,
+            cells_w: 48,
+            cells_h: 14,
+        };
+        let _cells = backend.render(&frame);
+        // Corners are sky-filled thanks to overscan: never pure black.
+        let pw = 96usize;
+        let ph = backend.img.h;
+        let rgb_snapshot: Vec<u8> = backend.img.rgb.clone();
+        let corner = |px: usize, py: usize| -> bool {
+            let o = (py * pw + px) * 3;
+            rgb_snapshot[o] as u32 + rgb_snapshot[o + 1] as u32 + rgb_snapshot[o + 2] as u32 > 0
+        };
+        assert!(corner(0, 0) && corner(pw - 1, 0));
+        assert!(corner(0, ph - 1) && corner(pw - 1, ph - 1));
+            }
+}

@@ -1,0 +1,37 @@
+[package]
+name = "opencar"
+description = "An open-world braille-graphics TUI driving simulator."
+keywords = ["tui", "game", "driving", "terminal"]
+categories = ["games", "command-line-interface"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+# Standalone demo crate; not published with the workspace.
+publish = false
+
+[features]
+default = []
+# Experimental hardware backend (wgpu). Off by default; CPU renderer always works.
+gpu = ["dep:wgpu"]
+
+[dependencies]
+crossterm = { workspace = true }
+rayon = "1.10"
+wgpu = { version = "24", optional = true, default-features = false, features = [
+    "wgsl",
+    "webgl",
+] }
+
+[lib]
+name = "opencar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "opencar"
+path = "src/main.rs"
+
+[lints]
+workspace = true

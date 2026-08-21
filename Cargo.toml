@@ -21,6 +21,7 @@ development = ["term-bench"]
 
 [workspace]
 members = [
+    "crates/opencar",
     "crates/term-bench",
     "crates/term-clipboard",
     "crates/term-session",
