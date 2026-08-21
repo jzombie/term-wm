@@ -31,6 +31,7 @@ use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
 
 // Palette polling intervals — extracted per AGENTS.md Magic Strings and Numbers.
 const PALETTE_TICK_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(feature = "session-persistence")]
 const PALETTE_IPC_INTERVAL: Duration = Duration::from_secs(30);
 const USER_REGISTRY_DEBOUNCE: Duration = Duration::from_secs(2);
 use term_wm_ui_components::TerminalComponent;
@@ -1063,6 +1064,7 @@ impl<C: Component<TermWmAction> + 'static>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "session-persistence")]
     use serial_test::serial;
 
     /// Every construction path must initialize the system windows (debug log,
