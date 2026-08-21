@@ -186,8 +186,7 @@ impl CommandPaletteComponent {
                     }
                     let display_name = cmd_node.name.format(self.current_context_mask);
                     let desc = cmd_node.description.clone().unwrap_or_default();
-                    let is_header =
-                        cmd_node.disabled && display_name.starts_with('\u{2500}');
+                    let is_header = cmd_node.disabled && display_name.starts_with('\u{2500}');
 
                     if is_header {
                         current_section = display_name
@@ -335,8 +334,7 @@ impl CommandPaletteComponent {
         } else {
             self.selected = self.selected.min(self.filtered_items.len() - 1);
             if self.skip_disabled_items && self.filtered_items[self.selected].disabled {
-                if let Some(valid_idx) =
-                    self.filtered_items.iter().position(|item| !item.disabled)
+                if let Some(valid_idx) = self.filtered_items.iter().position(|item| !item.disabled)
                 {
                     self.selected = valid_idx;
                 } else {
@@ -491,8 +489,7 @@ impl CommandPaletteComponent {
         } else {
             self.selected = self.selected.min(self.filtered_items.len() - 1);
             if self.skip_disabled_items && self.filtered_items[self.selected].disabled {
-                if let Some(valid_idx) =
-                    self.filtered_items.iter().position(|item| !item.disabled)
+                if let Some(valid_idx) = self.filtered_items.iter().position(|item| !item.disabled)
                 {
                     self.selected = valid_idx;
                 } else {
