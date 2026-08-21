@@ -226,6 +226,15 @@ fn draw_tri(
                 g += sky_horizon_rgb[1] as f32 * fres;
                 bl += sky_horizon_rgb[2] as f32 * fres;
             }
+            // Sub-pixel feature boost for thin bright faces (paint lines on
+            // signs, chrome trim) so they survive quantization at range.
+            let alb_l = mat.albedo[0] as f32 * 0.299
+                + mat.albedo[1] as f32 * 0.587
+                + mat.albedo[2] as f32 * 0.114;
+            let boost = 1.0 + crate::render::terrain::detail_boost(depth, alb_l);
+            r *= boost;
+            g *= boost;
+            bl *= boost;
             // Distance fog.
             let fog = 1.0 - (-depth / FOG_DIST).exp();
             let hr = sky_horizon_rgb;

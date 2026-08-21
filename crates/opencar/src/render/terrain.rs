@@ -31,6 +31,18 @@ impl Default for TerrainPass {
     }
 }
 
+/// Sub-pixel feature injection: thin bright geometry (paint, rails) gets a
+/// luminance boost that grows with depth, so lane lines never flicker into
+/// single dots near the horizon. Zero below `DETAIL_NEAR_M`.
+pub fn detail_boost(t_fwd: f32, base_luma: f32) -> f32 {
+    if base_luma < DETAIL_LUMA_MIN || t_fwd <= DETAIL_NEAR_M {
+        return 0.0;
+    }
+    let u = ((t_fwd - DETAIL_NEAR_M) / (DETAIL_FAR_M - DETAIL_NEAR_M)).clamp(0.0, 1.0);
+    let luma_f = (base_luma / 255.0).powi(2);
+    DETAIL_BOOST_GAIN * u * luma_f
+}
+
 #[inline]
 fn pal_rgb(idx: u8) -> [f32; 3] {
     let c = PALETTE[idx as usize % PALETTE.len()];
@@ -90,12 +102,19 @@ fn shade(
         b = b * WATER_MIRROR_TERRAIN + pal_rgb(PAL_SKY_LOW)[2] * WATER_MIRROR_SKY;
     }
 
+    // Sub-pixel feature injection for thin bright geometry.
+    let base_l = base[0] * 0.299 + base[1] * 0.587 + base[2] * 0.114;
+    let boost = 1.0 + detail_boost(t_fwd, base_l);
+    r *= boost;
+    g *= boost;
+    b *= boost;
+
     let fog = 1.0 - (-t_fwd / FOG_DIST).exp();
     let hr = pal_rgb(PAL_SKY_HORIZON);
     (
-        (r + (hr[0] - r) * fog) as u8,
-        (g + (hr[1] - g) * fog) as u8,
-        (b + (hr[2] - b) * fog) as u8,
+        (r + (hr[0] - r) * fog).clamp(0.0, 255.0) as u8,
+        (g + (hr[1] - g) * fog).clamp(0.0, 255.0) as u8,
+        (b + (hr[2] - b) * fog).clamp(0.0, 255.0) as u8,
     )
 }
 

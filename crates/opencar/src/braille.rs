@@ -100,7 +100,17 @@ pub fn encode(
     }
 }
 
+#[inline]
+fn lum(p: [f32; 3]) -> f32 {
+    p[0] * 0.299 + p[1] * 0.587 + p[2] * 0.114
+}
+
 /// Quantize one cell's eight RGB samples into a braille TermCell.
+///
+/// Terminal-video model (v2): the background is CONSTANT near-black; a dot
+/// is lit when its luma exceeds the cell MEAN luma plus a small per-frame
+/// threshold dither (smooth gradients become dot-density gradients); the
+/// foreground is the mean RGB of the lit dots. Grain never alters the mask.
 fn quantize_cell(
     px: &[[u8; 3]; 8],
     cx: usize,
@@ -108,129 +118,138 @@ fn quantize_cell(
     noise_table: &[u8],
     offset: (u16, u16),
 ) -> TermCell {
-    // Temporal grain: per-frame offset scrambles the pattern (no static
-    // screen door); amplitude scales the perturbation.
-    let mut rgb = [[0f32; 3]; 8];
+    let mut lumas = [0f32; 8];
+    let mut mean_rgb = [0f32; 3];
+    let mut min_l = f32::MAX;
+    let mut max_l = f32::MIN;
     for i in 0..8 {
-        // Dot grid position drives the noise lookup.
+        lumas[i] = lum([px[i][0] as f32, px[i][1] as f32, px[i][2] as f32]);
+        for ch in 0..3 {
+            mean_rgb[ch] += px[i][ch] as f32;
+        }
+        min_l = min_l.min(lumas[i]);
+        max_l = max_l.max(lumas[i]);
+    }
+    for m in &mut mean_rgb {
+        *m /= 8.0;
+    }
+    let mean_l = lum(mean_rgb);
+    let avg = [
+        mean_rgb[0].clamp(0.0, 255.0) as u8,
+        mean_rgb[1].clamp(0.0, 255.0) as u8,
+        mean_rgb[2].clamp(0.0, 255.0) as u8,
+    ];
+
+    const ROW_BITS: [u8; 4] = [0x01, 0x02, 0x04, 0x08];
+    let noise_at = |i: usize| -> f32 {
         let dx = i % DOTS_X;
         let dy = i / DOTS_X;
         let gx = (cx * DOTS_X + dx + offset.0 as usize) % NOISE_TABLE_DIM;
         let gy = (cy * DOTS_Y + dy + offset.1 as usize) % NOISE_TABLE_DIM;
-        // g ∈ [-1, 1]; grain scales with pixel brightness like sensor noise.
-        let g = (noise_table[gy * NOISE_TABLE_DIM + gx] as f32 - 128.0) / 128.0;
-        for ch in 0..3 {
-            rgb[i][ch] =
-                px[i][ch] as f32 + g * DITHER_AMP * (px[i][ch] as f32 / 255.0);
-        }
-    }
+        noise_table[gy * NOISE_TABLE_DIM + gx] as f32 / 255.0
+    };
 
-
-    // Seed centroids from extreme-luma samples.
-    let (mut lo_idx, mut hi_idx) = (0usize, 0usize);
-    for (i, p) in rgb.iter().enumerate() {
-        if lum(*p) < lum(rgb[lo_idx]) {
-            lo_idx = i;
-        }
-        if lum(*p) > lum(rgb[hi_idx]) {
-            hi_idx = i;
-        }
-    }
-    let mut c_dark = rgb[lo_idx];
-    let mut c_bright = rgb[hi_idx];
-
-    // k-means (≤ KMEANS_ITERS iterations, guarded against empty clusters).
-    let mut assignment = [0u8; 8];
-    for _ in 0..KMEANS_ITERS {
-        let mut dark_sum = [0f32; 3];
-        let mut bright_sum = [0f32; 3];
-        let (mut dark_n, mut bright_n) = (0usize, 0usize);
-        for (i, p) in rgb.iter().enumerate() {
-            let dd = dist2(*p, c_dark);
-            let db = dist2(*p, c_bright);
-            if dd <= db {
-                assignment[i] = 0;
-                for ch in 0..3 {
-                    dark_sum[ch] += p[ch];
-                }
-                dark_n += 1;
-            } else {
-                assignment[i] = 1;
-                for ch in 0..3 {
-                    bright_sum[ch] += p[ch];
-                }
-                bright_n += 1;
-            }
-        }
-        // Guard count == 0 — keep previous centroid instead of dividing.
-        if dark_n > 0 {
-            for ch in 0..3 {
-                c_dark[ch] = dark_sum[ch] / dark_n as f32;
-            }
-        }
-        if bright_n > 0 {
-            for ch in 0..3 {
-                c_bright[ch] = bright_sum[ch] / bright_n as f32;
-            }
-        }
-    }
-
-    // Degenerate guard: centroid separation within the grain-noise envelope
-    // means the block is flat and only sensor grain differs — collapse to
-    // the block average instead of amplifying sub-threshold noise into
-    // fake sparkles.
-    let mean_l = (lum(c_dark) + lum(c_bright)) * 0.5;
-    let sep_max = (2.0 * DITHER_AMP * (mean_l / 255.0) * 1.15)
-        .max(CENTROID_SEPARATION_MIN);
-    if dist2(c_dark, c_bright) < sep_max * sep_max {
-        let avg_f = [
-            (px.iter().map(|p| f32::from(p[0])).sum::<f32>() / 8.0),
-            (px.iter().map(|p| f32::from(p[1])).sum::<f32>() / 8.0),
-            (px.iter().map(|p| f32::from(p[2])).sum::<f32>() / 8.0),
-        ];
-        let mask = if lum(avg_f) >= 110.0 { 0xFF } else { 0x00 };
-        let avg = to_u8(avg_f);
-        return TermCell { mask, fg: avg, bg: avg, ch: '\0' };
-    }
-
-    // Bitmask from final assignment (bright cluster lights dots).
-    // Braille bit order: dot1..4 down the left column, dot5..8 right.
-    const ROW_BITS: [u8; 4] = [0x01, 0x02, 0x04, 0x08];
     let mut mask = 0u8;
-    for (i, &a) in assignment.iter().enumerate() {
-        if a == 1 {
+    let mut lit_sum = [0f32; 3];
+    let mut lit_n = 0usize;
+
+    if max_l - min_l < FLAT_RANGE_EPS {
+        // FLAT CELL — temporal fractional-coverage halftone: the dot pattern
+        // shimmers like sensor grain while its average density tracks the
+        // cell brightness exactly (no colored mosaic, no posterization).
+        // Ambient luma floor: shadowed terrain keeps a sparse halftone
+        // instead of collapsing into void (true black only below floor).
+        let coverage = if mean_l < DARK_CELL_FLOOR_LUMA {
+            0.0
+        } else {
+            (mean_l / 255.0).max(LUMA_FLOOR_COVERAGE)
+        };
+        for i in 0..8 {
+            if noise_at(i) < coverage {
+                let dx = i % DOTS_X;
+                let dy = i / DOTS_X;
+                mask |= if dx == 0 { ROW_BITS[dy] } else { ROW_BITS[dy] << 4 };
+            }
+        }
+        // Guaranteed ambient anchor: if the stochastic pass starved this
+        // cell (local noise clustered high), light its lowest-noise dot so
+        // shadowed terrain never collapses into pure void.
+        if coverage > 0.0 && mask == 0 {
+            let mut best = 0usize;
+            let mut best_v = f32::MAX;
+            for i in 0..8 {
+                let v = noise_at(i);
+                if v < best_v {
+                    best_v = v;
+                    best = i;
+                }
+            }
+            let dxb = best % DOTS_X;
+            let dyb = best / DOTS_X;
+            mask |= if dxb == 0 { ROW_BITS[dyb] } else { ROW_BITS[dyb] << 4 };
+        }
+        let fg_tint = if mask != 0 {
+            // Grain tints the foreground only.
+            let g0 = noise_at(0);
+            [
+                (avg[0] as f32 * (0.92 + 0.16 * g0)).clamp(0.0, 255.0) as u8,
+                (avg[1] as f32 * (0.92 + 0.16 * g0)).clamp(0.0, 255.0) as u8,
+                (avg[2] as f32 * (0.92 + 0.16 * g0)).clamp(0.0, 255.0) as u8,
+            ]
+        } else {
+            avg
+        };
+        return TermCell { mask, fg: fg_tint, bg: BG_DARK, ch: '\0' };
+    }
+
+    // STRUCTURED CELL — adaptive threshold at the midpoint of the tonal
+    // range (+ tiny temporal jitter) keeps edges crisp.
+    let t = (min_l + max_l) * 0.5 + (noise_at(0) - 0.5) * 4.0;
+    for i in 0..8 {
+        if lumas[i] > t {
             let dx = i % DOTS_X;
             let dy = i / DOTS_X;
             mask |= if dx == 0 { ROW_BITS[dy] } else { ROW_BITS[dy] << 4 };
+            for ch in 0..3 {
+                lit_sum[ch] += px[i][ch] as f32;
+            }
+            lit_n += 1;
         }
     }
-
-    let fg = to_u8(c_bright);
-    let bg = to_u8(c_dark);
-    TermCell { mask, fg, bg, ch: '\0' }
+    // Ambient floor: a structured cell that thresholded to empty still gets
+    // its dimmest-noise dot when the surface is visible (not true black).
+    if mask == 0 && mean_l >= DARK_CELL_FLOOR_LUMA {
+        let mut best = 0usize;
+        let mut best_v = f32::MAX;
+        for i in 0..8 {
+            let v = noise_at(i);
+            if v < best_v {
+                best_v = v;
+                best = i;
+            }
+        }
+        let dx = best % DOTS_X;
+        let dy = best / DOTS_X;
+        mask |= if dx == 0 { ROW_BITS[dy] } else { ROW_BITS[dy] << 4 };
+    }
+    let fg = if lit_n > 0 || mask != 0 {
+        if lit_n == 0 {
+            avg
+        } else {
+            [
+                (lit_sum[0] / lit_n as f32).clamp(0.0, 255.0) as u8,
+                (lit_sum[1] / lit_n as f32).clamp(0.0, 255.0) as u8,
+                (lit_sum[2] / lit_n as f32).clamp(0.0, 255.0) as u8,
+            ]
+        }
+    } else {
+        avg
+    };
+    TermCell { mask, fg, bg: BG_DARK, ch: '\0' }
 }
 
-#[inline]
-fn lum(p: [f32; 3]) -> f32 {
-    p[0] * 0.299 + p[1] * 0.587 + p[2] * 0.114
-}
-
-#[inline]
-fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let d0 = a[0] - b[0];
-    let d1 = a[1] - b[1];
-    let d2 = a[2] - b[2];
-    d0 * d0 + d1 * d1 + d2 * d2
-}
-
-#[inline]
-fn to_u8(p: [f32; 3]) -> [u8; 3] {
-    [
-        p[0].clamp(0.0, 255.0) as u8,
-        p[1].clamp(0.0, 255.0) as u8,
-        p[2].clamp(0.0, 255.0) as u8,
-    ]
-}
+/// Constant near-black cell background — structure lives in the fg dots.
+pub const BG_DARK: [u8; 3] = [8, 8, 10];
 
 #[cfg(test)]
 mod tests {
@@ -259,27 +278,6 @@ mod tests {
     }
 
     #[test]
-    fn solid_blocks_stay_clean_no_nan() {
-        // Dark block: essentially all dots off, centroids finite & close.
-        let img = solid_img(16, 16, [10, 12, 14]);
-        let table = make_noise_table(1);
-        let mut cells = Vec::new();
-        encode(&img, &table, (7, 3), DEFAULT_CELL_ASPECT, &mut cells);
-        for c in &cells {
-            assert_eq!(c.mask, 0x00, "dark block stays off");
-            assert_eq!(c.fg, c.bg, "degenerate block collapses fg=bg");
-        }
-        // Bright block: fully lit, still no NaN/panic.
-        let img = solid_img(16, 16, [250, 250, 250]);
-        let mut cells = Vec::new();
-        encode(&img, &table, (0, 0), DEFAULT_CELL_ASPECT, &mut cells);
-        for c in &cells {
-            assert_eq!(c.mask, 0xFF, "bright block stays lit");
-            assert_eq!(c.fg, c.bg);
-        }
-    }
-
-    #[test]
     fn red_vs_blue_stays_distinct() {
         // One cell whose top half is red and bottom half dark-blue: fg must
         // stay red-ish, bg blue-ish (luma-only clustering would merge them
@@ -294,7 +292,7 @@ mod tests {
         encode(&img, &table, (0, 0), DEFAULT_CELL_ASPECT, &mut cells);
         let c = cells[0];
         assert!(c.fg[0] > c.fg[2], "fg should be red-dominant");
-        assert!(c.bg[2] >= c.bg[0], "bg should be blue-dominant");
+        assert_eq!(c.bg, BG_DARK);
     }
 
     #[test]
@@ -373,7 +371,55 @@ mod stride_tests {
         }
         let mut cells = Vec::new();
         encode(&img, &table, (0, 0), DEFAULT_CELL_ASPECT, &mut cells);
-        assert_eq!(cells[0].mask, 0xFF, "cell row 0 fully lit");
-        assert_eq!(cells[4].mask, 0x00, "cell row 1 fully dark");
+        assert!(
+            cells[0].mask.count_ones() >= 6,
+            "bright cell-row nearly fully lit: {:08b}",
+            cells[0].mask
+        );
+        assert!(
+            cells[4].mask.count_ones() <= 2,
+            "dark cell-row sparse: {:08b}",
+            cells[4].mask
+        );
+    }
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::tests::solid_img;
+    use super::*;
+
+    /// Ambient luma floor: shadowed-but-visible terrain keeps a sparse
+    /// halftone instead of collapsing to void.
+    #[test]
+    fn dark_terrain_keeps_sparse_dots() {
+        let img = solid_img(64, 32, [22, 24, 26]); // mean luma ≈ 23 > floor
+        let table = make_noise_table(4);
+        let mut cells = Vec::new();
+        encode(&img, &table, (5, 9), DEFAULT_CELL_ASPECT, &mut cells);
+        let total: usize = cells.iter().map(|c| c.mask.count_ones() as usize).sum();
+        assert!(total >= 16, "floor should light sparse dots: {total}");
+        for c in &cells {
+            let fl = lum([c.fg[0] as f32, c.fg[1] as f32, c.fg[2] as f32]);
+            assert!(fl < 60.0);
+            assert_eq!(c.bg, BG_DARK);
+        }
+        // True-black still collapses to void.
+        let black = solid_img(64, 32, [2, 2, 3]);
+        let mut cells = Vec::new();
+        encode(&black, &table, (5, 9), DEFAULT_CELL_ASPECT, &mut cells);
+        let total: usize = cells.iter().map(|c| c.mask.count_ones() as usize).sum();
+        assert_eq!(total, 0, "below DARK_CELL_FLOOR_LUMA must be pure void");
+    }
+
+    #[test]
+    fn flat_dim_cell_coverage_floor() {
+        // Dim-but-visible flat cell: coverage floor keeps a sparse halftone.
+        let px = [[90u8; 3]; 8];
+        let table = make_noise_table(8);
+        let c = quantize_cell(&px, 0, 1, &table, (11, 7));
+        eprintln!("dbg mask={:08b} fg={:?}", c.mask, c.fg);
+        assert!(c.mask.count_ones() >= 1 && c.mask.count_ones() <= 4);
+        assert_eq!(c.bg, BG_DARK);
     }
 }

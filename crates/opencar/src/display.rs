@@ -42,6 +42,10 @@ impl TermDisplay {
     }
 
     /// Emit `cells` (length must match the grid) to `out`.
+    ///
+    /// NOTE: crossterm's `MoveTo` is 0-based — passing pre-incremented
+    /// coordinates shifts every frame right+down and wraps the last column,
+    /// interleaving stale rows (the "banding tearing" bug).
     pub fn present<W: Write>(&mut self, out: &mut W, cells: &[TermCell]) -> std::io::Result<()> {
         debug_assert_eq!(cells.len(), self.cols as usize * self.rows as usize);
         use crossterm::style::{Print, SetBackgroundColor, SetForegroundColor};
@@ -58,7 +62,7 @@ impl TermDisplay {
                     continue;
                 }
                 if !run_active {
-                    queue!(out, MoveTo(cx as u16 + 1, cy as u16 + 1))?;
+                    queue!(out, MoveTo(cx as u16, cy as u16))?;
                     run_active = true;
                 }
                 let fg = rgb(cell.fg);
@@ -92,4 +96,28 @@ impl Default for TermDisplay {
 #[inline]
 fn rgb(c: [u8; 3]) -> Color {
     Color::Rgb { r: c[0], g: c[1], b: c[2] }
+}
+
+#[cfg(test)]
+mod moveto_tests {
+    use super::*;
+    use crate::braille::TermCell;
+
+    /// Regression: crossterm's MoveTo is 0-based. The old code passed
+    /// pre-incremented coords, shifting every frame right+down and wrapping
+    /// the last column (the banding-tearing bug).
+    #[test]
+    fn origin_emits_home_and_no_newlines() {
+        let mut d = TermDisplay::new();
+        d.resize_if_needed(4, 2);
+        let mut out = Vec::new();
+        let mut cells = [TermCell::BLANK; 8];
+        cells[0].mask = 0xFF;
+        cells[0].fg = [250, 250, 250];
+        d.present(&mut out, &cells).expect("in-memory writer");
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("\x1b[1;1H"), "first move must target row1,col1: {s:?}");
+        assert!(!s.contains('\n') && !s.contains('\r'), "no embedded newlines: {s:?}");
+        assert!(!s.contains("\\x1b[2;"), "must not address row 2 for a row-0 cell");
+    }
 }

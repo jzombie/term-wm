@@ -153,6 +153,21 @@ pub const FILTER_MIN_SPREAD: f32 = 0.06;
 pub const FILTER_MAX_SPREAD: f32 = 0.5;
 /// Brightness floor inside shadows (multiplicative on lit color).
 pub const SHADOW_MIN_LIGHT: f32 = 0.42;
+/// Per-channel sample spread below which a cell counts as "flat" and uses
+/// temporal fractional-coverage halftone instead of edge thresholding.
+pub const FLAT_RANGE_EPS: f32 = 12.0;
+/// Minimum halftone coverage for flat cells — shadowed terrain keeps a
+/// sparse 1–2 dot pattern instead of collapsing to empty glyphs.
+pub const LUMA_FLOOR_COVERAGE: f32 = 0.08;
+/// Cells whose mean luma is below this are allowed to go fully dark.
+pub const DARK_CELL_FLOOR_LUMA: f32 = 16.0;
+/// Distance-scaled boost for thin bright features (lane paint, rails) so
+/// they stay above the quantization threshold toward the horizon.
+pub const DETAIL_BOOST_GAIN: f32 = 0.9;
+pub const DETAIL_NEAR_M: f32 = 40.0;
+pub const DETAIL_FAR_M: f32 = 420.0;
+/// Only features at least this bright get the distance boost.
+pub const DETAIL_LUMA_MIN: f32 = 170.0;
 /// Near plane for mesh clipping (camera space).
 pub const Z_NEAR: f32 = 0.1;
 pub const FOG_DIST: f32 = 470.0;
@@ -202,8 +217,9 @@ pub const CENTROID_SEPARATION_MIN: f32 = 6.0;
 pub const DITHER_AMP: f32 = 16.0;
 pub const NOISE_TABLE_DIM: usize = 64;
 pub const KMEANS_ITERS: usize = 4;
-/// Typical terminal cell height/width ratio used by the encoder sampling.
-pub const DEFAULT_CELL_ASPECT: f32 = 2.0;
+/// Encoder sampling aspect. The render buffer is built isotropic at 2×4 px
+/// per cell, so nominal targets use IDENTITY — direct integer indexing.
+pub const DEFAULT_CELL_ASPECT: f32 = 1.0;
 pub const MIN_CELLS_W: u16 = 48;
 pub const MIN_CELLS_H: u16 = 16;
 pub const MINIMAP_COLS: u16 = 20;
