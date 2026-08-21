@@ -2904,4 +2904,69 @@ mod tests {
     fn expected_child_term() -> &'static str {
         CHILD_TERM
     }
+
+    /// Regression for Windows deadlock: ToggleTiling (resize) during
+    /// `cargo test --all-features` floods PTY with 256KB+ without a render,
+    /// parking the reader on `dirty_cond` (burst budget). On Windows `wake_reader`
+    /// must notify that Condvar, not just CancelSynchronousIo, or the resize
+    /// never drains. This test floods a live Pty and hammers resize - it must
+    /// finish within 3s or it has deadlocked.
+    #[test]
+    fn resize_during_burst_does_not_deadlock() {
+        let mock = term_session_mock::get_mock_bin();
+        let mut cmd = CommandBuilder::new(&mock);
+        cmd.arg("echo");
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = Pty::spawn_with_scrollback(cmd, size, 0).expect("spawn echo");
+        let writer = pty.writer_handle();
+        // Flood the PTY input (echo -> output) to exceed IO_BURST_BUDGET on the reader.
+        // Throttle to avoid filling the kernel input buffer and blocking the writer
+        // while the reader is parked on dirty_cond (which would look like a deadlock
+        // but is just backpressure). The real cargo test flood is output, not input.
+        let flood = std::thread::spawn(move || {
+            let chunk = vec![b'x'; 1024];
+            for _ in 0..80 {
+                let _ = writer.write_bytes(&chunk);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        });
+        let start = std::time::Instant::now();
+        // Hammer resize like ToggleTiling does (float_all/tile_window path)
+        while start.elapsed() < std::time::Duration::from_secs(2) {
+            let _ = pty.resize(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+            pty.screen();
+            let _ = pty.resize(PtySize {
+                rows: 30,
+                cols: 100,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+            pty.screen();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if flood.is_finished() {
+                break;
+            }
+        }
+        flood.join().expect("flood thread");
+        // Also verify the resize was actually applied (not stuck in pending)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while pty.size().cols != 100 && std::time::Instant::now() < deadline {
+            pty.screen();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            pty.size().cols, 100,
+            "resize during burst must be applied, not deadlocked"
+        );
+    }
 }

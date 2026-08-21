@@ -3666,4 +3666,69 @@ mod tests {
             "visible_row() calls {calls} suggest per-cell lookup (quadratic)"
         );
     }
+
+    /// Regression for Windows deadlock: ToggleTiling triggers Pty::resize while
+    /// `cargo test --all-features` floods the PTY (burst budget). The old
+    /// `render_screen` held `shared_parser` for O(rows*cols) per-cell styling,
+    /// starving the reader's `process()` and the `pending_resize` wake (which
+    /// on Windows was only `CancelSynchronousIo`, not `cvar.notify`). This test
+    /// floods the parser on a background thread while repeatedly rendering and
+    /// resizing — it must complete within 2s or it has deadlocked.
+    #[test]
+    fn render_does_not_deadlock_under_heavy_output_and_resize() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let (mut term, _rb) =
+            make_term_with_content(80, 24, 1000, &"X".repeat(80 * 24));
+        let parser_arc = term.pane.borrow_mut().shared_parser();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let flood = std::thread::spawn(move || {
+            while !stop_clone.load(Ordering::Relaxed) {
+                if let Ok(mut p) = parser_arc.try_lock() {
+                    p.process(b"cargo test --all-features flooding output with --all-features\n");
+                }
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
+        });
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let rect = Rect::new(0, 0, 80, 24);
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let buffer = Buffer::empty(rect);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+            let ctx = term_wm_core::component_context::ComponentContext::new(true)
+                .with_screen_area(area);
+            let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+            term.render(&mut backend, area, &ctx, &mut registry);
+            // Simulate ToggleTiling resize storm (80x24 -> 100x30 -> back)
+            let _ = term
+                .pane
+                .borrow_mut()
+                .resize(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 });
+            term.pane.borrow_mut().sync_screen();
+            let _ = term
+                .pane
+                .borrow_mut()
+                .resize(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 });
+            term.pane.borrow_mut().sync_screen();
+            if start.elapsed() > std::time::Duration::from_secs(2) {
+                break;
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        flood.join().expect("flood thread");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "deadlock: render+resize starved by flood (elapsed {:?})",
+            start.elapsed()
+        );
+    }
 }
