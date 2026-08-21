@@ -9,6 +9,7 @@
 use crate::config::*;
 use crate::render::camera::Projector;
 use crate::render::image::ImageBuffer;
+use crate::render::shadows::ShadowMap;
 use crate::world::World;
 
 /// Overscan target for the unrolled march.
@@ -36,8 +37,30 @@ fn pal_rgb(idx: u8) -> [f32; 3] {
     [c[0] as f32, c[1] as f32, c[2] as f32]
 }
 
-/// Sun-shaded, procedurally textured, fog-blended color at a ground hit.
-fn shade(world: &World, x: f32, z: f32, mat: u8, t_fwd: f32) -> (u8, u8, u8) {
+/// Surface base color with procedural multi-scale mottle.
+#[inline]
+fn surface_base(world: &World, x: f32, z: f32, mat: u8) -> [f32; 3] {
+    let noise = world.noise();
+    let grain = noise.fbm(x * 0.35, z * 0.35, 2) - 0.5;
+    let macro_var = noise.fbm(x * 0.03, z * 0.03, 2) - 0.5;
+    let base = pal_rgb(mat);
+    let tex = 0.89 + grain * 0.22 + macro_var * 0.18;
+    [base[0] * tex, base[1] * tex, base[2] * tex]
+}
+
+/// Sun-shaded, shadow-PCF'd, fog-blended color at a ground hit.
+///
+/// Forward evaluation: the exact world point `(x, h, z)` is natively known
+/// here, so the sun map is sampled directly — no screen-space reconstruction.
+fn shade(
+    world: &World,
+    sm: &ShadowMap,
+    x: f32,
+    z: f32,
+    h: f32,
+    mat: u8,
+    t_fwd: f32,
+) -> (u8, u8, u8) {
     let eps = NORMAL_EPS;
     let hx0 = world.height_at(x - eps, z);
     let hx1 = world.height_at(x + eps, z);
@@ -48,18 +71,15 @@ fn shade(world: &World, x: f32, z: f32, mat: u8, t_fwd: f32) -> (u8, u8, u8) {
     let inv_len = 1.0 / (nx * nx + 1.0 + nz * nz).sqrt();
     let lambert = (-nx * SUN_DIR[0] + SUN_DIR[1] - nz * SUN_DIR[2]) * inv_len;
 
-    // Procedural multi-scale surface texture: mottle every material so no
-    // surface is flat-colored.
-    let noise = world.noise();
-    let grain = noise.fbm(x * 0.35, z * 0.35, 2) - 0.5;
-    let macro_var = noise.fbm(x * 0.03, z * 0.03, 2) - 0.5;
-    let mut base = pal_rgb(mat);
-    let tex = 0.82 + grain * 0.30 + macro_var * 0.18;
-    base[0] *= tex;
-    base[1] *= tex;
-    base[2] *= tex;
+    let base = surface_base(world, x, z, mat);
 
-    let light = AMBIENT + DIFFUSE * lambert.clamp(0.0, 1.0);
+    // Forward PCF shadow factor at the exact world point + normal-offset.
+    let n_len = inv_len;
+    let n_dir = [nx * n_len, n_len, nz * n_len];
+    let shadow_f = sm.factor([x, h, z], n_dir);
+
+    let light = (AMBIENT + DIFFUSE * lambert.clamp(0.0, 1.0))
+        * (SHADOW_MIN_LIGHT + (1.0 - SHADOW_MIN_LIGHT) * shadow_f);
     let mut r = base[0] * light;
     let mut g = base[1] * light;
     let mut b = base[2] * light;
@@ -79,80 +99,76 @@ fn shade(world: &World, x: f32, z: f32, mat: u8, t_fwd: f32) -> (u8, u8, u8) {
     )
 }
 
-/// March the overscan buffer, then rotate RGB+z into `final_buf`.
-pub fn render_terrain(
-    pass: &mut TerrainPass,
-    world: &World,
-    final_proj: &Projector,
-    roll: f32,
-    final_buf: &mut ImageBuffer,
-) {
-    let (ow, oh) = Projector::overscan_dims(final_buf.w, final_buf.h, roll.abs());
-    pass.buf.resize_if_needed(ow, oh);
-    pass.buf.clear();
-
-    // Projector over the overscan dimensions sharing the same camera/basis.
-    let op = Projector::new_from(final_proj, ow, oh);
-    march_columns(&mut pass.buf, &op, world);
-    rotate_into(&pass.buf, roll, final_buf);
-}
-
 /// March terrain columns into `buf` using `op`'s camera (call after sky).
-pub fn march_columns(buf: &mut ImageBuffer, op: &Projector, world: &World) {
+///
+/// Sample-and-project voxel space: advance along the horizontal ray, sample
+/// the height at EVERY step, project the actual ground point through the
+/// unrolled basis, and paint visible spans into a per-column y-top buffer.
+/// Flat ground converges to the vanishing point; per-span forward depths
+/// synchronize the mesh z-test.
+pub fn march_columns(buf: &mut ImageBuffer, op: &Projector, world: &World, sm: &ShadowMap) {
     let ow = buf.w;
     let oh = buf.h;
     for col in 0..ow {
         let u = (col as f32 + 0.5) / ow as f32;
         let dir = op.march_ray(u);
-        let mut y_top = oh.saturating_sub(1);
+        let mut y_top = oh; // exclusive bottom bound
         let mut t = VIEW_NEAR;
+
         while t < VIEW_FAR && y_top > 0 {
             let step = STEP_BASE + t * STEP_GROWTH;
-            let t_prev = t;
             t += step;
+
+            // 1. Advance horizontally along the XZ plane.
             let sx_t = op.cam[0] + dir[0] * t;
             let sz_t = op.cam[2] + dir[2] * t;
-            let ray_y = op.cam[1] + dir[1] * t;
+
+            // 2. Sample the terrain height at this specific spot.
             let h = world.height_at(sx_t, sz_t);
-            if ray_y > h {
-                continue;
-            }
-            // Ray penetrated between t_prev and t — bisect to the crossing.
-            let mut lo = t_prev;
-            let mut hi = t;
-            for _ in 0..4 {
-                let mid = (lo + hi) * 0.5;
-                let my = op.cam[1] + dir[1] * mid;
-                let mh =
-                    world.height_at(op.cam[0] + dir[0] * mid, op.cam[2] + dir[2] * mid);
-                if my <= mh {
-                    hi = mid;
-                } else {
-                    lo = mid;
-                }
-            }
-            let t_hit = hi;
-            let px_h = op.cam[0] + dir[0] * t_hit;
-            let pz_h = op.cam[2] + dir[2] * t_hit;
-            let py_h = op.cam[1] + dir[1] * t_hit;
-            let (_, row_f, fwd_d) = op.project_unrolled([px_h, py_h, pz_h]);
+
+            // 3. Project the physical terrain point (x, h, z) to the screen.
+            let (_, row_f, fwd_d) = op.project_unrolled([sx_t, h, sz_t]);
+
+            // Hit projects above the frame: fill the rest with sky and stop.
             if row_f < 0.0 {
-                // Hit projects above the frame: fill to the top and stop.
                 fill(buf, col, 0, y_top.saturating_sub(1), sky_rgb(), fwd_d);
                 break;
             }
+
             let row = (row_f as usize).min(oh - 1);
+
+            // 4. Visible if this terrain point projects higher than the
+            // previous highest point: fill the gap from `row` down to `y_top`.
             if row < y_top {
-                let mat = world.material_at(px_h, pz_h);
-                let rgb = shade(world, px_h, pz_h, mat, fwd_d);
-                fill(buf, col, row, y_top.saturating_sub(1), rgb, fwd_d);
+                // Continuous near-field filter: constant angular footprint,
+                // mip-style — two material samples straddle the ray.
+                let spread = (FILTER_NEAR_K / fwd_d.max(1e-3))
+                    .clamp(FILTER_MIN_SPREAD, FILTER_MAX_SPREAD);
+                let px_n = -dir[2];
+                let pz_n = dir[0];
+                let mat_a = world.material_at(sx_t + px_n * spread, sz_t + pz_n * spread);
+                let mat_b = world.material_at(sx_t - px_n * spread, sz_t - pz_n * spread);
+                let rgb_a = shade(world, sm, sx_t, sz_t, h, mat_a, fwd_d);
+                let rgb = if mat_a == mat_b {
+                    rgb_a
+                } else {
+                    let rgb_b = shade(world, sm, sx_t, sz_t, h, mat_b, fwd_d);
+                    blend_rgb(rgb_a, rgb_b, 0.5)
+                };
+                fill(buf, col, row, y_top.saturating_sub(1), rgb, fwd_d + TERRAIN_DEPTH_MARGIN);
                 y_top = row;
-            } else if fwd_d < VIEW_FAR * 0.5 {
-                // Below previously drawn ridge: keep marching for taller peaks.
-                continue;
             }
         }
     }
+}
+
+#[inline]
+fn blend_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
+    (
+        (a.0 as f32 + (b.0 as f32 - a.0 as f32) * t) as u8,
+        (a.1 as f32 + (b.1 as f32 - a.1 as f32) * t) as u8,
+        (a.2 as f32 + (b.2 as f32 - a.2 as f32) * t) as u8,
+    )
 }
 
 #[inline]
@@ -250,4 +266,42 @@ pub fn rotate_into(src: &ImageBuffer, roll: f32, dst: &mut ImageBuffer) {
 #[inline]
 fn lerp_f(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::camera::CameraState;
+
+    #[test]
+    fn vanishing_point_convergence() {
+        // Points on a horizontal plane 4 m below the camera must project
+        // strictly closer to the horizon as distance grows — this is what
+        // makes road edges converge instead of smearing into stripes.
+        let mut cam = CameraState::new();
+        cam.y = 2.7 + 4.0; // plane sits at y = 2.7
+        cam.pitch = CAM_PITCH_BASE;
+        let proj = Projector::new(&cam, 240, 160);
+        let dir = proj.march_ray(0.5); // center column
+        let plane_y = 2.7f32;
+
+        let mut prev_row = f32::INFINITY;
+        let mut samples = 0;
+        let mut t = VIEW_NEAR;
+        while t < 600.0 {
+            t += STEP_BASE + t * STEP_GROWTH;
+            let x = proj.cam[0] + dir[0] * t;
+            let z = proj.cam[2] + dir[2] * t;
+            let (_, row_f, _) = proj.project_unrolled([x, plane_y, z]);
+            assert!(
+                row_f < prev_row,
+                "plane row must decrease toward horizon at t={t}: {row_f} !< {prev_row}"
+            );
+            prev_row = row_f;
+            samples += 1;
+        }
+        assert!(samples > 40);
+        // Converges near mid-frame (horizon), not the bottom.
+        assert!(prev_row < proj.pixel_h as f32 * 0.60, "final row {prev_row}");
+    }
 }

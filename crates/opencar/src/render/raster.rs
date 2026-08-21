@@ -6,6 +6,7 @@
 use crate::config::*;
 use crate::render::camera::{dot, Projector};
 use crate::render::image::ImageBuffer;
+use crate::render::shadows::ShadowMap;
 
 /// Per-vertex data interpolated across the mesh surface.
 #[derive(Clone, Copy)]
@@ -49,6 +50,8 @@ struct CsV {
     /// Right/up/forward components in camera space.
     xyz: [f32; 3],
     normal: [f32; 3],
+    /// World-space position (for per-pixel forward shadow evaluation).
+    wp: [f32; 3],
 }
 
 #[inline]
@@ -61,7 +64,7 @@ fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 }
 
 fn to_camera(q: &Quad, proj: &Projector) -> [CsV; 4] {
-    let mut out = [CsV { xyz: [0.0; 3], normal: [0.0; 3] }; 4];
+    let mut out = [CsV { xyz: [0.0; 3], normal: [0.0; 3], wp: [0.0; 3] }; 4];
     for (i, vv) in q.v.iter().enumerate() {
         let rel = [
             vv.pos[0] - proj.cam[0],
@@ -71,6 +74,7 @@ fn to_camera(q: &Quad, proj: &Projector) -> [CsV; 4] {
         out[i] = CsV {
             xyz: [dot(rel, proj.right_r), dot(rel, proj.up_r), dot(rel, proj.fwd_r)],
             normal: vv.normal,
+            wp: vv.pos,
         };
     }
     out
@@ -96,6 +100,7 @@ fn clip_near(poly: &[CsV]) -> Vec<CsV> {
             out.push(CsV {
                 xyz: lerp3(cur.xyz, nxt.xyz, t),
                 normal: lerp3(cur.normal, nxt.normal, t),
+                wp: lerp3(cur.wp, nxt.wp, t),
             });
         }
     }
@@ -108,6 +113,7 @@ pub fn draw_quad(
     proj: &Projector,
     quad: &Quad,
     sky_horizon_rgb: [u8; 3],
+    sm: &ShadowMap,
 ) {
     let cam = to_camera(quad, proj);
     // Backface cull in camera space (screen y is flipped, so keep CCW check
@@ -121,7 +127,16 @@ pub fn draw_quad(
     }
     // Fan-triangulate the convex clipped polygon.
     for i in 1..clipped.len().saturating_sub(1) {
-        draw_tri(img, proj, &clipped[0], &clipped[i], &clipped[i + 1], quad.mat, sky_horizon_rgb);
+        draw_tri(
+            img,
+            proj,
+            &clipped[0],
+            &clipped[i],
+            &clipped[i + 1],
+            quad.mat,
+            sky_horizon_rgb,
+            sm,
+        );
     }
 }
 
@@ -134,6 +149,7 @@ fn draw_tri(
     c: &CsV,
     mat: Material,
     sky_horizon_rgb: [u8; 3],
+    sm: &ShadowMap,
 ) {
     let pa = proj_pt(proj, a.xyz);
     let pb = proj_pt(proj, b.xyz);
@@ -185,8 +201,21 @@ fn draw_tri(
                 img.rgb[o + 2] = mat.albedo[2];
                 continue;
             }
+            // Forward shadow evaluation at the interpolated world point.
+            let wp = [
+                a.wp[0] * w0 + b.wp[0] * w1 + c.wp[0] * w2,
+                a.wp[1] * w0 + b.wp[1] * w1 + c.wp[1] * w2,
+                a.wp[2] * w0 + b.wp[2] * w1 + c.wp[2] * w2,
+            ];
+            let n_i = [
+                a.normal[0] * w0 + b.normal[0] * w1 + c.normal[0] * w2,
+                a.normal[1] * w0 + b.normal[1] * w1 + c.normal[1] * w2,
+                a.normal[2] * w0 + b.normal[2] * w1 + c.normal[2] * w2,
+            ];
+            let shadow = SHADOW_MIN_LIGHT + (1.0 - SHADOW_MIN_LIGHT) * sm.factor(wp, n_i);
+
             // Lambert diffuse.
-            let light = AMBIENT + DIFFUSE * lambert;
+            let light = (AMBIENT + DIFFUSE * lambert) * shadow;
             let mut r = mat.albedo[0] as f32 * light;
             let mut g = mat.albedo[1] as f32 * light;
             let mut bl = mat.albedo[2] as f32 * light;

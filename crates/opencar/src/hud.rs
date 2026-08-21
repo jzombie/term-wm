@@ -36,7 +36,7 @@ impl Default for HudState {
 
 impl HudState {
     pub fn new() -> Self {
-        Self { show_hud: true, show_minimap: true }
+        Self { show_hud: true, show_minimap: false }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -79,7 +79,7 @@ impl HudState {
             let bar_w = 20u16;
             let filled = ((player.speed.abs() / MAX_SPEED).clamp(0.0, 1.0) * bar_w as f32) as u16;
             for i in 0..bar_w {
-                let ch = if i < filled { '█' } else { '░' };
+                let ch = if i < filled { '#' } else { '.' };
                 draw_ascii(
                     cells,
                     cols,

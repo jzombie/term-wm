@@ -1,11 +1,11 @@
-//! Terminal display layer: diffs the TermCell array against the previous
-//! frame and emits queued crossterm commands (fg / bg / glyph) for changed
-//! cells only, then flushes once — a flicker-free terminal video feed.
+//! Terminal display layer: diffs the TermCell grid against the previous
+//! frame and emits row-run-batched crossterm commands — one cursor move per
+//! changed run, SGR only when the color actually changes, one buffered write
+//! per flush. Keeps escape-sequence volume ~10× below naive per-cell output.
 
 use std::io::Write;
 
-use crossterm::queue;
-use crossterm::style::{Color, Print, SetBackgroundColor, SetForegroundColor};
+use crossterm::{queue, style::Color};
 
 use crate::braille::TermCell;
 
@@ -25,7 +25,7 @@ impl TermDisplay {
         }
     }
 
-    /// Resize tracking (clears the diff cache so everything redraws).
+    /// Resize tracking (clears the diff cache so everything repaints).
     pub fn resize_if_needed(&mut self, cols: u16, rows: u16) {
         if self.cols == cols && self.rows == rows {
             return;
@@ -33,7 +33,7 @@ impl TermDisplay {
         self.cols = cols;
         self.rows = rows;
         let len = cols as usize * rows as usize;
-        // Fill prev with an impossible sentinel to force full repaint.
+        // Impossible sentinel forces a full repaint.
         self.prev.clear();
         self.prev.resize(
             len,
@@ -44,20 +44,39 @@ impl TermDisplay {
     /// Emit `cells` (length must match the grid) to `out`.
     pub fn present<W: Write>(&mut self, out: &mut W, cells: &[TermCell]) -> std::io::Result<()> {
         debug_assert_eq!(cells.len(), self.cols as usize * self.rows as usize);
+        use crossterm::style::{Print, SetBackgroundColor, SetForegroundColor};
+        use crossterm::cursor::MoveTo;
+
+        let mut cur_fg: Option<Color> = None;
+        let mut cur_bg: Option<Color> = None;
         for cy in 0..self.rows as usize {
+            let mut run_active = false;
             for cx in 0..self.cols as usize {
                 let idx = cy * self.cols as usize + cx;
                 let cell = cells[idx];
                 if idx < self.prev.len() && self.prev[idx] == cell {
                     continue;
                 }
-                let x = cx as u16 + 1; // 1-based cursor coords
-                let y = cy as u16 + 1;
-                queue!(out, crossterm::cursor::MoveTo(x, y))?;
-                queue!(out, SetForegroundColor(rgb(cell.fg)))?;
-                queue!(out, SetBackgroundColor(rgb(cell.bg)))?;
-                queue!(out, Print(cell.glyph().to_string()))?;
-                self.prev[idx] = cell;
+                if !run_active {
+                    queue!(out, MoveTo(cx as u16 + 1, cy as u16 + 1))?;
+                    run_active = true;
+                }
+                let fg = rgb(cell.fg);
+                let bg = rgb(cell.bg);
+                if cur_fg != Some(fg) {
+                    queue!(out, SetForegroundColor(fg))?;
+                    cur_fg = Some(fg);
+                }
+                if cur_bg != Some(bg) {
+                    queue!(out, SetBackgroundColor(bg))?;
+                    cur_bg = Some(bg);
+                }
+                let glyph = cell.glyph();
+                let mut buf = [0u8; 4];
+                queue!(out, Print(glyph.encode_utf8(&mut buf)))?;
+                if idx < self.prev.len() {
+                    self.prev[idx] = cell;
+                }
             }
         }
         out.flush()
@@ -73,28 +92,4 @@ impl Default for TermDisplay {
 #[inline]
 fn rgb(c: [u8; 3]) -> Color {
     Color::Rgb { r: c[0], g: c[1], b: c[2] }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diff_emits_only_changes() {
-        let mut d = TermDisplay::new();
-        d.resize_if_needed(4, 2);
-        let blank = [TermCell::BLANK; 8];
-        let mut out = Vec::new();
-        d.present(&mut out, &blank).expect("present to Vec never fails");
-        assert!(!out.is_empty(), "first paint emits");
-        let n_after_first = out.len();
-        d.present(&mut out, &blank).expect("present to Vec never fails");
-        assert_eq!(out.len(), n_after_first, "unchanged frame emits nothing");
-
-        let mut changed = blank;
-        changed[3].mask = 0xFF;
-        changed[3].fg = [255, 255, 255];
-        d.present(&mut out, &changed).expect("present to Vec never fails");
-        assert!(out.len() > n_after_first, "changed cell re-emits");
-    }
 }

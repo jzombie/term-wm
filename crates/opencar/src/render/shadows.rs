@@ -6,8 +6,6 @@
 //! and sampling the sun-depth map with Poisson-disk PCF.
 
 use crate::config::*;
-use crate::render::camera::Projector;
-use crate::render::image::ImageBuffer;
 use crate::render::raster::Quad;
 
 /// Ortho sun-depth map centered on the player.
@@ -143,43 +141,6 @@ impl Default for ShadowMap {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Deferred pass: darken `img` by per-pixel PCF shadow factors.
-pub fn apply_deferred(img: &mut ImageBuffer, proj: &Projector, sm: &ShadowMap) {
-    let up_normal = [0.0f32; 3];
-    let _ = up_normal;
-    for py in 0..img.h {
-        for px in 0..img.w {
-            let idx = py * img.w + px;
-            let d = img.z[idx];
-            if !d.is_finite() || d > SPRITE_FAR * 1.5 {
-                continue;
-            }
-            // Inverse projection through the rolled basis (orthonormal).
-            let lat = ((px as f32 + 0.5) - proj.center_x) / proj.focal * d;
-            let vup = (proj.center_y - (py as f32 + 0.5)) / proj.focal * d;
-            let wp = [
-                proj.cam[0] + proj.right_r[0] * lat + proj.up_r[0] * vup + proj.fwd_r[0] * d,
-                proj.cam[1] + proj.right_r[1] * lat + proj.up_r[1] * vup + proj.fwd_r[1] * d,
-                proj.cam[2] + proj.right_r[2] * lat + proj.up_r[2] * vup + proj.fwd_r[2] * d,
-            ];
-            let f = sm.factor(wp, ground_normal_hint(proj, wp));
-            if f >= 0.999 {
-                continue;
-            }
-            let shade = 0.42 + 0.58 * f;
-            let o = idx * 3;
-            img.rgb[o] = (img.rgb[o] as f32 * shade) as u8;
-            img.rgb[o + 1] = (img.rgb[o + 1] as f32 * shade) as u8;
-            img.rgb[o + 2] = (img.rgb[o + 2] as f32 * shade) as u8;
-        }
-    }
-}
-
-/// Ground normal hint from the height field near the point.
-fn ground_normal_hint(_proj: &Projector, _p: [f32; 3]) -> [f32; 3] {
-    [0.0, 1.0, 0.0]
 }
 
 #[inline]

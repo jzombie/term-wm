@@ -18,8 +18,8 @@ pub const CONTINENT_SCALE: f32 = 1350.0;
 pub const CONTINENT_LOW: f32 = 0.52;
 pub const CONTINENT_HIGH: f32 = 0.74;
 pub const RIDGE_SCALE: f32 = 255.0;
-pub const HILL_SCALE: f32 = 88.0;
-pub const HILL_AMP: f32 = 24.0;
+pub const HILL_SCALE: f32 = 110.0;
+pub const HILL_AMP: f32 = 30.0;
 pub const MOUNTAIN_AMP: f32 = 240.0;
 pub const SEA_LEVEL: f32 = 5.0;
 pub const SAND_BAND: f32 = 1.1;
@@ -32,12 +32,12 @@ pub const MOISTURE_SCALE: f32 = 210.0;
 pub const WATER_SHALLOW_DEPTH: f32 = 1.6;
 
 // ── Roads (analytic highway network) ────────────────────────────────────
-pub const ROAD_HALF_WIDTH: f32 = 3.6;
+pub const ROAD_HALF_WIDTH: f32 = 4.6;
 pub const SHOULDER_WIDTH: f32 = 1.6;
 pub const BLEND_DIST: f32 = 26.0;
-pub const EDGE_LINE_INNER: f32 = 3.0;
-pub const EDGE_LINE_OUTER: f32 = 3.35;
-pub const DASH_HALF_WIDTH: f32 = 0.16;
+pub const EDGE_LINE_INNER: f32 = 4.05;
+pub const EDGE_LINE_OUTER: f32 = 4.45;
+pub const DASH_HALF_WIDTH: f32 = 0.22;
 pub const DASH_PERIOD: f32 = 9.0;
 pub const DASH_DUTY: f32 = 0.45;
 
@@ -99,7 +99,9 @@ pub const DRAG_COEFF: f32 = 0.0026;
 pub const ROLL_RESIST: f32 = 0.09;
 pub const OFFROAD_DRAG_MULT: f32 = 7.0;
 pub const OFFROAD_MAX_SPEED: f32 = 17.0;
-pub const STEER_RATE: f32 = 2.3; // rad/s at reference speed
+pub const STEER_RATE: f32 = 1.7; // rad/s at reference speed
+/// Gentle pull toward the lane tangent while on asphalt (rad/s max).
+pub const LANE_MAGNETISM: f32 = 0.026;
 pub const STEER_SMOOTH_RATE: f32 = 6.0; // input slew per second
 pub const LOW_SPEED_REF: f32 = 10.0; // full steering authority below this
 pub const HIGH_SPEED_STABILITY: f32 = 0.62; // steering retained at top speed
@@ -124,17 +126,38 @@ pub const CAM_PITCH_GAIN: f32 = PITCH_RESPONSE;
 
 // ── Rendering ───────────────────────────────────────────────────────────
 pub const VIEW_NEAR: f32 = 4.0;
-pub const VIEW_FAR: f32 = 1250.0;
+pub const VIEW_FAR: f32 = 1400.0;
 pub const STEP_BASE: f32 = 0.4;
-pub const STEP_GROWTH: f32 = 0.02;
+pub const STEP_GROWTH: f32 = 0.008;
 pub const FOV_H_DEG: f32 = 74.0;
+/// Base downward pitch so the road fills the lower frame.
+pub const CAM_PITCH_BASE: f32 = -0.055;
+/// Terrain-slope contribution to camera pitch.
+pub const SLOPE_PITCH_GAIN: f32 = 0.6;
+/// Clamp for combined slope+dive pitch (radians).
+pub const CAM_PITCH_LIMIT: f32 = 0.45;
+/// Look-ahead/behind distance for slope sampling (one car-length).
+pub const SLOPE_LOOK: f32 = 2.2;
 /// Slight negative barrel distortion coefficient of the virtual lens.
-pub const LENS_K: f32 = -0.12;
+/// Slight negative barrel distortion, BOUNDED at startup by
+/// `LENS_MAX_EDGE_CELLS` (see render::lens).
+pub const LENS_K: f32 = -0.045;
+/// Hard cap: distortion displacement at the screen edge ≤ this many cells.
+pub const LENS_MAX_EDGE_CELLS: f32 = 1.0;
+/// Terrain z-writes are pushed back this far so meshes clear the voxel
+/// plane (terrain-side only — mesh depths stay exact).
+pub const TERRAIN_DEPTH_MARGIN: f32 = 0.30;
+/// Continuous near-field filter: spread = clamp(K / fwd_d, MIN, MAX).
+pub const FILTER_NEAR_K: f32 = 1.6;
+pub const FILTER_MIN_SPREAD: f32 = 0.06;
+pub const FILTER_MAX_SPREAD: f32 = 0.5;
+/// Brightness floor inside shadows (multiplicative on lit color).
+pub const SHADOW_MIN_LIGHT: f32 = 0.42;
 /// Near plane for mesh clipping (camera space).
 pub const Z_NEAR: f32 = 0.1;
 pub const FOG_DIST: f32 = 470.0;
 pub const AMBIENT: f32 = 0.38;
-pub const DIFFUSE: f32 = 0.68;
+pub const DIFFUSE: f32 = 0.75;
 /// Direction from a surface toward the sun (normalized).
 pub const SUN_DIR: [f32; 3] = [-0.46, 0.80, -0.33];
 pub const NORMAL_EPS: f32 = 1.6;
@@ -176,15 +199,15 @@ pub const PCF_TAP_COUNT: usize = PCF_TAPS.len();
 /// the effective threshold scales up with brightness to cover grain jitter
 /// (`2 * DITHER_AMP * luma`), so flat blocks collapse instead of sparkling.
 pub const CENTROID_SEPARATION_MIN: f32 = 6.0;
-pub const DITHER_AMP: f32 = 10.0;
+pub const DITHER_AMP: f32 = 16.0;
 pub const NOISE_TABLE_DIM: usize = 64;
 pub const KMEANS_ITERS: usize = 4;
 /// Typical terminal cell height/width ratio used by the encoder sampling.
 pub const DEFAULT_CELL_ASPECT: f32 = 2.0;
 pub const MIN_CELLS_W: u16 = 48;
 pub const MIN_CELLS_H: u16 = 16;
-pub const MINIMAP_COLS: u16 = 27;
-pub const MINIMAP_ROWS: u16 = 12;
+pub const MINIMAP_COLS: u16 = 20;
+pub const MINIMAP_ROWS: u16 = 8;
 
 // ── Input ───────────────────────────────────────────────────────────────
 /// Held-key heartbeat timeout when the terminal lacks key-release events.
@@ -244,10 +267,10 @@ pub const PALETTE: [[u8; 3]; 32] = [
     [126, 124, 118],  // ROCK
     [162, 158, 150],  // ROCK_LIGHT
     [236, 240, 248],  // SNOW
-    [54, 54, 58],     // ASPHALT
+    [44, 44, 48],     // ASPHALT
     [66, 66, 70],     // ASPHALT_WORN
     [86, 84, 84],     // SHOULDER
-    [228, 228, 222],  // PAINT
+    [242, 242, 238],  // PAINT
     [188, 196, 208],  // RAIL
     [198, 44, 44],    // CAR_RED
     [228, 230, 236],  // CAR_WHITE

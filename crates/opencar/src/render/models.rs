@@ -208,13 +208,7 @@ pub fn instance(mesh: &Mesh, x: f32, y: f32, z: f32, yaw: f32) -> Vec<Quad> {
 /// Surface-conforming decal shadow quad from the four wheel-contact points:
 /// each corner sits `SHADOW_EPS` above the sampled ground along its normal.
 pub fn build_shadow_quad(contacts: [[f32; 3]; 4], normals: [[f32; 3]; 4]) -> Quad {
-    let mut corners = [[0.0f32; 3]; 4];
-    for i in 0..4 {
-        for k in 0..3 {
-            corners[i][k] =
-                contacts[i][k] + normals[i][k] * SHADOW_EPS;
-        }
-    }
+    let corners = contacts;
     Quad {
         v: [
             v(corners[0], normals[0]),

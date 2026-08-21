@@ -322,3 +322,58 @@ mod tests {
     }
 
 }
+
+#[cfg(test)]
+mod stride_tests {
+    use super::*;
+
+    /// Locks the encoder mapping: pixel_x == cell_x*2 + dx, pixel_y ==
+    /// cell_y*4 + dy. A bright column at even x must light LEFT dots only.
+    #[test]
+    fn stride_lock_parity_columns() {
+        let mut img = ImageBuffer::new();
+        img.resize_if_needed(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                if x % 2 == 0 {
+                    img.put_pixel(x, y, 255, 255, 255, f32::INFINITY);
+                }
+            }
+        }
+        let table = make_noise_table(3);
+        let mut cells = Vec::new();
+        encode(&img, &table, (0, 0), DEFAULT_CELL_ASPECT, &mut cells);
+        for c in cells {
+            assert_eq!(c.mask, 0x0F, "even columns light left dots only");
+        }
+        // Odd variant.
+        let mut img = ImageBuffer::new();
+        img.resize_if_needed(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                if x % 2 == 1 {
+                    img.put_pixel(x, y, 255, 255, 255, f32::INFINITY);
+                }
+            }
+        }
+        let mut cells = Vec::new();
+        encode(&img, &table, (0, 0), DEFAULT_CELL_ASPECT, &mut cells);
+        for c in cells {
+            assert_eq!(c.mask, 0xF0, "odd columns light right dots only");
+        }
+        // Vertical mapping: bright cell-row 0 (y<4), dark cell-row 1.
+        let mut img = ImageBuffer::new();
+        img.resize_if_needed(8, 8);
+        for y in 0..8 {
+            for x in 0..8 {
+                if y < 4 {
+                    img.put_pixel(x, y, 255, 255, 255, f32::INFINITY);
+                }
+            }
+        }
+        let mut cells = Vec::new();
+        encode(&img, &table, (0, 0), DEFAULT_CELL_ASPECT, &mut cells);
+        assert_eq!(cells[0].mask, 0xFF, "cell row 0 fully lit");
+        assert_eq!(cells[4].mask, 0x00, "cell row 1 fully dark");
+    }
+}

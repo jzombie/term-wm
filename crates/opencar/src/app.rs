@@ -6,6 +6,8 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config::*;
+use crate::render::camera::angle_wrap;
+use crate::world::roads::Axis;
 use crate::render::camera::CameraState;
 use crate::render::Environment;
 use crate::sim::car::{Vehicle, VehicleInput};
@@ -183,9 +185,15 @@ impl App {
         self.world
             .ensure_chunks_around(self.player.x, self.player.z, CHUNK_GEN_BUDGET_PER_FRAME);
 
-        // Camera follow + chassis dynamics.
+        // Camera follow + chassis dynamics + slope tracking.
         let ground_h = self.world.height_at(self.cam.x, self.cam.z);
-        self.cam.update(&self.player, dt, ground_h);
+        let slope = crate::render::camera::terrain_slope(
+            &self.world,
+            self.player.x,
+            self.player.z,
+            self.player.heading,
+        );
+        self.cam.update(&self.player, dt, ground_h, slope);
     }
 
     fn tick(&mut self, dt: f32) {
@@ -202,6 +210,32 @@ impl App {
             steer: (right as i32 - left as i32) as f32,
             handbrake: hand,
         };
+
+        // Lane magnetism: while on asphalt, a gentle pull toward the nearest
+        // highway tangent keeps holding a lane feeling planted, not icy.
+        let noise = *self.world.noise();
+        let roads = *self.world.roads();
+        let lat_ew = roads.ew().lateral(self.player.x, self.player.z, &noise).abs();
+        let lat_ns = roads.ns().lateral(self.player.x, self.player.z, &noise).abs();
+        let snap = ROAD_HALF_WIDTH + SHOULDER_WIDTH + 1.0;
+        if lat_ew.min(lat_ns) < snap && self.player.speed.abs() > 3.0 {
+            let hw = if lat_ew <= lat_ns { roads.ew() } else { roads.ns() };
+            let t_axis = match hw.axis() {
+                Axis::EastWest => self.player.z,
+                Axis::NorthSouth => self.player.x,
+            };
+            let tan = hw.tangent(t_axis, &noise);
+            // Face along the tangent in whichever direction we're closer to traveling.
+            let fwd = [self.player.heading.sin(), self.player.heading.cos()];
+            let mut dir_sign = 1.0;
+            if fwd[0] * tan.0 + fwd[1] * tan.1 < 0.0 {
+                dir_sign = -1.0;
+            }
+            let target = (dir_sign * tan.0).atan2(dir_sign * tan.1);
+            let delta = angle_wrap(target - self.player.heading);
+            let max_pull = LANE_MAGNETISM * dt * (1.0 - lat_ew.min(lat_ns) / snap);
+            self.player.heading += delta.clamp(-max_pull, max_pull);
+        }
 
         // Player physics.
         self.player.update(dt, input, &self.world);

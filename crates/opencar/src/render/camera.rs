@@ -7,6 +7,16 @@
 
 use crate::config::*;
 use crate::sim::car::Vehicle;
+use crate::world::World;
+
+/// Terrain slope along the heading at `(x, z)` — feeds chase-cam pitch so
+/// climbs tilt the camera up instead of staring into dirt.
+pub fn terrain_slope(world: &World, x: f32, z: f32, heading: f32) -> f32 {
+    let (s, c) = heading.sin_cos();
+    let h_ahead = world.height_at(x + s * SLOPE_LOOK, z + c * SLOPE_LOOK);
+    let h_behind = world.height_at(x - s * SLOPE_LOOK, z - c * SLOPE_LOOK);
+    (h_ahead - h_behind).atan2(2.0 * SLOPE_LOOK)
+}
 
 /// Wrap an angle to (-π, π].
 pub fn angle_wrap(a: f32) -> f32 {
@@ -38,7 +48,7 @@ impl CameraState {
             y: 0.0,
             z: 0.0,
             yaw: 0.0,
-            pitch: 0.0,
+            pitch: CAM_PITCH_BASE,
             roll: 0.0,
             heave: 0.0,
             preset: 0,
@@ -55,7 +65,7 @@ impl CameraState {
     }
 
     /// Spring toward the chase pose and integrate chassis dynamics.
-    pub fn update(&mut self, player: &Vehicle, dt: f32, ground_h: f32) {
+    pub fn update(&mut self, player: &Vehicle, dt: f32, ground_h: f32, slope: f32) {
         let pull = self.back + player.speed.abs() * CAM_SPEED_PULLBACK;
         let tx = player.x - player.heading.sin() * pull;
         let tz = player.z - player.heading.cos() * pull;
@@ -78,8 +88,11 @@ impl CameraState {
         let dyaw = angle_wrap(player.heading - self.yaw);
         self.yaw += dyaw * (1.0 - (-CAM_YAW_RATE * dt).exp());
 
-        // Chassis pitch from longitudinal acceleration (brake dives, throttle lifts).
-        let target_pitch = (-player.long_accel * PITCH_RESPONSE).clamp(-0.09, 0.09);
+        // Slope tracking keeps the car framed on grades; weight transfer adds
+        // the braking dive / throttle lift on top.
+        let dive = (-player.long_accel * PITCH_RESPONSE).clamp(-0.09, 0.09);
+        let target_pitch =
+            (slope * SLOPE_PITCH_GAIN + dive).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
         self.pitch += (target_pitch - self.pitch) * (1.0 - (-6.0 * dt).exp());
 
         // Cornering roll.

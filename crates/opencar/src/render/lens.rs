@@ -1,12 +1,19 @@
 //! Virtual lens: radial barrel distortion resample — the last image-space
 //! stage before quantization (a physical lens sits after the whole world).
 
-use crate::config::LENS_K;
+use crate::config::{LENS_K, LENS_MAX_EDGE_CELLS};
 use crate::render::image::ImageBuffer;
 
+/// Resolution-bound distortion coefficient: the edge displacement never
+/// exceeds `LENS_MAX_EDGE_CELLS` terminal cells (linear NDC↔screen mapping).
+pub fn lens_k_bounded(pixel_w: usize) -> f32 {
+    let bound = LENS_MAX_EDGE_CELLS * 2.0 / pixel_w.max(1) as f32;
+    -LENS_K.abs().min(bound)
+}
+
 /// Resample `src` through barrel distortion into `dst` (RGB only; z is dead
-/// after this stage). `scratch` must differ from both.
-pub fn apply_lens(src: &ImageBuffer, dst: &mut ImageBuffer) {
+/// after this stage). `k` is the (bounded) distortion coefficient.
+pub fn apply_lens(src: &ImageBuffer, dst: &mut ImageBuffer, k: f32) {
     if src.w == 0 || src.h == 0 {
         return;
     }
@@ -18,7 +25,7 @@ pub fn apply_lens(src: &ImageBuffer, dst: &mut ImageBuffer) {
             let nx = (dx as f32 + 0.5 - cx) / cx;
             let ny = (dy as f32 + 0.5 - cy) / cy;
             let r2 = nx * nx + ny * ny;
-            let f = 1.0 + LENS_K * r2;
+            let f = 1.0 + k * r2;
             let sxp = nx * f * cx + cx;
             let syp = ny * f * cy + cy;
             let o = (dy * dst.w + dx) * 3;
@@ -46,5 +53,36 @@ pub fn apply_lens(src: &ImageBuffer, dst: &mut ImageBuffer) {
                 dst.rgb[o + ch] = (a + (b - a) * fy).clamp(0.0, 255.0) as u8;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::LENS_MAX_EDGE_CELLS;
+
+    #[test]
+    fn bounded_k_caps_edge_displacement() {
+        // Worst-case horizontal shift at the frame edge must stay under one
+        // terminal cell (2 buffer px) for any resolution.
+        for w in [80usize, 240, 480, 3840] {
+            let k = lens_k_bounded(w);
+            let cx = w as f32 * 0.5;
+            let r_max = (1.0f32 + (cx / cx).powi(2)).sqrt(); // edge of frame: |nx|=1
+            let shift = cx * k.abs() * r_max; // |nx'|−|nx| at ny=0
+            assert!(shift <= LENS_MAX_EDGE_CELLS * 2.0 + 1e-3, "w={w} shift={shift}");
+        }
+    }
+
+    #[test]
+    fn center_is_identity() {
+        let src_src = crate::render::image::ImageBuffer::new();
+        let mut src = src_src;
+        src.resize_if_needed(64, 64);
+        let mut dst = crate::render::image::ImageBuffer::new();
+        apply_lens(&src, &mut dst, lens_k_bounded(128));
+        // Center pixel maps to itself: identity at r=0.
+        let o = (32 * 64 + 32) * 3;
+        assert_eq!(dst.rgb[o], src.rgb[o]);
     }
 }

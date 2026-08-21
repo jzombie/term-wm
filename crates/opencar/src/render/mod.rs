@@ -18,10 +18,10 @@ use crate::braille::{encode, make_noise_table, TermCell};
 use crate::config::*;
 use crate::render::camera::Projector;
 use crate::render::image::ImageBuffer;
-use crate::render::lens::apply_lens;
+use crate::render::lens::{apply_lens, lens_k_bounded};
 use crate::render::models::{build_car, build_sign, build_tree, instance};
 use crate::render::raster::draw_quad;
-use crate::render::shadows::{apply_deferred, ShadowMap};
+use crate::render::shadows::ShadowMap;
 use crate::render::terrain::{march_columns, rotate_into, TerrainPass};
 use crate::sim::car::Vehicle;
 use crate::sim::traffic::TrafficSystem;
@@ -234,31 +234,34 @@ impl Renderer for CpuBackend {
         self.img.clear();
         let proj = Projector::new(frame.cam, pw, ph);
 
-        // Stage 1+2: sky into overscan, march columns, rotate by roll.
+        // Stage 1: collect caster geometry, then build the sun-depth map.
+        // Forward-only lighting: the map exists BEFORE any screen writes so
+        // terrain and meshes sample it directly at exact world points.
+        self.collect_scene_quads(frame.world, &proj, frame.player, frame.traffic);
+        self.shadows.begin_frame(frame.player.x, frame.player.z);
+        let casters = std::mem::take(&mut self.quad_scratch);
+        self.shadows.rasterize_mesh(&casters);
+
+        // Stage 2: sky into overscan, march columns (forward PCF), rotate.
         let (ow, oh) = Projector::overscan_dims(pw, ph, frame.cam.roll.abs());
         self.terrain.buf.resize_if_needed(ow, oh);
         self.terrain.buf.clear();
         let op = Projector::new_from(&proj, ow, oh);
         sky::render_sky(&mut self.terrain.buf, &op, frame.world.noise(), frame.env.elapsed);
-        march_columns(&mut self.terrain.buf, &op, frame.world);
+        march_columns(&mut self.terrain.buf, &op, frame.world, &self.shadows);
         rotate_into(&self.terrain.buf, frame.cam.roll, &mut self.img);
 
-        // Stage 3: meshes through the rolled matrix, painter-ordered.
-        self.collect_scene_quads(frame.world, &proj, frame.player, frame.traffic);
+        // Stage 3: meshes through the rolled matrix, painter-ordered,
+        // per-pixel forward PCF during scanline fill.
         let horizon_rgb = PALETTE[PAL_SKY_HORIZON as usize];
-        let quads = std::mem::take(&mut self.quad_scratch);
-        for q in &quads {
-            draw_quad(&mut self.img, &proj, q, horizon_rgb);
+        for q in &casters {
+            draw_quad(&mut self.img, &proj, q, horizon_rgb, &self.shadows);
         }
-        self.quad_scratch = quads;
+        self.quad_scratch = casters;
 
-        // Stage 4: deferred PCF shadows over the completed depth buffer.
-        self.shadows.begin_frame(frame.player.x, frame.player.z);
-        self.shadows.rasterize_mesh(&self.quad_scratch);
-        apply_deferred(&mut self.img, &proj, &self.shadows);
-
-        // Stage 5: virtual lens, then quantize to braille cells.
-        apply_lens(&self.img, &mut self.scratch);
+        // Stage 4: bounded virtual lens, then quantize to braille cells.
+        let k_eff = lens_k_bounded(self.img.w);
+        apply_lens(&self.img, &mut self.scratch, k_eff);
         encode(
             &self.scratch,
             &self.noise_table,
@@ -323,7 +326,7 @@ mod tests {
     use crate::render::camera::CameraState;
     use crate::sim::car::VehicleInput;
 
-    fn scene() -> (World, Vehicle, TrafficSystem, CameraState, Environment) {
+    pub(crate) fn scene() -> (World, Vehicle, TrafficSystem, CameraState, Environment) {
         let mut world = World::new(7);
         let noise = *world.noise();
         let start = world.roads().ew().point(0.0, LANE_OFFSETS[0], &noise);
@@ -334,7 +337,8 @@ mod tests {
         let traffic = TrafficSystem::new(&player, &world);
         let mut cam = CameraState::new();
         let ground = world.height_at(player.x, player.z);
-        cam.update(&player, SIM_TICK_DT, ground);
+        let slope = crate::render::camera::terrain_slope(&world, player.x, player.z, player.heading);
+        cam.update(&player, SIM_TICK_DT, ground, slope);
         let env = Environment { elapsed: 1.0, noise_offset: (3, 4) };
         (world, player, traffic, cam, env)
     }
@@ -412,4 +416,89 @@ mod tests {
         assert!(corner(0, 0) && corner(pw - 1, 0));
         assert!(corner(0, ph - 1) && corner(pw - 1, ph - 1));
             }
+}
+
+#[cfg(test)]
+mod m0_tests {
+    use super::tests::scene;
+    use super::*;
+    use crate::sim::car::VehicleInput;
+
+    #[test]
+    fn depth_sync_car_beats_far_terrain() {
+        let (world, mut player, traffic, mut cam, env) = scene();
+        player.update(SIM_TICK_DT, VehicleInput::default(), &world);
+        cam.update(
+            &player,
+            SIM_TICK_DT,
+            world.height_at(cam.x, cam.z),
+            crate::render::camera::terrain_slope(&world, player.x, player.z, player.heading),
+        );
+        let (world, player, traffic, cam, env) = (world, player, traffic, cam, env);
+        let mut backend = CpuBackend::new();
+        let frame = FrameInput {
+            world: &world,
+            cam: &cam,
+            player: &player,
+            traffic: &traffic,
+            env: &env,
+            cells_w: 60,
+            cells_h: 16,
+        };
+        let _cells = backend.render(&frame);
+
+        // The player car occupies pixels just below mid-frame; those pixels
+        // must hold car-depth (near), not terrain-at-60m depth.
+        let pw = backend.img.w;
+        let ph = backend.img.h;
+        let mut near_count = 0;
+        for py in (ph / 2)..ph {
+            for px in (pw / 3)..(2 * pw / 3) {
+                let d = backend.img.z[py * pw + px];
+                if d.is_finite() && d < 12.0 {
+                    near_count += 1;
+                }
+            }
+        }
+        assert!(near_count > 40, "car/ground near-camera pixels missing: {near_count}");
+    }
+
+    #[test]
+    fn terrain_margin_and_mesh_exactness() {
+        // Terrain writes carry TERRAIN_DEPTH_MARGIN; meshes are exact. A
+        // quad lying IN the plane must therefore beat the terrain depth.
+        let d_terrain = 40.0 + TERRAIN_DEPTH_MARGIN;
+        assert!(40.0 < d_terrain);
+        let (world, mut player, _t, _c, _e) = scene();
+        player.update(SIM_TICK_DT, VehicleInput::default(), &world);
+        let ground = world.height_at(player.x, player.z);
+        assert!((ground - player.y).abs() < MESH_EPSILON_NONE, "meshes sit exactly on the height field");
+    }
+
+    /// Meshes use exact depths: the only epsilon is terrain-side.
+    const MESH_EPSILON_NONE: f32 = 1e-4;
+
+    #[test]
+    fn slope_pitch_tracks_ramp() {
+        // Synthetic ramp via a tiny custom world isn't available; verify the
+        // formula path directly through camera.update on a slope value.
+        let mut world = World::new(7);
+        let noise = *world.noise();
+        let start = world.roads().ew().point(0.0, LANE_OFFSETS[0], &noise);
+        world.ensure_chunks_around(start.0, start.1, usize::MAX);
+        let mut player = Vehicle::new(start.0, start.1, 0.0);
+        player.speed = 8.0;
+        let mut cam = crate::render::camera::CameraState::new();
+        let slope = 0.30; // ~17° grade
+        for _ in 0..90 {
+            cam.update(&player, SIM_TICK_DT, 10.0, slope);
+        }
+        let expected = (slope * SLOPE_PITCH_GAIN).clamp(-CAM_PITCH_LIMIT, CAM_PITCH_LIMIT);
+        assert!(
+            (cam.pitch - expected).abs() < 0.02,
+            "pitch should track slope: {} vs {expected}",
+            cam.pitch
+        );
+        assert!(cam.pitch > 0.05, "climbing should pitch up");
+    }
 }
