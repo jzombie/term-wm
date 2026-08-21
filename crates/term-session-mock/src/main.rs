@@ -35,11 +35,11 @@ pub const OSC52_TEST_PAYLOAD: &[u8] = b"c;dGVzdA==";
 #[cfg(windows)]
 mod win_console {
     use std::os::windows::io::AsRawHandle;
-
-    unsafe extern "system" {
-        fn GetConsoleMode(handle: *mut std::ffi::c_void, mode: *mut u32) -> i32;
-        fn SetConsoleMode(handle: *mut std::ffi::c_void, mode: u32) -> i32;
-    }
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{GetConsoleMode, SetConsoleMode};
 
     const ENABLE_LINE_INPUT: u32 = 0x0002;
     const ENABLE_ECHO_INPUT: u32 = 0x0004;
@@ -47,19 +47,73 @@ mod win_console {
     const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
 
+    /// Try to set console mode on `handle` if it is a console handle.
+    unsafe fn try_set_mode(handle: *mut std::ffi::c_void, f: impl FnOnce(u32) -> u32) -> bool {
+        unsafe {
+            let mut mode = 0u32;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                let new_mode = f(mode);
+                SetConsoleMode(handle, new_mode);
+                return true;
+            }
+            false
+        }
+    }
+
+    /// Open `CONOUT$` / `CONIN$` as a fallback when std handles are pipes
+    /// (the case under ConPTY: `stdin`/`stdout` are anonymous pipes, not
+    /// console handles, so `GetConsoleMode` on them fails). The console
+    /// device is still reachable via the named device.
+    unsafe fn with_con_device<F>(name: &str, f: F) -> bool
+    where
+        F: FnOnce(*mut std::ffi::c_void) -> bool,
+    {
+        // Encode as UTF-16 NUL-terminated.
+        let mut wide: Vec<u16> = name.encode_utf16().collect();
+        wide.push(0);
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                0x80000000 | 0x40000000, // GENERIC_READ|GENERIC_WRITE
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle.is_null() || handle as isize == -1 {
+            return false;
+        }
+        let ok = f(handle);
+        // SAFETY: handle was opened by CreateFileW
+        unsafe { CloseHandle(handle) };
+        ok
+    }
+
     pub fn enable_raw_vt() {
         unsafe {
+            // Stdin: try std handle, then CONIN$
             let stdin_handle = std::io::stdin().as_raw_handle();
-            let mut mode = 0u32;
-            if GetConsoleMode(stdin_handle, &mut mode) != 0 {
-                mode &= !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
-                mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
-                SetConsoleMode(stdin_handle, mode);
+            if !try_set_mode(stdin_handle, |m| {
+                (m & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                    | ENABLE_VIRTUAL_TERMINAL_INPUT
+            }) {
+                with_con_device("CONIN$", |h| {
+                    try_set_mode(h, |m| {
+                        (m & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                            | ENABLE_VIRTUAL_TERMINAL_INPUT
+                    });
+                    true
+                });
             }
+            // Stdout: try std handle, then CONOUT$
             let stdout_handle = std::io::stdout().as_raw_handle();
-            if GetConsoleMode(stdout_handle, &mut mode) != 0 {
-                mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-                SetConsoleMode(stdout_handle, mode);
+            if !try_set_mode(stdout_handle, |m| m | ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+                with_con_device("CONOUT$", |h| {
+                    try_set_mode(h, |m| m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                    true
+                });
             }
         }
     }
@@ -67,11 +121,14 @@ mod win_console {
     pub fn disable_stdout_vt_processing() {
         unsafe {
             let stdout_handle = std::io::stdout().as_raw_handle();
-            let mut mode = 0u32;
-            if GetConsoleMode(stdout_handle, &mut mode) != 0 {
-                mode &= !ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-                SetConsoleMode(stdout_handle, mode);
+            if try_set_mode(stdout_handle, |m| m & !ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+                return;
             }
+            // Fallback: CONOUT$ is the real console device under ConPTY
+            with_con_device("CONOUT$", |h| {
+                try_set_mode(h, |m| m & !ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                true
+            });
         }
     }
 }
@@ -97,13 +154,39 @@ fn disable_stdin_echo() {
 
     #[cfg(windows)]
     unsafe {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
         use windows_sys::Win32::System::Console::{
             ENABLE_ECHO_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE, SetConsoleMode,
         };
         let handle = GetStdHandle(STD_INPUT_HANDLE);
         let mut mode: u32 = 0;
+        let mut done = false;
         if GetConsoleMode(handle, &mut mode) != 0 {
             let _ = SetConsoleMode(handle, mode & !ENABLE_ECHO_INPUT);
+            done = true;
+        }
+        if !done {
+            // Fallback to CONIN$ when stdin is a pipe (ConPTY)
+            let mut wide: Vec<u16> = "CONIN$".encode_utf16().collect();
+            wide.push(0);
+            let conin = CreateFileW(
+                wide.as_ptr(),
+                0x80000000 | 0x40000000,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            );
+            if !conin.is_null() && conin as isize != -1 {
+                if GetConsoleMode(conin, &mut mode) != 0 {
+                    SetConsoleMode(conin, mode & !ENABLE_ECHO_INPUT);
+                }
+                CloseHandle(conin);
+            }
         }
     }
 }
@@ -154,8 +237,6 @@ fn main() {
         }
         "osc52_alive" => {
             #[cfg(windows)]
-            win_console::enable_raw_vt();
-            #[cfg(windows)]
             win_console::disable_stdout_vt_processing();
             disable_stdin_echo();
 
@@ -164,6 +245,11 @@ fn main() {
             let _ = stdout.write_all(OSC52_TEST_PAYLOAD);
             let _ = stdout.write_all(b"\x07");
             let _ = stdout.flush();
+            // Brief yield so ConPTY flushes the console buffer to the
+            // PTY master pipe before we block on stdin. Without this,
+            // the 10-byte OSC may stay buffered (no newline, not exiting)
+            // and the subscriber's wait_for_output times out.
+            std::thread::sleep(Duration::from_millis(50));
 
             // Stay alive until the session is killed (stdin EOF), so tests
             // can subscribe without racing this process exiting.
