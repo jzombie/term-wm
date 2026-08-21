@@ -3387,6 +3387,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn append_process_exit_none_shows_generic_completed() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        term.append_process_exit(None);
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process completed]"),
+            "None status must show generic '[Process completed]', got: {screen}"
+        );
+        assert!(
+            !screen.contains("exit code"),
+            "None status must NOT show exit code, got: {screen}"
+        );
+    }
+
     // --- Double-click word selection tests ---
 
     fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> Event {

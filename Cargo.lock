@@ -3223,6 +3223,7 @@ dependencies = [
  "term-wm-ui-components",
  "term-wm-ui-facade",
  "term-wm-view",
+ "term-wm-vt100",
  "tokio",
  "tracing",
  "tracing-subscriber",

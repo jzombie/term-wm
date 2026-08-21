@@ -1367,4 +1367,348 @@ mod tests {
         // Whether or not tasks.json exists, the method must not panic.
         let _ = app.project_tasks();
     }
+
+    // ── MockPane for on_terminal_exited / command_builder_for_task tests ──
+
+    use std::io;
+    use term_wm_pty_engine::Pane;
+
+    /// Minimal Pane implementation for unit-testing without spawning a real PTY.
+    struct MockPane {
+        parser: std::sync::Arc<std::sync::Mutex<term_wm_vt100::Parser>>,
+        exit_status_override: Option<portable_pty::ExitStatus>,
+    }
+
+    impl MockPane {
+        fn with_exit_status(status: Option<portable_pty::ExitStatus>) -> Self {
+            Self {
+                parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(
+                    24, 80, 500,
+                ))),
+                exit_status_override: status,
+            }
+        }
+    }
+
+    impl Pane for MockPane {
+        fn resize(&mut self, _size: portable_pty::PtySize) -> term_wm_pty_engine::PtyResult<()> {
+            Ok(())
+        }
+        fn has_exited(&mut self) -> bool {
+            false
+        }
+        fn alternate_screen(&mut self) -> bool {
+            false
+        }
+        fn scrollback(&mut self) -> usize {
+            0
+        }
+        fn set_scrollback(&mut self, _rows: usize) {}
+        fn write_bytes(&mut self, _input: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        fn shared_parser(&mut self) -> std::sync::Arc<std::sync::Mutex<term_wm_vt100::Parser>> {
+            self.parser.clone()
+        }
+        fn max_scrollback(&mut self) -> usize {
+            500
+        }
+        fn scrollback_len(&self) -> usize {
+            0
+        }
+        fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+            self.exit_status_override.take()
+        }
+        fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
+            self.exit_status_override.clone()
+        }
+        fn bytes_received(&self) -> usize {
+            0
+        }
+        fn last_bytes_text(&self) -> String {
+            String::new()
+        }
+        fn kill_child(&mut self) -> term_wm_pty_engine::PtyResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Helper: open a terminal window backed by a `MockPane`, return its key.
+    fn open_mock_terminal(
+        app: &mut TermWmApp<NoopComponent>,
+        exit_status: Option<portable_pty::ExitStatus>,
+    ) -> WindowKey {
+        let pane = MockPane::with_exit_status(exit_status);
+        let terminal = TerminalComponent::from_pane(Box::new(pane));
+        let sv = term_wm_ui_components::scroll_view::ScrollViewComponent::new(terminal);
+        let key = app.open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+        app.wm().transition_window(key, WindowState::Mapped);
+        key
+    }
+
+    // ── on_terminal_exited tests ──
+
+    /// Nonexistent window key cleans bookkeeping without panicking.
+    #[test]
+    fn on_terminal_exited_nonexistent_key_cleans_bookkeeping() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.project_task_windows.insert(key, "orphan".into());
+        app.exited_task_windows.insert(key);
+
+        // Close the window first so window_state returns None.
+        app.close_window(key);
+        app.on_terminal_exited(key);
+
+        assert!(
+            !app.project_task_windows.contains_key(&key),
+            "stale bookkeeping must be removed"
+        );
+        assert!(
+            !app.exited_task_windows.contains(&key),
+            "stale exit tracking must be removed"
+        );
+    }
+
+    /// Non-task window is closed by `on_terminal_exited`.
+    #[test]
+    fn on_terminal_exited_non_task_window_closes_it() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        assert!(app.wm().window_state(key).is_some(), "window must exist");
+
+        app.on_terminal_exited(key);
+        assert!(
+            app.wm().window_state(key).is_none(),
+            "non-task window must be closed"
+        );
+    }
+
+    /// Task window first exit keeps window open and pushes a notification.
+    #[test]
+    fn on_terminal_exited_task_first_exit_keeps_open_and_toasts() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_terminal(&mut app, Some(portable_pty::ExitStatus::with_exit_code(1)));
+        app.project_task_windows.insert(key, "my-task".into());
+
+        // Ensure this window is NOT focused so a notification is posted.
+        let other = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.wm().transition_window(other, WindowState::Mapped);
+
+        app.on_terminal_exited(key);
+
+        assert!(
+            app.wm().window_state(key).is_some(),
+            "task window must remain open after first exit"
+        );
+        assert!(
+            !app.wm().notifications().is_empty(),
+            "a notification must be pushed"
+        );
+        let body = app
+            .wm()
+            .notifications()
+            .renderable()
+            .next()
+            .map(|t| t.message.to_string())
+            .unwrap_or_default();
+        assert!(
+            body.contains("my-task"),
+            "notification must mention task label: got {body}"
+        );
+        assert!(
+            body.contains("exit code 1"),
+            "notification must mention exit code: got {body}"
+        );
+    }
+
+    /// Task window second exit is idempotent — no additional notification.
+    #[test]
+    fn on_terminal_exited_task_second_exit_is_idempotent() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_terminal(&mut app, Some(portable_pty::ExitStatus::with_exit_code(1)));
+        app.project_task_windows.insert(key, "my-task".into());
+
+        let other = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.wm().transition_window(other, WindowState::Mapped);
+
+        // First exit — notification posted.
+        app.on_terminal_exited(key);
+        let count_after_first = app.wm().notifications().len();
+
+        // Second exit — should be a no-op.
+        app.on_terminal_exited(key);
+        let count_after_second = app.wm().notifications().len();
+
+        assert_eq!(
+            count_after_first, count_after_second,
+            "second exit must not push another notification"
+        );
+        assert!(
+            app.wm().window_state(key).is_some(),
+            "task window must still be open"
+        );
+    }
+
+    // ── command_builder_for_task tests ──
+
+    #[test]
+    fn command_builder_basic_binary_and_args() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("cargo run --release".into()),
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
+        assert_eq!(
+            argv,
+            vec![
+                std::ffi::OsStr::new("cargo"),
+                std::ffi::OsStr::new("run"),
+                std::ffi::OsStr::new("--release"),
+            ]
+        );
+    }
+
+    #[test]
+    fn command_builder_args_appended_after_command() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("cargo".into()),
+            args: Some(vec!["build".into(), "--release".into()]),
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
+        assert_eq!(
+            argv,
+            vec![
+                std::ffi::OsStr::new("cargo"),
+                std::ffi::OsStr::new("build"),
+                std::ffi::OsStr::new("--release"),
+            ]
+        );
+    }
+
+    #[test]
+    fn command_builder_args_only_when_command_omitted() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: None,
+            args: Some(vec!["ls".into(), "-la".into()]),
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
+        assert_eq!(
+            argv,
+            vec![std::ffi::OsStr::new("ls"), std::ffi::OsStr::new("-la"),]
+        );
+    }
+
+    #[test]
+    fn command_builder_relative_cwd_joins_project_root() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: Some("subdir".into()),
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let cwd = cmd.get_cwd().expect("cwd must be set");
+        let cwd_str = cwd.to_string_lossy();
+        assert!(
+            cwd_str.ends_with("subdir"),
+            "cwd must end with 'subdir': got {cwd_str}"
+        );
+    }
+
+    #[test]
+    fn command_builder_env_overrides_applied() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let mut env = std::collections::HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env,
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        assert_eq!(
+            cmd.get_env("FOO"),
+            Some(std::ffi::OsStr::new("bar")),
+            "env override must be applied"
+        );
+    }
+
+    #[test]
+    fn command_builder_returns_none_on_empty() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: None,
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        assert!(
+            app.command_builder_for_task(&task).is_none(),
+            "must return None when argv is empty"
+        );
+    }
+
+    // ── spawn_project_task error-path tests ──
+
+    #[test]
+    fn spawn_project_task_returns_error_for_empty_command() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "empty".into(),
+            command: None,
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let result = app.spawn_project_task(&task);
+        assert!(result.is_err(), "must fail for empty command");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("no valid command"),
+            "error must mention 'no valid command': got {msg}"
+        );
+    }
+
+    #[test]
+    fn spawn_project_task_returns_error_for_malformed_command() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "bad".into(),
+            command: Some("'unbalanced".into()),
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let result = app.spawn_project_task(&task);
+        assert!(result.is_err(), "must fail for malformed command");
+    }
 }

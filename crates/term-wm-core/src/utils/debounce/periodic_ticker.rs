@@ -114,4 +114,29 @@ mod tests {
         t.reset();
         assert!(t.poll_at(t0 + Duration::from_millis(10)));
     }
+
+    #[test]
+    fn remaining_after_tick_counts_down() {
+        let mut t = PeriodicTicker::new_immediate(Duration::from_millis(300));
+        let t0 = Instant::now();
+        t.poll_at(t0); // Fires immediately, sets last_tick = t0
+
+        let remaining = t
+            .remaining_at(t0 + Duration::from_millis(100))
+            .expect("remaining must be Some after tick");
+        assert!(
+            remaining >= Duration::from_millis(190) && remaining <= Duration::from_millis(210),
+            "remaining should be ~200ms, got {remaining:?}"
+        );
+    }
+
+    #[test]
+    fn remaining_before_first_tick_returns_interval() {
+        let t = PeriodicTicker::new_immediate(Duration::from_millis(300));
+        // last_tick is None — remaining_at returns the full interval
+        let remaining = t
+            .remaining_at(Instant::now())
+            .expect("remaining must be Some for new_immediate");
+        assert_eq!(remaining, Duration::from_millis(300));
+    }
 }
