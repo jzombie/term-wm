@@ -2,10 +2,24 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+thread_local! {
+    static VISIBLE_ROW_CALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
-static VISIBLE_ROW_CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+fn visible_row_call_count_store(val: usize) {
+    VISIBLE_ROW_CALL_COUNT.with(|c| c.set(val));
+}
+
+#[cfg(test)]
+fn visible_row_call_count_load() -> usize {
+    VISIBLE_ROW_CALL_COUNT.with(|c| c.get())
+}
+
+#[cfg(test)]
+fn visible_row_call_count_inc() {
+    VISIBLE_ROW_CALL_COUNT.with(|c| c.set(c.get() + 1));
+}
 
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
@@ -662,7 +676,7 @@ impl TerminalComponent {
                 }
                 #[cfg(test)]
                 {
-                    VISIBLE_ROW_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+                    visible_row_call_count_inc();
                 }
                 let Some(vt_row) = screen.visible_row(row) else {
                     // No row data — fill with spaces
@@ -708,7 +722,7 @@ impl TerminalComponent {
             let viewport_row = row.saturating_sub(start_row) as usize;
             #[cfg(test)]
             {
-                VISIBLE_ROW_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+                visible_row_call_count_inc();
             }
             let Some(vt_row) = screen.visible_row(row) else {
                 continue;
@@ -3616,12 +3630,9 @@ mod tests {
 
     #[test]
     fn test_visible_row_lookup_is_hoisted() {
-        use std::sync::atomic::Ordering;
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap();
         let rows = 24;
         let cols = 80;
-        super::VISIBLE_ROW_CALL_COUNT.store(0, Ordering::SeqCst);
+        super::visible_row_call_count_store(0);
         let (mut term, _rb) =
             make_term_with_content(cols, rows, 1000, &"X".repeat(cols as usize * rows as usize));
         let area = LayoutRect {
@@ -3637,7 +3648,7 @@ mod tests {
             term_wm_core::component_context::ComponentContext::new(true).with_screen_area(area);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         term.render(&mut backend, area, &ctx, &mut registry);
-        let calls = super::VISIBLE_ROW_CALL_COUNT.load(Ordering::SeqCst);
+        let calls = super::visible_row_call_count_load();
         // Two loops (link overlay + cell render) each hoisted to once per row
         let expected = rows as usize * 2;
         assert_eq!(
