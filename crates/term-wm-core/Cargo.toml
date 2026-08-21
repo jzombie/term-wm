@@ -19,10 +19,10 @@ project-tasks = ["dep:shell-words", "dep:serde_json", "dep:json_comments"]
 bitflags = { workspace = true }
 console = { workspace = true }
 crossbeam-channel = { workspace = true }
+json_comments = { workspace = true, optional = true }
 linkify = { workspace = true }
 nucleo-matcher = { workspace = true }
 portable-pty = { workspace = true, optional = true }
-json_comments = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 shell-words = { workspace = true, optional = true }
