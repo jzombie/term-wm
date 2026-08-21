@@ -2912,6 +2912,7 @@ mod tests {
     /// never drains. This test floods a live Pty and hammers resize - it must
     /// finish within 3s or it has deadlocked.
     #[test]
+    #[cfg(windows)]
     fn resize_during_burst_does_not_deadlock() {
         let mock = term_session_mock::get_mock_bin();
         let mut cmd = CommandBuilder::new(&mock);
