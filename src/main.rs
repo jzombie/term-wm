@@ -784,7 +784,9 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "session-persistence")]
     use serial_test::serial;
+    #[cfg(feature = "session-persistence")]
     use term_wm_core::actions::TermWmAction;
 
     #[test]
@@ -976,6 +978,7 @@ mod tests {
 
     /// Build an `App` without spawning any PTYs, so the workspace-action
     /// handler can be unit-tested directly.
+    #[cfg(feature = "session-persistence")]
     fn test_app() -> App {
         let (event_source, event_owner) = UnifiedEventSource::new(true).expect("headless source");
         let pty_wakeup_tx = event_source.pty_wakeup_tx();

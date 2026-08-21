@@ -555,7 +555,15 @@ async fn get_or_create_channel(
                 } else {
                     let (raw, exited, code) = {
                         let Some(session) = guard.session.as_mut() else {
-                            // No live session: finalize any lingering subscribers.
+                            // No live session: finalize lingering subscribers only if
+                            // the channel has ever had a session (cmd stored).
+                            // A subscriber attaching before the first Spawn would
+                            // otherwise be closed immediately (race with Subscribe
+                            // vs Spawn ordering, especially on Windows).
+                            if guard.cmd.is_empty() && guard.output_cache.is_empty() {
+                                // No session yet, keep subscriber waiting for Spawn.
+                                continue;
+                            }
                             for sub in &guard.subscribers {
                                 sub.respond.respond(Vec::new(), true);
                             }
@@ -1256,7 +1264,11 @@ pub async fn run_gateway(
                         respond: respond.clone(),
                     });
                     guard.notify.notify_one();
-                    let is_dead = guard.session.is_none();
+                    // Only consider the channel dead if it has ever had a session.
+                    // Before the first Spawn, cmd is empty and output_cache is empty,
+                    // so a subscriber must stay waiting (Subscribe-before-Spawn race).
+                    let is_dead = guard.session.is_none()
+                        && (!guard.cmd.is_empty() || !guard.output_cache.is_empty());
                     // Deliver the retained/live output and the end-of-stream
                     // marker while still holding the channel guard, so the
                     // polling task's dead-session finalization cannot interleave

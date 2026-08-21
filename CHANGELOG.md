@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **Follow Workspaces toggle:** A simple on/off switch in the Workspaces section. When off (default), switching workspaces moves only you. When on, everyone on that workspace follows together — great for pairing or presentations. Toggle it anytime from the palette; it takes effect immediately.
 - **Workspace notifications:** You’ll get a “Workspace <name>” toast when you create or switch workspaces.
 - **JSONC in `.term-wm/tasks.json`:** `tasks.json` now accepts `//` line and `/* */` block comments (via `json_comments::StripComments`). Content inside strings (e.g. URLs, `//` / `/* */` literals) is preserved.
+- **Command Palette section-aware search:** typing in the palette now matches against section titles (e.g., "Window Management", "Quick Actions") in addition to action names. Section headers are also skipped during keyboard navigation so Up/Down always lands on a selectable action.
 
 ### Fixed
 
@@ -21,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **Background console reader busy-spin on macOS:** `BackgroundConsoleReader` now sleeps on `poll()==false` (`CROSSTERM_POLL_INTERVAL`) instead of tight-looping, fixing 100% core pinning while idle.
 - **Terminal render overhead:** hoisted `Screen::visible_row(row)` outside the column loop (`terminal.rs:700`) to fix `O(rows×cols×row)` `visible_rows().nth(row)` scans; cached wrapped line heights in `TextRendererComponent`, cached `MenuDisplayItem` builds in `CommandPaletteComponent`, and cached Help title string. Covered by `test_visible_row_lookup_is_hoisted` and `crates/term-wm-ui-components/benches/terminal_render.rs`.
 - **Throttling via `Debouncer` / `PeriodicTicker`:** replaced ad-hoc `Option<Instant>` checks with `Debouncer` (trailing-edge, 2 s for `on_user_registry_changed`) and `PeriodicTicker` (`new_suppressed` for 5 s palette tick, 30 s IPC, and 1 s foreground poll in `term-wm-pty-engine`).
+- **Windows deadlock regression under `cargo test` on Windows (follow-up to #272):** the previous fix addressed three causes of the UI lockup when tile/float operations raced heavy PTY output. Two additional root causes were missed: `wake_reader()` only called `CancelSynchronousIo`, which cannot wake a reader parked on the burst-budget `Condvar`, and the reader loop did not break early when a resize was pending. Under `cargo test --all-features` (256 KB+ output flood), ToggleTiling would deadlock because the reader waited for `dirty` to clear while the UI waited for the resize to drain. Fixed by notifying the Condvar in `wake_reader()` and breaking the reader loop on pending resize (both `#[cfg(windows)]`). Regression tests added in `pty.rs` and `terminal.rs`.
 
 ### Changed
 
