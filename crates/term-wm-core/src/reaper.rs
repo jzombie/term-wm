@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn stub_reaper_default() {
-        let r = Reaper::default();
+        let r = Reaper;
         r.reap(());
     }
 
