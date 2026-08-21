@@ -2913,7 +2913,7 @@ mod tests {
     /// finish within 3s or it has deadlocked.
     #[test]
     #[cfg(windows)]
-    fn resize_during_burst_does_not_deadlock() {
+    fn windows_platform_resize_during_burst_does_not_deadlock() {
         let mock = term_session_mock::get_mock_bin();
         let mut cmd = CommandBuilder::new(&mock);
         cmd.arg("echo");
