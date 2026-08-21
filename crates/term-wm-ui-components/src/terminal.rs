@@ -650,10 +650,15 @@ impl TerminalComponent {
         // Call sync_screen() to handle DSR, foreground polling.
         pane.sync_screen();
 
-        // Lock the shared parser once for both link overlay and cell rendering.
-        let parser_arc = pane.shared_parser();
-        let parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
-        let screen = parser.screen();
+        // Clone screen once under lock then drop before heavy iteration.
+        // Holding Arc<Mutex<Parser>> for O(rows*cols) blocks the PTY reader's
+        // process(&buf) under heavy output and causes the Windows deadlock
+        // when toggling tiling (resize) while the CPU is saturated.
+        let screen = {
+            let parser_arc = pane.shared_parser();
+            let parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
+            parser.screen().clone()
+        };
 
         let bytes_seen = pane.bytes_received();
         let signature = OverlaySignature::new(

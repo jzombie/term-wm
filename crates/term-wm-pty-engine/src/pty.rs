@@ -603,14 +603,24 @@ impl Pty {
         #[cfg(unix)]
         self.resize_wake.signal();
         #[cfg(windows)]
-        if let Some(reader) = &self.reader {
-            use std::os::windows::io::{AsHandle, AsRawHandle};
-            // SAFETY: `handle` is the OS thread handle backing the reader's
-            // `JoinHandle`, which is alive for as long as the `Pty` holds it.
-            // It was created by `CreateThread` with `THREAD_ALL_ACCESS`, which
-            // `CancelSynchronousIo` requires.
-            unsafe {
-                kernel32::CancelSynchronousIo(reader.as_handle().as_raw_handle());
+        {
+            // Also wake a reader parked on the burst-budget Condvar — CancelSynchronousIo
+            // only aborts a blocking ReadFile, not a cvar.wait() inside the
+            // IO_BURST_BUDGET backpressure. Without this ToggleTiling+heavy cargo test
+            // deadlocks: reader waits for dirty to clear while UI waits for resize.
+            let (lock, cvar) = &*self.dirty_cond;
+            let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+            cvar.notify_one();
+            drop(_guard);
+            if let Some(reader) = &self.reader {
+                use std::os::windows::io::{AsHandle, AsRawHandle};
+                // SAFETY: `handle` is the OS thread handle backing the reader's
+                // `JoinHandle`, which is alive for as long as the `Pty` holds it.
+                // It was created by `CreateThread` with `THREAD_ALL_ACCESS`, which
+                // `CancelSynchronousIo` requires.
+                unsafe {
+                    kernel32::CancelSynchronousIo(reader.as_handle().as_raw_handle());
+                }
             }
         }
     }
@@ -1253,13 +1263,32 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                     // IO_BURST_BUDGET bytes without a render, wait on the Condvar
                     // until the UI thread clears dirty. This prevents a single
                     // reader thread from consuming 100% CPU on infinite streams.
+                    // On Windows also break early if a resize is pending — wake_reader()
+                    // notifies this Condvar (CancelSynchronousIo alone can't wake a
+                    // cvar.wait), so ToggleTiling during a cargo test flood doesn't deadlock.
                     if bytes_since_render >= IO_BURST_BUDGET {
                         let (lock, cvar) = &*dirty_cond;
                         let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
                         while dirty.load(Ordering::Acquire) {
+                            #[cfg(windows)]
+                            if pending_resize
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .is_some()
+                            {
+                                break;
+                            }
                             guard = cvar.wait(guard).unwrap_or_else(|err| err.into_inner());
                         }
                         bytes_since_render = 0;
+                        #[cfg(windows)]
+                        if pending_resize
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .is_some()
+                        {
+                            break;
+                        }
                     }
 
                     // Drain-sync: break at the starvation bound so a continuous
@@ -1328,11 +1357,11 @@ fn apply_resize(
     master: &Arc<Mutex<Box<dyn MasterPty + Send>>>,
     size: &Arc<Mutex<PtySize>>,
 ) {
-    let old_rows = {
-        let parser = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
-        parser.screen().size().0
-    };
+    // Single lock scope to avoid contention window between two acquisitions:
+    // the UI thread's render holds shared_parser for O(rows*cols), and a
+    // second lock here would widen the race under heavy output.
     let mut guard = shared_parser.lock().unwrap_or_else(|err| err.into_inner());
+    let old_rows = guard.screen().size().0;
     if new_size.rows < old_rows && !tracker.has_custom_margins() {
         let (cursor_row, _) = guard.screen().cursor_position();
         if cursor_row >= new_size.rows {
