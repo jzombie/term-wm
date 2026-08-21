@@ -1553,6 +1553,7 @@ mod tests {
     // ── command_builder_for_task tests ──
 
     #[test]
+    #[cfg(feature = "project-tasks")]
     fn command_builder_basic_binary_and_args() {
         let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         let task = ProjectTaskConfig {
@@ -1576,6 +1577,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "project-tasks")]
     fn command_builder_args_appended_after_command() {
         let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         let task = ProjectTaskConfig {
@@ -1599,6 +1601,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "project-tasks")]
     fn command_builder_args_only_when_command_omitted() {
         let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         let task = ProjectTaskConfig {
@@ -1618,6 +1621,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "project-tasks")]
     fn command_builder_relative_cwd_joins_project_root() {
         let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         let task = ProjectTaskConfig {
@@ -1638,6 +1642,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "project-tasks")]
     fn command_builder_env_overrides_applied() {
         let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         let mut env = std::collections::HashMap::new();
