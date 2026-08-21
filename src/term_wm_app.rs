@@ -303,11 +303,13 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             project_root: None,
             project_task_windows: HashMap::new(),
             exited_task_windows: HashSet::new(),
-            palette_tick_ticker:
-                term_wm_core::utils::PeriodicTicker::new_suppressed(PALETTE_TICK_INTERVAL),
+            palette_tick_ticker: term_wm_core::utils::PeriodicTicker::new_suppressed(
+                PALETTE_TICK_INTERVAL,
+            ),
             #[cfg(feature = "session-persistence")]
-            palette_ipc_ticker:
-                term_wm_core::utils::PeriodicTicker::new_suppressed(PALETTE_IPC_INTERVAL),
+            palette_ipc_ticker: term_wm_core::utils::PeriodicTicker::new_suppressed(
+                PALETTE_IPC_INTERVAL,
+            ),
             user_registry_debouncer: term_wm_core::utils::Debouncer::new(USER_REGISTRY_DEBOUNCE),
         };
         // Every TermWmApp flows through here — the standalone constructors

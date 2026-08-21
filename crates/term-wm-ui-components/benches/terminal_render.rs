@@ -10,11 +10,11 @@
 //! instead of ~4×, the `visible_row()` hoist has regressed.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use portable_pty::PtySize;
 use std::sync::{Arc, Mutex};
 use term_wm_core::components::{Component, ComponentContext};
 use term_wm_core::hitbox_registry::HitboxRegistry;
 use term_wm_layout_engine::LayoutRect;
-use portable_pty::PtySize;
 use term_wm_pty_engine::{Pane, PtyResult};
 use term_wm_ui_components::TerminalComponent;
 

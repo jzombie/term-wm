@@ -13,6 +13,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **Streamlined Command Palette:** The palette now shows 5 clearly labeled sections — Quick Actions, Workspaces & Collaboration, Window Management, View & Layout, and Settings & System. Workspaces, follow mode, and who’s in each workspace are together in one place: create or switch workspaces and see connected users right under each workspace name.
 - **Follow Workspaces toggle:** A simple on/off switch in the Workspaces section. When off (default), switching workspaces moves only you. When on, everyone on that workspace follows together — great for pairing or presentations. Toggle it anytime from the palette; it takes effect immediately.
 - **Workspace notifications:** You’ll get a “Workspace <name>” toast when you create or switch workspaces.
+- **JSONC in `.term-wm/tasks.json`:** `tasks.json` now accepts `//` line and `/* */` block comments (via `json_comments::StripComments`). Content inside strings (e.g. URLs, `//` / `/* */` literals) is preserved.
+
+### Fixed
+
+- **Idle CPU with overlays open:** opening Command Palette or Help no longer forces a 60 FPS redraw loop. Removed unconditional `system_handle.set_keep_awake(!overlays.is_empty())` (`runner.rs:937`) that kept `pending_work=true` → `PowerProfile::Streaming`; the loop now drops to `PowerSaver` and re-arms only on input or `palette_tick_deadline()`.
+- **Background console reader busy-spin on macOS:** `BackgroundConsoleReader` now sleeps on `poll()==false` (`CROSSTERM_POLL_INTERVAL`) instead of tight-looping, fixing 100% core pinning while idle.
+- **Terminal render overhead:** hoisted `Screen::visible_row(row)` outside the column loop (`terminal.rs:700`) to fix `O(rows×cols×row)` `visible_rows().nth(row)` scans; cached wrapped line heights in `TextRendererComponent`, cached `MenuDisplayItem` builds in `CommandPaletteComponent`, and cached Help title string. Covered by `test_visible_row_lookup_is_hoisted` and `crates/term-wm-ui-components/benches/terminal_render.rs`.
+- **Throttling via `Debouncer` / `PeriodicTicker`:** replaced ad-hoc `Option<Instant>` checks with `Debouncer` (trailing-edge, 2 s for `on_user_registry_changed`) and `PeriodicTicker` (`new_suppressed` for 5 s palette tick, 30 s IPC, and 1 s foreground poll in `term-wm-pty-engine`).
+
+### Changed
+
+- **`term-wm-vt100` `0.16.2-patch3 → patch4`:** exposes `Screen::visible_row(row)` for `O(1)` row access (enables the hoist above).
 
 ## [0.10.2-alpha] - 2026-08-19
 

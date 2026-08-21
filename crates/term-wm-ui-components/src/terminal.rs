@@ -3633,8 +3633,8 @@ mod tests {
         let rect = ratatui::layout::Rect::new(0, 0, cols, rows);
         let buffer = ratatui::buffer::Buffer::empty(rect);
         let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
-        let ctx = term_wm_core::component_context::ComponentContext::new(true)
-            .with_screen_area(area);
+        let ctx =
+            term_wm_core::component_context::ComponentContext::new(true).with_screen_area(area);
         let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
         term.render(&mut backend, area, &ctx, &mut registry);
         let calls = super::VISIBLE_ROW_CALL_COUNT.load(Ordering::SeqCst);

@@ -662,8 +662,8 @@ impl Pty {
             let name = get_process_name(fg_pid);
             *self
                 .foreground_title
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner()) = name;
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = name;
         }
     }
 
