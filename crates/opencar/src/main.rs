@@ -13,7 +13,12 @@ use opencar::app::{App, Mode};
 use opencar::config::*;
 use opencar::display::TermDisplay;
 
-pub fn run(seed: u32, debug_frame: Option<usize>, capture_out: Option<String>) -> io::Result<()> {
+pub fn run(
+    seed: u32,
+    debug_frame: Option<usize>,
+    capture_out: Option<String>,
+    truecolor: bool,
+) -> io::Result<()> {
     let mut stdout = io::stdout();
     terminal::enable_raw_mode()?;
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
@@ -36,9 +41,9 @@ pub fn run(seed: u32, debug_frame: Option<usize>, capture_out: Option<String>) -
             out: &mut stdout,
             cap: file,
         };
-        drive(&mut tee, seed, kitty, debug_frame)
+        drive(&mut tee, seed, kitty, debug_frame, truecolor)
     } else {
-        drive(&mut stdout, seed, kitty, debug_frame)
+        drive(&mut stdout, seed, kitty, debug_frame, truecolor)
     };
 
     // Teardown runs no matter how the loop ended.
@@ -80,15 +85,47 @@ impl Write for TeeWriter<'_> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum GateState {
+    Nominal,
+    Slow,
+}
+
+/// Deterministic two-stage cadence hysteresis (G3): sustained write-blocking
+/// widens the draw gate to 2× target; consecutive clean windows restore it.
+fn update_gate(
+    state: GateState,
+    slow_windows: u32,
+    clean_windows: u32,
+) -> (GateState, u32) {
+    match state {
+        GateState::Nominal => {
+            if slow_windows >= CADENCE_SLOW_WINDOWS {
+                (GateState::Slow, 2)
+            } else {
+                (state, 1)
+            }
+        }
+        GateState::Slow => {
+            if clean_windows >= CADENCE_CLEAN_WINDOWS {
+                (GateState::Nominal, 1)
+            } else {
+                (state, 2)
+            }
+        }
+    }
+}
+
 fn drive(
     stdout: &mut impl Write,
     seed: u32,
     kitty: bool,
     debug_frame: Option<usize>,
+    truecolor: bool,
 ) -> io::Result<()> {
     let mut app = App::new(seed, kitty);
     let mut frame_n = 0usize;
-    let mut display = TermDisplay::new();
+    let mut display = TermDisplay::new(truecolor);
     let mut backend = opencar::render::create_backend().map_err(io::Error::other)?;
     let mut last = Instant::now();
 
@@ -101,7 +138,12 @@ fn drive(
     // F3 draw gate: cadence anchored to each draw's start; overruns leave
     // next_draw in the past ⇒ immediate redraw (natural PTY backpressure).
     let target_frame_time = Duration::from_micros(16_667);
+    let mut last_draw_started: Option<Instant> = None;
     let mut next_draw = Instant::now();
+    // G3 adaptive-cadence state.
+    let mut gate_state = GateState::Nominal;
+    let mut slow_windows = 0u32;
+    let mut clean_windows = 0u32;
 
     loop {
         let frame_start = Instant::now();
@@ -120,7 +162,7 @@ fn drive(
         last = frame_start;
         let update_start = Instant::now();
         app.update(dt);
-        let update_ms = update_start.elapsed().as_secs_f32() * 1000.0;
+        app.hud.perf.set_update(update_start.elapsed().as_secs_f32() * 1000.0);
 
         if app.mode == Mode::Quit {
             return Ok(());
@@ -139,7 +181,19 @@ fn drive(
         if draw_started_at < next_draw {
             continue;
         }
-        next_draw = draw_started_at + target_frame_time;
+        // G1: honest fps — real wall-clock interval between draws.
+        if let Some(prev) = last_draw_started {
+            let interval = (draw_started_at - prev).as_secs_f32();
+            if interval > 0.0 {
+                app.hud.perf.note_draw_interval(interval);
+            }
+        }
+        last_draw_started = Some(draw_started_at);
+        let gate_mult = match gate_state {
+            GateState::Nominal => 1,
+            GateState::Slow => 2,
+        };
+        next_draw = draw_started_at + target_frame_time * gate_mult;
 
         let cells = {
             let frame = opencar::render::FrameInput {
@@ -171,15 +225,31 @@ fn drive(
                 app.mode == Mode::Paused,
                 Some(fh.as_str()),
             );
-            app.hud
-                .perf
-                .push(update_ms, render_start.elapsed().as_secs_f32() * 1000.0, 0.0);
+            app.hud.perf.set_render(render_start.elapsed().as_secs_f32() * 1000.0);
             owned
         };
 
         let io_start = Instant::now();
         display.present(&mut out, &cells)?;
-        app.hud.perf.set_io(io_start.elapsed().as_secs_f32() * 1000.0);
+        let blocked_ms = io_start.elapsed().as_secs_f32() * 1000.0;
+        app.hud.perf.set_blocked(blocked_ms);
+
+        // G3 hysteresis counters (budget scales with current gate so Slow
+        // mode is judged against its own wider cadence).
+        let budget_ms = target_frame_time.as_secs_f32() * 1000.0 * gate_mult as f32;
+        if blocked_ms > budget_ms * CADENCE_BLOCKED_SHARE {
+            slow_windows += 1;
+            clean_windows = 0;
+        } else {
+            clean_windows += 1;
+            slow_windows = 0;
+        }
+        let (next_state, _) = update_gate(gate_state, slow_windows, clean_windows);
+        if next_state != gate_state {
+            gate_state = next_state;
+            slow_windows = 0;
+            clean_windows = 0;
+        }
 
         // ── Diagnostics: synchronous dump + clean exit on --debug-frame=N ──
         frame_n += 1;
@@ -221,7 +291,12 @@ fn main() -> io::Result<()> {
     };
     let mut debug_frame = None;
     let mut capture_out = None;
+    let mut truecolor = false;
     for a in std::env::args().skip(1) {
+        if a == "--truecolor" {
+            truecolor = true;
+            continue;
+        }
         if let Some(v) = a.strip_prefix("--debug-frame=") {
             debug_frame = v.parse::<usize>().ok();
         } else if let Some(v) = a.strip_prefix("--capture-out=") {
@@ -230,5 +305,43 @@ fn main() -> io::Result<()> {
             seed = n;
         }
     }
-    run(seed, debug_frame, capture_out)
+    run(seed, debug_frame, capture_out, truecolor)
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::{update_gate, GateState};
+
+    #[test]
+    fn nominal_holds_until_three_slow_windows() {
+        let mut state = GateState::Nominal;
+        let mut gate;
+        for i in 1..3 {
+            (state, gate) = update_gate(state, i, 0);
+            assert_eq!((state, gate), (GateState::Nominal, 1), "premature widen at {i}");
+        }
+        (state, gate) = update_gate(state, 3, 0);
+        assert_eq!((state, gate), (GateState::Slow, 2), "three blocked draws widen");
+    }
+
+    #[test]
+    fn slow_recovers_after_two_clean_windows() {
+        let mut state = GateState::Slow;
+        let mut gate;
+        (state, gate) = update_gate(state, 0, 1);
+        assert_eq!((state, gate), (GateState::Slow, 2));
+        (state, gate) = update_gate(state, 0, 2);
+        assert_eq!((state, gate), (GateState::Nominal, 1), "two clean windows restore");
+    }
+
+    #[test]
+    fn mixed_windows_do_not_oscillate() {
+        // Alternating slow/clean never accumulates enough of either.
+        let mut state = GateState::Nominal;
+        for _ in 0..10 {
+            (state, _) = update_gate(state, 1, 0);
+            (state, _) = update_gate(state, 0, 0);
+            assert_eq!(state, GateState::Nominal);
+        }
+    }
 }

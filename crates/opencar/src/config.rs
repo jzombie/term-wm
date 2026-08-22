@@ -309,10 +309,17 @@ pub const MINIMAP_ROWS: u16 = 8;
 // ── Input ───────────────────────────────────────────────────────────────
 // (Fallback held-key windows live with the steering consts above:
 // TAP_CONFIRM_SECS / INITIAL_DELAY_TIMEOUT_SECS / REPEAT_GAP_SECS.)
-/// Capacity of the buffered terminal writer. Large enough to hold several
-/// full dirty-frame payloads so `present()` issues a handful of big writes
-/// instead of hundreds of tiny blocking syscalls (Terminal.app over SSH).
-pub const OUT_BUF_BYTES: usize = 256 * 1024;
+/// Capacity of the buffered terminal writer. Small enough that a slow
+/// consumer surfaces as measurable write-blocking within a frame or two
+/// (G3 honesty), large enough to hold several dirty-frame payloads.
+pub const OUT_BUF_BYTES: usize = 64 * 1024;
+/// Share of the current draw budget above which a frame counts as
+/// write-blocked for the adaptive cadence (G3).
+pub const CADENCE_BLOCKED_SHARE: f32 = 0.30;
+/// Consecutive blocked draws before the gate widens to 2× cadence.
+pub const CADENCE_SLOW_WINDOWS: u32 = 3;
+/// Consecutive clean draws before the gate returns to nominal.
+pub const CADENCE_CLEAN_WINDOWS: u32 = 2;
 pub const BOB_PHASE_RATE: f32 = 0.55; // bob phase per meter traveled
 pub const OFFROAD_BOB_MULT: f32 = 3.0;
 

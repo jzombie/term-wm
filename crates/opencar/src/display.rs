@@ -47,6 +47,93 @@ static ASCII_LUT: [AsciiU8; 256] = build_ascii_lut();
 
 const CSI: &[u8] = b"\x1b[";
 
+// ── xterm-256 quantization ───────────────────────────────────────────────
+// The 6×6×6 cube levels are NOT uniformly spaced, so nearest-level lookup
+// uses a const table (uniform rounding would mis-snaps dim/shadow colors).
+
+const CUBE_LEVELS: [u16; 6] = [0, 95, 135, 175, 215, 255];
+/// Tolerance under which a color counts as gray and rides the 24-step ramp.
+const GRAY_EPS: u8 = 6;
+
+const fn build_cube_lut() -> [u8; 256] {
+    let mut lut = [0u8; 256];
+    let mut v = 0usize;
+    while v < 256 {
+        let mut best = 0usize;
+        let mut best_d = i32::MAX;
+        let mut li = 0usize;
+        while li < CUBE_LEVELS.len() {
+            let d = (CUBE_LEVELS[li] as i32 - v as i32).abs();
+            if d < best_d {
+                best_d = d;
+                best = li;
+            }
+            li += 1;
+        }
+        lut[v] = best as u8;
+        v += 1;
+    }
+    lut
+}
+
+static CUBE_LUT: [u8; 256] = build_cube_lut();
+
+/// Nearest xterm-256 index for an RGB triple. Pure stack arithmetic; the
+/// gray-ramp candidate competes with the cube candidate by squared distance,
+/// so near-white picks cube white (`#fff`) over the ramp's `#eee` ceiling.
+#[inline(always)]
+fn rgb_to_xterm256(c: [u8; 3]) -> u8 {
+    // Cube candidate via per-channel nearest-level LUTs.
+    let lr = CUBE_LUT[c[0] as usize];
+    let lg = CUBE_LUT[c[1] as usize];
+    let lb = CUBE_LUT[c[2] as usize];
+    let cr = CUBE_LEVELS[lr as usize] as i32;
+    let cg = CUBE_LEVELS[lg as usize] as i32;
+    let cb = CUBE_LEVELS[lb as usize] as i32;
+    let mut best_idx = 16 + 36 * lr + 6 * lg + lb;
+    let best_d2 = sq_dist(c[0], cr) + sq_dist(c[1], cg) + sq_dist(c[2], cb);
+
+    // Gray-ramp candidate: only plausible when channels are nearly equal
+    // (noise tint keeps grays within a few LSBs).
+    let mx = c[0].max(c[1]).max(c[2]);
+    let mn = c[0].min(c[1]).min(c[2]);
+    if mx - mn <= GRAY_EPS {
+        let lum = ((c[0] as u16 + c[1] as u16 + c[2] as u16) / 3) as i32;
+        // Ramp levels are 8 + 10·i, i in 0..=23 (indices 232..255).
+        let i = (((lum - 8).max(0) as u32 + 5) / 10).min(23) as i32;
+        let gval = 8 + 10 * i;
+        let d2_gray = 3 * sq_dist_i(lum, gval);
+        if d2_gray < best_d2 {
+            best_idx = 232 + i as u8;
+        }
+    }
+
+    best_idx
+}
+
+#[inline(always)]
+fn sq_dist(a: u8, b: i32) -> i32 {
+    sq_dist_i(a as i32, b)
+}
+
+#[inline(always)]
+fn sq_dist_i(a: i32, b: i32) -> i32 {
+    let d = a - b;
+    d * d
+}
+
+fn set_fg_indexed(out: &mut impl Write, idx: u8) -> std::io::Result<()> {
+    out.write_all(b"\x1b[38;5;")?;
+    write_num(out, idx)?;
+    out.write_all(b"m")
+}
+
+fn set_bg_indexed(out: &mut impl Write, idx: u8) -> std::io::Result<()> {
+    out.write_all(b"\x1b[48;5;")?;
+    write_num(out, idx)?;
+    out.write_all(b"m")
+}
+
 fn write_num(out: &mut impl Write, v: u8) -> std::io::Result<()> {
     let a = &ASCII_LUT[v as usize];
     out.write_all(&a.bytes[..a.len as usize])
@@ -77,7 +164,7 @@ fn move_to(out: &mut impl Write, cx: u16, cy: u16) -> std::io::Result<()> {
     out.write_all(b"H")
 }
 
-fn set_fg(out: &mut impl Write, c: [u8; 3]) -> std::io::Result<()> {
+fn set_fg_truecolor(out: &mut impl Write, c: [u8; 3]) -> std::io::Result<()> {
     out.write_all(b"\x1b[38;2;")?;
     write_num(out, c[0])?;
     out.write_all(b";")?;
@@ -87,7 +174,7 @@ fn set_fg(out: &mut impl Write, c: [u8; 3]) -> std::io::Result<()> {
     out.write_all(b"m")
 }
 
-fn set_bg(out: &mut impl Write, c: [u8; 3]) -> std::io::Result<()> {
+fn set_bg_truecolor(out: &mut impl Write, c: [u8; 3]) -> std::io::Result<()> {
     out.write_all(b"\x1b[48;2;")?;
     write_num(out, c[0])?;
     out.write_all(b";")?;
@@ -109,10 +196,13 @@ pub struct TermDisplay {
     /// Logical terminal cursor after the last printed glyph (`Print`
     /// auto-advances), so `MoveTo` fires only on real jumps.
     cursor: Option<(u16, u16)>,
+    /// Emit exact 24-bit RGB instead of indexed xterm-256 (G2 payload diet
+    /// opt-out).
+    truecolor: bool,
 }
 
 impl TermDisplay {
-    pub fn new() -> Self {
+    pub fn new(truecolor: bool) -> Self {
         Self {
             cols: 0,
             rows: 0,
@@ -120,6 +210,23 @@ impl TermDisplay {
             cur_fg: None,
             cur_bg: None,
             cursor: None,
+            truecolor,
+        }
+    }
+
+    fn set_fg(&mut self, out: &mut impl Write, c: [u8; 3]) -> std::io::Result<()> {
+        if self.truecolor {
+            set_fg_truecolor(out, c)
+        } else {
+            set_fg_indexed(out, rgb_to_xterm256(c))
+        }
+    }
+
+    fn set_bg(&mut self, out: &mut impl Write, c: [u8; 3]) -> std::io::Result<()> {
+        if self.truecolor {
+            set_bg_truecolor(out, c)
+        } else {
+            set_bg_indexed(out, rgb_to_xterm256(c))
         }
     }
 
@@ -167,11 +274,11 @@ impl TermDisplay {
                 }
 
                 if self.cur_fg != Some(cell.fg) {
-                    set_fg(out, cell.fg)?;
+                    self.set_fg(out, cell.fg)?;
                     self.cur_fg = Some(cell.fg);
                 }
                 if self.cur_bg != Some(cell.bg) {
-                    set_bg(out, cell.bg)?;
+                    self.set_bg(out, cell.bg)?;
                     self.cur_bg = Some(cell.bg);
                 }
 
@@ -198,7 +305,7 @@ impl TermDisplay {
 
 impl Default for TermDisplay {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -212,7 +319,7 @@ mod moveto_tests {
     /// wrapping the last column (the banding-tearing bug).
     #[test]
     fn origin_emits_home_and_no_newlines() {
-        let mut d = TermDisplay::new();
+        let mut d = TermDisplay::new(false);
         d.resize_if_needed(4, 2);
         let mut out = Vec::new();
         let mut cells = [TermCell::BLANK; 8];
@@ -238,7 +345,7 @@ mod moveto_tests {
 
     #[test]
     fn adjacent_dirty_cells_share_one_move_to() {
-        let mut d = TermDisplay::new();
+        let mut d = TermDisplay::new(false);
         d.resize_if_needed(8, 2);
         let mut out = Vec::new();
         let mut cells = [TermCell::BLANK; 16];
@@ -259,7 +366,7 @@ mod moveto_tests {
 
     #[test]
     fn unchanged_second_frame_is_silent() {
-        let mut d = TermDisplay::new();
+        let mut d = TermDisplay::new(false);
         d.resize_if_needed(6, 3);
         let mut cells = vec![TermCell::BLANK; 18];
         cells[3].mask = 0xFF;
@@ -273,5 +380,57 @@ mod moveto_tests {
             bytes_after_first,
             "identical frame must emit nothing at all"
         );
+    }
+}
+
+#[cfg(test)]
+mod quantizer_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_xterm_mappings() {
+        assert_eq!(rgb_to_xterm256([0, 0, 0]), 16, "black = cube corner");
+        assert_eq!(rgb_to_xterm256([255, 255, 255]), 231, "white = cube corner");
+        assert_eq!(rgb_to_xterm256([255, 0, 0]), 196, "pure red");
+        assert_eq!(rgb_to_xterm256([0, 255, 0]), 46, "pure green");
+        assert_eq!(rgb_to_xterm256([0, 0, 255]), 21, "pure blue");
+    }
+
+    #[test]
+    fn near_grays_ride_the_ramp() {
+        // Noise tint keeps grays nearly equal — they must use the 24-step
+        // ramp rather than muddy cube corners.
+        let idx = rgb_to_xterm256([130, 127, 132]);
+        assert!((232..=255).contains(&idx), "near-gray got {idx}");
+        assert_eq!(rgb_to_xterm256([8, 8, 8]), 232, "ramp floor");
+        assert_eq!(rgb_to_xterm256([238, 238, 238]), 255, "ramp ceiling");
+    }
+
+    #[test]
+    fn indexed_emission_halves_color_bytes() {
+        let cell = |m: &mut TermCell| {
+            m.mask = 0xFF;
+            m.fg = [255, 0, 0];
+        };
+        let mut tc = TermDisplay::new(true);
+        tc.resize_if_needed(4, 2);
+        let mut cells = [TermCell::BLANK; 8];
+        cell(&mut cells[0]);
+        let mut out_tc = Vec::new();
+        tc.present(&mut out_tc, &cells).expect("tc");
+
+        let mut idx = TermDisplay::new(false);
+        idx.resize_if_needed(4, 2);
+        let mut cells2 = [TermCell::BLANK; 8];
+        cell(&mut cells2[0]);
+        let mut out_idx = Vec::new();
+        idx.present(&mut out_idx, &cells2).expect("idx");
+
+        let s_tc = String::from_utf8_lossy(&out_tc);
+        let s_idx = String::from_utf8_lossy(&out_idx);
+        assert!(s_tc.contains("\x1b[38;2;255;0;0m"), "truecolor path: {s_tc:?}");
+        assert!(s_idx.contains("\x1b[38;5;196m"), "indexed path: {s_idx:?}");
+        assert!(!s_idx.contains(";2;"), "indexed must not leak TrueColor: {s_idx:?}");
+        assert!(out_idx.len() < out_tc.len(), "indexed payload must be smaller");
     }
 }

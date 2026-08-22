@@ -30,37 +30,46 @@ pub struct HudState {
     pub perf: PerfStats,
 }
 
-/// Rolling per-segment frame timings, EMA-smoothed for readability.
+/// Rolling per-segment frame statistics (G1: display-only, never fed back
+/// into pacing). `fps` is the REAL inter-draw wall-clock rate — not a sum of
+/// internal segments; `blocked_ms` is time the terminal made us wait inside
+/// `present()`.
 #[derive(Clone, Copy)]
 pub struct PerfStats {
     pub fps: f32,
     pub update_ms: f32,
     pub render_ms: f32,
-    pub io_ms: f32,
+    pub blocked_ms: f32,
 }
 
 impl PerfStats {
     const EMA_ALPHA: f32 = 0.15;
 
     fn new() -> Self {
-        Self { fps: 0.0, update_ms: 0.0, render_ms: 0.0, io_ms: 0.0 }
+        Self { fps: 0.0, update_ms: 0.0, render_ms: 0.0, blocked_ms: 0.0 }
     }
 
     fn ema(old: f32, new: f32) -> f32 {
         old + Self::EMA_ALPHA * (new - old)
     }
 
-    /// Fold one drawn frame's update/render timings in; fps derives from the
-    /// total. `io_ms` arrives after presentation via [`Self::set_io`].
-    pub fn push(&mut self, update_ms: f32, render_ms: f32, _io_ms: f32) {
-        self.update_ms = Self::ema(self.update_ms, update_ms);
-        self.render_ms = Self::ema(self.render_ms, render_ms);
-        let total = self.update_ms.max(0.01) + self.render_ms.max(0.01) + self.io_ms.max(0.01);
-        self.fps = Self::ema(self.fps, 1000.0 / total);
+    /// Record the wall-clock interval between this draw and the previous one.
+    pub fn note_draw_interval(&mut self, secs: f32) {
+        if secs > 0.0001 {
+            self.fps = Self::ema(self.fps, 1.0 / secs);
+        }
     }
 
-    pub fn set_io(&mut self, io_ms: f32) {
-        self.io_ms = Self::ema(self.io_ms, io_ms);
+    pub fn set_update(&mut self, ms: f32) {
+        self.update_ms = Self::ema(self.update_ms, ms);
+    }
+
+    pub fn set_render(&mut self, ms: f32) {
+        self.render_ms = Self::ema(self.render_ms, ms);
+    }
+
+    pub fn set_blocked(&mut self, ms: f32) {
+        self.blocked_ms = Self::ema(self.blocked_ms, ms);
     }
 }
 
@@ -133,9 +142,9 @@ impl HudState {
             }
             let hint = format!(
                 "[{}] WASD drive - Space brake - C cam - M map - H hud - P pause - Q quit  \
-                 {:>4.0}fps u{:.1} r{:.1} io{:.1}",
+                 {:>4.0}fps u{:.1} r{:.1} b{:.1}",
                 backend_name, self.perf.fps, self.perf.update_ms, self.perf.render_ms,
-                self.perf.io_ms
+                self.perf.blocked_ms
             );
             draw_ascii(cells, cols, 0, 0, &hint, dim);
             if let Some(h) = frame_hash {
