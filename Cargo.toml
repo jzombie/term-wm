@@ -203,6 +203,7 @@ term-session-mock = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }
 term-wm-render = { workspace = true }
+term-wm-vt100 = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

@@ -784,7 +784,9 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "session-persistence")]
     use serial_test::serial;
+    #[cfg(feature = "session-persistence")]
     use term_wm_core::actions::TermWmAction;
 
     #[test]
@@ -976,6 +978,7 @@ mod tests {
 
     /// Build an `App` without spawning any PTYs, so the workspace-action
     /// handler can be unit-tested directly.
+    #[cfg(feature = "session-persistence")]
     fn test_app() -> App {
         let (event_source, event_owner) = UnifiedEventSource::new(true).expect("headless source");
         let pty_wakeup_tx = event_source.pty_wakeup_tx();
@@ -1045,6 +1048,101 @@ mod tests {
 
         // Detach with no attributed conn id: no gateway call, still consumed.
         assert!(app.handle_custom_action(&TermWmAction::DetachCurrentClient));
+
+        init(prev);
+        unsafe {
+            std::env::remove_var("TERM_WM_GATEWAY");
+        }
+    }
+
+    /// `RunProjectTask` with a nonexistent task label returns false
+    /// and does not panic — the "task not found" branch.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    fn run_project_task_nonexistent_returns_false() {
+        let mut app = test_app();
+        assert!(
+            !app.handle_custom_action(&TermWmAction::RunProjectTask("no-such-task".into())),
+            "RunProjectTask with nonexistent label must return false"
+        );
+    }
+
+    /// `RunProjectTask` works regardless of the session-persistence toggle
+    /// (it is matched before the persistence guard).
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(runtime_config)]
+    fn run_project_task_works_without_persistence() {
+        use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
+        let prev = RuntimeConfig {
+            session_persistence: session_persistence_enabled(),
+        };
+        init(RuntimeConfig {
+            session_persistence: false,
+        });
+
+        let mut app = test_app();
+        // Even with persistence disabled, RunProjectTask is matched first.
+        assert!(
+            !app.handle_custom_action(&TermWmAction::RunProjectTask("missing".into())),
+            "RunProjectTask must be reachable even when persistence is disabled"
+        );
+
+        init(prev);
+    }
+
+    /// `ToggleWorkspaceFollow` toggles the flag and pushes a notification.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(runtime_config)]
+    fn toggle_workspace_follow_toggles_flag() {
+        let mut app = test_app();
+        let initially_enabled = app.inner.wm().workspace_follow_enabled;
+
+        assert!(
+            app.handle_custom_action(&TermWmAction::ToggleWorkspaceFollow),
+            "ToggleWorkspaceFollow must return true"
+        );
+        assert_eq!(
+            app.inner.wm().workspace_follow_enabled,
+            !initially_enabled,
+            "toggle must flip the flag"
+        );
+
+        // Toggle back
+        app.handle_custom_action(&TermWmAction::ToggleWorkspaceFollow);
+        assert_eq!(
+            app.inner.wm().workspace_follow_enabled,
+            initially_enabled,
+            "second toggle must restore original value"
+        );
+    }
+
+    /// `SwitchWorkspace` with `workspace_follow_enabled = true` exercises the
+    /// `RebindScope::AllViewers` branch (vs `CallerOnly` when disabled).
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(runtime_config)]
+    fn switch_workspace_follow_enabled_uses_all_viewers_scope() {
+        use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
+        let _guard = env_lock();
+        let prev = RuntimeConfig {
+            session_persistence: session_persistence_enabled(),
+        };
+        init(RuntimeConfig {
+            session_persistence: true,
+        });
+        unsafe {
+            std::env::set_var("TERM_WM_GATEWAY", "term-wm/coverage-test-gw-follow");
+        }
+
+        let mut app = test_app();
+        // Enable follow mode, then switch workspace
+        app.inner.wm().workspace_follow_enabled = true;
+        assert!(
+            app.handle_custom_action(&TermWmAction::SwitchWorkspace("staging".into())),
+            "SwitchWorkspace must be consumed"
+        );
 
         init(prev);
         unsafe {

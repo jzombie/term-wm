@@ -131,6 +131,10 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # Run Clippy without default features to catch feature-gating regressions
+      - name: Run Clippy (no default features)
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+
       # Fail if any documentation warnings occur
       - name: Check documentation
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items

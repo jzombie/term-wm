@@ -147,9 +147,10 @@ pub fn decode_path(pw: &PathWire) -> PathBuf {
             bytes.len().is_multiple_of(2),
             "windows cwd bytes must be u16 little-endian pairs"
         );
-        let units = bytes
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        let (chunks, _remainder) = bytes.as_chunks::<2>();
+        let units = chunks
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect::<Vec<u16>>();
         PathBuf::from(OsString::from_wide(&units))
     }

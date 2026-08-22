@@ -419,4 +419,53 @@ mod tests {
         );
         drop(r);
     }
+
+    /// When multiple zombies are sent and the reaper is dropped after a short
+    /// delay, the shutdown drain path must kill all children and join all reader
+    /// threads without deadlocking.
+    #[test]
+    fn reaper_drains_burst_on_shutdown() {
+        let r = Reaper::new(Duration::from_millis(50));
+        let states: Vec<_> = (0..5)
+            .map(|_| {
+                let (_child, state) = SharedMockChild::new();
+                r.reap(make_shared_zombie(state.clone()));
+                state
+            })
+            .collect();
+        // Give the reaper thread a chance to wake up and start processing
+        // the zombies, then drop to exercise the shutdown drain path.
+        thread::sleep(Duration::from_millis(200));
+        drop(r);
+        // Verify all children were killed (SIGHUP at minimum)
+        for state in &states {
+            assert!(
+                state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1,
+                "all zombies must be killed during shutdown drain"
+            );
+        }
+    }
+}
+
+#[cfg(all(test, not(feature = "pty")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stub_reaper_new() {
+        let r = Reaper::new(Duration::from_secs(5));
+        r.reap(());
+    }
+
+    #[test]
+    fn stub_reaper_default() {
+        let r = Reaper;
+        r.reap(());
+    }
+
+    #[test]
+    fn stub_reaper_drop() {
+        let r = Reaper::new(Duration::from_secs(1));
+        drop(r);
+    }
 }

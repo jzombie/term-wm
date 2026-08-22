@@ -186,8 +186,7 @@ impl CommandPaletteComponent {
                     }
                     let display_name = cmd_node.name.format(self.current_context_mask);
                     let desc = cmd_node.description.clone().unwrap_or_default();
-                    let is_header =
-                        cmd_node.disabled && display_name.starts_with('\u{2500}');
+                    let is_header = cmd_node.disabled && display_name.starts_with('\u{2500}');
 
                     if is_header {
                         current_section = display_name
@@ -335,8 +334,7 @@ impl CommandPaletteComponent {
         } else {
             self.selected = self.selected.min(self.filtered_items.len() - 1);
             if self.skip_disabled_items && self.filtered_items[self.selected].disabled {
-                if let Some(valid_idx) =
-                    self.filtered_items.iter().position(|item| !item.disabled)
+                if let Some(valid_idx) = self.filtered_items.iter().position(|item| !item.disabled)
                 {
                     self.selected = valid_idx;
                 } else {
@@ -491,8 +489,7 @@ impl CommandPaletteComponent {
         } else {
             self.selected = self.selected.min(self.filtered_items.len() - 1);
             if self.skip_disabled_items && self.filtered_items[self.selected].disabled {
-                if let Some(valid_idx) =
-                    self.filtered_items.iter().position(|item| !item.disabled)
+                if let Some(valid_idx) = self.filtered_items.iter().position(|item| !item.disabled)
                 {
                     self.selected = valid_idx;
                 } else {
@@ -1447,6 +1444,259 @@ mod tests {
         assert!(
             list_row.contains(NO_RESULTS_PLACEHOLDER),
             "expected '{NO_RESULTS_PLACEHOLDER}' in list row, got '{list_row}'"
+        );
+    }
+
+    // ── skip-disabled navigation tests ──
+
+    #[test]
+    fn nav_down_skips_disabled_items() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.skip_disabled_items = true;
+        palette.filtered_items = vec![
+            PaletteItem {
+                stable_id: "a".into(),
+                display_name: "A".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: false,
+            },
+            PaletteItem {
+                stable_id: "b".into(),
+                display_name: "B".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: true,
+            },
+            PaletteItem {
+                stable_id: "c".into(),
+                display_name: "C".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: false,
+            },
+        ];
+        palette.selected = 0;
+        let ctx = ComponentContext::new(true);
+        palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 2, "must skip index 1 (disabled)");
+    }
+
+    #[test]
+    fn nav_up_skips_disabled_items() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.skip_disabled_items = true;
+        palette.filtered_items = vec![
+            PaletteItem {
+                stable_id: "a".into(),
+                display_name: "A".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: false,
+            },
+            PaletteItem {
+                stable_id: "b".into(),
+                display_name: "B".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: true,
+            },
+            PaletteItem {
+                stable_id: "c".into(),
+                display_name: "C".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: false,
+            },
+        ];
+        palette.selected = 2;
+        let ctx = ComponentContext::new(true);
+        palette.update(TermWmAction::MenuUp, &ctx, &mut VecDeque::new());
+        assert_eq!(palette.selected, 0, "must skip index 1 (disabled)");
+    }
+
+    #[test]
+    fn nav_wraps_around_skipping_disabled() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.skip_disabled_items = true;
+        palette.filtered_items = vec![
+            PaletteItem {
+                stable_id: "a".into(),
+                display_name: "A".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: true,
+            },
+            PaletteItem {
+                stable_id: "b".into(),
+                display_name: "B".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: false,
+            },
+        ];
+        palette.selected = 1;
+        let ctx = ComponentContext::new(true);
+        // MenuDown from index 1: next is 0 (disabled), wraps to 1 (enabled)
+        palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
+        assert_eq!(
+            palette.selected, 1,
+            "wraps and stays on the only enabled item"
+        );
+    }
+
+    #[test]
+    fn nav_all_disabled_stays_put() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.skip_disabled_items = true;
+        palette.filtered_items = vec![
+            PaletteItem {
+                stable_id: "a".into(),
+                display_name: "A".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: true,
+            },
+            PaletteItem {
+                stable_id: "b".into(),
+                display_name: "B".into(),
+                description: String::new(),
+                action: TermWmAction::CloseMenu,
+                icon: None,
+                disabled: true,
+            },
+        ];
+        palette.selected = 0;
+        let ctx = ComponentContext::new(true);
+        palette.update(TermWmAction::MenuDown, &ctx, &mut VecDeque::new());
+        assert_eq!(
+            palette.selected, 0,
+            "no non-disabled item exists, stays put"
+        );
+    }
+
+    // ── search + disabled interaction tests ──
+
+    #[test]
+    fn search_zero_match_returns_empty_and_ignored_enter() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.filtered_items = vec![PaletteItem {
+            stable_id: "a".into(),
+            display_name: "New Terminal".into(),
+            description: String::new(),
+            action: TermWmAction::NewTerminal,
+            icon: None,
+            disabled: false,
+        }];
+        palette.query = "zzz_nonexistent".to_string();
+
+        // Simulate that rerank filtered everything out
+        palette.filtered_items.clear();
+        palette.selected = 0;
+        palette.display_nodes.clear();
+
+        assert!(palette.filtered_items.is_empty());
+
+        // Enter on empty list must be Ignored
+        let ctx = ComponentContext::new(true);
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyKind::Press,
+        });
+        let result = palette.handle_events(&event, &ctx);
+        assert!(result.is_ignored(), "enter on empty search must be ignored");
+    }
+
+    #[test]
+    fn all_disabled_filtered_items_yields_none_action() {
+        let mut palette = CommandPaletteComponent::new();
+        palette.data_dirty = false;
+        palette.query_dirty = false;
+        palette.skip_disabled_items = true;
+        palette.filtered_items = vec![
+            PaletteItem {
+                stable_id: "a".into(),
+                display_name: "A".into(),
+                description: String::new(),
+                action: TermWmAction::NewTerminal,
+                icon: None,
+                disabled: true,
+            },
+            PaletteItem {
+                stable_id: "b".into(),
+                display_name: "B".into(),
+                description: String::new(),
+                action: TermWmAction::Help,
+                icon: None,
+                disabled: true,
+            },
+        ];
+        palette.selected = 0;
+        assert_eq!(
+            palette.selected_action(),
+            None,
+            "selected_action must be None when current item is disabled"
+        );
+    }
+
+    // ── data_dirty lifecycle test ──
+
+    #[test]
+    fn data_dirty_cleared_by_rebuild_and_sets_query_dirty() {
+        let mut palette = CommandPaletteComponent::new();
+        assert!(palette.data_dirty, "must start dirty");
+        palette.data_dirty = true;
+        palette.query_dirty = false;
+
+        let registry = CommandRegistry::new();
+        palette.rebuild_data_cache(&registry);
+
+        assert!(
+            !palette.data_dirty,
+            "data_dirty must be false after rebuild"
+        );
+        assert!(
+            palette.query_dirty,
+            "query_dirty must be true after rebuild"
+        );
+    }
+
+    // ── items_dirty lifecycle test ──
+
+    #[test]
+    fn render_populates_inner_menu_from_display_nodes() {
+        let mut palette = make_palette_with_many_items(3);
+        // Before render, the inner menu should be empty
+        assert_eq!(
+            palette.list_scroll.content.borrow().items().len(),
+            0,
+            "inner menu must start empty"
+        );
+        render_palette(&mut palette, 10);
+        let count = palette.list_scroll.content.borrow().items().len();
+        assert!(
+            count > 0,
+            "inner menu must have items after render, got {count}"
         );
     }
 }

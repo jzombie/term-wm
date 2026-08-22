@@ -1,3 +1,4 @@
+#![cfg(feature = "session-persistence")]
 #![allow(clippy::unwrap_used)]
 
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;

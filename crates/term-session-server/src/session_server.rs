@@ -555,7 +555,15 @@ async fn get_or_create_channel(
                 } else {
                     let (raw, exited, code) = {
                         let Some(session) = guard.session.as_mut() else {
-                            // No live session: finalize any lingering subscribers.
+                            // No live session: finalize lingering subscribers only if
+                            // the channel has ever had a session (cmd stored).
+                            // A subscriber attaching before the first Spawn would
+                            // otherwise be closed immediately (race with Subscribe
+                            // vs Spawn ordering, especially on Windows).
+                            if guard.cmd.is_empty() && guard.output_cache.is_empty() {
+                                // No session yet, keep subscriber waiting for Spawn.
+                                continue;
+                            }
                             for sub in &guard.subscribers {
                                 sub.respond.respond(Vec::new(), true);
                             }
@@ -619,6 +627,40 @@ async fn get_or_create_channel(
 fn purge_input_forwarder(state: &ServerState, conn_id: usize) {
     if let Ok(mut fwd) = state.input_forwarders.lock() {
         fwd.remove(&conn_id);
+    }
+}
+
+/// Resolve which connection handles should receive a `RebindWorkspace`
+/// notification based on the requested scope.
+fn filter_rebind_targets(
+    conns: &HashMap<usize, ConnEntry>,
+    source: &ChannelName,
+    scope: &RebindScope,
+    initiator_conn_id: Option<usize>,
+) -> Vec<RpcIpcConnectionContextHandle> {
+    match scope {
+        RebindScope::CallerOnly => {
+            let attached: Vec<_> = conns
+                .values()
+                .filter(|e| matches!(&e.state, ConnState::Attached(n) if n == source))
+                .collect();
+            if let Some(init_id) = initiator_conn_id {
+                attached
+                    .into_iter()
+                    .filter(|e| e.handle.0.conn_id == init_id)
+                    .map(|e| e.handle.clone())
+                    .collect()
+            } else if attached.len() == 1 {
+                vec![attached[0].handle.clone()]
+            } else {
+                Vec::new()
+            }
+        }
+        RebindScope::AllViewers => conns
+            .values()
+            .filter(|e| matches!(&e.state, ConnState::Attached(n) if n == source))
+            .map(|e| e.handle.clone())
+            .collect(),
     }
 }
 
@@ -1256,7 +1298,11 @@ pub async fn run_gateway(
                         respond: respond.clone(),
                     });
                     guard.notify.notify_one();
-                    let is_dead = guard.session.is_none();
+                    // Only consider the channel dead if it has ever had a session.
+                    // Before the first Spawn, cmd is empty and output_cache is empty,
+                    // so a subscriber must stay waiting (Subscribe-before-Spawn race).
+                    let is_dead = guard.session.is_none()
+                        && (!guard.cmd.is_empty() || !guard.output_cache.is_empty());
                     // Deliver the retained/live output and the end-of-stream
                     // marker while still holding the channel guard, so the
                     // polling task's dead-session finalization cannot interleave
@@ -1556,34 +1602,9 @@ pub async fn run_gateway(
                 }
                 let req = RebindWorkspace::decode_request(&payload).map_err(boxed_io)?;
                 let source = ChannelName::parse(&req.source_channel).map_err(|e| rpc_err(&e))?;
-                let targets: Vec<RpcIpcConnectionContextHandle> = {
+                let targets = {
                     let conns = state.conns.read().await;
-                    match req.scope {
-                        RebindScope::CallerOnly => {
-                            let attached: Vec<_> = conns
-                                .values()
-                                .filter(
-                                    |e| matches!(&e.state, ConnState::Attached(n) if n == &source),
-                                )
-                                .collect();
-                            if let Some(init_id) = req.initiator_conn_id {
-                                attached
-                                    .into_iter()
-                                    .filter(|e| e.handle.0.conn_id == init_id)
-                                    .map(|e| e.handle.clone())
-                                    .collect()
-                            } else if attached.len() == 1 {
-                                vec![attached[0].handle.clone()]
-                            } else {
-                                Vec::new()
-                            }
-                        }
-                        RebindScope::AllViewers => conns
-                            .values()
-                            .filter(|e| matches!(&e.state, ConnState::Attached(n) if n == &source))
-                            .map(|e| e.handle.clone())
-                            .collect(),
-                    }
+                    filter_rebind_targets(&conns, &source, &req.scope, req.initiator_conn_id)
                 };
                 for caller in targets {
                     let target = req.target.clone();
@@ -1932,5 +1953,469 @@ mod tests {
         assert_eq!(channel.input_mode, InputMode::RawPty);
         assert_eq!(channel.internal_wm_conn_id, None);
         assert!(channel.internal_wm_caller.is_none());
+    }
+
+    // ── Batch 1: retain_final_output ─────────────────────────────────
+
+    #[test]
+    fn retain_final_output_appends_when_below_max() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        ch.retain_final_output(b"hello");
+        assert_eq!(ch.output_cache, b"hello");
+    }
+
+    #[test]
+    fn retain_final_output_replaces_when_single_chunk_exceeds_max() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        let big = vec![b'C'; MAX_RETAINED_OUTPUT_BYTES * 2];
+        ch.retain_final_output(&big);
+        assert_eq!(ch.output_cache.len(), MAX_RETAINED_OUTPUT_BYTES);
+        assert!(ch.output_cache.iter().all(|&b| b == b'C'));
+    }
+
+    #[test]
+    fn retain_final_output_evicts_oldest_when_overflow() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        let prefix = vec![b'A'; 50_000];
+        ch.retain_final_output(&prefix);
+        let suffix = vec![b'B'; 50_000];
+        ch.retain_final_output(&suffix);
+        assert_eq!(ch.output_cache.len(), MAX_RETAINED_OUTPUT_BYTES);
+        // Tail of cache should be the suffix bytes
+        assert!(ch.output_cache.ends_with(&suffix));
+    }
+
+    // ── Batch 2: to_info ─────────────────────────────────────────────
+
+    #[test]
+    fn to_info_no_session_populates_clients_sorted_by_conn_id() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        let name = ChannelName::parse("test/info").expect("parse");
+        for conn_id in [3, 1, 2] {
+            ch.clients.insert(
+                conn_id,
+                ClientEntry {
+                    caller: None,
+                    hostname: format!("host-{conn_id}"),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                    cols: 80,
+                    rows: 24,
+                },
+            );
+        }
+        let info = ch.to_info(&name);
+        assert!(info.session.is_none());
+        assert_eq!(info.clients.len(), 3);
+        let ids: Vec<_> = info.clients.iter().map(|c| c.conn_id).collect();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    // ── Batch 3: evict_conn ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn evict_conn_removes_conn_and_client() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        let (write_tx2, _write_rx2) = mpsc::unbounded_channel();
+        let conn2 = ConnEntry {
+            handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                write_tx: write_tx2,
+                conn_id: 2,
+                is_connected: Arc::new(AtomicBool::new(true)),
+                dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+            })),
+            state: ConnState::Attached(name.clone()),
+            hostname: String::new(),
+            connected_at_unix: 0,
+            pid: 0,
+            user: String::new(),
+            version: String::new(),
+            ssh_ip: None,
+            ssh_port: None,
+        };
+        state.conns.write().await.insert(2, conn2);
+        {
+            let ch = resolve_channel(&state, &name).await.expect("channel");
+            let mut guard = ch.lock().await;
+            guard.clients.insert(
+                2,
+                ClientEntry {
+                    caller: None,
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                    cols: 80,
+                    rows: 24,
+                },
+            );
+        }
+        state
+            .conn_to_channel
+            .lock()
+            .unwrap()
+            .insert(2, "test/coalesce".to_string());
+
+        evict_conn(&state, 2).await;
+
+        assert!(!state.conns.read().await.contains_key(&2));
+        assert!(!state.conn_to_channel.lock().unwrap().contains_key(&2));
+        let ch = resolve_channel(&state, &name).await.expect("channel");
+        let guard = ch.lock().await;
+        assert!(!guard.clients.contains_key(&2));
+    }
+
+    #[tokio::test]
+    async fn evict_conn_noop_for_unattached() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let (write_tx, _write_rx) = mpsc::unbounded_channel();
+        let conn = ConnEntry {
+            handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                write_tx,
+                conn_id: 99,
+                is_connected: Arc::new(AtomicBool::new(true)),
+                dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+            })),
+            state: ConnState::Unattached,
+            hostname: String::new(),
+            connected_at_unix: 0,
+            pid: 0,
+            user: String::new(),
+            version: String::new(),
+            ssh_ip: None,
+            ssh_port: None,
+        };
+        state.conns.write().await.insert(99, conn);
+
+        evict_conn(&state, 99).await;
+
+        assert!(!state.conns.read().await.contains_key(&99));
+    }
+
+    #[tokio::test]
+    async fn evict_conn_noop_for_nonexistent_conn() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+
+        evict_conn(&state, 9999).await;
+
+        assert!(state.conns.read().await.contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn evict_concurrent_no_deadlock() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        for cid in [2, 3] {
+            let (write_tx, _write_rx) = mpsc::unbounded_channel();
+            let conn = ConnEntry {
+                handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                    write_tx,
+                    conn_id: cid,
+                    is_connected: Arc::new(AtomicBool::new(true)),
+                    dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+                })),
+                state: ConnState::Attached(name.clone()),
+                hostname: String::new(),
+                connected_at_unix: 0,
+                pid: 0,
+                user: String::new(),
+                version: String::new(),
+                ssh_ip: None,
+                ssh_port: None,
+            };
+            state.conns.write().await.insert(cid, conn);
+            let ch = resolve_channel(&state, &name).await.expect("channel");
+            let mut guard = ch.lock().await;
+            guard.clients.insert(
+                cid,
+                ClientEntry {
+                    caller: None,
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                    cols: 80,
+                    rows: 24,
+                },
+            );
+            state
+                .conn_to_channel
+                .lock()
+                .unwrap()
+                .insert(cid, "test/coalesce".to_string());
+        }
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (r1, r2, r3) = tokio::join!(
+                evict_conn(&state, 1),
+                evict_conn(&state, 2),
+                evict_conn(&state, 3),
+            );
+            // All three evictions complete without deadlock
+            let _ = (r1, r2, r3);
+        })
+        .await
+        .expect("deadlock: timed out after 5s");
+
+        assert!(state.conns.read().await.is_empty());
+        let ch = resolve_channel(&state, &name).await.expect("channel");
+        let guard = ch.lock().await;
+        assert!(guard.clients.is_empty());
+    }
+
+    // ── Batch 4: notify_user_connected/disconnected ──────────────────
+
+    #[tokio::test]
+    async fn notify_user_connected_skips_when_single_client() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        {
+            let ch = resolve_channel(&state, &name).await.expect("channel");
+            let mut guard = ch.lock().await;
+            let (write_tx, _write_rx) = mpsc::unbounded_channel();
+            guard.internal_wm_caller = Some(RpcIpcConnectionContextHandle(Arc::new(
+                RpcIpcConnectionContext {
+                    write_tx,
+                    conn_id: 999,
+                    is_connected: Arc::new(AtomicBool::new(true)),
+                    dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+                },
+            )));
+        }
+        let info = UserInfo {
+            conn_id: 1,
+            hostname: "test".into(),
+            pid: 0,
+            user: "u".into(),
+            ssh_ip: None,
+            ssh_port: None,
+            cols: 80,
+            rows: 24,
+            connected_at_unix: 0,
+        };
+        notify_user_connected(&state, &name, info).await;
+    }
+
+    #[tokio::test]
+    async fn notify_user_connected_skips_when_no_internal_wm() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        {
+            let ch = resolve_channel(&state, &name).await.expect("channel");
+            let mut guard = ch.lock().await;
+            guard.clients.insert(
+                2,
+                ClientEntry {
+                    caller: None,
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                    cols: 80,
+                    rows: 24,
+                },
+            );
+        }
+        let info = UserInfo {
+            conn_id: 2,
+            hostname: "test".into(),
+            pid: 0,
+            user: "u".into(),
+            ssh_ip: None,
+            ssh_port: None,
+            cols: 80,
+            rows: 24,
+            connected_at_unix: 0,
+        };
+        notify_user_connected(&state, &name, info).await;
+    }
+
+    #[tokio::test]
+    async fn notify_user_disconnected_no_panic_when_no_internal_wm() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        notify_user_disconnected(&state, &name, 1).await;
+    }
+
+    // ── Batch 5: request_session_kill + spawn_kill_escalation ────────
+
+    #[test]
+    fn request_session_kill_sets_kill_pending() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert!(!ch.kill_pending);
+        ch.request_session_kill(SIGTERM);
+        assert!(ch.kill_pending);
+    }
+
+    #[tokio::test]
+    async fn kill_escalation_noop_when_kill_pending_false() {
+        tokio::time::pause();
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        let handle = spawn_kill_escalation(&state, &name).await;
+        tokio::time::advance(SIGKILL_GRACE + std::time::Duration::from_secs(1)).await;
+        handle.await.expect("task should not panic");
+    }
+
+    #[tokio::test]
+    async fn kill_escalation_noop_when_no_session() {
+        tokio::time::pause();
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        {
+            let ch = resolve_channel(&state, &name).await.expect("channel");
+            let mut guard = ch.lock().await;
+            guard.kill_pending = true;
+        }
+        let handle = spawn_kill_escalation(&state, &name).await;
+        tokio::time::advance(SIGKILL_GRACE + std::time::Duration::from_secs(1)).await;
+        handle.await.expect("task should not panic");
+        let ch = resolve_channel(&state, &name).await.expect("channel");
+        let guard = ch.lock().await;
+        assert!(!guard.kill_pending);
+    }
+
+    // ── Batch 6: get_or_create_channel ───────────────────────────────
+
+    #[tokio::test]
+    async fn get_or_create_channel_returns_existing_and_same_arc() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+
+        let (r1, r2, r3, r4, r5) = tokio::join!(
+            get_or_create_channel(&state, &name),
+            get_or_create_channel(&state, &name),
+            get_or_create_channel(&state, &name),
+            get_or_create_channel(&state, &name),
+            get_or_create_channel(&state, &name),
+        );
+        assert!(Arc::ptr_eq(&r1, &r2));
+        assert!(Arc::ptr_eq(&r2, &r3));
+        assert!(Arc::ptr_eq(&r3, &r4));
+        assert!(Arc::ptr_eq(&r4, &r5));
+    }
+
+    // ── Batch 7: filter_rebind_targets ───────────────────────────────
+
+    #[test]
+    fn rebind_caller_only_sends_to_initiator() {
+        let name = ChannelName::parse("test/rebind").expect("parse");
+        let mut conns = HashMap::new();
+        for cid in [1, 2, 3] {
+            let (write_tx, _write_rx) = mpsc::unbounded_channel();
+            conns.insert(
+                cid,
+                ConnEntry {
+                    handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                        write_tx,
+                        conn_id: cid,
+                        is_connected: Arc::new(AtomicBool::new(true)),
+                        dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+                    })),
+                    state: ConnState::Attached(name.clone()),
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                },
+            );
+        }
+        let targets = filter_rebind_targets(&conns, &name, &RebindScope::CallerOnly, Some(2));
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0.conn_id, 2);
+    }
+
+    #[test]
+    fn rebind_all_viewers_sends_to_all_attached() {
+        let name = ChannelName::parse("test/rebind").expect("parse");
+        let mut conns = HashMap::new();
+        for cid in [1, 2, 3] {
+            let (write_tx, _write_rx) = mpsc::unbounded_channel();
+            conns.insert(
+                cid,
+                ConnEntry {
+                    handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                        write_tx,
+                        conn_id: cid,
+                        is_connected: Arc::new(AtomicBool::new(true)),
+                        dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+                    })),
+                    state: ConnState::Attached(name.clone()),
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                },
+            );
+        }
+        let targets = filter_rebind_targets(&conns, &name, &RebindScope::AllViewers, None);
+        assert_eq!(targets.len(), 3);
+        let mut ids: Vec<_> = targets.iter().map(|t| t.0.conn_id).collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn rebind_caller_only_no_initiator_single_attached() {
+        let name = ChannelName::parse("test/rebind").expect("parse");
+        let mut conns = HashMap::new();
+        let (write_tx, _write_rx) = mpsc::unbounded_channel();
+        conns.insert(
+            7,
+            ConnEntry {
+                handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                    write_tx,
+                    conn_id: 7,
+                    is_connected: Arc::new(AtomicBool::new(true)),
+                    dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+                })),
+                state: ConnState::Attached(name.clone()),
+                hostname: String::new(),
+                connected_at_unix: 0,
+                pid: 0,
+                user: String::new(),
+                version: String::new(),
+                ssh_ip: None,
+                ssh_port: None,
+            },
+        );
+        let targets = filter_rebind_targets(&conns, &name, &RebindScope::CallerOnly, None);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0.conn_id, 7);
     }
 }

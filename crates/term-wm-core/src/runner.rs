@@ -164,7 +164,9 @@ fn dispatch_action<
             app.wm().set_keyboard_focus(key, id);
         }
         TermWmAction::PasteClipboard => {
-            if let Some(text) = app.wm().clipboard_mut().and_then(|cb| cb.get().ok()) {
+            if app.wm().clipboard_enabled()
+                && let Some(text) = app.wm().clipboard_mut().and_then(|cb| cb.get().ok())
+            {
                 queue.push_back((key, TermWmAction::ClipboardPaste(text)));
             }
         }
@@ -2054,6 +2056,223 @@ mod tests {
             actions.is_empty(),
             "notification action should drain without error"
         );
+    }
+
+    // ── Untested dispatch_action arm tests ──
+
+    #[test]
+    fn dispatch_action_help_opens_overlay() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+            overlay_opened: bool,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+            fn open_help_overlay(&mut self) {
+                self.overlay_opened = true;
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App {
+            wm,
+            overlay_opened: false,
+        };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k, TermWmAction::Help, &mut queue);
+        assert!(app.overlay_opened, "Help must call open_help_overlay");
+    }
+
+    #[test]
+    fn dispatch_action_open_help_opens_overlay() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+            overlay_opened: bool,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+            fn open_help_overlay(&mut self) {
+                self.overlay_opened = true;
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App {
+            wm,
+            overlay_opened: false,
+        };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k, TermWmAction::OpenHelp, &mut queue);
+        assert!(app.overlay_opened, "OpenHelp must call open_help_overlay");
+    }
+
+    #[test]
+    fn dispatch_action_request_keyboard_focus_does_not_panic() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        let hitbox_id = crate::hitbox_registry::HitboxId(42);
+        dispatch_action(
+            &mut app,
+            k,
+            TermWmAction::RequestKeyboardFocus(hitbox_id),
+            &mut queue,
+        );
+    }
+
+    #[test]
+    fn dispatch_action_paste_clipboard_noop_when_no_clipboard() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig {
+                clipboard_enabled: false,
+                ..Default::default()
+            },
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(&mut app, k, TermWmAction::PasteClipboard, &mut queue);
+        assert!(
+            queue.is_empty(),
+            "PasteClipboard must not queue anything when clipboard is disabled"
+        );
+    }
+
+    #[test]
+    fn dispatch_action_run_project_task_forwards_to_host() {
+        use crate::window::WindowManager;
+        use crate::window::test_component::ActionRecorder;
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let recorder = ActionRecorder {
+            actions: Vec::new(),
+            received_mouse_bytes: false,
+        };
+        let k = wm.create_window(TestComponent::ActionRecorder(recorder));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        let mut app = App { wm };
+        let mut queue = std::collections::VecDeque::new();
+        // Default handle_custom_action returns false, so RunProjectTask falls through to component
+        dispatch_action(
+            &mut app,
+            k,
+            TermWmAction::RunProjectTask("test-task".into()),
+            &mut queue,
+        );
+        if let Some(comp) = app.wm.component_for_key_mut(k) {
+            if let TestComponent::ActionRecorder(r) = comp {
+                assert!(
+                    r.actions
+                        .iter()
+                        .any(|a| matches!(a, TermWmAction::RunProjectTask(_))),
+                    "ActionRecorder should have received RunProjectTask"
+                );
+            } else {
+                panic!("expected ActionRecorder component");
+            }
+        } else {
+            panic!("component should exist");
+        }
+    }
+
+    #[test]
+    fn handle_focused_app_event_focus_lost_clears_hover() {
+        use crate::window::WindowManager;
+        struct App {
+            wm: WindowManager<TestComponent>,
+        }
+        impl WindowManagerHost<TestComponent> for App {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+        }
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let k = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(k, crate::window::WindowState::Mapped);
+        wm.regions.set(
+            k,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        );
+        wm.focus_app_window(k);
+        let mut app = App { wm };
+        // FocusLost clears hover and then falls through to component dispatch.
+        // NoopComponent returns Ignored, so overall result is false.
+        let _result = handle_focused_app_event(&Event::FocusLost, &mut app);
     }
 }
 

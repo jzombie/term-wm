@@ -298,4 +298,16 @@ mod bus_tests {
         assert_ne!(id1, id_other);
         assert_eq!(b.len(), 2, "different messages must not be deduplicated");
     }
+
+    #[test]
+    fn bus_tick_expires_past_deadline_deterministic() {
+        let mut b = NotificationBus::default();
+        let t0 = Instant::now();
+        b.push("msg", Duration::from_millis(100));
+        assert_eq!(b.len(), 1);
+
+        // Tick at a time well past the 100ms TTL — no sleep needed
+        b.tick(t0 + Duration::from_millis(200));
+        assert!(b.is_empty(), "toast must expire when tick passes deadline");
+    }
 }

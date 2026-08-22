@@ -2101,4 +2101,355 @@ mod tests {
             "attributed key must set the shared owner"
         );
     }
+
+    /// Helper to build a `UnifiedEventSource` with session-persistence fields
+    /// for the tests below.
+    #[cfg(feature = "session-persistence")]
+    fn make_source_with_session_fields(
+        workspace_entered: Vec<String>,
+        user_connected: Vec<term_session::protocol::UserInfo>,
+        user_disconnected: Vec<usize>,
+        user_cache_refreshed: Option<Vec<term_session::protocol::UserInfo>>,
+    ) -> UnifiedEventSource {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        UnifiedEventSource {
+            rx,
+            tx,
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+            workspace_entered,
+            user_connected,
+            user_disconnected,
+            user_cache_refreshed,
+        }
+    }
+
+    /// Build a `UserInfo` with all fields set to distinct, recognisable values
+    /// so a transposition bug is immediately caught.
+    #[cfg(feature = "session-persistence")]
+    fn make_user_info(conn_id: usize) -> term_session::protocol::UserInfo {
+        term_session::protocol::UserInfo {
+            conn_id,
+            user: format!("user_{conn_id}"),
+            hostname: format!("host_{conn_id}"),
+            ssh_ip: Some(format!("10.0.0.{conn_id}")),
+            ssh_port: Some(2200 + conn_id as u16),
+            cols: 100 + conn_id as u16,
+            rows: 50 + conn_id as u16,
+            connected_at_unix: 1000 + conn_id as u64,
+            pid: 2000 + conn_id as u64,
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn take_workspace_entered_drains_accumulator() {
+        use super::EventSource;
+        let mut source = make_source_with_session_fields(
+            vec!["ws1".into(), "ws2".into()],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        let taken = EventSource::take_workspace_entered(&mut source);
+        assert_eq!(taken, vec!["ws1", "ws2"]);
+        assert!(EventSource::take_workspace_entered(&mut source).is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn take_user_disconnected_drains_accumulator() {
+        use super::EventSource;
+        let mut source = make_source_with_session_fields(Vec::new(), Vec::new(), vec![3, 7], None);
+        let taken = EventSource::take_user_disconnected(&mut source);
+        assert_eq!(taken, vec![3, 7]);
+        assert!(EventSource::take_user_disconnected(&mut source).is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn take_user_connected_maps_all_fields() {
+        use super::EventSource;
+        let info = make_user_info(42);
+        let mut source = make_source_with_session_fields(Vec::new(), vec![info], Vec::new(), None);
+        let entries = EventSource::take_user_connected(&mut source);
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.conn_id, 42);
+        assert_eq!(e.user, "user_42");
+        assert_eq!(e.hostname, "host_42");
+        assert_eq!(e.ssh_ip.as_deref(), Some("10.0.0.42"));
+        assert_eq!(e.ssh_port, Some(2242));
+        assert_eq!(e.cols, 142);
+        assert_eq!(e.rows, 92);
+        assert_eq!(e.connected_at_unix, 1042);
+        assert_eq!(e.pid, 2042);
+        assert!(
+            EventSource::take_user_connected(&mut source).is_empty(),
+            "second call must drain"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn take_user_cache_refreshed_maps_fields_and_handles_none() {
+        use super::EventSource;
+        let mut source = make_source_with_session_fields(Vec::new(), Vec::new(), Vec::new(), None);
+        assert!(
+            EventSource::take_user_cache_refreshed(&mut source).is_none(),
+            "None must remain None"
+        );
+
+        let info = make_user_info(99);
+        let mut source2 =
+            make_source_with_session_fields(Vec::new(), Vec::new(), Vec::new(), Some(vec![info]));
+        let entries =
+            EventSource::take_user_cache_refreshed(&mut source2).expect("must return Some");
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.conn_id, 99);
+        assert_eq!(e.user, "user_99");
+        assert_eq!(e.hostname, "host_99");
+        assert_eq!(e.ssh_ip.as_deref(), Some("10.0.0.99"));
+        assert_eq!(e.ssh_port, Some(2299));
+        assert_eq!(e.cols, 199);
+        assert_eq!(e.rows, 149);
+        assert_eq!(e.connected_at_unix, 1099);
+        assert_eq!(e.pid, 2099);
+        assert!(
+            EventSource::take_user_cache_refreshed(&mut source2).is_none(),
+            "second call must return None"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn drain_pending_accumulates_workspace_entered() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
+        };
+
+        tx.send(UnifiedEvent::WorkspaceEntered("ws1".into()))
+            .unwrap();
+        tx.send(UnifiedEvent::WorkspaceEntered("ws2".into()))
+            .unwrap();
+        source.drain_pending();
+        assert_eq!(
+            source.workspace_entered,
+            vec!["ws1", "ws2"],
+            "drain_pending must accumulate WorkspaceEntered events"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn drain_pending_accumulates_user_connected() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
+        };
+
+        let info = make_user_info(5);
+        tx.send(UnifiedEvent::UserConnected(info)).unwrap();
+        source.drain_pending();
+        assert_eq!(
+            source.user_connected.len(),
+            1,
+            "drain_pending must accumulate UserConnected"
+        );
+        assert_eq!(source.user_connected[0].conn_id, 5);
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn drain_pending_accumulates_user_disconnected() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
+        };
+
+        tx.send(UnifiedEvent::UserDisconnected(42)).unwrap();
+        tx.send(UnifiedEvent::UserDisconnected(7)).unwrap();
+        source.drain_pending();
+        assert_eq!(
+            source.user_disconnected,
+            vec![42, 7],
+            "drain_pending must accumulate UserDisconnected"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn drain_pending_user_cache_refreshed_overwrites() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
+        };
+
+        let info1 = make_user_info(1);
+        let info2 = make_user_info(2);
+        tx.send(UnifiedEvent::UserCacheRefreshed(vec![info1]))
+            .unwrap();
+        tx.send(UnifiedEvent::UserCacheRefreshed(vec![info2]))
+            .unwrap();
+        source.drain_pending();
+        let cached = source
+            .user_cache_refreshed
+            .as_ref()
+            .expect("must be Some after UserCacheRefreshed");
+        assert_eq!(
+            cached.len(),
+            1,
+            "UserCacheRefreshed must overwrite, not append"
+        );
+        assert_eq!(cached[0].conn_id, 2, "must keep the last value");
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn drain_pending_mixed_session_events() {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, _console_tx) = test_console();
+        let mut source = UnifiedEventSource {
+            rx,
+            tx: tx.clone(),
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+            workspace_entered: Vec::new(),
+            user_connected: Vec::new(),
+            user_disconnected: Vec::new(),
+            user_cache_refreshed: None,
+        };
+
+        tx.send(UnifiedEvent::WorkspaceEntered("ws1".into()))
+            .unwrap();
+        tx.send(UnifiedEvent::UserConnected(make_user_info(1)))
+            .unwrap();
+        tx.send(UnifiedEvent::UserDisconnected(2)).unwrap();
+        tx.send(UnifiedEvent::UserCacheRefreshed(vec![make_user_info(3)]))
+            .unwrap();
+        source.drain_pending();
+        assert_eq!(source.workspace_entered, vec!["ws1"]);
+        assert_eq!(source.user_connected.len(), 1);
+        assert_eq!(source.user_disconnected, vec![2]);
+        assert!(source.user_cache_refreshed.is_some());
+    }
 }
