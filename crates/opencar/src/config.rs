@@ -10,17 +10,17 @@ pub const EVENT_POLL_MILLIS: u64 = 8;
 
 // ── World generation ────────────────────────────────────────────────────
 pub const CHUNK_SIZE_I32: i32 = 64;
-pub const CHUNK_LOAD_RADIUS: i32 = 3;
+pub const CHUNK_LOAD_RADIUS: i32 = 5;
 pub const CHUNK_GEN_BUDGET_PER_FRAME: usize = 2;
 
 pub const BASE_ELEV: f32 = 8.0;
 pub const CONTINENT_SCALE: f32 = 1350.0;
 pub const CONTINENT_LOW: f32 = 0.52;
 pub const CONTINENT_HIGH: f32 = 0.74;
-pub const RIDGE_SCALE: f32 = 255.0;
-pub const HILL_SCALE: f32 = 110.0;
-pub const HILL_AMP: f32 = 30.0;
-pub const MOUNTAIN_AMP: f32 = 240.0;
+pub const RIDGE_SCALE: f32 = 500.0;
+pub const HILL_SCALE: f32 = 300.0;
+pub const HILL_AMP: f32 = 4.0;
+pub const MOUNTAIN_AMP: f32 = 30.0;
 pub const SEA_LEVEL: f32 = 5.0;
 pub const SAND_BAND: f32 = 1.1;
 pub const SNOW_LINE: f32 = 155.0;
@@ -32,11 +32,11 @@ pub const MOISTURE_SCALE: f32 = 210.0;
 pub const WATER_SHALLOW_DEPTH: f32 = 1.6;
 
 // ── Roads (analytic highway network) ────────────────────────────────────
-pub const ROAD_HALF_WIDTH: f32 = 4.6;
+pub const ROAD_HALF_WIDTH: f32 = 8.0;
 pub const SHOULDER_WIDTH: f32 = 1.6;
 pub const BLEND_DIST: f32 = 26.0;
-pub const EDGE_LINE_INNER: f32 = 4.05;
-pub const EDGE_LINE_OUTER: f32 = 4.45;
+pub const EDGE_LINE_INNER: f32 = 5.4;
+pub const EDGE_LINE_OUTER: f32 = 5.8;
 pub const DASH_HALF_WIDTH: f32 = 0.22;
 pub const DASH_PERIOD: f32 = 9.0;
 pub const DASH_DUTY: f32 = 0.45;
@@ -82,24 +82,24 @@ pub const GAP_SCAN: f32 = 70.0;
 pub const MIN_GAP: f32 = 14.0;
 pub const RECYCLE_BEHIND: f32 = 340.0;
 pub const RECYCLE_AHEAD: f32 = 720.0;
-pub const SPAWN_MIN: f32 = 240.0;
-pub const SPAWN_MAX: f32 = 660.0;
+pub const SPAWN_MIN: f32 = 80.0;
+pub const SPAWN_MAX: f32 = 400.0;
 pub const SPAWN_STRIDE: f32 = 25.0;
 pub const SPAWN_SCAN_RANGE: f32 = 900.0;
 /// Bezier turn arcs through junctions take roughly this long.
 pub const JUNCTION_TURN_SPEED: f32 = 9.0;
 
 // ── Player physics (kinematic arcade) ───────────────────────────────────
-pub const MAX_SPEED: f32 = 50.0; // 180 km/h
+pub const MAX_SPEED: f32 = 60.0; // 180 km/h
 pub const MAX_REVERSE: f32 = 9.0;
-pub const ENGINE_ACCEL: f32 = 4.4;
+pub const ENGINE_ACCEL: f32 = 6.5;
 pub const BRAKE_DECEL: f32 = 9.0;
 pub const HANDBRAKE_DECEL: f32 = 13.0;
-pub const DRAG_COEFF: f32 = 0.0026;
-pub const ROLL_RESIST: f32 = 0.09;
-pub const OFFROAD_DRAG_MULT: f32 = 7.0;
-pub const OFFROAD_MAX_SPEED: f32 = 17.0;
-pub const STEER_RATE: f32 = 1.7; // rad/s at reference speed
+pub const DRAG_COEFF: f32 = 0.0012;
+pub const ROLL_RESIST: f32 = 0.045;
+pub const OFFROAD_DRAG_MULT: f32 = 1.8;
+pub const OFFROAD_MAX_SPEED: f32 = 35.0;
+pub const STEER_RATE: f32 = 0.5; // rad/s at reference speed
 /// Gentle pull toward the lane tangent while on asphalt (rad/s max).
 pub const LANE_MAGNETISM: f32 = 0.026;
 pub const STEER_SMOOTH_RATE: f32 = 6.0; // input slew per second
@@ -111,7 +111,7 @@ pub const PITCH_RESPONSE: f32 = 0.010; // rad per m/s²
 
 // ── Chase camera & chassis dynamics ─────────────────────────────────────
 /// (back distance, height) presets cycled with `C`.
-pub const CAM_PRESETS: [(f32, f32); 3] = [(6.8, 2.7), (10.6, 4.3), (4.4, 1.9)];
+pub const CAM_PRESETS: [(f32, f32); 3] = [(7.5, 3.5), (10.6, 4.3), (4.4, 1.9)];
 pub const CAM_SPRING_XZ: f32 = 7.0;
 pub const CAM_Y_SPRING: f32 = 9.0;
 pub const CAM_YAW_RATE: f32 = 4.6;
@@ -131,7 +131,7 @@ pub const STEP_BASE: f32 = 0.4;
 pub const STEP_GROWTH: f32 = 0.008;
 pub const FOV_H_DEG: f32 = 74.0;
 /// Base downward pitch so the road fills the lower frame.
-pub const CAM_PITCH_BASE: f32 = -0.055;
+pub const CAM_PITCH_BASE: f32 = -0.08;
 /// Terrain-slope contribution to camera pitch.
 pub const SLOPE_PITCH_GAIN: f32 = 0.6;
 /// Clamp for combined slope+dive pitch (radians).
@@ -241,7 +241,7 @@ pub const MINIMAP_ROWS: u16 = 8;
 // ── Input ───────────────────────────────────────────────────────────────
 /// Held-key heartbeat timeout when the terminal lacks key-release events.
 /// Must exceed the worst-case OS initial auto-repeat delay (~500 ms).
-pub const FALLBACK_HELD_TIMEOUT_SECS: f32 = 0.6;
+pub const FALLBACK_HELD_TIMEOUT_SECS: f32 = 5.0;
 pub const BOB_PHASE_RATE: f32 = 0.55; // bob phase per meter traveled
 pub const OFFROAD_BOB_MULT: f32 = 3.0;
 
