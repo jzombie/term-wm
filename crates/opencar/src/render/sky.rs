@@ -4,7 +4,7 @@
 
 use crate::config::*;
 use crate::render::camera::Projector;
-use crate::render::image::ImageBuffer;
+use crate::render::image::ColumnMajorImage;
 use crate::world::noise::Noise;
 
 #[inline]
@@ -21,7 +21,9 @@ fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> (u8, u8, u8) {
     )
 }
 
-pub fn render_sky(buf: &mut ImageBuffer, proj: &Projector, noise: &Noise, elapsed: f32) {
+/// Paint the sky into the column-major overscan buffer (terrain marches over
+/// it afterwards).
+pub fn render_sky(buf: &mut ColumnMajorImage, proj: &Projector, noise: &Noise, elapsed: f32) {
     // Horizon row: project a far point at camera height through the unrolled
     // basis — exact under pitch (no 1-D offsets).
     let far_p = [

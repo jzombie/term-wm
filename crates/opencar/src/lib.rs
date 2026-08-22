@@ -12,6 +12,7 @@ pub mod config;
 pub mod display;
 pub mod hud;
 pub mod minimap;
+pub mod pool;
 pub mod render;
 pub mod sim;
 pub mod world;

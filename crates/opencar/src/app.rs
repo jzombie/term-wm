@@ -228,12 +228,17 @@ impl App {
 
         // Lane magnetism: while on asphalt, a gentle pull toward the nearest
         // highway tangent keeps holding a lane feeling planted, not icy.
+        // Yields entirely to deliberate steering input (gate) so it never
+        // fights the player's corrections near road edges.
         let noise = *self.world.noise();
         let roads = *self.world.roads();
         let lat_ew = roads.ew().lateral(self.player.x, self.player.z, &noise).abs();
         let lat_ns = roads.ns().lateral(self.player.x, self.player.z, &noise).abs();
         let snap = ROAD_HALF_WIDTH + SHOULDER_WIDTH + 1.0;
-        if lat_ew.min(lat_ns) < snap && self.player.speed.abs() > 3.0 {
+        if lat_ew.min(lat_ns) < snap
+            && self.player.speed.abs() > 3.0
+            && input.steer.abs() < LANE_MAGNET_STEER_GATE
+        {
             let hw = if lat_ew <= lat_ns { roads.ew() } else { roads.ns() };
             let t_axis = match hw.axis() {
                 Axis::EastWest => self.player.z,

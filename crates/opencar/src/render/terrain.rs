@@ -1,26 +1,31 @@
 //! Terrain renderer: voxel-space column march (one ray per overscan column,
 //! O(W′ × steps)) with TRUE 3-D pitch rays and shared-matrix projection.
 //!
-//! Roll never enters the march: columns fill an oversized `TerrainBuffer`
-//! covering the rotated screen bbox, which is then bilinear-rotated (RGB+z)
-//! into the final frame. Meshes rasterize directly through the rolled matrix,
-//! so terrain and meshes stay pixel-locked under pitch and roll alike.
+//! Roll never enters the march: columns fill an oversized `TerrainPass`
+//! buffer covering the rotated screen bbox, which is then bilinear-rotated
+//! (RGB+z) into the final frame. Meshes rasterize directly through the rolled
+//! matrix, so terrain and meshes stay pixel-locked under pitch and roll alike.
+//!
+//! The overscan target is COLUMN-major: rays are per-column, so vertical
+//! bands are contiguous slices that rayon can own via disjoint
+//! `split_at_mut` views — parallel marching with no copies. `rotate_into`
+//! is the single transposition point back to row-major.
 
 use crate::config::*;
 use crate::render::camera::Projector;
-use crate::render::image::ImageBuffer;
+use crate::render::image::{ColumnMajorImage, ImageBuffer, unpack_rgb};
 use crate::render::shadows::ShadowMap;
 use crate::world::World;
 
 /// Overscan target for the unrolled march.
 pub struct TerrainPass {
-    pub buf: ImageBuffer,
+    pub buf: ColumnMajorImage,
 }
 
 impl TerrainPass {
     pub fn new() -> Self {
         Self {
-            buf: ImageBuffer::new(),
+            buf: ColumnMajorImage::new(),
         }
     }
 }
@@ -132,6 +137,42 @@ fn shade(
     )
 }
 
+/// Ascending column bounds partitioning `[0, total_w)` into bands.
+/// Narrow buffers stay single-banded (no parallel overhead); wide ones split
+/// into `MARCH_BAND_COLS`-ish chunks, merging a small tail so no sliver
+/// bands are spawned.
+pub fn band_bounds(total_w: usize) -> Vec<usize> {
+    if total_w <= MARCH_BAND_COLS {
+        return vec![0, total_w];
+    }
+    let mut bounds = vec![0];
+    let mut c = 0;
+    while c + MARCH_BAND_COLS <= total_w {
+        // Leave at least half a band for the tail; otherwise absorb it here.
+        if total_w - (c + MARCH_BAND_COLS) < MARCH_BAND_COLS / 2 {
+            c = total_w;
+        } else {
+            c += MARCH_BAND_COLS;
+        }
+        bounds.push(c);
+    }
+    if bounds.last().is_none_or(|last| *last < total_w) {
+        bounds.push(total_w);
+    }
+    bounds
+}
+
+/// Shared per-frame march parameters (keeps `march_range` under the arity
+/// lint while staying explicit at call sites).
+struct MarchSpan<'a> {
+    op: &'a Projector,
+    world: &'a World,
+    sm: &'a ShadowMap,
+    contrast_boost: f32,
+    /// Total overscan width; normalizes the ray parameter.
+    total_w: usize,
+}
+
 /// March terrain columns into `buf` using `op`'s camera (call after sky).
 ///
 /// Sample-and-project voxel space: advance along the horizontal ray, sample
@@ -139,8 +180,12 @@ fn shade(
 /// unrolled basis, and paint visible spans into a per-column y-top buffer.
 /// Flat ground converges to the vanishing point; per-span forward depths
 /// synchronize the mesh z-test.
+///
+/// Columns are independent ⇒ output is identical regardless of how the
+/// buffer is split across threads. Wide frames march their bands in parallel
+/// on the shared bounded pool.
 pub fn march_columns(
-    buf: &mut ImageBuffer,
+    buf: &mut ColumnMajorImage,
     op: &Projector,
     world: &World,
     sm: &ShadowMap,
@@ -148,9 +193,41 @@ pub fn march_columns(
 ) {
     let ow = buf.w;
     let oh = buf.h;
-    for col in 0..ow {
-        let u = (col as f32 + 0.5) / ow as f32;
-        let dir = op.march_ray(u);
+    if ow == 0 || oh == 0 {
+        return;
+    }
+    let bounds = band_bounds(ow);
+    let ranges: Vec<(usize, usize)> =
+        bounds.windows(2).map(|pair| (pair[0], pair[1])).collect();
+    let mut bands = buf.split_bands(&bounds);
+    let span = MarchSpan { op, world, sm, contrast_boost, total_w: ow };
+    if bands.len() == 1 {
+        march_range(&mut bands[0], &span, ranges[0]);
+        return;
+    }
+    crate::pool::pool().install(|| {
+        use rayon::prelude::*;
+        bands
+            .par_iter_mut()
+            .zip(ranges.par_iter())
+            .for_each(|(band, &range)| {
+                march_range(band, &span, range);
+            });
+    });
+}
+
+/// Sequential march over global columns `range`, writing band-local x.
+fn march_range(
+    band: &mut crate::render::image::ColumnMajorBand,
+    span: &MarchSpan<'_>,
+    range: (usize, usize),
+) {
+    let (c0, c1) = range;
+    let oh = band.h;
+    for col in c0..c1 {
+        let lx = col - c0;
+        let u = (col as f32 + 0.5) / span.total_w as f32;
+        let dir = span.op.march_ray(u);
         let mut y_top = oh; // exclusive bottom bound
         let mut t = VIEW_NEAR;
 
@@ -163,24 +240,24 @@ pub fn march_columns(
             t += step;
 
             // 1. Advance horizontally along the XZ plane.
-            let sx_t = op.cam[0] + dir[0] * t;
-            let sz_t = op.cam[2] + dir[2] * t;
+            let sx_t = span.op.cam[0] + dir[0] * t;
+            let sz_t = span.op.cam[2] + dir[2] * t;
 
             // 2. Sample the terrain height at this specific spot. Beyond
             //    chunk reach, use the cheap far-field LOD (no ridge detail).
             let far = t > CHUNK_REACH_M;
             let h = if far {
-                world.height_far(sx_t, sz_t)
+                span.world.height_far(sx_t, sz_t)
             } else {
-                world.height_at(sx_t, sz_t)
+                span.world.height_at(sx_t, sz_t)
             };
 
             // 3. Project the physical terrain point (x, h, z) to the screen.
-            let (_, row_f, fwd_d) = op.project_unrolled([sx_t, h, sz_t]);
+            let (_, row_f, fwd_d) = span.op.project_unrolled([sx_t, h, sz_t]);
 
             // Hit projects above the frame: fill the rest with sky and stop.
             if row_f < 0.0 {
-                fill(buf, col, 0, y_top.saturating_sub(1), sky_rgb(), fwd_d);
+                fill(band, lx, 0, y_top.saturating_sub(1), sky_rgb(), fwd_d);
                 break;
             }
 
@@ -196,23 +273,23 @@ pub fn march_columns(
                 let px_n = -dir[2];
                 let pz_n = dir[0];
                 let mat_a = if far {
-                    world.material_far(sx_t + px_n * spread, sz_t + pz_n * spread)
+                    span.world.material_far(sx_t + px_n * spread, sz_t + pz_n * spread)
                 } else {
-                    world.material_at(sx_t + px_n * spread, sz_t + pz_n * spread)
+                    span.world.material_at(sx_t + px_n * spread, sz_t + pz_n * spread)
                 };
                 let mat_b = if far {
-                    world.material_far(sx_t - px_n * spread, sz_t - pz_n * spread)
+                    span.world.material_far(sx_t - px_n * spread, sz_t - pz_n * spread)
                 } else {
-                    world.material_at(sx_t - px_n * spread, sz_t - pz_n * spread)
+                    span.world.material_at(sx_t - px_n * spread, sz_t - pz_n * spread)
                 };
-                let rgb_a = shade(world, sm, sx_t, sz_t, h, mat_a, fwd_d, contrast_boost);
+                let rgb_a = shade(span.world, span.sm, sx_t, sz_t, h, mat_a, fwd_d, span.contrast_boost);
                 let rgb = if mat_a == mat_b {
                     rgb_a
                 } else {
-                    let rgb_b = shade(world, sm, sx_t, sz_t, h, mat_b, fwd_d, contrast_boost);
+                    let rgb_b = shade(span.world, span.sm, sx_t, sz_t, h, mat_b, fwd_d, span.contrast_boost);
                     blend_rgb(rgb_a, rgb_b, 0.5)
                 };
-                fill(buf, col, row, y_top.saturating_sub(1), rgb, fwd_d + TERRAIN_DEPTH_MARGIN);
+                fill(band, lx, row, y_top.saturating_sub(1), rgb, fwd_d + TERRAIN_DEPTH_MARGIN);
                 y_top = row;
             }
         }
@@ -235,28 +312,30 @@ fn sky_rgb() -> (u8, u8, u8) {
 }
 
 fn fill(
-    buf: &mut ImageBuffer,
-    col: usize,
+    band: &mut crate::render::image::ColumnMajorBand,
+    lx: usize,
     row_from: usize,
     row_to: usize,
     rgb: (u8, u8, u8),
     depth_fwd: f32,
 ) {
-    if col >= buf.w || buf.h == 0 {
+    if band.cols == 0 || band.h == 0 {
         return;
     }
-    let lo = row_from.min(buf.h - 1);
-    let hi = row_to.min(buf.h - 1);
+    let lo = row_from.min(band.h - 1);
+    let hi = row_to.min(band.h - 1);
     if lo > hi {
         return;
     }
     for py in lo..=hi {
-        buf.put_pixel(col, py, rgb.0, rgb.1, rgb.2, depth_fwd);
+        band.put_pixel(lx, py, rgb.0, rgb.1, rgb.2, depth_fwd);
     }
 }
 
-/// Bilinear-rotate the overscan buffer by `roll` into `dst` (RGB + z).
-pub fn rotate_into(src: &ImageBuffer, roll: f32, dst: &mut ImageBuffer) {
+/// Bilinear-rotate the column-major overscan buffer by `roll` into the
+/// row-major destination (RGB + z). This is the single transposition point;
+/// everything downstream reads only the row-major frame.
+pub fn rotate_into(src: &ColumnMajorImage, roll: f32, dst: &mut ImageBuffer) {
     if src.w == 0 || src.h == 0 || dst.w == 0 || dst.h == 0 {
         return;
     }
@@ -265,12 +344,13 @@ pub fn rotate_into(src: &ImageBuffer, roll: f32, dst: &mut ImageBuffer) {
             for dx in 0..dst.w {
                 let sx = dx.min(src.w - 1);
                 let sy = dy.min(src.h - 1);
-                let sidx = sy * src.w + sx;
+                let sidx = sx * src.h + sy;
                 let o = dy * dst.w + dx;
+                let [r, g, b] = unpack_rgb(src.px[sidx]);
+                dst.rgb[o * 3] = r;
+                dst.rgb[o * 3 + 1] = g;
+                dst.rgb[o * 3 + 2] = b;
                 dst.z[o] = src.z[sidx];
-                dst.rgb[o * 3] = src.rgb[sidx * 3];
-                dst.rgb[o * 3 + 1] = src.rgb[sidx * 3 + 1];
-                dst.rgb[o * 3 + 2] = src.rgb[sidx * 3 + 2];
             }
         }
         return;
@@ -280,6 +360,8 @@ pub fn rotate_into(src: &ImageBuffer, roll: f32, dst: &mut ImageBuffer) {
     let cx_d = dst.w as f32 * 0.5;
     let cy_d = dst.h as f32 * 0.5;
     let (sr, cr) = (-roll).sin_cos(); // inverse mapping
+    // Column-major neighbor indices: x is the leading (column) dimension.
+    let idx = |x: usize, y: usize| x * src.h + y;
     for dy in 0..dst.h {
         for dx in 0..dst.w {
             let vx = dx as f32 - cx_d;
@@ -293,22 +375,18 @@ pub fn rotate_into(src: &ImageBuffer, roll: f32, dst: &mut ImageBuffer) {
             let y1 = (y0 + 1).min(src.h - 1);
             let fx = sxp - x0 as f32;
             let fy = syp - y0 as f32;
-            let i00 = y0 * src.w + x0;
-            let i10 = y0 * src.w + x1;
-            let i01 = y1 * src.w + x0;
-            let i11 = y1 * src.w + x1;
+            let i00 = idx(x0, y0);
+            let i10 = idx(x1, y0);
+            let i01 = idx(x0, y1);
+            let i11 = idx(x1, y1);
             let o = dy * dst.w + dx;
+            let c00 = unpack_rgb(src.px[i00]);
+            let c10 = unpack_rgb(src.px[i10]);
+            let c01 = unpack_rgb(src.px[i01]);
+            let c11 = unpack_rgb(src.px[i11]);
             for ch in 0..3 {
-                let a = lerp_f(
-                    src.rgb[i00 * 3 + ch] as f32,
-                    src.rgb[i10 * 3 + ch] as f32,
-                    fx,
-                );
-                let b = lerp_f(
-                    src.rgb[i01 * 3 + ch] as f32,
-                    src.rgb[i11 * 3 + ch] as f32,
-                    fx,
-                );
+                let a = lerp_f(c00[ch] as f32, c10[ch] as f32, fx);
+                let b = lerp_f(c01[ch] as f32, c11[ch] as f32, fx);
                 dst.rgb[o * 3 + ch] = lerp_f(a, b, fy).clamp(0.0, 255.0) as u8;
             }
             let za = lerp_f(src.z[i00], src.z[i10], fx);
@@ -364,11 +442,11 @@ mod tests {
 #[cfg(test)]
 mod rotate_tests {
     use super::*;
-    use crate::render::image::ImageBuffer;
+    use crate::render::image::{ColumnMajorImage, ImageBuffer};
 
     #[test]
     fn oob_rotation_returns_sky() {
-        let mut src = ImageBuffer::new();
+        let mut src = ColumnMajorImage::new();
         src.resize_if_needed(4, 4);
         for y in 0..4 {
             for x in 0..4 {
@@ -392,6 +470,33 @@ mod rotate_tests {
                 };
                 assert!(is_sky || is_src, "OOB pixel must be sky, never black");
             }
+        }
+    }
+
+    #[test]
+    fn band_split_partitions_and_indexes() {
+        // Bands must tile the buffer exactly and write through to the parent
+        // with band-local x — this is what makes parallel marching safe.
+        let mut img = ColumnMajorImage::new();
+        img.resize_if_needed(10, 3);
+        let bounds = band_bounds(10);
+        assert_eq!(bounds.first(), Some(&0));
+        assert_eq!(bounds.last(), Some(&10));
+        {
+            let mut bands = img.split_bands(&bounds);
+            let widths: Vec<usize> = bands.iter().map(|b| b.cols).collect();
+            assert_eq!(widths.iter().sum::<usize>(), 10);
+            for (i, band) in bands.iter_mut().enumerate() {
+                let base = bounds[i];
+                for lx in 0..band.cols {
+                    band.put_pixel(lx, 0, (base + lx) as u8, 0, 7, 1.0 + i as f32);
+                }
+            }
+        }
+        for x in 0..10 {
+            let idx = x * 3;
+            assert_eq!(img.px[idx], crate::render::image::pack_rgb(x as u8, 0, 7));
+            assert!(img.z[idx].is_finite(), "band write must land depth");
         }
     }
 }

@@ -83,9 +83,10 @@ impl World {
         &self.roads
     }
 
-    /// Generate missing chunks around a world position (nearest ring first),
-    /// up to `budget` per call. Pass `usize::MAX` for a synchronous load.
-    pub fn ensure_chunks_around(&mut self, x: f32, z: f32, budget: usize) {
+    /// Chunk keys around a world position that are not resident yet,
+    /// nearest rings first. Used by the synchronous loader and by the
+    /// background [`crate::world::stream::ChunkStreamer`].
+    pub fn missing_chunks_around(&self, x: f32, z: f32) -> Vec<(i32, i32)> {
         let ckx = (x / CHUNK_SIZE_I32 as f32).floor() as i32;
         let cky = (z / CHUNK_SIZE_I32 as f32).floor() as i32;
         let radius = CHUNK_LOAD_RADIUS;
@@ -105,17 +106,42 @@ impl World {
             let dy = ky - cky;
             dx * dx + dy * dy
         });
-        for key in wanted.into_iter().take(budget) {
-            let chunk = Chunk::bake(key.0, key.1, &self.noise, &self.roads);
-            self.chunks.insert(chunk_key(key.0, key.1), chunk);
-        }
+        wanted
+    }
 
-        // Evict chunks far outside the load radius to bound memory.
+    /// Insert an externally baked chunk (background streamer results).
+    pub fn insert_chunk(&mut self, kx: i32, ky: i32, chunk: Chunk) {
+        self.chunks.insert(chunk_key(kx, ky), chunk);
+    }
+
+    /// True when the chunk containing these coordinates is resident.
+    #[cfg(test)]
+    pub fn chunk_loaded(&self, kx: i32, ky: i32) -> bool {
+        self.chunks.contains_key(&chunk_key(kx, ky))
+    }
+
+    /// Evict chunks far outside the load radius to bound memory.
+    pub fn evict_far(&mut self, x: f32, z: f32) {
+        let ckx = (x / CHUNK_SIZE_I32 as f32).floor() as i32;
+        let cky = (z / CHUNK_SIZE_I32 as f32).floor() as i32;
+        let radius = CHUNK_LOAD_RADIUS;
         let evict_sq = (radius + 1) * (radius + 1);
         self.chunks.retain(|k, _| {
             let (kx, ky) = unpack_key(*k);
             (kx - ckx).pow(2) + (ky - cky).pow(2) <= evict_sq
         });
+    }
+
+    /// Synchronously bake missing chunks around a world position (nearest
+    /// ring first), up to `budget` per call. Pass `usize::MAX` for a full
+    /// load — used at startup and in tests; gameplay streaming goes through
+    /// the background [`crate::world::stream::ChunkStreamer`] instead.
+    pub fn ensure_chunks_around(&mut self, x: f32, z: f32, budget: usize) {
+        for key in self.missing_chunks_around(x, z).into_iter().take(budget) {
+            let chunk = Chunk::bake(key.0, key.1, &self.noise, &self.roads);
+            self.insert_chunk(key.0, key.1, chunk);
+        }
+        self.evict_far(x, z);
     }
 
     /// Bilinear height at a world position; falls back to raw analytic

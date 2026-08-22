@@ -78,6 +78,143 @@ impl Default for ImageBuffer {
     }
 }
 
+/// Pack three channels into a 32-bit pixel (`0x00RRGGBB`).
+#[inline]
+pub fn pack_rgb(r: u8, g: u8, b: u8) -> u32 {
+    (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+}
+
+/// Unpack a 32-bit pixel into `[r, g, b]`.
+#[inline]
+pub fn unpack_rgb(p: u32) -> [u8; 3] {
+    [(p >> 16) as u8, (p >> 8) as u8, p as u8]
+}
+
+/// A disjoint mutable vertical band of a [`ColumnMajorImage`].
+///
+/// Because the parent stores pixels column-contiguously (`idx = x*h + y`),
+/// a column range maps to one contiguous slice per plane — which is what
+/// makes ray-band parallelism a safe `split_at_mut` partition with no
+/// copying. Local `lx` is 0-based within the band.
+pub struct ColumnMajorBand<'a> {
+    /// Band width in columns.
+    pub cols: usize,
+    /// Shared pixel height.
+    pub h: usize,
+    px: &'a mut [u32],
+    z: &'a mut [f32],
+}
+
+impl ColumnMajorBand<'_> {
+    #[inline]
+    fn idx(&self, lx: usize, y: usize) -> Option<usize> {
+        if lx >= self.cols || y >= self.h {
+            return None;
+        }
+        Some(lx * self.h + y)
+    }
+
+    #[inline]
+    pub fn put_pixel(&mut self, lx: usize, y: usize, r: u8, g: u8, b: u8, depth: f32) {
+        let Some(idx) = self.idx(lx, y) else { return };
+        if depth > self.z[idx] {
+            return;
+        }
+        self.z[idx] = depth;
+        self.px[idx] = pack_rgb(r, g, b);
+    }
+
+    /// Depth at a band-local pixel (used by tests).
+    #[cfg(test)]
+    #[inline]
+    pub fn depth(&self, lx: usize, y: usize) -> f32 {
+        self.z[lx * self.h + y]
+    }
+}
+
+/// Column-major color+depth target for the pre-rotation passes (sky fill,
+/// terrain march).
+///
+/// The raymarcher advances per screen *column*, so storing columns
+/// contiguously gives every vertical range one flat slice per plane. Bands
+/// are handed to rayon as disjoint `split_at_mut` views and written in
+/// place — zero intermediate buffers, zero copy passes.
+/// [`rotate_into`](crate::render::terrain::rotate_into) performs the single
+/// transposition into the row-major [`ImageBuffer`] everything downstream
+/// reads.
+pub struct ColumnMajorImage {
+    pub w: usize,
+    pub h: usize,
+    /// Packed `0x00RRGGBB`, `w * h` entries, column-contiguous.
+    pub px: Vec<u32>,
+    /// View-space forward depth per pixel (`f32::INFINITY` = sky).
+    pub z: Vec<f32>,
+}
+
+impl ColumnMajorImage {
+    pub fn new() -> Self {
+        Self { w: 0, h: 0, px: Vec::new(), z: Vec::new() }
+    }
+
+    /// Resize preserving capacity; marks depth as sky.
+    pub fn resize_if_needed(&mut self, w: usize, h: usize) {
+        if self.w == w && self.h == h {
+            return;
+        }
+        self.w = w;
+        self.h = h;
+        let px_count = w * h;
+        self.px.clear();
+        self.px.resize(px_count, 0);
+        self.z.clear();
+        self.z.resize(px_count, f32::INFINITY);
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.px.fill(0);
+        self.z.fill(f32::INFINITY);
+    }
+
+    #[inline]
+    pub fn put_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8, depth: f32) {
+        if x >= self.w || y >= self.h {
+            return;
+        }
+        let idx = x * self.h + y;
+        if depth > self.z[idx] {
+            return;
+        }
+        self.z[idx] = depth;
+        self.px[idx] = pack_rgb(r, g, b);
+    }
+
+    /// Partition `[0, w)` into disjoint bands at the given ascending bounds
+    /// (`bounds[0] == 0`, `bounds.last() == &w`). Panics on malformed bounds.
+    pub fn split_bands(&mut self, bounds: &[usize]) -> Vec<ColumnMajorBand<'_>> {
+        assert!(bounds.len() >= 2 && bounds.first() == Some(&0) && bounds.last() == Some(&self.w));
+        assert!(bounds.windows(2).all(|wv| wv[0] < wv[1]));
+        let mut px_rest: &mut [u32] = &mut self.px;
+        let mut z_rest: &mut [f32] = &mut self.z;
+        let mut out = Vec::with_capacity(bounds.len() - 1);
+        for pair in bounds.windows(2) {
+            let n = (pair[1] - pair[0]) * self.h;
+            let (px_head, px_tail) = px_rest.split_at_mut(n);
+            let (z_head, z_tail) = z_rest.split_at_mut(n);
+            px_rest = px_tail;
+            z_rest = z_tail;
+            out.push(ColumnMajorBand { cols: pair[1] - pair[0], h: self.h, px: px_head, z: z_head });
+        }
+        out
+    }
+}
+
+impl Default for ColumnMajorImage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 use std::io::Write as _;
 use std::path::Path;
 

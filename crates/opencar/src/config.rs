@@ -16,6 +16,9 @@ pub const MARCH_FAR: f32 = 600.0;
 /// screen cells each, so coarse sampling is invisible there.
 pub const STEP_GROWTH_FAR: f32 = 0.02;
 pub const STEP_FAR_START: f32 = 250.0;
+/// Target width of one parallel march band. Bands are disjoint column ranges
+/// handed to rayon as contiguous slices of the column-major overscan buffer.
+pub const MARCH_BAND_COLS: usize = 64;
 /// Distance from the player within which chunks are guaranteed resident;
 /// march queries beyond this use the cheap far-field terrain LOD.
 pub const CHUNK_REACH_M: f32 =
@@ -25,6 +28,18 @@ pub const CHUNK_REACH_M: f32 =
 pub const CHUNK_SIZE_I32: i32 = 64;
 pub const CHUNK_LOAD_RADIUS: i32 = 5;
 pub const CHUNK_GEN_BUDGET_PER_FRAME: usize = 2;
+
+// ── Background chunk streaming ──────────────────────────────────────────
+/// Cap on bake jobs outstanding at any moment; also the capacity of the
+/// result channel so outstanding work can never exceed what the receiver
+/// can hold without blocking a pool thread.
+pub const MAX_INFLIGHT_CHUNKS: usize = 8;
+/// After a dropped-on-full-channel bake, wait this long before allowing a
+/// re-request — prevents thrash while the main thread is stalled.
+pub const REQUEST_BACKOFF_MILLIS: u64 = 200;
+/// A pending entry older than this is assumed lost and forgotten entirely
+/// (last-resort net behind the tombstone/backoff path).
+pub const PENDING_TTL_MILLIS: u64 = 1000;
 
 pub const BASE_ELEV: f32 = 8.0;
 /// fBm/ridged octave counts for `raw_terrain_height`. Trimmed from
@@ -131,12 +146,21 @@ pub const DRAG_COEFF: f32 = 0.0012;
 pub const ROLL_RESIST: f32 = 0.045;
 pub const OFFROAD_DRAG_MULT: f32 = 1.8;
 pub const OFFROAD_MAX_SPEED: f32 = 35.0;
-pub const STEER_RATE: f32 = 0.5; // rad/s at reference speed
+/// Yaw rate at full lock and reference speed. The old 0.5 rad/s gave a
+/// ~315 m turn radius at top speed — undrivable at highway pace.
+pub const STEER_RATE: f32 = 1.4;
 /// Gentle pull toward the lane tangent while on asphalt (rad/s max).
 pub const LANE_MAGNETISM: f32 = 0.026;
+/// Magnetism only applies while deliberate steering input is below this
+/// magnitude, so it never fights the player's corrections near road edges.
+pub const LANE_MAGNET_STEER_GATE: f32 = 0.25;
 pub const STEER_SMOOTH_RATE: f32 = 6.0; // input slew per second
 pub const LOW_SPEED_REF: f32 = 10.0; // full steering authority below this
-pub const HIGH_SPEED_STABILITY: f32 = 0.62; // steering retained at top speed
+/// Minimum steering-authority fraction at crawl speed so maneuvering works
+/// from a standstill instead of ramping linearly from zero.
+pub const LOW_SPEED_FLOOR: f32 = 0.35;
+/// Steering authority retained at top speed (was 0.62 ⇒ 38 % left).
+pub const HIGH_SPEED_STABILITY: f32 = 0.45;
 pub const COLLIDE_RADIUS: f32 = 2.4;
 /// Longitudinal acceleration used by the camera pitch response.
 pub const PITCH_RESPONSE: f32 = 0.010; // rad per m/s²
