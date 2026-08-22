@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod auto_spawn;
 
 pub use muxio_tokio_rpc_ipc_client as rpc_client;

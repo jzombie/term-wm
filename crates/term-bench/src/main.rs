@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 

@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 //! Shared test helpers for the `term-session-mock` binary.
 //!
 //! Every test suite that needs the mock binary (the session server integration
