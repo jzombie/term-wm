@@ -3,6 +3,7 @@
 pub mod chunk;
 pub mod noise;
 pub mod roads;
+pub mod stream;
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};

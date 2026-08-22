@@ -28,6 +28,12 @@ const CTRL_RIGHT: usize = 3;
 const CTRL_HANDBRAKE: usize = 4;
 const CONTROL_COUNT: usize = 5;
 
+/// R3 gating: a candidate scan happens only when capacity exists AND either
+/// the player crossed into a new chunk or the rescan tick elapsed.
+fn should_scan(cooldown: u32, chunk_changed: bool, has_capacity: bool) -> bool {
+    has_capacity && (chunk_changed || cooldown == 0)
+}
+
 fn control_of(code: KeyCode) -> Option<usize> {
     match code {
         KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('W') => Some(CTRL_ACCEL),
@@ -169,6 +175,9 @@ pub struct App {
     pub env: Environment,
     pub hud: crate::hud::HudState,
     keys: HeldKeys,
+    streamer: crate::world::stream::ChunkStreamer,
+    scan_cooldown: u32,
+    last_scan_chunk: Option<(i32, i32)>,
     accumulator: f32,
     /// Set by the K key; consumed by the render loop for diagnostics.
     pub dump_request: bool,
@@ -199,7 +208,12 @@ impl App {
         player.y = world.height_at(player.x, player.z);
 
         // Synchronous initial ring so the road surface exists immediately.
+        // Startup ring is synchronous (plan §0f): first frame always has a
+        // complete world; everything further streams in the background.
         world.ensure_chunks_around(player.x, player.z, usize::MAX);
+
+        // Background streaming worker (owns generator copies).
+        let streamer = crate::world::stream::ChunkStreamer::spawn(*world.noise(), *world.roads());
         player.y = world.height_at(player.x, player.z);
 
         let cam_y = player.y + CAM_PRESETS[0].1;
@@ -218,6 +232,9 @@ impl App {
             env: Environment { elapsed: 0.0, noise_offset: (0, 0) },
             hud: crate::hud::HudState::new(),
             keys: HeldKeys::new(kitty),
+            streamer,
+            scan_cooldown: 0,
+            last_scan_chunk: None,
             accumulator: 0.0,
             dump_request: false,
         }
@@ -287,9 +304,31 @@ impl App {
             ((t * 613.0).cos().rem_euclid(1.0) * NOISE_TABLE_DIM as f32) as u16,
         );
 
-        // Stream chunks around the player (amortized after the sync ring).
-        self.world
-            .ensure_chunks_around(self.player.x, self.player.z, CHUNK_GEN_BUDGET_PER_FRAME);
+        // ── Background chunk streaming (Stage 0f) ──
+        // Ordering contract: collect drains finished work and tombstones
+        // before request admits new candidates, so channel capacity is
+        // freed within the same frame it is needed.
+        let now = Instant::now();
+        let ckx = (self.player.x / CHUNK_SIZE_I32 as f32).floor() as i32;
+        let cky = (self.player.z / CHUNK_SIZE_I32 as f32).floor() as i32;
+        self.streamer.note_player_chunk(ckx, cky);
+        self.streamer.collect(&mut self.world, now);
+
+        // R3: the candidate scan allocates + sorts; run it only when there
+        // is admission room AND something can have changed (border crossing,
+        // or the periodic rescan tick catching stragglers).
+        self.scan_cooldown = self.scan_cooldown.saturating_sub(1);
+        if should_scan(
+            self.scan_cooldown,
+            self.last_scan_chunk != Some((ckx, cky)),
+            self.streamer.has_capacity(),
+        ) {
+            let wants = self.world.missing_chunks_around(self.player.x, self.player.z);
+            self.streamer.request(&wants, now);
+            self.last_scan_chunk = Some((ckx, cky));
+            self.scan_cooldown = STREAM_RESCAN_FRAMES;
+        }
+        self.world.evict_far(self.player.x, self.player.z);
 
         // Camera follow + chassis dynamics + slope tracking.
         let ground_h = self.world.height_at(self.cam.x, self.cam.z);
@@ -415,5 +454,27 @@ mod keys_tests {
         for c in [CTRL_ACCEL, CTRL_BRAKE, CTRL_LEFT, CTRL_RIGHT, CTRL_HANDBRAKE] {
             assert!(!keys.held(c, now));
         }
+    }
+}
+
+#[cfg(test)]
+mod scan_gate_tests {
+    use super::should_scan;
+
+    #[test]
+    fn scans_require_capacity() {
+        assert!(!should_scan(0, true, false), "no room ⇒ no scan");
+        assert!(should_scan(0, true, true));
+    }
+
+    #[test]
+    fn border_crossing_scans_immediately() {
+        assert!(should_scan(30, true, true));
+    }
+
+    #[test]
+    fn stationary_scans_wait_for_rescan_tick() {
+        assert!(!should_scan(15, false, true), "mid-cooldown holds");
+        assert!(should_scan(0, false, true), "tick elapsed rescans");
     }
 }

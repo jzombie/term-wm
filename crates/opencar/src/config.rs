@@ -316,6 +316,12 @@ pub const OUT_BUF_BYTES: usize = 64 * 1024;
 /// Share of the current draw budget above which a frame counts as
 /// write-blocked for the adaptive cadence (G3).
 pub const CADENCE_BLOCKED_SHARE: f32 = 0.30;
+/// Batches at or below this size bake sequentially on the worker thread
+/// (rayon dispatch overhead exceeds the scalar bake for micro-batches).
+pub const STREAM_SEQUENTIAL_BATCH_MAX: usize = 2;
+/// Frames between background candidate rescans when nothing else triggers
+/// one (movement or free capacity). Keeps TTL/eviction stragglers converging.
+pub const STREAM_RESCAN_FRAMES: u32 = 30;
 /// Consecutive blocked draws before the gate widens to 2× cadence.
 pub const CADENCE_SLOW_WINDOWS: u32 = 3;
 /// Consecutive clean draws before the gate returns to nominal.
