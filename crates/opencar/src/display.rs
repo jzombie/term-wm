@@ -709,15 +709,15 @@ mod stream_tests {
         d.present(&mut f1, &cells).expect("f1");
         assert!(String::from_utf8_lossy(&f1).contains("38;5;196"));
 
-        // Same quantized index (196), tiny RGB drift ⇒ fully silent.
+        // Same quantized index (196), tiny RGB drift ⇒ SGR suppressed.
+        // Per the self-healing doctrine the GLYPH is still rewritten
+        // (cursor was already pinned here by the DECAWM clamp, so nothing
+        // else may appear).
         cells[0].fg = [252, 3, 3];
         let mut f2 = Vec::new();
         d.present(&mut f2, &cells).expect("f2");
-        assert!(
-            f2.is_empty(),
-            "index-stable change must emit nothing: {:?}",
-            String::from_utf8_lossy(&f2)
-        );
+        // Expected: glyph-only rewrite (U+28FF for mask 0xFF), no SGR.
+        assert_eq!(String::from_utf8_lossy(&f2), "\u{28ff}");
 
         // Real change resyncs.
         cells[0].fg = [0, 255, 0];
@@ -758,3 +758,44 @@ mod stream_tests {
         assert!(!s.contains("2J"), "presentation must never clear: {s:?}");
     }
 }
+
+    #[test]
+    fn suppression_rewrites_glyphs_but_skips_sgr() {
+        // Regression: the T1/V1 rewrite once forgot to record emitted colors
+        // into cur_fg/cur_bg, so identical-color cells re-emitted their SGR
+        // every frame (visible as color thrash). Lock it down: after a
+        // frame mixing a SUPPRESSED cell with an EMITTED one, the next
+        // identical frame must be fully silent, and the suppressed cell
+        // alone changing must stay silent too.
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(2, 1);
+        let mut cells = vec![
+            TermCell { mask: 0xFF, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }, // red, idx 196
+            TermCell { mask: 0x0F, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }, // same fg
+        ];
+        let mut f1 = Vec::new();
+        d.present(&mut f1, &cells).expect("f1");
+        assert!(String::from_utf8_lossy(&f1).contains("38;5;196"));
+
+        // Frame 2: both cells drift within the same quantized index ⇒ SGR
+        // suppressed; glyphs still rewritten (self-healing doctrine) and a
+        // MoveTo re-anchors cell 0.
+        cells[0].fg = [252, 3, 3];
+        cells[1].fg = [250, 6, 4];
+        let mut f2 = Vec::new();
+        d.present(&mut f2, &cells).expect("f2");
+        let s2 = String::from_utf8_lossy(&f2);
+        assert!(!s2.contains("38;5"), "no color escapes expected: {s2:?}");
+        assert_eq!(s2.match_indices('H').count(), 1);
+        assert_eq!(s2.match_indices('\u{28ff}').count(), 1);
+        assert_eq!(s2.match_indices('\u{280f}').count(), 1);
+
+        // Frame 3: identical grid ⇒ SGR stays suppressed; glyphs/moves may
+        // repeat but colors must never come back.
+        let mut f3 = Vec::new();
+        d.present(&mut f3, &cells).expect("f3");
+        assert!(
+            !String::from_utf8_lossy(&f3).contains("38;5"),
+            "colors must stay suppressed"
+        );
+    }
