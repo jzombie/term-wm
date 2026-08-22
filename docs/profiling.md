@@ -1,7 +1,7 @@
 ## Profiling with Debug Symbols
 
 ```bash
-CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release
+CARGO_PROFILE_RELEASE_DEBUG=true CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed cargo build --release -v
 ```
 
 ## Profiling without the daemon
