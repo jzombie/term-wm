@@ -1050,14 +1050,14 @@ mod vt_harness {
                             (lcg(&mut rng) % 256) as u8,
                             (lcg(&mut rng) % 256) as u8,
                         ];
-                        cells[i].ch = if lcg(&mut rng) % 11 == 0 {
+                        cells[i].ch = if lcg(&mut rng).is_multiple_of(11) {
                             ['W', 'A', '9', ':'][(lcg(&mut rng) % 4) as usize]
                         } else {
                             '\0'
                         };
                     }
 
-                    if lcg(&mut rng) % 9 == 0 {
+                    if lcg(&mut rng).is_multiple_of(9) {
                         w = 4 + (lcg(&mut rng) as usize % 26);
                         h = 3 + (lcg(&mut rng) as usize % 10);
                         d.resize_if_needed(w as u16, h as u16);
@@ -1076,7 +1076,7 @@ mod vt_harness {
                         "cursor desync ({truecolor}, seed {seed})"
                     );
                     assert_eq!(
-                        d.test_fg().map(|c| rgb_to_xterm256(c)),
+                        d.test_fg().map(rgb_to_xterm256),
                         sim.fg.map(|c| match c {
                             SgrColor::Indexed(i) => i,
                             SgrColor::Rgb(v) => rgb_to_xterm256(v),
@@ -1084,7 +1084,7 @@ mod vt_harness {
                         "fg parity ({truecolor}, seed {seed})"
                     );
                     assert_eq!(
-                        d.test_bg().map(|c| rgb_to_xterm256(c)),
+                        d.test_bg().map(rgb_to_xterm256),
                         sim.bg.map(|c| match c {
                             SgrColor::Indexed(i) => i,
                             SgrColor::Rgb(v) => rgb_to_xterm256(v),
@@ -1093,11 +1093,8 @@ mod vt_harness {
                     );
 
                     // Invariant 3: full glyph-grid parity.
-                    for i in 0..cells.len() {
-                        assert_eq!(
-                            sim.screen[i], cells[i].glyph(),
-                            "screen glyph drift at cell {i}"
-                        );
+                    for (i, screen_glyph) in sim.screen.iter().enumerate() {
+                        assert_eq!(*screen_glyph, cells[i].glyph(), "glyph drift at {i}");
                     }
                 }
             }
