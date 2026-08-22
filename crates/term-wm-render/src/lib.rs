@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 /// Opaque render backend trait with downcasting capability.
 /// Core crate defines this trait; UI crates downcast to concrete implementations.
 /// This enables true backend independence — core compiles without Ratatui.

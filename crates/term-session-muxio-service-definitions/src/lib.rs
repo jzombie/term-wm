@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod channel;
 pub mod methods;
 pub mod path_wire;

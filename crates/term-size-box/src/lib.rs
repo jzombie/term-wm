@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen,

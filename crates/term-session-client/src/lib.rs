@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod remote_pane;
 
 pub use remote_pane::RemotePane;

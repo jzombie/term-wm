@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 //! Cross-platform clipboard utilities: system clipboard (`arboard`) + OSC 52.
 //!
 //! Extracted from `term-wm-pty-engine` — the clipboard subsystem is OS/terminal

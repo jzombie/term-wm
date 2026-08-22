@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod actions;
 pub mod app_context;
 pub mod chrome;
