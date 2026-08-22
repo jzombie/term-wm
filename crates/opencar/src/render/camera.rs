@@ -73,7 +73,11 @@ impl CameraState {
         self.x += (tx - self.x) * k_xz;
         self.z += (tz - self.z) * k_xz;
 
-        let bob_mult = if player.offroad { OFFROAD_BOB_MULT } else { 1.0 };
+        let bob_mult = if player.offroad {
+            OFFROAD_BOB_MULT
+        } else {
+            1.0
+        };
         let speed_frac = player.speed.abs() / MAX_SPEED;
         self.heave =
             (player.bob_phase.sin() * 0.06 + player.bob_phase.cos() * 0.03) * speed_frac * bob_mult;
@@ -258,10 +262,7 @@ impl Projector {
         let h = pixel_h as f32;
         let ow = (w * c + h * s).ceil() as usize;
         let oh = (h * c + w * s).ceil() as usize;
-        (
-            ow.max(pixel_w.max(1)),
-            oh.max(pixel_h.max(1)),
-        )
+        (ow.max(pixel_w.max(1)), oh.max(pixel_h.max(1)))
     }
 }
 

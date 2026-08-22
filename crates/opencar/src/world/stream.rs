@@ -17,14 +17,14 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::config::*;
+use crate::world::World;
 use crate::world::chunk::Chunk;
 use crate::world::noise::Noise;
 use crate::world::roads::RoadNetwork;
-use crate::world::World;
 
 /// Work order: one batch of chunk keys plus the generation it was requested
 /// under.
@@ -98,8 +98,7 @@ impl ChunkStreamer {
     pub fn spawn(noise: Noise, roads: RoadNetwork) -> Self {
         let epoch = Arc::new(AtomicU64::new(0));
         let (work_tx, work_rx) = mpsc::channel::<BakeBatch>();
-        let (result_tx, result_rx) =
-            mpsc::sync_channel::<((i32, i32), Chunk)>(MAX_INFLIGHT_CHUNKS);
+        let (result_tx, result_rx) = mpsc::sync_channel::<((i32, i32), Chunk)>(MAX_INFLIGHT_CHUNKS);
         let (drop_tx, drop_rx) = mpsc::channel::<(i32, i32)>();
 
         let worker_epoch = Arc::clone(&epoch);
@@ -168,7 +167,8 @@ impl ChunkStreamer {
         // cooldown must free admission capacity again.
         let ttl = Duration::from_millis(PENDING_TTL_MILLIS);
         self.backoff.retain(|_, expires| now < *expires);
-        self.in_flight.retain(|_, queued| now.duration_since(*queued) < ttl);
+        self.in_flight
+            .retain(|_, queued| now.duration_since(*queued) < ttl);
 
         let Some(work_tx) = &self.work_tx else { return };
         let room = MAX_INFLIGHT_CHUNKS.saturating_sub(self.in_flight.len());
@@ -177,9 +177,7 @@ impl ChunkStreamer {
         }
         let keys: Vec<(i32, i32)> = wants
             .iter()
-            .filter(|key| {
-                !self.in_flight.contains_key(*key) && !self.backoff.contains_key(*key)
-            })
+            .filter(|key| !self.in_flight.contains_key(*key) && !self.backoff.contains_key(*key))
             .copied()
             .take(room)
             .collect();
@@ -251,7 +249,9 @@ mod tests {
         streamer.request(&wants[..2], now);
 
         let both_loaded = |world: &World, wants: &[(i32, i32)]| {
-            wants[..2].iter().all(|(kx, ky)| world.chunk_loaded(*kx, *ky))
+            wants[..2]
+                .iter()
+                .all(|(kx, ky)| world.chunk_loaded(*kx, *ky))
         };
         let ok = wait_until(2_000, || {
             let now = Instant::now();

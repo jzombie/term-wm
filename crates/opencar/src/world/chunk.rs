@@ -1,8 +1,8 @@
 //! Chunk generation: baked heights (with road cuts/fills), surface
 //! materials (asphalt, paint lines, guardrail bands) and curve-sign anchors.
 
-use super::noise::{lerp, Noise};
-use super::roads::{smoothstep, Centerline, CenterlineCache, RoadHit, RoadNetwork};
+use super::noise::{Noise, lerp};
+use super::roads::{Centerline, CenterlineCache, RoadHit, RoadNetwork, smoothstep};
 use crate::config::*;
 
 /// A curve-warning sign anchor (billboard sprite position).
@@ -45,7 +45,11 @@ pub fn natural_material(noise: &Noise, x: f32, z: f32, h: f32, slope: f32) -> u8
         return MAT_SNOW;
     }
     if slope > ROCK_SLOPE || h > ROCK_BAND_ELEV + dither {
-        return if moisture > 0.5 { MAT_ROCK_LIGHT } else { MAT_ROCK };
+        return if moisture > 0.5 {
+            MAT_ROCK_LIGHT
+        } else {
+            MAT_ROCK
+        };
     }
     if moisture < 0.34 {
         return MAT_GRASS_DRY;
@@ -81,9 +85,15 @@ impl BakeRoads<'_> {
         let lat_ew = self.ew.lateral(x, z);
         let lat_ns = self.ns.lateral(x, z);
         if lat_ew.abs() <= lat_ns.abs() {
-            RoadHit { dist: lat_ew.abs(), elev: self.ew_hw.elevation(z) }
+            RoadHit {
+                dist: lat_ew.abs(),
+                elev: self.ew_hw.elevation(z),
+            }
         } else {
-            RoadHit { dist: lat_ns.abs(), elev: self.ns_hw.elevation(x) }
+            RoadHit {
+                dist: lat_ns.abs(),
+                elev: self.ns_hw.elevation(x),
+            }
         }
     }
 
@@ -92,13 +102,21 @@ impl BakeRoads<'_> {
     fn nearer(&self, x: f32, z: f32) -> (f32, bool) {
         let lat_ew = self.ew.lateral(x, z);
         let lat_ns = self.ns.lateral(x, z);
-        if lat_ew.abs() <= lat_ns.abs() { (lat_ew, true) } else { (lat_ns, false) }
+        if lat_ew.abs() <= lat_ns.abs() {
+            (lat_ew, true)
+        } else {
+            (lat_ns, false)
+        }
     }
 
     /// Cached right-hand normal of the chosen highway at the cell's
     /// along-axis coordinate.
     fn right_normal(&self, is_ew: bool, t_axis: f32) -> (f32, f32) {
-        if is_ew { self.ew.right_normal_at(t_axis) } else { self.ns.right_normal_at(t_axis) }
+        if is_ew {
+            self.ew.right_normal_at(t_axis)
+        } else {
+            self.ns.right_normal_at(t_axis)
+        }
     }
 }
 
@@ -122,8 +140,12 @@ impl Chunk {
         let bro = BakeRoads {
             ew_hw: *roads.ew(),
             ns_hw: *roads.ns(),
-            ew: &roads.ew().bake_cache(base_z - ROAD_CACHE_MARGIN_M, count, noise),
-            ns: &roads.ns().bake_cache(base_x - ROAD_CACHE_MARGIN_M, count, noise),
+            ew: &roads
+                .ew()
+                .bake_cache(base_z - ROAD_CACHE_MARGIN_M, count, noise),
+            ns: &roads
+                .ns()
+                .bake_cache(base_x - ROAD_CACHE_MARGIN_M, count, noise),
         };
 
         // ── Vertex heights: raw terrain blended toward road elevation ──
@@ -159,8 +181,12 @@ impl Chunk {
         let mut signs = Vec::new();
         for hw in roads.highways() {
             let (t_min, t_max) = match hw.axis() {
-                super::roads::Axis::EastWest => (base_z - SIGN_MARGIN, base_z + size as f32 + SIGN_MARGIN),
-                super::roads::Axis::NorthSouth => (base_x - SIGN_MARGIN, base_x + size as f32 + SIGN_MARGIN),
+                super::roads::Axis::EastWest => {
+                    (base_z - SIGN_MARGIN, base_z + size as f32 + SIGN_MARGIN)
+                }
+                super::roads::Axis::NorthSouth => {
+                    (base_x - SIGN_MARGIN, base_x + size as f32 + SIGN_MARGIN)
+                }
             };
             let mut k = (t_min / SIGN_SPACING).ceil() as i64;
             let k_max = (t_max / SIGN_SPACING).floor() as i64;
@@ -174,7 +200,11 @@ impl Chunk {
             }
         }
 
-        Self { heights, materials, signs }
+        Self {
+            heights,
+            materials,
+            signs,
+        }
     }
 
     /// Bilinear height at local coordinates (fx, fz) in `[0, SIZE]`.
@@ -183,7 +213,10 @@ impl Chunk {
     }
 
     pub fn material_local(&self, i: usize, j: usize) -> u8 {
-        self.materials[mat_index(i.min(CHUNK_SIZE_I32 as usize - 1), j.min(CHUNK_SIZE_I32 as usize - 1))]
+        self.materials[mat_index(
+            i.min(CHUNK_SIZE_I32 as usize - 1),
+            j.min(CHUNK_SIZE_I32 as usize - 1),
+        )]
     }
 }
 
@@ -193,7 +226,8 @@ pub fn raw_terrain_height(noise: &Noise, x: f32, z: f32) -> f32 {
     let mountain_mask = smoothstep(CONTINENT_LOW, CONTINENT_HIGH, cont);
     let ridge = noise.ridged(x / RIDGE_SCALE, z / RIDGE_SCALE, RIDGE_OCTAVES);
     let hills = noise.fbm(x / HILL_SCALE, z / HILL_SCALE, HILL_OCTAVES);
-    BASE_ELEV + hills * HILL_AMP * (1.0 - 0.5 * mountain_mask)
+    BASE_ELEV
+        + hills * HILL_AMP * (1.0 - 0.5 * mountain_mask)
         + mountain_mask * MOUNTAIN_AMP * ridge.powf(1.3)
 }
 
@@ -203,10 +237,15 @@ pub fn raw_terrain_height(noise: &Noise, x: f32, z: f32) -> f32 {
 pub fn far_terrain_height(noise: &Noise, x: f32, z: f32) -> f32 {
     const FAR_CONTINENT_OCTAVES: u8 = 2;
     const FAR_HILL_OCTAVES: u8 = 2;
-    let cont = noise.fbm(x / CONTINENT_SCALE, z / CONTINENT_SCALE, FAR_CONTINENT_OCTAVES);
+    let cont = noise.fbm(
+        x / CONTINENT_SCALE,
+        z / CONTINENT_SCALE,
+        FAR_CONTINENT_OCTAVES,
+    );
     let mountain_mask = smoothstep(CONTINENT_LOW, CONTINENT_HIGH, cont);
     let hills = noise.fbm(x / HILL_SCALE, z / HILL_SCALE, FAR_HILL_OCTAVES);
-    BASE_ELEV + hills * HILL_AMP * (1.0 - 0.5 * mountain_mask)
+    BASE_ELEV
+        + hills * HILL_AMP * (1.0 - 0.5 * mountain_mask)
         + mountain_mask * MOUNTAIN_AMP * FAR_RIDGE_MEAN
 }
 

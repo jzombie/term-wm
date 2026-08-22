@@ -21,8 +21,7 @@ pub const STEP_FAR_START: f32 = 250.0;
 pub const MARCH_BAND_COLS: usize = 64;
 /// Distance from the player within which chunks are guaranteed resident;
 /// march queries beyond this use the cheap far-field terrain LOD.
-pub const CHUNK_REACH_M: f32 =
-    CHUNK_LOAD_RADIUS as f32 * CHUNK_SIZE_I32 as f32 * 0.9;
+pub const CHUNK_REACH_M: f32 = CHUNK_LOAD_RADIUS as f32 * CHUNK_SIZE_I32 as f32 * 0.9;
 
 // ── World generation ────────────────────────────────────────────────────
 pub const CHUNK_SIZE_I32: i32 = 64;
@@ -282,12 +281,7 @@ pub const SHADOW_EPS: f32 = 0.03;
 /// Normal-offset bias against shadow-map acne (meters along normal).
 pub const SHADOW_BIAS: f32 = 0.15;
 /// Poisson-disk tap offsets for percentage-closer filtering (x, y pairs).
-pub const PCF_TAPS: [[f32; 2]; 4] = [
-    [-0.62, -0.31],
-    [0.41, -0.56],
-    [-0.11, 0.64],
-    [0.58, 0.38],
-];
+pub const PCF_TAPS: [[f32; 2]; 4] = [[-0.62, -0.31], [0.41, -0.56], [-0.11, 0.64], [0.58, 0.38]];
 pub const PCF_TAP_COUNT: usize = PCF_TAPS.len();
 
 // ── Quantization / grain / lens / display ───────────────────────────────
@@ -373,38 +367,38 @@ pub const PAL_SIGN_BLACK: u8 = 30;
 pub const PAL_POLE: u8 = 31;
 
 pub const PALETTE: [[u8; 3]; 32] = [
-    [36, 58, 108],    // SKY_TOP
-    [86, 118, 172],   // SKY_HIGH
-    [152, 176, 212],  // SKY_LOW
-    [196, 206, 222],  // SKY_HORIZON
-    [255, 244, 198],  // SUN
-    [214, 222, 236],  // CLOUD
-    [34, 72, 124],    // WATER
-    [58, 104, 148],   // SHALLOW
-    [198, 182, 134],  // SAND
-    [74, 124, 60],    // GRASS
-    [52, 98, 46],     // GRASS_DARK
-    [128, 138, 70],   // GRASS_DRY
-    [128, 100, 64],   // DIRT
-    [126, 124, 118],  // ROCK
-    [162, 158, 150],  // ROCK_LIGHT
-    [236, 240, 248],  // SNOW
-    [44, 44, 48],     // ASPHALT
-    [66, 66, 70],     // ASPHALT_WORN
-    [86, 84, 84],     // SHOULDER
-    [242, 242, 238],  // PAINT
-    [188, 196, 208],  // RAIL
-    [198, 44, 44],    // CAR_RED
-    [228, 230, 236],  // CAR_WHITE
-    [52, 92, 196],    // CAR_BLUE
-    [40, 42, 48],     // CAR_DARK
-    [70, 88, 110],    // GLASS
-    [24, 24, 26],     // TIRE
-    [255, 64, 40],    // TAIL
-    [255, 238, 180],  // HEAD
-    [248, 208, 64],   // SIGN_YELLOW
-    [30, 30, 32],     // SIGN_BLACK
-    [120, 124, 130],  // POLE
+    [36, 58, 108],   // SKY_TOP
+    [86, 118, 172],  // SKY_HIGH
+    [152, 176, 212], // SKY_LOW
+    [196, 206, 222], // SKY_HORIZON
+    [255, 244, 198], // SUN
+    [214, 222, 236], // CLOUD
+    [34, 72, 124],   // WATER
+    [58, 104, 148],  // SHALLOW
+    [198, 182, 134], // SAND
+    [74, 124, 60],   // GRASS
+    [52, 98, 46],    // GRASS_DARK
+    [128, 138, 70],  // GRASS_DRY
+    [128, 100, 64],  // DIRT
+    [126, 124, 118], // ROCK
+    [162, 158, 150], // ROCK_LIGHT
+    [236, 240, 248], // SNOW
+    [44, 44, 48],    // ASPHALT
+    [66, 66, 70],    // ASPHALT_WORN
+    [86, 84, 84],    // SHOULDER
+    [242, 242, 238], // PAINT
+    [188, 196, 208], // RAIL
+    [198, 44, 44],   // CAR_RED
+    [228, 230, 236], // CAR_WHITE
+    [52, 92, 196],   // CAR_BLUE
+    [40, 42, 48],    // CAR_DARK
+    [70, 88, 110],   // GLASS
+    [24, 24, 26],    // TIRE
+    [255, 64, 40],   // TAIL
+    [255, 238, 180], // HEAD
+    [248, 208, 64],  // SIGN_YELLOW
+    [30, 30, 32],    // SIGN_BLACK
+    [120, 124, 130], // POLE
 ];
 
 // Terrain material ids double as palette indices.

@@ -19,7 +19,10 @@ struct AsciiU8 {
 }
 
 const fn build_ascii_lut() -> [AsciiU8; 256] {
-    let mut lut = [AsciiU8 { bytes: *b"000", len: 1 }; 256];
+    let mut lut = [AsciiU8 {
+        bytes: *b"000",
+        len: 1,
+    }; 256];
     let mut v = 0usize;
     while v < 256 {
         let mut n = v;
@@ -331,7 +334,11 @@ impl TermDisplay {
             if dx == 0 && (2..=CURSOR_REL_ROW_MAX).contains(&dy.abs()) {
                 let n = dy.unsigned_abs() as u16;
                 let rel_len = 2 + decimal_len(n) + 1;
-                let abs_len = 2 + decimal_len(ty.saturating_add(1)) + 1 + decimal_len(tx.saturating_add(1)) + 1;
+                let abs_len = 2
+                    + decimal_len(ty.saturating_add(1))
+                    + 1
+                    + decimal_len(tx.saturating_add(1))
+                    + 1;
                 if rel_len < abs_len {
                     out.write_all(CSI)?;
                     write_u16(out, n)?;
@@ -371,7 +378,12 @@ impl TermDisplay {
         self.prev.clear();
         self.prev.resize(
             len,
-            TermCell { mask: 0xFF, fg: [255; 3], bg: [255; 3], ch: '?' },
+            TermCell {
+                mask: 0xFF,
+                fg: [255; 3],
+                bg: [255; 3],
+                ch: '?',
+            },
         );
         // Unknown colors/cursor after a full repaint boundary.
         self.cur_fg = None;
@@ -400,7 +412,15 @@ impl TermDisplay {
         let expected = self.cols as usize * self.rows as usize;
         if self.prev.len() != expected || cells.len() != expected {
             self.prev.clear();
-            self.prev.resize(expected, TermCell { mask: 0xFF, fg: [255; 3], bg: [255; 3], ch: '?' });
+            self.prev.resize(
+                expected,
+                TermCell {
+                    mask: 0xFF,
+                    fg: [255; 3],
+                    bg: [255; 3],
+                    ch: '?',
+                },
+            );
             self.cur_fg = None;
             self.cur_bg = None;
             self.cursor = None;
@@ -519,7 +539,10 @@ mod moveto_tests {
         cells[0].fg = [250, 250, 250];
         d.present(&mut out, &cells).expect("in-memory writer");
         let s = String::from_utf8_lossy(&out);
-        assert!(s.contains("\x1b[1;1H"), "first move must target row1,col1: {s:?}");
+        assert!(
+            s.contains("\x1b[1;1H"),
+            "first move must target row1,col1: {s:?}"
+        );
         // T3: row advances are explicit \r\n pairs; a lone LF or CR is
         // always a bug (misaligned columns / stray scroll risk).
         let mut chars = s.chars().peekable();
@@ -531,7 +554,10 @@ mod moveto_tests {
                 assert_eq!(chars.next(), Some('\n'), "CR must pair with LF: {s:?}");
             }
         }
-        assert!(!s.contains("\\x1b[2;"), "must not address row 2 for a row-0 cell");
+        assert!(
+            !s.contains("\\x1b[2;"),
+            "must not address row 2 for a row-0 cell"
+        );
     }
 
     #[test]
@@ -639,8 +665,14 @@ mod quantizer_tests {
             s_idx.contains("\x1b[38;5;196;48;5;16m"),
             "indexed merged: {s_idx:?}"
         );
-        assert!(!s_idx.contains(";2;"), "indexed must not leak TrueColor: {s_idx:?}");
-        assert!(out_idx.len() < out_tc.len(), "indexed payload must be smaller");
+        assert!(
+            !s_idx.contains(";2;"),
+            "indexed must not leak TrueColor: {s_idx:?}"
+        );
+        assert!(
+            out_idx.len() < out_tc.len(),
+            "indexed payload must be smaller"
+        );
     }
 }
 
@@ -654,7 +686,12 @@ mod stream_tests {
     }
 
     fn red(mask: u8) -> TermCell {
-        TermCell { mask, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }
+        TermCell {
+            mask,
+            fg: [255, 0, 0],
+            bg: [0, 0, 0],
+            ch: '\0',
+        }
     }
 
     #[test]
@@ -687,13 +724,16 @@ mod stream_tests {
         let mut out = Vec::new();
         d.present(&mut out, &cells).expect("baseline");
 
-        cells[7] = red(0xFF);   // last col, row 0
-        cells[8] = red(0x0F);   // first col, row 1
+        cells[7] = red(0xFF); // last col, row 0
+        cells[8] = red(0x0F); // first col, row 1
         let mut f2 = Vec::new();
         d.present(&mut f2, &cells).expect("f2");
         let s = String::from_utf8_lossy(&f2);
         assert!(s.contains("\r\n"), "row transition must use CRLF: {s:?}");
-        assert!(!s.contains("\x1b[2;1H"), "must not absolutely address (0,1)");
+        assert!(
+            !s.contains("\x1b[2;1H"),
+            "must not absolutely address (0,1)"
+        );
     }
 
     #[test]
@@ -706,13 +746,19 @@ mod stream_tests {
         let mut out = Vec::new();
         d.present(&mut out, &cells).expect("baseline");
 
-        cells[3] = red(0xFF);     // (3,0) — last column; DECAWM clamp pins cursor here
+        cells[3] = red(0xFF); // (3,0) — last column; DECAWM clamp pins cursor here
         cells[3 + 5 * 4] = red(0xF0); // (3,5)
         let mut f2 = Vec::new();
         d.present(&mut f2, &cells).expect("f2");
         let s = String::from_utf8_lossy(&f2);
-        assert!(s.contains("\x1b[7A"), "up-jump to (3,0) from clamped bottom-right: {s:?}");
-        assert!(s.contains("\x1b[5B"), "expected parameterized down-jump: {s:?}");
+        assert!(
+            s.contains("\x1b[7A"),
+            "up-jump to (3,0) from clamped bottom-right: {s:?}"
+        );
+        assert!(
+            s.contains("\x1b[5B"),
+            "expected parameterized down-jump: {s:?}"
+        );
         // Pure vertical same-column hops are strictly cheaper than absolute
         // moves here — no `H` should appear at all.
         assert_eq!(s.match_indices('H').count(), 0);
@@ -747,7 +793,12 @@ mod stream_tests {
         // frames, making the hysteresis contract directly observable.
         let mut d = TermDisplay::new(false);
         d.resize_if_needed(1, 1);
-        let mut cells = vec![TermCell { mask: 0xFF, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }];
+        let mut cells = vec![TermCell {
+            mask: 0xFF,
+            fg: [255, 0, 0],
+            bg: [0, 0, 0],
+            ch: '\0',
+        }];
         let mut f1 = Vec::new();
         d.present(&mut f1, &cells).expect("f1");
         assert!(String::from_utf8_lossy(&f1).contains("38;5;196"));
@@ -773,7 +824,12 @@ mod stream_tests {
     fn text_cells_are_exempt_from_hysteresis() {
         let mut d = TermDisplay::new(false);
         d.resize_if_needed(1, 1);
-        let mut cells = vec![TermCell { mask: 0, fg: [255, 0, 0], bg: [0, 0, 0], ch: 'A' }];
+        let mut cells = vec![TermCell {
+            mask: 0,
+            fg: [255, 0, 0],
+            bg: [0, 0, 0],
+            ch: 'A',
+        }];
         let mut f1 = Vec::new();
         d.present(&mut f1, &cells).expect("f1");
 
@@ -802,46 +858,56 @@ mod stream_tests {
     }
 }
 
-    #[test]
-    fn suppression_rewrites_glyphs_but_skips_sgr() {
-        // Regression: the T1/V1 rewrite once forgot to record emitted colors
-        // into cur_fg/cur_bg, so identical-color cells re-emitted their SGR
-        // every frame (visible as color thrash). Lock it down: after a
-        // frame mixing a SUPPRESSED cell with an EMITTED one, the next
-        // identical frame must be fully silent, and the suppressed cell
-        // alone changing must stay silent too.
-        let mut d = TermDisplay::new(false);
-        d.resize_if_needed(2, 1);
-        let mut cells = vec![
-            TermCell { mask: 0xFF, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }, // red, idx 196
-            TermCell { mask: 0x0F, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }, // same fg
-        ];
-        let mut f1 = Vec::new();
-        d.present(&mut f1, &cells).expect("f1");
-        assert!(String::from_utf8_lossy(&f1).contains("38;5;196"));
+#[test]
+fn suppression_rewrites_glyphs_but_skips_sgr() {
+    // Regression: the T1/V1 rewrite once forgot to record emitted colors
+    // into cur_fg/cur_bg, so identical-color cells re-emitted their SGR
+    // every frame (visible as color thrash). Lock it down: after a
+    // frame mixing a SUPPRESSED cell with an EMITTED one, the next
+    // identical frame must be fully silent, and the suppressed cell
+    // alone changing must stay silent too.
+    let mut d = TermDisplay::new(false);
+    d.resize_if_needed(2, 1);
+    let mut cells = vec![
+        TermCell {
+            mask: 0xFF,
+            fg: [255, 0, 0],
+            bg: [0, 0, 0],
+            ch: '\0',
+        }, // red, idx 196
+        TermCell {
+            mask: 0x0F,
+            fg: [255, 0, 0],
+            bg: [0, 0, 0],
+            ch: '\0',
+        }, // same fg
+    ];
+    let mut f1 = Vec::new();
+    d.present(&mut f1, &cells).expect("f1");
+    assert!(String::from_utf8_lossy(&f1).contains("38;5;196"));
 
-        // Frame 2: both cells drift within the same quantized index ⇒ SGR
-        // suppressed; glyphs still rewritten (self-healing doctrine) and a
-        // MoveTo re-anchors cell 0.
-        cells[0].fg = [252, 3, 3];
-        cells[1].fg = [250, 6, 4];
-        let mut f2 = Vec::new();
-        d.present(&mut f2, &cells).expect("f2");
-        let s2 = String::from_utf8_lossy(&f2);
-        assert!(!s2.contains("38;5"), "no color escapes expected: {s2:?}");
-        assert_eq!(s2.match_indices('H').count(), 1);
-        assert_eq!(s2.match_indices('\u{28ff}').count(), 1);
-        assert_eq!(s2.match_indices('\u{280f}').count(), 1);
+    // Frame 2: both cells drift within the same quantized index ⇒ SGR
+    // suppressed; glyphs still rewritten (self-healing doctrine) and a
+    // MoveTo re-anchors cell 0.
+    cells[0].fg = [252, 3, 3];
+    cells[1].fg = [250, 6, 4];
+    let mut f2 = Vec::new();
+    d.present(&mut f2, &cells).expect("f2");
+    let s2 = String::from_utf8_lossy(&f2);
+    assert!(!s2.contains("38;5"), "no color escapes expected: {s2:?}");
+    assert_eq!(s2.match_indices('H').count(), 1);
+    assert_eq!(s2.match_indices('\u{28ff}').count(), 1);
+    assert_eq!(s2.match_indices('\u{280f}').count(), 1);
 
-        // Frame 3: identical grid ⇒ SGR stays suppressed; glyphs/moves may
-        // repeat but colors must never come back.
-        let mut f3 = Vec::new();
-        d.present(&mut f3, &cells).expect("f3");
-        assert!(
-            !String::from_utf8_lossy(&f3).contains("38;5"),
-            "colors must stay suppressed"
-        );
-    }
+    // Frame 3: identical grid ⇒ SGR stays suppressed; glyphs/moves may
+    // repeat but colors must never come back.
+    let mut f3 = Vec::new();
+    d.present(&mut f3, &cells).expect("f3");
+    assert!(
+        !String::from_utf8_lossy(&f3).contains("38;5"),
+        "colors must stay suppressed"
+    );
+}
 
 /// SGR color state as carried by the wire protocol.
 #[cfg(test)]
@@ -928,8 +994,11 @@ mod vt_harness {
                                 self.col = c.parse::<usize>().unwrap().saturating_sub(1);
                             }
                             'C' | 'B' | 'A' => {
-                                let n: usize =
-                                    if body.is_empty() { 1 } else { body.parse().unwrap() };
+                                let n: usize = if body.is_empty() {
+                                    1
+                                } else {
+                                    body.parse().unwrap()
+                                };
                                 match term {
                                     'C' => self.col = (self.col + n).min(self.w - 1),
                                     'B' => self.row += n,
@@ -948,8 +1017,13 @@ mod vt_harness {
                                             k += 1;
                                         }
                                         "38" | "48" => {
-                                            let mut slot =
-                                                |v: SgrColor| if parts[k] == "38" { self.fg = Some(v) } else { self.bg = Some(v) };
+                                            let mut slot = |v: SgrColor| {
+                                                if parts[k] == "38" {
+                                                    self.fg = Some(v)
+                                                } else {
+                                                    self.bg = Some(v)
+                                                }
+                                            };
                                             if parts[k + 1] == "5" {
                                                 slot(SgrColor::Indexed(
                                                     parts[k + 2].parse().unwrap(),

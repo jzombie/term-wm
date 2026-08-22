@@ -3,8 +3,8 @@
 
 use crate::config::*;
 use crate::sim::car::Vehicle;
-use crate::world::roads::{Axis, RoadNetwork};
 use crate::world::World;
+use crate::world::roads::{Axis, RoadNetwork};
 
 /// Which highway an NPC drives on.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -99,7 +99,11 @@ impl NpcCar {
     }
 
     /// World position + heading tangent on the current road/path.
-    pub fn pose(&self, roads: &RoadNetwork, noise: &crate::world::noise::Noise) -> ([f32; 2], [f32; 2]) {
+    pub fn pose(
+        &self,
+        roads: &RoadNetwork,
+        noise: &crate::world::noise::Noise,
+    ) -> ([f32; 2], [f32; 2]) {
         if let Some((jp, _)) = &self.junction {
             // Bezier traversal.
             let u = self.junction.map(|(_, u)| u).unwrap_or(0.0);
@@ -179,7 +183,11 @@ impl TrafficSystem {
                 let lat = other.lateral(pos[0], pos[1], &noise);
                 if lat.abs() < JUNCTION_HALF && (car.salt.wrapping_mul(97) % 10) < 4 {
                     // Turn onto the crossing highway in the travel direction.
-                    let exit_dir = if (car.salt >> 3).is_multiple_of(2) { 1.0 } else { -1.0 };
+                    let exit_dir = if (car.salt >> 3).is_multiple_of(2) {
+                        1.0
+                    } else {
+                        -1.0
+                    };
                     let enter_far = JUNCTION_HALF * 1.15;
                     let p0 = [pos[0] + tan[0] * 2.0, pos[1] + tan[1] * 2.0];
                     // Exit point beyond the far edge of the junction box.
@@ -203,10 +211,7 @@ impl TrafficSystem {
                         p3,
                         length: bezier_length(p0, p1, p2, p3),
                     };
-                    car.junction = Some((
-                        jp,
-                        0.0,
-                    ));
+                    car.junction = Some((jp, 0.0));
                     car.pending_hw = Some(match car.hw {
                         Highway::Ew => Highway::Ns,
                         Highway::Ns => Highway::Ew,
@@ -267,7 +272,8 @@ impl TrafficSystem {
             let rel = (car.t - player_axis) * car.dir;
             if rel < -RECYCLE_BEHIND || rel > RECYCLE_AHEAD {
                 let respawn_t = player_axis
-                    + car.dir * (SPAWN_MIN + (car.salt % 100) as f32 * (SPAWN_MAX - SPAWN_MIN) / 100.0);
+                    + car.dir
+                        * (SPAWN_MIN + (car.salt % 100) as f32 * (SPAWN_MAX - SPAWN_MIN) / 100.0);
                 car.t = respawn_t;
                 car.v = car.cruise * 0.85;
                 car.junction = None;
@@ -279,7 +285,6 @@ impl TrafficSystem {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

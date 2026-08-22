@@ -83,7 +83,9 @@ pub fn build_car(body_idx: u8, braking: bool, oncoming: bool) -> Mesh {
     } else {
         [130, 34, 26]
     };
-    let mut m = Mesh { quads: Vec::with_capacity(48) };
+    let mut m = Mesh {
+        quads: Vec::with_capacity(48),
+    };
 
     // Body slab.
     add_box(
@@ -107,8 +109,18 @@ pub fn build_car(body_idx: u8, braking: bool, oncoming: bool) -> Mesh {
         paint,
     );
     // Bumpers.
-    add_box(&mut m, [-CAR_W * 0.52, 0.30, -CAR_L * 0.52], [CAR_W * 0.52, 0.55, -CAR_L * 0.46], dark);
-    add_box(&mut m, [-CAR_W * 0.52, 0.30, CAR_L * 0.46], [CAR_W * 0.52, 0.55, CAR_L * 0.52], dark);
+    add_box(
+        &mut m,
+        [-CAR_W * 0.52, 0.30, -CAR_L * 0.52],
+        [CAR_W * 0.52, 0.55, -CAR_L * 0.46],
+        dark,
+    );
+    add_box(
+        &mut m,
+        [-CAR_W * 0.52, 0.30, CAR_L * 0.46],
+        [CAR_W * 0.52, 0.55, CAR_L * 0.52],
+        dark,
+    );
 
     // Wheels: short prisms slightly outside the body line.
     let wz = CAR_L * 0.31;
@@ -156,7 +168,9 @@ pub fn build_sign() -> Mesh {
     let pole_m = Material::opaque(PALETTE[PAL_POLE as usize], 0.7, 0.4);
     let plate_m = Material::opaque(PALETTE[PAL_SIGN_YELLOW as usize], 0.4, 0.2);
     let core_m = Material::opaque(PALETTE[PAL_SIGN_BLACK as usize], 0.6, 0.0);
-    let mut m = Mesh { quads: Vec::with_capacity(15) };
+    let mut m = Mesh {
+        quads: Vec::with_capacity(15),
+    };
     add_box(&mut m, [-0.05, 0.0, -0.05], [0.05, 2.6, 0.05], pole_m);
     add_box(&mut m, [-0.55, 1.45, -0.03], [0.55, 2.55, 0.03], plate_m);
     add_box(&mut m, [-0.40, 1.60, 0.03], [0.40, 2.40, 0.035], core_m);
@@ -171,18 +185,34 @@ pub fn build_tree(jitter: u32) -> Mesh {
     let j = (jitter % 7) as f32 * 0.13;
     let h = 3.2 + j;
     let r = 1.1 + (jitter % 5) as f32 * 0.11;
-    let mut m = Mesh { quads: Vec::with_capacity(25) };
+    let mut m = Mesh {
+        quads: Vec::with_capacity(25),
+    };
     add_box(&mut m, [-0.14, 0.0, -0.14], [0.14, h * 0.42, 0.14], trunk);
     add_box(&mut m, [-r, h * 0.35, -r], [r, h * 0.68, r], leaf_a);
-    add_box(&mut m, [-r * 0.72, h * 0.62, -r * 0.72], [r * 0.72, h, r * 0.72], leaf_b);
-    add_box(&mut m, [-r * 0.4, h, -r * 0.4], [r * 0.4, h * 1.16, r * 0.4], leaf_a);
+    add_box(
+        &mut m,
+        [-r * 0.72, h * 0.62, -r * 0.72],
+        [r * 0.72, h, r * 0.72],
+        leaf_b,
+    );
+    add_box(
+        &mut m,
+        [-r * 0.4, h, -r * 0.4],
+        [r * 0.4, h * 1.16, r * 0.4],
+        leaf_a,
+    );
     m
 }
 
 /// Rotate a local-space point by yaw and translate to world.
 fn place(p: [f32; 3], yaw_sin: f32, yaw_cos: f32, x: f32, y: f32, z: f32) -> ([f32; 3], bool) {
     (
-        [p[0] * yaw_cos + p[2] * yaw_sin + x, p[1] + y, -p[0] * yaw_sin + p[2] * yaw_cos + z],
+        [
+            p[0] * yaw_cos + p[2] * yaw_sin + x,
+            p[1] + y,
+            -p[0] * yaw_sin + p[2] * yaw_cos + z,
+        ],
         false,
     )
 }

@@ -62,7 +62,12 @@ impl PerfStats {
     const EMA_ALPHA: f32 = 0.15;
 
     fn new() -> Self {
-        Self { fps: 0.0, update_ms: 0.0, render_ms: 0.0, blocked_ms: 0.0 }
+        Self {
+            fps: 0.0,
+            update_ms: 0.0,
+            render_ms: 0.0,
+            blocked_ms: 0.0,
+        }
     }
 
     fn ema(old: f32, new: f32) -> f32 {
@@ -97,7 +102,11 @@ impl Default for HudState {
 
 impl HudState {
     pub fn new() -> Self {
-        Self { show_hud: true, show_minimap: false, perf: PerfStats::new() }
+        Self {
+            show_hud: true,
+            show_minimap: false,
+            perf: PerfStats::new(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -122,14 +131,7 @@ impl HudState {
             // Constant-width digits: no ghosting on contraction (A2).
             let buf = format!("{:>3}", kmh);
             let label = "km/h ";
-            draw_ascii(
-                cells,
-                cols,
-                1,
-                rows.saturating_sub(1),
-                label,
-                dim,
-            );
+            draw_ascii(cells, cols, 1, rows.saturating_sub(1), label, dim);
             draw_ascii(
                 cells,
                 cols,
@@ -153,18 +155,41 @@ impl HudState {
                 );
             }
             let gear = if player.speed < -0.3 { "R" } else { "D" };
-            draw_ascii(cells, cols, 1 + label.len() as u16 + 4 + bar_w + 1, rows.saturating_sub(1), gear, bright);
+            draw_ascii(
+                cells,
+                cols,
+                1 + label.len() as u16 + 4 + bar_w + 1,
+                rows.saturating_sub(1),
+                gear,
+                bright,
+            );
             if player.offroad && kmh > 5 {
-                draw_ascii(cells, cols, cols.saturating_sub(12), rows.saturating_sub(1), "OFF-ROAD!", warn);
+                draw_ascii(
+                    cells,
+                    cols,
+                    cols.saturating_sub(12),
+                    rows.saturating_sub(1),
+                    "OFF-ROAD!",
+                    warn,
+                );
             } else {
                 // A2: clear the fixed span so a hidden warning leaves no
                 // stale text behind.
-                clear_span(cells, cols as usize, cols.saturating_sub(12) as usize, rows.saturating_sub(1) as usize, 9);
+                clear_span(
+                    cells,
+                    cols as usize,
+                    cols.saturating_sub(12) as usize,
+                    rows.saturating_sub(1) as usize,
+                    9,
+                );
             }
             let hint = format!(
                 "[{}] WASD drive - Space brake - C cam - M map - H hud - P pause - Q quit  \
                  {:>4.0}fps u{:.1} r{:.1} b{:.1}",
-                backend_name, self.perf.fps, self.perf.update_ms, self.perf.render_ms,
+                backend_name,
+                self.perf.fps,
+                self.perf.update_ms,
+                self.perf.render_ms,
                 self.perf.blocked_ms
             );
             draw_ascii(cells, cols, 0, 0, &hint, dim);
@@ -214,15 +239,7 @@ mod tests {
         let traffic = TrafficSystem::new(&player, &world);
         let hud = HudState::new();
         hud.draw(
-            &mut cells,
-            cols,
-            rows,
-            &player,
-            &traffic,
-            &world,
-            "CPU",
-            false,
-            None,
+            &mut cells, cols, rows, &player, &traffic, &world, "CPU", false, None,
         );
         // Row 0, columns 0..5 must read "[CPU]".
         let expect = ['[', 'C', 'P', 'U', ']'];

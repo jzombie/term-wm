@@ -13,7 +13,7 @@ use crate::config::*;
 use chunk::{far_terrain_height, raw_terrain_height};
 use roads::RoadNetwork;
 
-pub use chunk::{natural_material, Chunk, SignDef};
+pub use chunk::{Chunk, SignDef, natural_material};
 pub use noise::Noise;
 
 // ── Chunk map hashing ────────────────────────────────────────────────────
@@ -177,9 +177,11 @@ impl World {
         let h = raw_terrain_height(&self.noise, x, z);
         let eps = SLOPE_SAMPLE_STEP;
         let slope = {
-            let dx = (raw_terrain_height(&self.noise, x + eps, z) - raw_terrain_height(&self.noise, x - eps, z))
+            let dx = (raw_terrain_height(&self.noise, x + eps, z)
+                - raw_terrain_height(&self.noise, x - eps, z))
                 / (2.0 * eps);
-            let dz = (raw_terrain_height(&self.noise, x, z + eps) - raw_terrain_height(&self.noise, x, z - eps))
+            let dz = (raw_terrain_height(&self.noise, x, z + eps)
+                - raw_terrain_height(&self.noise, x, z - eps))
                 / (2.0 * eps);
             (dx * dx + dz * dz).sqrt()
         };
@@ -206,12 +208,7 @@ impl World {
     }
 
     /// Signs in loaded chunks near a world position (within `radius_m`).
-    pub fn signs_near(
-        &self,
-        x: f32,
-        z: f32,
-        radius_m: f32,
-    ) -> impl Iterator<Item = &SignDef> {
+    pub fn signs_near(&self, x: f32, z: f32, radius_m: f32) -> impl Iterator<Item = &SignDef> {
         let span = (radius_m / CHUNK_SIZE_I32 as f32).ceil() as i32 + 1;
         let ckx = (x / CHUNK_SIZE_I32 as f32).floor() as i32;
         let cky = (z / CHUNK_SIZE_I32 as f32).floor() as i32;

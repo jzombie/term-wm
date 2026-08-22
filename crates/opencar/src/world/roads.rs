@@ -6,7 +6,7 @@
 
 use std::f32::consts::TAU;
 
-use super::noise::{lerp, Noise};
+use super::noise::{Noise, lerp};
 use crate::config::*;
 
 /// Travel direction of an axis-aligned highway.
@@ -135,10 +135,7 @@ impl Centerline {
         // Local refinement.
         let mut step = SPAWN_STRIDE * 0.5;
         for _ in 0..6 {
-            let cand = [
-                best_t - step,
-                best_t + step,
-            ];
+            let cand = [best_t - step, best_t + step];
             for c in cand {
                 let (px, pz) = self.point(c, 0.0, noise);
                 let d = (x - px) * (x - px) + (z - pz) * (z - pz);
@@ -195,14 +192,19 @@ impl Centerline {
             slope[0] = slope[1];
             slope[count - 1] = slope[count - 2];
         }
-        CenterlineCache { axis: self.axis, t0, cross, slope }
+        CenterlineCache {
+            axis: self.axis,
+            t0,
+            cross,
+            slope,
+        }
     }
 }
 
 impl CenterlineCache {
     fn index(&self, t: f32) -> usize {
-        (((t - self.t0) / ROAD_CACHE_STEP).round() as i32)
-            .clamp(0, self.cross.len() as i32 - 1) as usize
+        (((t - self.t0) / ROAD_CACHE_STEP).round() as i32).clamp(0, self.cross.len() as i32 - 1)
+            as usize
     }
 
     /// Cached centerline offset at along-axis coordinate `t`.
@@ -325,7 +327,10 @@ mod tests {
             z += 8.0;
         }
         let (x0, z0, _) = best;
-        assert!(best.2 < JUNCTION_HALF * 2.0, "scan should find near-crossing");
+        assert!(
+            best.2 < JUNCTION_HALF * 2.0,
+            "scan should find near-crossing"
+        );
         // Height query is single-valued: repeated calls identical.
         let h1 = {
             let hit = roads.sample(x0, z0, &noise);

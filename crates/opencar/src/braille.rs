@@ -23,7 +23,6 @@ pub struct TermCell {
     pub ch: char,
 }
 
-
 /// Build the static braille UTF-8 table: `mask i` encodes code point
 /// `U+2800 + i` as its 3-byte UTF-8 sequence.
 const fn build_braille_utf8() -> [[u8; 3]; 256] {
@@ -42,7 +41,12 @@ const fn build_braille_utf8() -> [[u8; 3]; 256] {
 }
 
 impl TermCell {
-    pub const BLANK: TermCell = TermCell { mask: 0, fg: [0, 0, 0], bg: [0, 0, 0], ch: '\0' };
+    pub const BLANK: TermCell = TermCell {
+        mask: 0,
+        fg: [0, 0, 0],
+        bg: [0, 0, 0],
+        ch: '\0',
+    };
 
     /// Pre-encoded UTF-8 bytes for every braille pattern
     /// (`U+2800 + mask`, indexed by mask). The presentation hot path writes
@@ -190,7 +194,11 @@ fn quantize_cell(
             if noise_at(i) < coverage {
                 let dx = i % DOTS_X;
                 let dy = i / DOTS_X;
-                mask |= if dx == 0 { ROW_BITS[dy] } else { ROW_BITS[dy] << 4 };
+                mask |= if dx == 0 {
+                    ROW_BITS[dy]
+                } else {
+                    ROW_BITS[dy] << 4
+                };
             }
         }
         // Guaranteed ambient anchor: if the stochastic pass starved this
@@ -208,7 +216,11 @@ fn quantize_cell(
             }
             let dxb = best % DOTS_X;
             let dyb = best / DOTS_X;
-            mask |= if dxb == 0 { ROW_BITS[dyb] } else { ROW_BITS[dyb] << 4 };
+            mask |= if dxb == 0 {
+                ROW_BITS[dyb]
+            } else {
+                ROW_BITS[dyb] << 4
+            };
         }
         let fg_tint = if mask != 0 {
             // Grain tints the foreground only.
@@ -221,7 +233,12 @@ fn quantize_cell(
         } else {
             avg
         };
-        return TermCell { mask, fg: fg_tint, bg: BG_DARK, ch: '\0' };
+        return TermCell {
+            mask,
+            fg: fg_tint,
+            bg: BG_DARK,
+            ch: '\0',
+        };
     }
 
     // STRUCTURED CELL — adaptive threshold at the midpoint of the tonal
@@ -231,7 +248,11 @@ fn quantize_cell(
         if lumas[i] > t {
             let dx = i % DOTS_X;
             let dy = i / DOTS_X;
-            mask |= if dx == 0 { ROW_BITS[dy] } else { ROW_BITS[dy] << 4 };
+            mask |= if dx == 0 {
+                ROW_BITS[dy]
+            } else {
+                ROW_BITS[dy] << 4
+            };
             for ch in 0..3 {
                 lit_sum[ch] += px[i][ch] as f32;
             }
@@ -252,7 +273,11 @@ fn quantize_cell(
         }
         let dx = best % DOTS_X;
         let dy = best / DOTS_X;
-        mask |= if dx == 0 { ROW_BITS[dy] } else { ROW_BITS[dy] << 4 };
+        mask |= if dx == 0 {
+            ROW_BITS[dy]
+        } else {
+            ROW_BITS[dy] << 4
+        };
     }
     let fg = if lit_n > 0 || mask != 0 {
         if lit_n == 0 {
@@ -267,7 +292,12 @@ fn quantize_cell(
     } else {
         avg
     };
-    TermCell { mask, fg, bg: BG_DARK, ch: '\0' }
+    TermCell {
+        mask,
+        fg,
+        bg: BG_DARK,
+        ch: '\0',
+    }
 }
 
 /// Constant near-black cell background — structure lives in the fg dots.
@@ -340,7 +370,6 @@ mod tests {
         let hi = dots_a.max(dots_b);
         assert!(hi * 3 < lo * 4 + 4 * (hi - lo + 1) && (hi as f64) < (lo as f64) * 1.34 + 2.0);
     }
-
 }
 
 #[cfg(test)]

@@ -153,7 +153,12 @@ pub struct ColumnMajorImage {
 
 impl ColumnMajorImage {
     pub fn new() -> Self {
-        Self { w: 0, h: 0, px: Vec::new(), z: Vec::new() }
+        Self {
+            w: 0,
+            h: 0,
+            px: Vec::new(),
+            z: Vec::new(),
+        }
     }
 
     /// Resize preserving capacity; marks depth as sky.
@@ -203,7 +208,12 @@ impl ColumnMajorImage {
             let (z_head, z_tail) = z_rest.split_at_mut(n);
             px_rest = px_tail;
             z_rest = z_tail;
-            out.push(ColumnMajorBand { cols: pair[1] - pair[0], h: self.h, px: px_head, z: z_head });
+            out.push(ColumnMajorBand {
+                cols: pair[1] - pair[0],
+                h: self.h,
+                px: px_head,
+                z: z_head,
+            });
         }
         out
     }

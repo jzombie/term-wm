@@ -24,9 +24,8 @@ pub fn draw_minimap(
     let y0 = 1u16;
 
     // Scissor test: nothing may write outside the panel frame.
-    let in_panel = |gx: u16, gy: u16| -> bool {
-        gx >= x0 && gx < x0 + w && gy >= y0 && gy < y0 + h
-    };
+    let in_panel =
+        |gx: u16, gy: u16| -> bool { gx >= x0 && gx < x0 + w && gy >= y0 && gy < y0 + h };
 
     // Meters per minimap cell.
     const M_PER_CELL: f32 = 9.0;
@@ -49,8 +48,7 @@ pub fn draw_minimap(
                 let roads = world.roads();
                 let noise = world.noise();
                 let (pos, _) = npc.pose(roads, noise);
-                if (pos[0] - wx).abs() < M_PER_CELL * 0.6
-                    && (pos[1] - wz).abs() < M_PER_CELL * 0.6
+                if (pos[0] - wx).abs() < M_PER_CELL * 0.6 && (pos[1] - wz).abs() < M_PER_CELL * 0.6
                 {
                     blip = true;
                     break;
@@ -111,7 +109,15 @@ mod tests {
     fn minimap_viewport_scissors() {
         let cols = 60u16;
         let rows = 20u16;
-        let mut cells = vec![TermCell { mask: 0, fg: [1, 2, 3], bg: [1, 2, 3], ch: '\0' }; (cols * rows) as usize];
+        let mut cells = vec![
+            TermCell {
+                mask: 0,
+                fg: [1, 2, 3],
+                bg: [1, 2, 3],
+                ch: '\0'
+            };
+            (cols * rows) as usize
+        ];
         let player = Vehicle::new(0.0, 0.0, 0.0);
         let mut world = World::new(7);
         world.ensure_chunks_around(player.x, player.z, usize::MAX);

@@ -7,8 +7,8 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config::*;
-use crate::render::camera::CameraState;
 use crate::render::Environment;
+use crate::render::camera::CameraState;
 use crate::sim::car::{Vehicle, VehicleInput};
 use crate::sim::traffic::TrafficSystem;
 use crate::world::World;
@@ -229,7 +229,10 @@ impl App {
             world,
             player,
             cam,
-            env: Environment { elapsed: 0.0, noise_offset: (0, 0) },
+            env: Environment {
+                elapsed: 0.0,
+                noise_offset: (0, 0),
+            },
             hud: crate::hud::HudState::new(),
             keys: HeldKeys::new(kitty),
             streamer,
@@ -252,7 +255,9 @@ impl App {
                 self.toggle_pause();
             }
             KeyCode::Char('c') | KeyCode::Char('C') => self.cam.cycle_preset(),
-            KeyCode::Char('m') | KeyCode::Char('M') => self.hud.show_minimap = !self.hud.show_minimap,
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                self.hud.show_minimap = !self.hud.show_minimap
+            }
             KeyCode::Char('h') | KeyCode::Char('H') => self.hud.show_hud = !self.hud.show_hud,
             KeyCode::Char('k') | KeyCode::Char('K') => self.dump_request = true,
             _ => {}
@@ -271,7 +276,11 @@ impl App {
     /// stays stuck while the sim is frozen.
     fn toggle_pause(&mut self) {
         self.keys.clear_all();
-        self.mode = if self.mode == Mode::Paused { Mode::Running } else { Mode::Paused };
+        self.mode = if self.mode == Mode::Paused {
+            Mode::Running
+        } else {
+            Mode::Paused
+        };
     }
 
     /// Terminal focus lost: nothing is trustworthy about key state until the
@@ -323,7 +332,9 @@ impl App {
             self.last_scan_chunk != Some((ckx, cky)),
             self.streamer.has_capacity(),
         ) {
-            let wants = self.world.missing_chunks_around(self.player.x, self.player.z);
+            let wants = self
+                .world
+                .missing_chunks_around(self.player.x, self.player.z);
             self.streamer.request(&wants, now);
             self.last_scan_chunk = Some((ckx, cky));
             self.scan_cooldown = STREAM_RESCAN_FRAMES;
@@ -394,9 +405,15 @@ mod keys_tests {
         let press_t = Instant::now();
         keys.press(CTRL_LEFT, press_t);
         // Just inside the 150 ms window: full lock.
-        assert_eq!(keys.value(CTRL_LEFT, press_t + Duration::from_millis(100)), 1.0);
+        assert_eq!(
+            keys.value(CTRL_LEFT, press_t + Duration::from_millis(100)),
+            1.0
+        );
         // Past the window with no confirming repeat: released.
-        assert_eq!(keys.value(CTRL_LEFT, press_t + Duration::from_millis(200)), 0.0);
+        assert_eq!(
+            keys.value(CTRL_LEFT, press_t + Duration::from_millis(200)),
+            0.0
+        );
     }
 
     #[test]
@@ -405,13 +422,22 @@ mod keys_tests {
         let t0 = Instant::now();
         keys.press(CTRL_ACCEL, t0);
         // Provisional throttle is reduced force, not full.
-        assert_eq!(keys.value(CTRL_ACCEL, t0 + Duration::from_millis(50)), PROVISIONAL_FORCE);
+        assert_eq!(
+            keys.value(CTRL_ACCEL, t0 + Duration::from_millis(50)),
+            PROVISIONAL_FORCE
+        );
         // Auto-repeat arrives past the tap window: hold confirmed at full.
         let rep = t0 + Duration::from_millis(300);
         keys.press(CTRL_ACCEL, rep);
-        assert_eq!(keys.value(CTRL_ACCEL, rep + Duration::from_millis(100)), 1.0);
+        assert_eq!(
+            keys.value(CTRL_ACCEL, rep + Duration::from_millis(100)),
+            1.0
+        );
         // Silence beyond REPEAT_GAP releases.
-        assert_eq!(keys.value(CTRL_ACCEL, rep + Duration::from_millis(250)), 0.0);
+        assert_eq!(
+            keys.value(CTRL_ACCEL, rep + Duration::from_millis(250)),
+            0.0
+        );
     }
 
     #[test]
@@ -447,11 +473,23 @@ mod keys_tests {
     fn clear_all_drops_everything() {
         let mut keys = HeldKeys::new(false);
         let now = Instant::now();
-        for c in [CTRL_ACCEL, CTRL_BRAKE, CTRL_LEFT, CTRL_RIGHT, CTRL_HANDBRAKE] {
+        for c in [
+            CTRL_ACCEL,
+            CTRL_BRAKE,
+            CTRL_LEFT,
+            CTRL_RIGHT,
+            CTRL_HANDBRAKE,
+        ] {
             keys.press(c, now);
         }
         keys.clear_all();
-        for c in [CTRL_ACCEL, CTRL_BRAKE, CTRL_LEFT, CTRL_RIGHT, CTRL_HANDBRAKE] {
+        for c in [
+            CTRL_ACCEL,
+            CTRL_BRAKE,
+            CTRL_LEFT,
+            CTRL_RIGHT,
+            CTRL_HANDBRAKE,
+        ] {
             assert!(!keys.held(c, now));
         }
     }

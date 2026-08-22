@@ -197,10 +197,15 @@ pub fn march_columns(
         return;
     }
     let bounds = band_bounds(ow);
-    let ranges: Vec<(usize, usize)> =
-        bounds.windows(2).map(|pair| (pair[0], pair[1])).collect();
+    let ranges: Vec<(usize, usize)> = bounds.windows(2).map(|pair| (pair[0], pair[1])).collect();
     let mut bands = buf.split_bands(&bounds);
-    let span = MarchSpan { op, world, sm, contrast_boost, total_w: ow };
+    let span = MarchSpan {
+        op,
+        world,
+        sm,
+        contrast_boost,
+        total_w: ow,
+    };
     if bands.len() == 1 {
         march_range(&mut bands[0], &span, ranges[0]);
         return;
@@ -235,7 +240,11 @@ fn march_range(
             // Two-stage step growth: far spans cover many screen cells each,
             // so coarse sampling past STEP_FAR_START is invisible — and fog
             // fully saturates well before MARCH_FAR anyway.
-            let growth = if t < STEP_FAR_START { STEP_GROWTH } else { STEP_GROWTH_FAR };
+            let growth = if t < STEP_FAR_START {
+                STEP_GROWTH
+            } else {
+                STEP_GROWTH_FAR
+            };
             let step = STEP_BASE + t * growth;
             t += step;
 
@@ -268,28 +277,57 @@ fn march_range(
             if row < y_top {
                 // Continuous near-field filter: constant angular footprint,
                 // mip-style — two material samples straddle the ray.
-                let spread = (FILTER_NEAR_K / fwd_d.max(1e-3))
-                    .clamp(FILTER_MIN_SPREAD, FILTER_MAX_SPREAD);
+                let spread =
+                    (FILTER_NEAR_K / fwd_d.max(1e-3)).clamp(FILTER_MIN_SPREAD, FILTER_MAX_SPREAD);
                 let px_n = -dir[2];
                 let pz_n = dir[0];
                 let mat_a = if far {
-                    span.world.material_far(sx_t + px_n * spread, sz_t + pz_n * spread)
+                    span.world
+                        .material_far(sx_t + px_n * spread, sz_t + pz_n * spread)
                 } else {
-                    span.world.material_at(sx_t + px_n * spread, sz_t + pz_n * spread)
+                    span.world
+                        .material_at(sx_t + px_n * spread, sz_t + pz_n * spread)
                 };
                 let mat_b = if far {
-                    span.world.material_far(sx_t - px_n * spread, sz_t - pz_n * spread)
+                    span.world
+                        .material_far(sx_t - px_n * spread, sz_t - pz_n * spread)
                 } else {
-                    span.world.material_at(sx_t - px_n * spread, sz_t - pz_n * spread)
+                    span.world
+                        .material_at(sx_t - px_n * spread, sz_t - pz_n * spread)
                 };
-                let rgb_a = shade(span.world, span.sm, sx_t, sz_t, h, mat_a, fwd_d, span.contrast_boost);
+                let rgb_a = shade(
+                    span.world,
+                    span.sm,
+                    sx_t,
+                    sz_t,
+                    h,
+                    mat_a,
+                    fwd_d,
+                    span.contrast_boost,
+                );
                 let rgb = if mat_a == mat_b {
                     rgb_a
                 } else {
-                    let rgb_b = shade(span.world, span.sm, sx_t, sz_t, h, mat_b, fwd_d, span.contrast_boost);
+                    let rgb_b = shade(
+                        span.world,
+                        span.sm,
+                        sx_t,
+                        sz_t,
+                        h,
+                        mat_b,
+                        fwd_d,
+                        span.contrast_boost,
+                    );
                     blend_rgb(rgb_a, rgb_b, 0.5)
                 };
-                fill(band, lx, row, y_top.saturating_sub(1), rgb, fwd_d + TERRAIN_DEPTH_MARGIN);
+                fill(
+                    band,
+                    lx,
+                    row,
+                    y_top.saturating_sub(1),
+                    rgb,
+                    fwd_d + TERRAIN_DEPTH_MARGIN,
+                );
                 y_top = row;
             }
         }
@@ -435,7 +473,10 @@ mod tests {
         }
         assert!(samples > 40);
         // Converges near mid-frame (horizon), not the bottom.
-        assert!(prev_row < proj.pixel_h as f32 * 0.60, "final row {prev_row}");
+        assert!(
+            prev_row < proj.pixel_h as f32 * 0.60,
+            "final row {prev_row}"
+        );
     }
 }
 
@@ -461,9 +502,8 @@ mod rotate_tests {
         for py in 0..dst.h {
             for px in 0..dst.w {
                 let o = (py * dst.w + px) * 3;
-                let is_sky = dst.rgb[o] == hr[0]
-                    && dst.rgb[o + 1] == hr[1]
-                    && dst.rgb[o + 2] == hr[2];
+                let is_sky =
+                    dst.rgb[o] == hr[0] && dst.rgb[o + 1] == hr[1] && dst.rgb[o + 2] == hr[2];
                 let is_src = {
                     let idx = py * dst.w + px;
                     dst.z[idx].is_finite()

@@ -4,7 +4,7 @@
 //! emissive faces and distance fog.
 
 use crate::config::*;
-use crate::render::camera::{dot, Projector};
+use crate::render::camera::{Projector, dot};
 use crate::render::image::ImageBuffer;
 use crate::render::shadows::ShadowMap;
 
@@ -31,16 +31,34 @@ pub struct Material {
 
 impl Material {
     pub const fn opaque(albedo: [u8; 3], roughness: f32, metallic: f32) -> Self {
-        Self { albedo, roughness, metallic, self_light: 0.0, emissive: false }
+        Self {
+            albedo,
+            roughness,
+            metallic,
+            self_light: 0.0,
+            emissive: false,
+        }
     }
 
     /// Vehicle-paint material with an additive luma floor.
     pub const fn body(albedo: [u8; 3]) -> Self {
-        Self { albedo, roughness: 0.25, metallic: 0.6, self_light: SELF_LIGHT, emissive: false }
+        Self {
+            albedo,
+            roughness: 0.25,
+            metallic: 0.6,
+            self_light: SELF_LIGHT,
+            emissive: false,
+        }
     }
 
     pub const fn emissive(albedo: [u8; 3]) -> Self {
-        Self { albedo, roughness: 1.0, metallic: 0.0, self_light: 1.0, emissive: true }
+        Self {
+            albedo,
+            roughness: 1.0,
+            metallic: 0.0,
+            self_light: 1.0,
+            emissive: true,
+        }
     }
 }
 
@@ -71,7 +89,11 @@ fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 }
 
 fn to_camera(q: &Quad, proj: &Projector) -> [CsV; 4] {
-    let mut out = [CsV { xyz: [0.0; 3], normal: [0.0; 3], wp: [0.0; 3] }; 4];
+    let mut out = [CsV {
+        xyz: [0.0; 3],
+        normal: [0.0; 3],
+        wp: [0.0; 3],
+    }; 4];
     for (i, vv) in q.v.iter().enumerate() {
         let rel = [
             vv.pos[0] - proj.cam[0],
@@ -79,7 +101,11 @@ fn to_camera(q: &Quad, proj: &Projector) -> [CsV; 4] {
             vv.pos[2] - proj.cam[2],
         ];
         out[i] = CsV {
-            xyz: [dot(rel, proj.right_r), dot(rel, proj.up_r), dot(rel, proj.fwd_r)],
+            xyz: [
+                dot(rel, proj.right_r),
+                dot(rel, proj.up_r),
+                dot(rel, proj.fwd_r),
+            ],
             normal: vv.normal,
             wp: vv.pos,
         };

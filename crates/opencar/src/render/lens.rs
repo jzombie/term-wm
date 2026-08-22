@@ -70,7 +70,10 @@ mod tests {
             let cx = w as f32 * 0.5;
             let r_max = (1.0f32 + (cx / cx).powi(2)).sqrt(); // edge of frame: |nx|=1
             let shift = cx * k.abs() * r_max; // |nx'|−|nx| at ny=0
-            assert!(shift <= LENS_MAX_EDGE_CELLS * 2.0 + 1e-3, "w={w} shift={shift}");
+            assert!(
+                shift <= LENS_MAX_EDGE_CELLS * 2.0 + 1e-3,
+                "w={w} shift={shift}"
+            );
         }
     }
 

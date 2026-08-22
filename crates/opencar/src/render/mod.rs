@@ -15,7 +15,7 @@ pub mod shadows;
 pub mod sky;
 pub mod terrain;
 
-use crate::braille::{encode, make_noise_table, TermCell};
+use crate::braille::{TermCell, encode, make_noise_table};
 use crate::config::*;
 use crate::render::camera::Projector;
 use crate::render::image::ImageBuffer;
@@ -23,7 +23,7 @@ use crate::render::lens::{apply_lens, lens_k_bounded};
 use crate::render::models::{build_car, build_sign, build_tree, instance};
 use crate::render::raster::draw_quad;
 use crate::render::shadows::ShadowMap;
-use crate::render::terrain::{march_columns, rotate_into, TerrainPass};
+use crate::render::terrain::{TerrainPass, march_columns, rotate_into};
 use crate::sim::car::Vehicle;
 use crate::sim::traffic::TrafficSystem;
 use crate::world::World;
@@ -138,13 +138,7 @@ impl CpuBackend {
         // ── Player car ──
         let braking = player.brake > 0.1 || player.handbrake;
         let player_mesh = build_car(PAL_CAR_RED, braking, false);
-        for q in instance(
-            &player_mesh,
-            player.x,
-            player.y,
-            player.z,
-            player.heading,
-        ) {
+        for q in instance(&player_mesh, player.x, player.y, player.z, player.heading) {
             self.quad_scratch.push(q);
         }
 
@@ -226,11 +220,7 @@ impl CpuBackend {
             .iter()
             .map(|q| {
                 let c = centroid(&q.v.map(|vv| vv.pos));
-                let rel = [
-                    c[0] - proj.cam[0],
-                    c[1] - proj.cam[1],
-                    c[2] - proj.cam[2],
-                ];
+                let rel = [c[0] - proj.cam[0], c[1] - proj.cam[1], c[2] - proj.cam[2]];
                 dot3(rel, proj.fwd_r)
             })
             .collect();
@@ -315,7 +305,12 @@ impl Renderer for CpuBackend {
         self.terrain.buf.resize_if_needed(ow, oh);
         self.terrain.buf.clear();
         let op = Projector::new_from(&proj, ow, oh);
-        sky::render_sky(&mut self.terrain.buf, &op, frame.world.noise(), frame.env.elapsed);
+        sky::render_sky(
+            &mut self.terrain.buf,
+            &op,
+            frame.world.noise(),
+            frame.env.elapsed,
+        );
         let static_boost = if frame.player.kmh() < 1 { 1.25 } else { 1.0 };
         march_columns(
             &mut self.terrain.buf,
@@ -337,8 +332,7 @@ impl Renderer for CpuBackend {
         // Stage 5: distance-normalized edge contours, then bounded virtual
         // lens (skipped while shaking), then quantize to braille cells.
         edges::apply_edge_contours(&mut self.img);
-        let shaking =
-            frame.player.offroad || frame.cam.heave.abs() > SHAKE_BYPASS_M;
+        let shaking = frame.player.offroad || frame.cam.heave.abs() > SHAKE_BYPASS_M;
         if !shaking {
             let k_eff = lens_k_bounded(self.img.w);
             apply_lens(&self.img, &mut self.scratch, k_eff);
@@ -432,9 +426,13 @@ mod tests {
         let traffic = TrafficSystem::new(&player, &world);
         let mut cam = CameraState::new();
         let ground = world.height_at(player.x, player.z);
-        let slope = crate::render::camera::terrain_slope(&world, player.x, player.z, player.heading);
+        let slope =
+            crate::render::camera::terrain_slope(&world, player.x, player.z, player.heading);
         cam.update(&player, SIM_TICK_DT, ground, slope);
-        let env = Environment { elapsed: 1.0, noise_offset: (3, 4) };
+        let env = Environment {
+            elapsed: 1.0,
+            noise_offset: (3, 4),
+        };
         (world, player, traffic, cam, env)
     }
 
@@ -510,7 +508,7 @@ mod tests {
         };
         assert!(corner(0, 0) && corner(pw - 1, 0));
         assert!(corner(0, ph - 1) && corner(pw - 1, ph - 1));
-            }
+    }
 }
 
 #[cfg(test)]
@@ -555,7 +553,10 @@ mod m0_tests {
                 }
             }
         }
-        assert!(near_count > 40, "car/ground near-camera pixels missing: {near_count}");
+        assert!(
+            near_count > 40,
+            "car/ground near-camera pixels missing: {near_count}"
+        );
     }
 
     #[test]
@@ -567,7 +568,10 @@ mod m0_tests {
         let (world, mut player, _t, _c, _e) = scene();
         player.update(SIM_TICK_DT, VehicleInput::default(), &world);
         let ground = world.height_at(player.x, player.z);
-        assert!((ground - player.y).abs() < MESH_EPSILON_NONE, "meshes sit exactly on the height field");
+        assert!(
+            (ground - player.y).abs() < MESH_EPSILON_NONE,
+            "meshes sit exactly on the height field"
+        );
     }
 
     /// Meshes use exact depths: the only epsilon is terrain-side.
@@ -610,7 +614,8 @@ mod m05_tests {
         // Extreme steer at speed would otherwise exceed the cap.
         player.steer_sm = 1.0;
         player.speed = 40.0;
-        let slope = crate::render::camera::terrain_slope(&world, player.x, player.z, player.heading);
+        let slope =
+            crate::render::camera::terrain_slope(&world, player.x, player.z, player.heading);
         for _ in 0..120 {
             cam.update(&player, SIM_TICK_DT, world.height_at(cam.x, cam.z), slope);
         }

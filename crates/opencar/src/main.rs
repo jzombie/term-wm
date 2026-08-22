@@ -101,11 +101,7 @@ enum GateState {
 
 /// Deterministic two-stage cadence hysteresis (G3): sustained write-blocking
 /// widens the draw gate to 2× target; consecutive clean windows restore it.
-fn update_gate(
-    state: GateState,
-    slow_windows: u32,
-    clean_windows: u32,
-) -> (GateState, u32) {
+fn update_gate(state: GateState, slow_windows: u32, clean_windows: u32) -> (GateState, u32) {
     match state {
         GateState::Nominal => {
             if slow_windows >= CADENCE_SLOW_WINDOWS {
@@ -174,7 +170,9 @@ fn drive(
         last = frame_start;
         let update_start = Instant::now();
         app.update(dt);
-        app.hud.perf.set_update(update_start.elapsed().as_secs_f32() * 1000.0);
+        app.hud
+            .perf
+            .set_update(update_start.elapsed().as_secs_f32() * 1000.0);
 
         if app.mode == Mode::Quit {
             return Ok(());
@@ -231,7 +229,9 @@ fn drive(
             app.mode == Mode::Paused,
             Some(fh.as_str()),
         );
-        app.hud.perf.set_render(render_start.elapsed().as_secs_f32() * 1000.0);
+        app.hud
+            .perf
+            .set_render(render_start.elapsed().as_secs_f32() * 1000.0);
 
         let io_start = Instant::now();
         display.present(&mut out, &cells)?;
@@ -314,7 +314,7 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod gate_tests {
-    use super::{update_gate, GateState};
+    use super::{GateState, update_gate};
 
     #[test]
     fn nominal_holds_until_three_slow_windows() {
@@ -322,10 +322,18 @@ mod gate_tests {
         let mut gate;
         for i in 1..3 {
             (state, gate) = update_gate(state, i, 0);
-            assert_eq!((state, gate), (GateState::Nominal, 1), "premature widen at {i}");
+            assert_eq!(
+                (state, gate),
+                (GateState::Nominal, 1),
+                "premature widen at {i}"
+            );
         }
         (state, gate) = update_gate(state, 3, 0);
-        assert_eq!((state, gate), (GateState::Slow, 2), "three blocked draws widen");
+        assert_eq!(
+            (state, gate),
+            (GateState::Slow, 2),
+            "three blocked draws widen"
+        );
     }
 
     #[test]
@@ -335,7 +343,11 @@ mod gate_tests {
         (state, gate) = update_gate(state, 0, 1);
         assert_eq!((state, gate), (GateState::Slow, 2));
         (state, gate) = update_gate(state, 0, 2);
-        assert_eq!((state, gate), (GateState::Nominal, 1), "two clean windows restore");
+        assert_eq!(
+            (state, gate),
+            (GateState::Nominal, 1),
+            "two clean windows restore"
+        );
     }
 
     #[test]

@@ -168,11 +168,20 @@ mod tests {
         // Roads curve; a blind full-throttle run would legitimately leave the
         // asphalt. Clamp behavior is what we verify: overspeed decays.
         let (mut v, w) = on_road();
-        let idle = VehicleInput { throttle: 0.0, brake: 0.0, steer: 0.0, handbrake: false };
+        let idle = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 0.0,
+            handbrake: false,
+        };
         v.speed = 999.0;
         v.offroad = false;
         v.update(SIM_TICK_DT, idle, &w);
-        assert!(v.speed <= MAX_SPEED + 1e-3, "overspeed must clamp: {}", v.speed);
+        assert!(
+            v.speed <= MAX_SPEED + 1e-3,
+            "overspeed must clamp: {}",
+            v.speed
+        );
         assert!(v.kmh() as f32 <= MAX_SPEED * 3.6 + 0.1);
     }
 
@@ -182,19 +191,37 @@ mod tests {
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
         v.speed = 6.0;
-        let stop = VehicleInput { throttle: 0.0, brake: 0.0, steer: 0.0, handbrake: true };
+        let stop = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 0.0,
+            handbrake: true,
+        };
         for _ in 0..120 {
             if v.speed.abs() < 0.2 {
                 break;
             }
             v.update(SIM_TICK_DT, stop, &w);
         }
-        assert!(v.speed.abs() < 0.3, "handbrake should stop the car: {}", v.speed);
-        let reverse = VehicleInput { throttle: -1.0, brake: 0.0, steer: 0.0, handbrake: false };
+        assert!(
+            v.speed.abs() < 0.3,
+            "handbrake should stop the car: {}",
+            v.speed
+        );
+        let reverse = VehicleInput {
+            throttle: -1.0,
+            brake: 0.0,
+            steer: 0.0,
+            handbrake: false,
+        };
         for _ in 0..60 {
             v.update(SIM_TICK_DT, reverse, &w);
         }
-        assert!(v.speed < -0.4 && v.speed >= -MAX_REVERSE, "reverse builds: {}", v.speed);
+        assert!(
+            v.speed < -0.4 && v.speed >= -MAX_REVERSE,
+            "reverse builds: {}",
+            v.speed
+        );
     }
 
     #[test]
@@ -202,10 +229,19 @@ mod tests {
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
         v.speed = -5.0; // reversing
-        let steer_right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        let steer_right = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 1.0,
+            handbrake: false,
+        };
         v.update(SIM_TICK_DT, steer_right, &w);
         // Bicycle yaw carries speed's sign: reverse+right decreases heading.
-        assert!(v.heading < 0.0, "reverse+right should decrease heading, got {}", v.heading);
+        assert!(
+            v.heading < 0.0,
+            "reverse+right should decrease heading, got {}",
+            v.heading
+        );
     }
 
     #[test]
@@ -213,7 +249,12 @@ mod tests {
         // Full lock cranks the wheel but a stationary car never rotates.
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
-        let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        let right = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 1.0,
+            handbrake: false,
+        };
         let h0 = v.heading;
         for _ in 0..30 {
             v.update(SIM_TICK_DT, right, &w);
@@ -233,7 +274,12 @@ mod tests {
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
         v.speed = 1.4; // ~5 km/h
-        let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        let right = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 1.0,
+            handbrake: false,
+        };
         let h0 = v.heading;
         for _ in 0..30 {
             v.update(SIM_TICK_DT, right, &w);
@@ -252,7 +298,12 @@ mod tests {
         // MAX_LAT_ACCEL exactly (cap was derived from that budget).
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
-        let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        let right = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 1.0,
+            handbrake: false,
+        };
         let expected_cap = (WHEELBASE * MAX_LAT_ACCEL / (MAX_SPEED * MAX_SPEED)).atan();
         // Slew to the cap while pinning speed at vmax (white-box override of
         // drag decay so the test measures geometry, not the engine curve).
@@ -284,12 +335,22 @@ mod tests {
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
         v.speed = 10.0;
-        let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        let right = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 1.0,
+            handbrake: false,
+        };
         for _ in 0..15 {
             v.update(SIM_TICK_DT, right, &w);
         }
         assert!(v.steer_sm.abs() > 0.01, "wheel should be off center");
-        let neutral = VehicleInput { throttle: 0.0, brake: 0.0, steer: 0.0, handbrake: false };
+        let neutral = VehicleInput {
+            throttle: 0.0,
+            brake: 0.0,
+            steer: 0.0,
+            handbrake: false,
+        };
         // Fixed-rate recenter: |δ| shrinks by RECENTER·dt per tick.
         for _ in 0..20 {
             v.update(SIM_TICK_DT, neutral, &w);

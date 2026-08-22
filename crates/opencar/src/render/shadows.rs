@@ -101,8 +101,10 @@ impl ShadowMap {
             for tx in min_x..=max_x {
                 let fx = tx as f32 + 0.5;
                 let fy = ty as f32 + 0.5;
-                let w0 = ((pts[1].0 - fx) * (pts[2].1 - fy) - (pts[2].0 - fx) * (pts[1].1 - fy)) * inv;
-                let w1 = ((pts[2].0 - fx) * (pts[0].1 - fy) - (pts[0].0 - fx) * (pts[2].1 - fy)) * inv;
+                let w0 =
+                    ((pts[1].0 - fx) * (pts[2].1 - fy) - (pts[2].0 - fx) * (pts[1].1 - fy)) * inv;
+                let w1 =
+                    ((pts[2].0 - fx) * (pts[0].1 - fy) - (pts[0].0 - fx) * (pts[2].1 - fy)) * inv;
                 let w2 = 1.0 - w0 - w1;
                 if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                     continue;
@@ -131,7 +133,11 @@ impl ShadowMap {
         for tap in PCF_TAPS.iter().take(PCF_TAP_COUNT) {
             let x = (tu + tap[0] * tap_span).clamp(0.0, self.dim as f32 - 1.0) as usize;
             let y = (tv + tap[1] * tap_span).clamp(0.0, self.dim as f32 - 1.0) as usize;
-            sum += if d <= self.depth[y * self.dim + x] { 1.0 } else { 0.0 };
+            sum += if d <= self.depth[y * self.dim + x] {
+                1.0
+            } else {
+                0.0
+            };
         }
         sum / PCF_TAP_COUNT as f32
     }
