@@ -29,13 +29,11 @@ xcrun xctrace list templates
 * **GUI Inspection (Local):** Transfer the generated `.trace` bundle back to your workstation via `scp` or `rsync`, then open it in `Instruments.app`:
 ```bash
 open /path/to/downloaded.trace
-
 ```
 
 * **Headless XML Extraction (Remote):** Export raw sample tables directly on the server to XML for automated stack aggregation:
 ```bash
 xcrun xctrace export --input /tmp/app.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' --output /tmp/profile.xml
-
 ```
 
 **Required System Permissions & Operational Restrictions**
@@ -43,7 +41,6 @@ xcrun xctrace export --input /tmp/app.trace --xpath '/trace-toc/run[@number="1"]
 * **Developer Mode Authorization:** The SSH user must be authorized to attach debugging tools. Enable tracing rights non-interactively via:
 ```bash
 sudo DevToolsSecurity -enable
-
 ```
 
 ## Profiling without the daemon
