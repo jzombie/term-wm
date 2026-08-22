@@ -35,7 +35,12 @@ webbrowser = { workspace = true }
 # If re-adding property tests, uncomment and ensure proptest-regressions/
 # is maintained.
 # proptest = { workspace = true }
+criterion = { workspace = true }
 tempfile = { workspace = true }
+
+[[bench]]
+name = "terminal_render"
+harness = false
 
 [lints]
 workspace = true

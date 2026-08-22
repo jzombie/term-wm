@@ -115,7 +115,12 @@ fn input_loop(tx: Sender<Event>, shutdown: Arc<AtomicBool>) {
                     Err(_) => break,
                 }
             }
-            Ok(false) => {}  // timeout elapsed — loop and check shutdown
+            Ok(false) => {
+                // Prevent immediate non-blocking loop spin on macOS.
+                // Sleep for the full poll interval so idle wakeup rate
+                // matches the intended 10Hz (CROSSTERM_POLL_INTERVAL = 100ms).
+                thread::sleep(CROSSTERM_POLL_INTERVAL);
+            }
             Err(_) => break, // TTY broken — kill the thread, avoid a CPU spinlock
         }
     }

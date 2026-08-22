@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod channel;
 pub mod methods;
 pub mod path_wire;
@@ -9,12 +11,14 @@ pub use channel::{
 };
 pub use methods::{
     Attach, AttachRequest, ChannelInfo, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
-    OnWorkspaceRebind, OnWorkspaceRebindRequest, PushOutput, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindWorkspace,
-    RebindWorkspaceRequest, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    SendAttributedInput, SendAttributedInputRequest, SessionInfo, ShutdownGateway, Spawn,
-    SpawnRequest, SpawnResponse, SubscribeInternalInput, SubscribeInternalInputRequest, WriteInput,
+    ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
+    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected, OnUserResized,
+    OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, PushOutput,
+    RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN,
+    RPC_ERROR_UNATTACHED, RebindScope, RebindWorkspace, RebindWorkspaceRequest, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
+    SendAttributedInputRequest, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
+    SubscribeInternalInput, SubscribeInternalInputRequest, UserInfo, WriteInput,
 };
 pub use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
 pub use path_wire::PathWire;

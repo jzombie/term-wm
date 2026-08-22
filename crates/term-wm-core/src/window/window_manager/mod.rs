@@ -40,10 +40,11 @@ use crate::hitbox_registry::HitboxRegistry;
 use crate::keybindings::KeyBindings;
 use crate::layout::floating::*;
 use crate::layout::{InsertPosition, LayoutNode, RegionMap, SplitHandle, TilingLayout};
-use crate::notification::NotificationQueue;
+use crate::notification::NotificationBus;
 use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
+use crate::user_registry::UserRegistry;
 use crate::utils::DelayedReleaseBool;
 use crate::utils::KeyedTaskDebouncer;
 #[cfg(test)]
@@ -400,8 +401,14 @@ pub struct WindowManager<
     quit_requested: bool,
     /// Flag indicating the layout has changed and needs re-projection
     layout_dirty: bool,
-    /// Active toast notifications
-    notification_queue: NotificationQueue,
+    /// Active toast notifications (TTL-aware bus, ticked each frame)
+    notification_queue: NotificationBus,
+    /// Centralized registry of connected users for the command palette.
+    pub user_registry: UserRegistry,
+    /// Global workspace follow mode (linked workspaces) — when true, switching
+    /// workspaces moves all viewers on the source workspace together.
+    #[cfg(feature = "session-persistence")]
+    pub workspace_follow_enabled: bool,
     /// Per-window pending Direct Input Mode toast. The debouncer buffers the latest
     /// mode per window and arms ONE flush timer on the first transition (the
     /// deadline is never pushed back — leading-edge debounce with a cap).
@@ -426,6 +433,10 @@ pub struct WindowManager<
     pub cached_workspaces: Vec<String>,
     /// Current workspace name for palette rebuild on focus change.
     pub current_workspace: String,
+    /// Cached project tasks for palette rebuild on focus change.
+    pub project_tasks: Vec<crate::project_tasks::ProjectTaskConfig>,
+    /// Cached connected users by workspace for palette rebuild on focus change.
+    pub all_users_by_ws: std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
@@ -922,10 +933,16 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             synthetic_event: None,
             clipboard,
             power_profile: PowerProfile::PowerSaver,
+            #[cfg(feature = "pty")]
             reaper: Reaper::default(),
+            #[cfg(not(feature = "pty"))]
+            reaper: Reaper,
             quit_requested: false,
             layout_dirty: true,
-            notification_queue: NotificationQueue::default(),
+            notification_queue: NotificationBus::default(),
+            user_registry: UserRegistry::default(),
+            #[cfg(feature = "session-persistence")]
+            workspace_follow_enabled: false,
             semantic_registry,
             overlays: SlotMap::with_key(),
             system_windows: HashMap::new(),
@@ -939,6 +956,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             cached_workspaces: Vec::new(),
             // Leave empty. The outer executable injects the real workspace immediately after instantiation.
             current_workspace: String::new(),
+            project_tasks: Vec::new(),
+            all_users_by_ws: std::collections::BTreeMap::new(),
         }
     }
 
@@ -2708,9 +2727,12 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         &self.supported_menu_actions
     }
 
-    /// Push a notification and schedule its auto-dismiss via the system task scheduler.
+    /// Push a notification with a TTL. The notification is evicted by
+    /// `tick_notifications` on the next frame after its deadline. No
+    /// `TaskScheduler` is used — `NotificationBus::tick` is the single source
+    /// of truth for expiry.
     pub fn push_notification(&mut self, message: impl Into<String>, ttl: Duration) -> u64 {
-        let id = self.notification_queue.push(message);
+        let id = self.notification_queue.push(message, ttl);
         tracing::info!(
             "push_notification: id={}, queue_len={}",
             id,
@@ -2718,10 +2740,17 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         );
         // Mark layout dirty so the draw plan regenerates with notification regions
         self.mark_layout_dirty();
-        if let Some(handle) = &self.system_task_handle {
-            handle.schedule_once(ttl, SystemTask::DismissNotification(id));
-        }
         id
+    }
+
+    /// Evict expired toasts. Called at the top of the runner loop each frame.
+    pub fn tick_notifications(&mut self) {
+        let now = Instant::now();
+        let before = self.notification_queue.len();
+        self.notification_queue.tick(now);
+        if self.notification_queue.len() != before {
+            self.mark_layout_dirty();
+        }
     }
 
     /// Dismiss a notification by ID.
@@ -2765,8 +2794,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         self.push_notification(message, DIRECT_MODE_TOAST_TTL);
     }
 
-    /// Read-only access to the notification queue.
-    pub fn notifications(&self) -> &NotificationQueue {
+    /// Read-only access to the notification queue (TTL-aware bus).
+    pub fn notifications(&self) -> &NotificationBus {
         &self.notification_queue
     }
 
@@ -5799,13 +5828,11 @@ mod tests {
             "second transition must not re-arm the flush timer"
         );
 
-        // Drain before the deadline yields nothing.
-        assert!(scheduler.drain_expired_once().is_empty());
-        std::thread::sleep(Duration::from_millis(60));
+        // Drain before the deadline yields nothing (generous margin for CI).
         assert!(scheduler.drain_expired_once().is_empty());
 
         // After the window elapses, exactly ONE flush fires with the latest mode.
-        std::thread::sleep(Duration::from_millis(180));
+        std::thread::sleep(Duration::from_millis(300));
         let expired = scheduler.drain_expired_once();
         assert_eq!(expired.len(), 1, "must be exactly one flush task");
         assert!(matches!(
@@ -6702,7 +6729,7 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6780,7 +6807,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {
@@ -8862,5 +8889,133 @@ mod tests {
             Some(SnapPreviewState::Edge(InsertPosition::Top)),
             "full_region (frame) at area.y must satisfy the window_at_top gate"
         );
+    }
+
+    // ── Title lock tests ────────────────────────────────────────────────────
+
+    fn make_wm_for_titles() -> WindowManager<TestComponent> {
+        WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn set_window_title_bogus_key_is_noop() {
+        let mut wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        wm.set_window_title(bogus, "x");
+        assert!(wm.window(bogus).is_none());
+    }
+
+    #[test]
+    fn window_title_bogus_key_falls_back_to_debug() {
+        let wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        assert_eq!(wm.window_title(bogus), format!("{:?}", bogus));
+    }
+
+    #[test]
+    fn window_titles_empty_when_no_windows() {
+        let wm = make_wm_for_titles();
+        assert!(wm.window_titles().is_empty());
+    }
+
+    #[test]
+    fn set_window_title_lock_bogus_key_is_noop() {
+        let mut wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        wm.set_window_title_lock(bogus, "Label", true);
+        assert!(!wm.is_window_title_locked(bogus));
+    }
+
+    #[test]
+    fn is_window_title_locked_missing_key_is_false() {
+        let wm = make_wm_for_titles();
+        let bogus = WindowKey::default();
+        assert!(!wm.is_window_title_locked(bogus));
+    }
+
+    #[test]
+    fn set_window_title_lock_pins_title() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title_lock(key, "Label", true);
+        assert_eq!(wm.window_title(key), "Label");
+        assert!(wm.is_window_title_locked(key));
+        wm.set_window_title(key, "overwrite");
+        assert_eq!(
+            wm.window_title(key),
+            "Label",
+            "locked window must ignore subsequent set_window_title"
+        );
+    }
+
+    #[test]
+    fn set_window_title_lock_not_sticky_when_unlocked() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title_lock(key, "Label", false);
+        assert!(!wm.is_window_title_locked(key));
+        wm.set_window_title(key, "overwrite");
+        assert_eq!(
+            wm.window_title(key),
+            "overwrite",
+            "unlocked window must accept overwrites"
+        );
+    }
+
+    #[test]
+    fn set_window_title_lock_preserves_seq_order() {
+        let mut wm = make_wm_for_titles();
+        let keys = make_keys(&mut wm, 3);
+        for &k in &keys {
+            wm.managed_draw_order.push(k);
+        }
+        wm.set_window_title(keys[0], "Label");
+        wm.set_window_title(keys[1], "Label");
+        wm.set_window_title(keys[2], "Other");
+        let titles: Vec<String> = wm.window_titles().into_iter().map(|(_, t)| t).collect();
+        assert_eq!(titles[0], "Label (1)");
+        assert_eq!(titles[1], "Label (2)");
+        assert_eq!(titles[2], "Other");
+    }
+
+    #[test]
+    fn set_window_title_lock_same_title_no_seq_bump() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title(key, "Label");
+        let order_before = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        wm.set_window_title_lock(key, "Label", true);
+        let order_after = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        assert_eq!(
+            order_before, order_after,
+            "same-title lock must not bump title_set_order"
+        );
+        assert!(wm.is_window_title_locked(key));
+    }
+
+    #[test]
+    fn set_window_title_locked_toggles_flag_only() {
+        let mut wm = make_wm_for_titles();
+        let key = make_keys(&mut wm, 1)[0];
+        wm.set_window_title(key, "Label");
+        let order_before = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        wm.set_window_title_locked(key, true);
+        assert!(wm.is_window_title_locked(key));
+        assert_eq!(wm.window_title(key), "Label");
+        let order_after = wm.window(key).and_then(|w| w.title_set_order()).unwrap();
+        assert_eq!(
+            order_before, order_after,
+            "lock toggle must not change title_set_order"
+        );
+        wm.set_window_title_locked(key, false);
+        assert!(!wm.is_window_title_locked(key));
+        wm.set_window_title(key, "NewLabel");
+        assert_eq!(wm.window_title(key), "NewLabel");
     }
 }

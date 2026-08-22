@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod core_component;
 pub mod layer_component;
 pub mod overlay_component;

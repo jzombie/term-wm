@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod remote_pane;
 
 pub use remote_pane::RemotePane;
@@ -307,6 +309,21 @@ fn client_ssh_ip() -> Option<String> {
     None
 }
 
+/// SSH client source port from `SSH_CLIENT` (`client-ip client-port server-port`)
+/// or `SSH_CONNECTION` (`client-ip client-port server-ip server-port`).
+/// Returns `None` for local attaches or when the port cannot be parsed.
+fn client_ssh_port() -> Option<u16> {
+    for var in ["SSH_CLIENT", "SSH_CONNECTION"] {
+        if let Ok(v) = std::env::var(var)
+            && let Some(port_str) = v.split_whitespace().nth(1)
+            && let Ok(port) = port_str.parse::<u16>()
+        {
+            return Some(port);
+        }
+    }
+    None
+}
+
 /// Connect to a term-session gateway and run the TUI viewer for `channel`.
 ///
 /// This function is synchronous. It creates a background tokio runtime for
@@ -444,6 +461,7 @@ pub fn run_session(
                 user: client_user(),
                 version: client_version(),
                 ssh_ip: client_ssh_ip(),
+                ssh_port: client_ssh_port(),
             },
         )
         .await

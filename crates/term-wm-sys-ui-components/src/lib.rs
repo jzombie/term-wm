@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod wm_bottom_panel;
 pub mod wm_command_palette;
 pub mod wm_debug_log;

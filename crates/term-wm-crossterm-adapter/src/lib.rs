@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 //! Crossterm ↔ core adapter.
 //!
 //! Split into two concerns:

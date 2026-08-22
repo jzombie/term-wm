@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use term_wm_layout_engine::{CoordSpace, LayoutRect, MousePosition};
 
 // ============================================================================

@@ -1,6 +1,25 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
+#[cfg(test)]
+thread_local! {
+    static VISIBLE_ROW_CALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn visible_row_call_count_store(val: usize) {
+    VISIBLE_ROW_CALL_COUNT.with(|c| c.set(val));
+}
+
+#[cfg(test)]
+fn visible_row_call_count_load() -> usize {
+    VISIBLE_ROW_CALL_COUNT.with(|c| c.get())
+}
+
+#[cfg(test)]
+fn visible_row_call_count_inc() {
+    VISIBLE_ROW_CALL_COUNT.with(|c| c.set(c.get() + 1));
+}
 
 use portable_pty::{CommandBuilder, PtySize};
 use ratatui::style::{Color as TColor, Modifier, Style};
@@ -41,6 +60,12 @@ use term_wm_pty_engine::{Pane, PtyStatus};
 fn force_native_selection(modifiers: KeyModifiers) -> bool {
     modifiers.shift || (cfg!(target_os = "macos") && modifiers.alt)
 }
+
+/// SGR escape that dims the process-completion marker to bright black. The
+/// formatting for the exit status line lives only here — never in the app layer.
+const SGR_BRIGHT_BLACK: &str = "\x1b[90m";
+/// SGR escape that resets all attributes after the completion marker.
+const SGR_RESET: &str = "\x1b[0m";
 
 pub struct TerminalComponent {
     hitbox_id: HitboxId,
@@ -391,6 +416,21 @@ impl TerminalComponent {
         }
     }
 
+    /// Append a dimmed process-completion marker directly into the VT100 buffer.
+    /// Safe to call after the child has exited (bypasses the closed PTY master).
+    pub fn append_process_exit(&mut self, status: Option<&portable_pty::ExitStatus>) {
+        let msg = match status {
+            Some(st) if !st.success() => format!(
+                "\r\n{SGR_BRIGHT_BLACK}[Process completed with exit code: {}]{SGR_RESET}\r\n",
+                st.exit_code()
+            ),
+            _ => format!("\r\n{SGR_BRIGHT_BLACK}[Process completed]{SGR_RESET}\r\n"),
+        };
+        let parser_arc = self.pane.borrow_mut().shared_parser();
+        let mut parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
+        parser.process(msg.as_bytes());
+    }
+
     pub fn write_bytes(&mut self, input: &[u8]) -> std::io::Result<()> {
         self.pane.get_mut().write_bytes(input)
     }
@@ -610,10 +650,15 @@ impl TerminalComponent {
         // Call sync_screen() to handle DSR, foreground polling.
         pane.sync_screen();
 
-        // Lock the shared parser once for both link overlay and cell rendering.
-        let parser_arc = pane.shared_parser();
-        let parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
-        let screen = parser.screen();
+        // Clone screen once under lock then drop before heavy iteration.
+        // Holding Arc<Mutex<Parser>> for O(rows*cols) blocks the PTY reader's
+        // process(&buf) under heavy output and causes the Windows deadlock
+        // when toggling tiling (resize) while the CPU is saturated.
+        let screen = {
+            let parser_arc = pane.shared_parser();
+            let parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
+            parser.screen().clone()
+        };
 
         let bytes_seen = pane.bytes_received();
         let signature = OverlaySignature::new(
@@ -634,12 +679,28 @@ impl TerminalComponent {
                 if viewport_row >= viewport_height {
                     continue;
                 }
+                #[cfg(test)]
+                {
+                    visible_row_call_count_inc();
+                }
+                let Some(vt_row) = screen.visible_row(row) else {
+                    // No row data — fill with spaces
+                    let mut line = String::with_capacity(visible.width as usize);
+                    let mut offsets = Vec::with_capacity(visible.width as usize + 1);
+                    offsets.push(0);
+                    for _ in start_col..start_col + visible.width {
+                        line.push(' ');
+                        offsets.push(line.len());
+                    }
+                    row_data.push((viewport_row, start_col as usize, line, offsets));
+                    continue;
+                };
                 let mut line = String::with_capacity(visible.width as usize);
                 let mut offsets = Vec::with_capacity(visible.width as usize + 1);
                 offsets.push(0);
                 for col in start_col..start_col + visible.width {
-                    let ch = screen
-                        .cell(row, col)
+                    let ch = vt_row
+                        .get(col)
                         .and_then(|cell| cell.contents().chars().next())
                         .unwrap_or(' ');
                     line.push(ch);
@@ -662,13 +723,20 @@ impl TerminalComponent {
 
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
+            let cell_y = area.y.saturating_add(row);
+            let viewport_row = row.saturating_sub(start_row) as usize;
+            #[cfg(test)]
+            {
+                visible_row_call_count_inc();
+            }
+            let Some(vt_row) = screen.visible_row(row) else {
+                continue;
+            };
             for col in start_col..start_col + visible.width {
                 let cell_x = area.x.saturating_add(col);
-                let cell_y = area.y.saturating_add(row);
-                let viewport_row = row.saturating_sub(start_row) as usize;
                 let viewport_col = col.saturating_sub(start_col) as usize;
 
-                if let Some(cell) = screen.cell(row, col) {
+                if let Some(cell) = vt_row.get(col) {
                     let mut symbol = cell.contents().chars().next().unwrap_or(' ');
                     let (fg, bg) = resolve_colors_with_defaults(cell, default_fg, default_bg);
                     let mut style = Style::default();
@@ -3281,6 +3349,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn append_process_exit_success_shows_completed_label() {
+        use portable_pty::ExitStatus;
+
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        let status = ExitStatus::with_exit_code(0);
+        term.append_process_exit(Some(&status));
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process completed]"),
+            "success exit must show '[Process completed]', got: {screen}"
+        );
+        assert!(
+            !screen.contains("exit code"),
+            "success exit must NOT show exit code, got: {screen}"
+        );
+    }
+
+    #[test]
+    fn append_process_exit_failure_shows_exit_code() {
+        use portable_pty::ExitStatus;
+
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        let status = ExitStatus::with_exit_code(3);
+        term.append_process_exit(Some(&status));
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process completed with exit code: 3]"),
+            "non-zero exit must show exit code, got: {screen}"
+        );
+    }
+
+    #[test]
+    fn append_process_exit_none_shows_generic_completed() {
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        term.append_process_exit(None);
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process completed]"),
+            "None status must show generic '[Process completed]', got: {screen}"
+        );
+        assert!(
+            !screen.contains("exit code"),
+            "None status must NOT show exit code, got: {screen}"
+        );
+    }
+
     // --- Double-click word selection tests ---
 
     fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> Event {
@@ -3524,6 +3648,108 @@ mod tests {
             term.selection_text(),
             Some("foo-bar".to_string()),
             "with '-' configured, kebab-case selects as one word"
+        );
+    }
+
+    #[test]
+    fn test_visible_row_lookup_is_hoisted() {
+        let rows = 24;
+        let cols = 80;
+        super::visible_row_call_count_store(0);
+        let (mut term, _rb) =
+            make_term_with_content(cols, rows, 1000, &"X".repeat(cols as usize * rows as usize));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: cols,
+            height: rows,
+        };
+        let rect = ratatui::layout::Rect::new(0, 0, cols, rows);
+        let buffer = ratatui::buffer::Buffer::empty(rect);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+        let ctx =
+            term_wm_core::component_context::ComponentContext::new(true).with_screen_area(area);
+        let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+        term.render(&mut backend, area, &ctx, &mut registry);
+        let calls = super::visible_row_call_count_load();
+        // Two loops (link overlay + cell render) each hoisted to once per row
+        let expected = rows as usize * 2;
+        assert_eq!(
+            calls, expected,
+            "visible_row() was called {calls} times instead of {expected}. Hoisting regression detected!"
+        );
+        // Ensure not quadratic (rows*cols = 1920 would indicate per-cell lookup)
+        assert!(
+            calls < rows as usize * 3,
+            "visible_row() calls {calls} suggest per-cell lookup (quadratic)"
+        );
+    }
+
+    /// Regression for Windows deadlock: ToggleTiling triggers Pty::resize while
+    /// `cargo test --all-features` floods the PTY (burst budget). The old
+    /// `render_screen` held `shared_parser` for O(rows*cols) per-cell styling,
+    /// starving the reader's `process()` and the `pending_resize` wake (which
+    /// on Windows was only `CancelSynchronousIo`, not `cvar.notify`). This test
+    /// floods the parser on a background thread while repeatedly rendering and
+    /// resizing — it must complete within 2s or it has deadlocked.
+    #[test]
+    fn render_does_not_deadlock_under_heavy_output_and_resize() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let (mut term, _rb) = make_term_with_content(80, 24, 1000, &"X".repeat(80 * 24));
+        let parser_arc = term.pane.borrow_mut().shared_parser();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let flood = std::thread::spawn(move || {
+            while !stop_clone.load(Ordering::Relaxed) {
+                if let Ok(mut p) = parser_arc.try_lock() {
+                    p.process(b"cargo test --all-features flooding output with --all-features\n");
+                }
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
+        });
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let rect = Rect::new(0, 0, 80, 24);
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let buffer = Buffer::empty(rect);
+            let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, rect);
+            let ctx =
+                term_wm_core::component_context::ComponentContext::new(true).with_screen_area(area);
+            let mut registry = term_wm_core::hitbox_registry::HitboxRegistry::new();
+            term.render(&mut backend, area, &ctx, &mut registry);
+            // Simulate ToggleTiling resize storm (80x24 -> 100x30 -> back)
+            let _ = term.pane.borrow_mut().resize(PtySize {
+                rows: 30,
+                cols: 100,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+            term.pane.borrow_mut().sync_screen();
+            let _ = term.pane.borrow_mut().resize(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+            term.pane.borrow_mut().sync_screen();
+            if start.elapsed() > std::time::Duration::from_secs(2) {
+                break;
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        flood.join().expect("flood thread");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "deadlock: render+resize starved by flood (elapsed {:?})",
+            start.elapsed()
         );
     }
 }

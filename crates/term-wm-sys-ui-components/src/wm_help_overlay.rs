@@ -28,6 +28,7 @@ pub struct WmHelpOverlayComponent {
     dialog_bounds: Cell<LayoutRect>,
     keybindings: KeyBindings,
     app_ctx: Arc<AppContext>,
+    cached_title: String,
 }
 
 impl Component<TermWmAction> for WmHelpOverlayComponent {
@@ -42,7 +43,7 @@ impl Component<TermWmAction> for WmHelpOverlayComponent {
         if !self.dialog.visible() || area.width == 0 || area.height == 0 {
             return;
         }
-        let title = format!("{} \u{2014} About / Help", self.app_ctx.app_name);
+        let title = &self.cached_title;
         self.dialog.render_backdrop(backend, area, None);
         let ratatui_area = layout_rect_to_clipped_rect(area);
         let rect = self.dialog.rect_for(ratatui_area);
@@ -169,6 +170,7 @@ impl WmHelpOverlayComponent {
         dialog.set_bg(term_wm_core::theme::NOIR.dialog_bg);
         dialog.set_size(70, 20);
         let viewer = ScrollViewComponent::new(MarkdownViewerComponent::new());
+        let cached_title = format!("{} \u{2014} About / Help", app_ctx.app_name);
         let mut overlay = Self {
             dialog,
             content: viewer,
@@ -176,6 +178,7 @@ impl WmHelpOverlayComponent {
             dialog_bounds: Cell::new(LayoutRect::default()),
             keybindings,
             app_ctx: Arc::clone(app_ctx),
+            cached_title,
         };
         if let Ok(raw) = str::from_utf8(HELP_CONTENT_BYTES) {
             let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);

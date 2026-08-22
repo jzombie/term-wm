@@ -611,6 +611,9 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
     }
 
     pub fn set_window_title(&mut self, key: WindowKey, title: impl Into<String>) {
+        if self.window(key).is_some_and(|w| w.is_title_locked()) {
+            return;
+        }
         let title = title.into();
         let prev = self
             .window(key)
@@ -619,10 +622,39 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             && let Some(window) = self.windows.get_mut(key)
         {
             let seq = self.next_title_seq;
-            self.next_title_seq += 1;
+            self.next_title_seq = self.next_title_seq.saturating_add(1);
             window.set_title(Some(title));
             window.set_title_set_order(Some(seq));
         }
+    }
+
+    pub fn set_window_title_lock(
+        &mut self,
+        key: WindowKey,
+        title: impl Into<String>,
+        locked: bool,
+    ) {
+        let title = title.into();
+        if let Some(window) = self.windows.get_mut(key) {
+            if window.title() == Some(title.as_str()) {
+                window.set_title_locked_flag(locked);
+                return;
+            }
+            let seq = self.next_title_seq;
+            self.next_title_seq = self.next_title_seq.saturating_add(1);
+            window.set_title_locked(Some(title), locked);
+            window.set_title_set_order(Some(seq));
+        }
+    }
+
+    pub fn set_window_title_locked(&mut self, key: WindowKey, locked: bool) {
+        if let Some(window) = self.windows.get_mut(key) {
+            window.set_title_locked_flag(locked);
+        }
+    }
+
+    pub fn is_window_title_locked(&self, key: WindowKey) -> bool {
+        self.window(key).is_some_and(|w| w.is_title_locked())
     }
 
     pub fn set_regions_from_plan(&mut self, plan: &LayoutPlan<WindowKey>, area: Rect) {

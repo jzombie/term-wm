@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 extern crate self as term_wm_ui_components;
 
 pub mod ascii_image;
