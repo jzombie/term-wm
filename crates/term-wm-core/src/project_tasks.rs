@@ -446,10 +446,7 @@ mod tests {
         // should preserve the string contents exactly.
         let tasks = parse_tasks_str(json).expect("strings with // or /* */ must survive");
         assert_eq!(tasks.len(), 3);
-        assert_eq!(
-            tasks[1].command.as_deref(),
-            Some("echo // not a comment")
-        );
+        assert_eq!(tasks[1].command.as_deref(), Some("echo // not a comment"));
         assert_eq!(
             tasks[2].command.as_deref(),
             Some("echo /* not a comment */")

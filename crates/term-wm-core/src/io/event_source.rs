@@ -102,6 +102,12 @@ pub trait EventSource {
         Vec::new()
     }
 
+    /// Take accumulated user-resized events since the last drain as
+    /// `(conn_id, cols, rows)` tuples.
+    fn take_user_resized(&mut self) -> Vec<(usize, u16, u16)> {
+        Vec::new()
+    }
+
     /// Take a refreshed user cache snapshot if available.
     fn take_user_cache_refreshed(&mut self) -> Option<Vec<crate::user_registry::UserEntry>> {
         None
@@ -179,6 +185,10 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn take_user_disconnected(&mut self) -> Vec<usize> {
         (**self).take_user_disconnected()
+    }
+
+    fn take_user_resized(&mut self) -> Vec<(usize, u16, u16)> {
+        (**self).take_user_resized()
     }
 
     fn take_user_cache_refreshed(&mut self) -> Option<Vec<crate::user_registry::UserEntry>> {

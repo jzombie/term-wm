@@ -121,4 +121,35 @@ mod tests {
         d.reset();
         assert!(!d.is_pending());
     }
+
+    #[test]
+    fn remaining_is_none_when_idle() {
+        let d = Debouncer::new(Duration::from_millis(100));
+        assert_eq!(
+            d.remaining_at(Instant::now()),
+            None,
+            "must be None when not triggered"
+        );
+    }
+
+    #[test]
+    fn remaining_after_trigger_counts_down() {
+        let mut d = Debouncer::new(Duration::from_millis(200));
+        let t0 = Instant::now();
+        d.trigger_at(t0);
+
+        let remaining = d
+            .remaining_at(t0 + Duration::from_millis(50))
+            .expect("remaining must be Some while pending");
+        assert!(
+            remaining >= Duration::from_millis(140) && remaining <= Duration::from_millis(160),
+            "remaining should be ~150ms, got {remaining:?}"
+        );
+
+        // After full delay, remaining is zero
+        let remaining = d
+            .remaining_at(t0 + Duration::from_millis(200))
+            .expect("remaining must be Some while pending");
+        assert_eq!(remaining, Duration::from_millis(0));
+    }
 }

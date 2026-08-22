@@ -10,7 +10,7 @@ pub use channel::{
 pub use methods::{
     Attach, AttachRequest, ChannelInfo, ClientInfo, CloseSession, KillChannel, KillClient,
     ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
-    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected,
+    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected, OnUserResized,
     OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, PushOutput,
     RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN,
     RPC_ERROR_UNATTACHED, RebindScope, RebindWorkspace, RebindWorkspaceRequest, ResizePty,

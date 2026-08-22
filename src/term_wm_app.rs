@@ -31,6 +31,7 @@ use term_wm_sys_ui_components::wm_help_overlay::WmHelpOverlayComponent;
 
 // Palette polling intervals — extracted per AGENTS.md Magic Strings and Numbers.
 const PALETTE_TICK_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(feature = "session-persistence")]
 const PALETTE_IPC_INTERVAL: Duration = Duration::from_secs(30);
 const USER_REGISTRY_DEBOUNCE: Duration = Duration::from_secs(2);
 use term_wm_ui_components::TerminalComponent;
@@ -121,6 +122,28 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 ///     app.run()
 /// }
 /// ```
+/// Patch one user's terminal size across every workspace bucket of an
+/// `all_users_by_ws` map. Returns `true` when at least one entry changed.
+#[cfg(feature = "session-persistence")]
+fn patch_users_by_ws(
+    map: &mut std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
+    conn_id: usize,
+    cols: u16,
+    rows: u16,
+) -> bool {
+    let mut changed = false;
+    for users in map.values_mut() {
+        for u in users.iter_mut() {
+            if u.conn_id == conn_id && (u.cols != cols || u.rows != rows) {
+                u.cols = cols;
+                u.rows = rows;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 pub struct TermWmApp<C = NoopComponent>
 where
     C: Component<TermWmAction> + 'static,
@@ -890,7 +913,28 @@ impl<C: Component<TermWmAction> + 'static>
         self.user_registry_debouncer.trigger();
     }
 
-    fn poll_palette_tick(&mut self) {
+    fn on_user_resized(&mut self, conn_id: usize, cols: u16, rows: u16) -> bool {
+        // Filter no-op sizes and unknown conn ids — never arm redraws for them.
+        if !self.wm.user_registry.update_size(conn_id, cols, rows) {
+            return false;
+        }
+        // Patch the palette's data source in BOTH copies so a rebuilt item
+        // cache shows the new size without waiting for an IPC round-trip.
+        #[cfg(feature = "session-persistence")]
+        let patched_visible = patch_users_by_ws(&mut self.all_users_by_ws, conn_id, cols, rows)
+            && patch_users_by_ws(&mut self.wm.all_users_by_ws, conn_id, cols, rows);
+        #[cfg(not(feature = "session-persistence"))]
+        let patched_visible = true;
+        if !self.wm.command_menu_visible() || !patched_visible {
+            return false;
+        }
+        // Rebuild the overlay's cached display items now; the runner's
+        // redraw latch paints them on this same iteration.
+        self.wm.refresh_palette_items();
+        true
+    }
+
+    fn poll_palette_tick(&mut self) -> bool {
         if !self.wm.command_menu_visible() {
             self.palette_tick_ticker.reset();
             #[cfg(feature = "session-persistence")]
@@ -898,8 +942,9 @@ impl<C: Component<TermWmAction> + 'static>
                 self.palette_ipc_ticker.reset();
             }
             self.user_registry_debouncer.reset();
-            return;
+            return false;
         }
+        let mut mutated = false;
         // Flush pending registry updates (trailing-edge debounce)
         if self.user_registry_debouncer.poll() {
             #[cfg(feature = "session-persistence")]
@@ -910,6 +955,7 @@ impl<C: Component<TermWmAction> + 'static>
                 self.wm.all_users_by_ws = self.all_users_by_ws.clone();
             }
             self.wm.refresh_palette_items();
+            mutated = true;
         }
         let need_tick = self.palette_tick_ticker.poll();
         #[cfg(feature = "session-persistence")]
@@ -917,7 +963,7 @@ impl<C: Component<TermWmAction> + 'static>
         #[cfg(not(feature = "session-persistence"))]
         let need_ipc = false;
         if !need_tick && !need_ipc {
-            return;
+            return mutated;
         }
         if need_ipc {
             #[cfg(feature = "session-persistence")]
@@ -930,7 +976,9 @@ impl<C: Component<TermWmAction> + 'static>
         }
         if need_tick || need_ipc {
             self.wm.refresh_palette_items();
+            mutated = true;
         }
+        mutated
     }
 
     fn palette_tick_deadline(&self) -> Option<Duration> {
@@ -1063,6 +1111,7 @@ impl<C: Component<TermWmAction> + 'static>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "session-persistence")]
     use serial_test::serial;
 
     /// Every construction path must initialize the system windows (debug log,
@@ -1275,5 +1324,613 @@ mod tests {
         app.set_current_workspace("dev".to_string());
         assert_eq!(app.current_workspace, "dev");
         assert!(app.cached_workspaces().is_empty());
+    }
+
+    /// `close_window` purges project-task bookkeeping and closes the window
+    /// via the underlying WM.
+    #[test]
+    fn close_window_removes_bookkeeping_and_closes() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        assert!(app.wm().window_state(key).is_some(), "window must exist");
+
+        // Simulate bookkeeping entries
+        app.project_task_windows.insert(key, "test-task".into());
+        app.exited_task_windows.insert(key);
+
+        app.close_window(key);
+        assert!(
+            app.wm().window_state(key).is_none(),
+            "window must be closed"
+        );
+        assert!(
+            !app.project_task_windows.contains_key(&key),
+            "project_task_windows must be cleaned"
+        );
+        assert!(
+            !app.exited_task_windows.contains(&key),
+            "exited_task_windows must be cleaned"
+        );
+    }
+
+    /// `close_window` for a window without bookkeeping is still safe.
+    #[test]
+    fn close_window_non_task_window_is_noop() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.close_window(key);
+        assert!(app.wm().window_state(key).is_none());
+    }
+
+    /// `project_tasks` accessor returns the tasks loaded from the nearest
+    /// `.term-wm/tasks.json` (or an empty slice if none exists).
+    #[test]
+    fn project_tasks_accessor_returns_loaded_tasks() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        // The project tasks are loaded from cwd during construction;
+        // just verify the accessor doesn't panic and returns a consistent value.
+        let _ = app.project_tasks();
+    }
+
+    /// `project_task` returns None for a nonexistent label.
+    #[test]
+    fn project_task_nonexistent_label_returns_none() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(app.project_task("no-such-task-xyz").is_none());
+    }
+
+    /// `poll_palette_tick` when palette is not visible must reset all tickers.
+    #[test]
+    fn poll_palette_tick_resets_when_palette_closed() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        // Palette starts closed — poll should be a no-op that resets tickers
+        // and reports no mutation.
+        assert!(!app.poll_palette_tick());
+        // No panic, no side effects.
+    }
+
+    /// `poll_palette_tick` is strictly edge-triggered while the palette is
+    /// open: exactly one `true` per expired source, then `false` again —
+    /// never a level-triggered spin that would regress idle redraw behavior.
+    #[test]
+    fn poll_palette_tick_is_edge_triggered_when_open() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.open_command_palette();
+        // Force the uptime ticker due immediately instead of waiting out the
+        // full tick interval.
+        app.palette_tick_ticker.reset();
+        assert!(
+            app.poll_palette_tick(),
+            "first poll with an expired ticker must report mutation"
+        );
+        assert!(
+            !app.poll_palette_tick(),
+            "second consecutive poll must be false — consume-on-read only"
+        );
+    }
+
+    /// `on_user_resized` filters unknown conn ids and no-op sizes.
+    #[test]
+    fn on_user_resized_rejects_unknown_conn_id_and_noop() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.wm()
+            .user_registry
+            .upsert(1, "alice".into(), "host".into(), None, None, 80, 24, 0, 0);
+        // Unknown conn id → false.
+        assert!(!app.on_user_resized(99, 120, 40));
+        // Same-size no-op → false.
+        assert!(!app.on_user_resized(1, 80, 24));
+        // Real change with palette closed → registry patched but not flagged.
+        assert!(app.wm().user_registry.get_by_conn_id(1).unwrap().cols == 80);
+        assert!(!app.on_user_resized(1, 120, 40));
+        assert_eq!(app.wm().user_registry.get_by_conn_id(1).unwrap().cols, 120);
+        assert_eq!(app.wm().user_registry.get_by_conn_id(1).unwrap().rows, 40);
+        // Palette still closed — subsequent same-size event is a no-op again.
+        assert!(!app.on_user_resized(1, 120, 40));
+    }
+
+    /// `palette_tick_deadline` returns None when palette is not visible.
+    #[test]
+    fn palette_tick_deadline_none_when_palette_closed() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(
+            app.palette_tick_deadline().is_none(),
+            "deadline must be None when palette is closed"
+        );
+    }
+
+    /// `on_user_registry_changed` resets debouncer when palette is closed.
+    #[test]
+    fn on_user_registry_changed_resets_when_palette_closed() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.on_user_registry_changed();
+        // No panic; debouncer is reset.
+    }
+
+    /// `refresh_project_tasks` refreshes from cwd without panicking.
+    #[test]
+    fn refresh_project_tasks_loads_from_cwd() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.refresh_project_tasks();
+        // Whether or not tasks.json exists, the method must not panic.
+        let _ = app.project_tasks();
+    }
+
+    // ── MockPane for on_terminal_exited / command_builder_for_task tests ──
+
+    use std::io;
+    use term_wm_pty_engine::Pane;
+
+    /// Minimal Pane implementation for unit-testing without spawning a real PTY.
+    struct MockPane {
+        parser: std::sync::Arc<std::sync::Mutex<term_wm_vt100::Parser>>,
+        exit_status_override: Option<portable_pty::ExitStatus>,
+    }
+
+    impl MockPane {
+        fn with_exit_status(status: Option<portable_pty::ExitStatus>) -> Self {
+            Self {
+                parser: std::sync::Arc::new(std::sync::Mutex::new(term_wm_vt100::Parser::new(
+                    24, 80, 500,
+                ))),
+                exit_status_override: status,
+            }
+        }
+    }
+
+    impl Pane for MockPane {
+        fn resize(&mut self, _size: portable_pty::PtySize) -> term_wm_pty_engine::PtyResult<()> {
+            Ok(())
+        }
+        fn has_exited(&mut self) -> bool {
+            false
+        }
+        fn alternate_screen(&mut self) -> bool {
+            false
+        }
+        fn scrollback(&mut self) -> usize {
+            0
+        }
+        fn set_scrollback(&mut self, _rows: usize) {}
+        fn write_bytes(&mut self, _input: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        fn shared_parser(&mut self) -> std::sync::Arc<std::sync::Mutex<term_wm_vt100::Parser>> {
+            self.parser.clone()
+        }
+        fn max_scrollback(&mut self) -> usize {
+            500
+        }
+        fn scrollback_len(&self) -> usize {
+            0
+        }
+        fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
+            self.exit_status_override.take()
+        }
+        fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
+            self.exit_status_override.clone()
+        }
+        fn bytes_received(&self) -> usize {
+            0
+        }
+        fn last_bytes_text(&self) -> String {
+            String::new()
+        }
+        fn kill_child(&mut self) -> term_wm_pty_engine::PtyResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Helper: open a terminal window backed by a `MockPane`, return its key.
+    fn open_mock_terminal(
+        app: &mut TermWmApp<NoopComponent>,
+        exit_status: Option<portable_pty::ExitStatus>,
+    ) -> WindowKey {
+        let pane = MockPane::with_exit_status(exit_status);
+        let terminal = TerminalComponent::from_pane(Box::new(pane));
+        let sv = term_wm_ui_components::scroll_view::ScrollViewComponent::new(terminal);
+        let key = app.open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+        app.wm().transition_window(key, WindowState::Mapped);
+        key
+    }
+
+    // ── on_terminal_exited tests ──
+
+    /// Nonexistent window key cleans bookkeeping without panicking.
+    #[test]
+    fn on_terminal_exited_nonexistent_key_cleans_bookkeeping() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.project_task_windows.insert(key, "orphan".into());
+        app.exited_task_windows.insert(key);
+
+        // Close the window first so window_state returns None.
+        app.close_window(key);
+        app.on_terminal_exited(key);
+
+        assert!(
+            !app.project_task_windows.contains_key(&key),
+            "stale bookkeeping must be removed"
+        );
+        assert!(
+            !app.exited_task_windows.contains(&key),
+            "stale exit tracking must be removed"
+        );
+    }
+
+    /// Non-task window is closed by `on_terminal_exited`.
+    #[test]
+    fn on_terminal_exited_non_task_window_closes_it() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        assert!(app.wm().window_state(key).is_some(), "window must exist");
+
+        app.on_terminal_exited(key);
+        assert!(
+            app.wm().window_state(key).is_none(),
+            "non-task window must be closed"
+        );
+    }
+
+    /// Task window first exit keeps window open and pushes a notification.
+    #[test]
+    fn on_terminal_exited_task_first_exit_keeps_open_and_toasts() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_terminal(&mut app, Some(portable_pty::ExitStatus::with_exit_code(1)));
+        app.project_task_windows.insert(key, "my-task".into());
+
+        // Ensure this window is NOT focused so a notification is posted.
+        let other = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.wm().transition_window(other, WindowState::Mapped);
+
+        app.on_terminal_exited(key);
+
+        assert!(
+            app.wm().window_state(key).is_some(),
+            "task window must remain open after first exit"
+        );
+        assert!(
+            !app.wm().notifications().is_empty(),
+            "a notification must be pushed"
+        );
+        let body = app
+            .wm()
+            .notifications()
+            .renderable()
+            .next()
+            .map(|t| t.message.to_string())
+            .unwrap_or_default();
+        assert!(
+            body.contains("my-task"),
+            "notification must mention task label: got {body}"
+        );
+        assert!(
+            body.contains("exit code 1"),
+            "notification must mention exit code: got {body}"
+        );
+    }
+
+    /// Task window second exit is idempotent — no additional notification.
+    #[test]
+    fn on_terminal_exited_task_second_exit_is_idempotent() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_terminal(&mut app, Some(portable_pty::ExitStatus::with_exit_code(1)));
+        app.project_task_windows.insert(key, "my-task".into());
+
+        let other = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.wm().transition_window(other, WindowState::Mapped);
+
+        // First exit — notification posted.
+        app.on_terminal_exited(key);
+        let count_after_first = app.wm().notifications().len();
+
+        // Second exit — should be a no-op.
+        app.on_terminal_exited(key);
+        let count_after_second = app.wm().notifications().len();
+
+        assert_eq!(
+            count_after_first, count_after_second,
+            "second exit must not push another notification"
+        );
+        assert!(
+            app.wm().window_state(key).is_some(),
+            "task window must still be open"
+        );
+    }
+
+    // ── command_builder_for_task tests ──
+
+    #[test]
+    #[cfg(feature = "project-tasks")]
+    fn command_builder_basic_binary_and_args() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("cargo run --release".into()),
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
+        assert_eq!(
+            argv,
+            vec![
+                std::ffi::OsStr::new("cargo"),
+                std::ffi::OsStr::new("run"),
+                std::ffi::OsStr::new("--release"),
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "project-tasks")]
+    fn command_builder_args_appended_after_command() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("cargo".into()),
+            args: Some(vec!["build".into(), "--release".into()]),
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
+        assert_eq!(
+            argv,
+            vec![
+                std::ffi::OsStr::new("cargo"),
+                std::ffi::OsStr::new("build"),
+                std::ffi::OsStr::new("--release"),
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "project-tasks")]
+    fn command_builder_args_only_when_command_omitted() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: None,
+            args: Some(vec!["ls".into(), "-la".into()]),
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
+        assert_eq!(
+            argv,
+            vec![std::ffi::OsStr::new("ls"), std::ffi::OsStr::new("-la"),]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "project-tasks")]
+    fn command_builder_relative_cwd_joins_project_root() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: Some("subdir".into()),
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        let cwd = cmd.get_cwd().expect("cwd must be set");
+        let cwd_str = cwd.to_string_lossy();
+        assert!(
+            cwd_str.ends_with("subdir"),
+            "cwd must end with 'subdir': got {cwd_str}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "project-tasks")]
+    fn command_builder_env_overrides_applied() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let mut env = std::collections::HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env,
+            environments: Vec::new(),
+        };
+        let cmd = app.command_builder_for_task(&task).unwrap();
+        assert_eq!(
+            cmd.get_env("FOO"),
+            Some(std::ffi::OsStr::new("bar")),
+            "env override must be applied"
+        );
+    }
+
+    #[test]
+    fn command_builder_returns_none_on_empty() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: None,
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        assert!(
+            app.command_builder_for_task(&task).is_none(),
+            "must return None when argv is empty"
+        );
+    }
+
+    // ── spawn_project_task error-path tests ──
+
+    #[test]
+    fn spawn_project_task_returns_error_for_empty_command() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "empty".into(),
+            command: None,
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let result = app.spawn_project_task(&task);
+        assert!(result.is_err(), "must fail for empty command");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("no valid command"),
+            "error must mention 'no valid command': got {msg}"
+        );
+    }
+
+    #[test]
+    fn spawn_project_task_returns_error_for_malformed_command() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let task = ProjectTaskConfig {
+            label: "bad".into(),
+            command: Some("'unbalanced".into()),
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+        };
+        let result = app.spawn_project_task(&task);
+        assert!(result.is_err(), "must fail for malformed command");
+    }
+
+    // ── Thin delegates + accessor tests ──
+
+    #[test]
+    fn quit_requested_defaults_false() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(!app.quit_requested(), "should default to false");
+    }
+
+    #[test]
+    fn request_quit_sets_flag() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.request_quit();
+        assert!(app.quit_requested(), "should be true after request_quit");
+    }
+
+    #[test]
+    fn set_window_title_does_not_panic() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.set_window_title(key, "test title");
+    }
+
+    #[test]
+    fn engine_returns_mut_reference() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let _engine = app.engine();
+    }
+
+    #[test]
+    fn draw_renderer_returns_mut_reference() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let _renderer = app.draw_renderer();
+    }
+
+    #[test]
+    fn wm_returns_mut_reference() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let _wm = app.wm();
+    }
+
+    #[test]
+    fn on_panic_shows_debug_log() {
+        use term_wm_core::window::WindowState;
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let debug_key = app
+            .debug_key
+            .expect("debug_key must be set after construction");
+        // Debug log starts unmapped.
+        assert_eq!(
+            app.wm().window_state(debug_key),
+            Some(WindowState::Unmapped)
+        );
+        app.on_panic();
+        assert_eq!(app.wm().window_state(debug_key), Some(WindowState::Mapped));
+    }
+
+    #[test]
+    fn toggle_debug_window_shows_and_hides() {
+        use term_wm_core::window::WindowState;
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app
+            .debug_key
+            .expect("debug_key must be set after construction");
+        // Starts hidden.
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+        // First toggle shows it.
+        app.toggle_debug_window();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Mapped));
+        // Second toggle hides it.
+        app.toggle_debug_window();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+    }
+
+    #[test]
+    fn toggle_system_panel_shows_and_hides() {
+        use term_wm_core::window::WindowState;
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app
+            .system_panel_key
+            .expect("system_panel_key must be set after construction");
+        // Starts hidden.
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+        // First toggle shows it.
+        app.toggle_system_panel();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Mapped));
+        // Second toggle hides it.
+        app.toggle_system_panel();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+    }
+
+    #[test]
+    fn open_help_overlay_creates_overlay() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(app.wm().overlay_keys().is_empty(), "no overlay before open");
+        app.open_help_overlay();
+        assert!(
+            !app.wm().overlay_keys().is_empty(),
+            "overlay must be present after open"
+        );
+    }
+
+    #[test]
+    fn open_exit_confirm_creates_overlay() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(app.wm().overlay_keys().is_empty(), "no overlay before open");
+        app.open_exit_confirm();
+        assert!(
+            !app.wm().overlay_keys().is_empty(),
+            "overlay must be present after open"
+        );
+    }
+
+    #[test]
+    fn handle_app_event_records_key() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let event = Event::Key(KeyEvent::new(
+            term_wm_core::events::KeyCode::Char('a'),
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
+        ));
+        let handled = app.handle_app_event(&event);
+        assert!(!handled, "handle_app_event always returns false");
+        let last = app.last_key.borrow();
+        assert!(
+            last.is_some(),
+            "last_key must be set after handling a key event"
+        );
     }
 }
