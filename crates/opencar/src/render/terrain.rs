@@ -154,16 +154,26 @@ pub fn march_columns(
         let mut y_top = oh; // exclusive bottom bound
         let mut t = VIEW_NEAR;
 
-        while t < VIEW_FAR && y_top > 0 {
-            let step = STEP_BASE + t * STEP_GROWTH;
+        while t < MARCH_FAR && y_top > 0 {
+            // Two-stage step growth: far spans cover many screen cells each,
+            // so coarse sampling past STEP_FAR_START is invisible — and fog
+            // fully saturates well before MARCH_FAR anyway.
+            let growth = if t < STEP_FAR_START { STEP_GROWTH } else { STEP_GROWTH_FAR };
+            let step = STEP_BASE + t * growth;
             t += step;
 
             // 1. Advance horizontally along the XZ plane.
             let sx_t = op.cam[0] + dir[0] * t;
             let sz_t = op.cam[2] + dir[2] * t;
 
-            // 2. Sample the terrain height at this specific spot.
-            let h = world.height_at(sx_t, sz_t);
+            // 2. Sample the terrain height at this specific spot. Beyond
+            //    chunk reach, use the cheap far-field LOD (no ridge detail).
+            let far = t > CHUNK_REACH_M;
+            let h = if far {
+                world.height_far(sx_t, sz_t)
+            } else {
+                world.height_at(sx_t, sz_t)
+            };
 
             // 3. Project the physical terrain point (x, h, z) to the screen.
             let (_, row_f, fwd_d) = op.project_unrolled([sx_t, h, sz_t]);
@@ -185,8 +195,16 @@ pub fn march_columns(
                     .clamp(FILTER_MIN_SPREAD, FILTER_MAX_SPREAD);
                 let px_n = -dir[2];
                 let pz_n = dir[0];
-                let mat_a = world.material_at(sx_t + px_n * spread, sz_t + pz_n * spread);
-                let mat_b = world.material_at(sx_t - px_n * spread, sz_t - pz_n * spread);
+                let mat_a = if far {
+                    world.material_far(sx_t + px_n * spread, sz_t + pz_n * spread)
+                } else {
+                    world.material_at(sx_t + px_n * spread, sz_t + pz_n * spread)
+                };
+                let mat_b = if far {
+                    world.material_far(sx_t - px_n * spread, sz_t - pz_n * spread)
+                } else {
+                    world.material_at(sx_t - px_n * spread, sz_t - pz_n * spread)
+                };
                 let rgb_a = shade(world, sm, sx_t, sz_t, h, mat_a, fwd_d, contrast_boost);
                 let rgb = if mat_a == mat_b {
                     rgb_a

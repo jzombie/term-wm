@@ -160,6 +160,89 @@ pub struct RoadHit {
     pub elev: f32,
 }
 
+/// Bake-time centerline samples for one highway.
+///
+/// Chunk baking queries road geometry for every vertex *and* every material
+/// cell; each direct call re-evaluates multi-octave fBm inside
+/// [`Centerline::cross`]. Because `cross(t)` depends only on the along-axis
+/// coordinate, a chunk can precompute it once over its span (plus margin) at
+/// [`ROAD_CACHE_STEP`] resolution — which lands exactly on both integer
+/// vertex coordinates and half-integer cell centers — turning O(N²) fBm work
+/// into O(N) array reads.
+pub struct CenterlineCache {
+    axis: Axis,
+    t0: f32,
+    cross: Vec<f32>,
+    slope: Vec<f32>,
+}
+
+impl Centerline {
+    /// Sample this centerline over `[t0, t0 + count*ROAD_CACHE_STEP)` for
+    /// bake-time reuse.
+    pub fn bake_cache(&self, t0: f32, count: usize, noise: &Noise) -> CenterlineCache {
+        let mut cross = Vec::with_capacity(count);
+        for k in 0..count {
+            cross.push(self.cross(t0 + k as f32 * ROAD_CACHE_STEP, noise));
+        }
+        // Central-difference slope from neighboring cache entries; edges copy
+        // their inner neighbor (queries there are clamped rail look-aheads).
+        let inv = 1.0 / (2.0 * ROAD_CACHE_STEP);
+        let mut slope = vec![0.0_f32; count];
+        if count >= 3 {
+            for k in 1..count - 1 {
+                slope[k] = (cross[k + 1] - cross[k - 1]) * inv;
+            }
+            slope[0] = slope[1];
+            slope[count - 1] = slope[count - 2];
+        }
+        CenterlineCache { axis: self.axis, t0, cross, slope }
+    }
+}
+
+impl CenterlineCache {
+    fn index(&self, t: f32) -> usize {
+        (((t - self.t0) / ROAD_CACHE_STEP).round() as i32)
+            .clamp(0, self.cross.len() as i32 - 1) as usize
+    }
+
+    /// Cached centerline offset at along-axis coordinate `t`.
+    pub fn cross_at(&self, t: f32) -> f32 {
+        self.cross[self.index(t)]
+    }
+
+    fn tangent_at(&self, t: f32) -> (f32, f32) {
+        let s = self.slope[self.index(t)];
+        let len = (s * s + 1.0).sqrt();
+        match self.axis {
+            Axis::EastWest => (s / len, 1.0 / len),
+            Axis::NorthSouth => (1.0 / len, s / len),
+        }
+    }
+
+    /// Cached right-hand normal of +t travel at along-axis coordinate `t`.
+    pub fn right_normal_at(&self, t: f32) -> (f32, f32) {
+        let (tx, tz) = self.tangent_at(t);
+        (tz, -tx)
+    }
+
+    /// Signed lateral offset of a world point from this centerline
+    /// (positive = right of +t travel). Matches [`Centerline::lateral`].
+    pub fn lateral(&self, x: f32, z: f32) -> f32 {
+        let t_axis = match self.axis {
+            Axis::EastWest => z,
+            Axis::NorthSouth => x,
+        };
+        let c = self.cross_at(t_axis);
+        let (cx, cz) = match self.axis {
+            // point(t, 0): EastWest => (c, t); NorthSouth => (t, c).
+            Axis::EastWest => (c, t_axis),
+            Axis::NorthSouth => (t_axis, c),
+        };
+        let (nx, nz) = self.right_normal_at(t_axis);
+        (x - cx) * nx + (z - cz) * nz
+    }
+}
+
 /// The global highway graph: one E-W and one N-S winding highway.
 #[derive(Clone, Copy)]
 pub struct RoadNetwork {
@@ -276,5 +359,47 @@ mod tests {
         let noise = Noise::new(5);
         let h = raw_terrain_height(&noise, 12_345.6, -987.65);
         assert!(h.is_finite());
+    }
+
+    #[test]
+    fn bake_cache_matches_analytic() {
+        // The per-chunk cache must reproduce lateral/right_normal within the
+        // central-difference tolerance of its slope stencil.
+        let noise = Noise::new(7);
+        for salt in [1.7_f32, 4.2] {
+            let hw = Centerline::new(Axis::EastWest, salt);
+            let cache = hw.bake_cache(1000.0, 153, &noise);
+            let mut max_lat_err = 0.0_f32;
+            let mut max_nrm_err = 0.0_f32;
+            for k in 0..120 {
+                let t = 1004.0 + 0.5 * (k as f32) + if k % 3 == 0 { 0.0 } else { 0.5 };
+                let x = hw.cross(t, &noise) + 3.25;
+                let z = t;
+                let lat_a = hw.lateral(x, z, &noise);
+                let lat_c = cache.lateral(x, z);
+                max_lat_err = max_lat_err.max((lat_a - lat_c).abs());
+                let (ax, az) = hw.right_normal(t, &noise);
+                let (cx, cz) = cache.right_normal_at(t);
+                max_nrm_err = max_nrm_err.max(((ax - cx).abs() + (az - cz).abs()));
+            }
+            assert!(
+                max_lat_err < 0.02,
+                "lateral cache drift {max_lat_err} exceeds tolerance"
+            );
+            assert!(
+                max_nrm_err < 0.01,
+                "normal cache drift {max_nrm_err} exceeds tolerance"
+            );
+        }
+    }
+
+    #[test]
+    fn bake_cache_clamps_out_of_range() {
+        let noise = Noise::new(9);
+        let hw = Centerline::new(Axis::NorthSouth, 4.2);
+        let cache = hw.bake_cache(-50.0, 21, &noise);
+        // Far outside the cached span: clamped, never panics.
+        let _ = cache.lateral(1_000.0, -1e6);
+        let _ = cache.right_normal_at(9_999.0);
     }
 }

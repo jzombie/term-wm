@@ -8,12 +8,31 @@ pub const MAX_FRAME_SECS: f32 = 0.05;
 pub const MAX_SIM_SUBSTEPS: u32 = 5;
 pub const EVENT_POLL_MILLIS: u64 = 8;
 
+// ── Terrain-march LOD / pacing ──────────────────────────────────────────
+/// March cutoff. Fog fully saturates at FOG_DIST (470 m), so stepping past
+/// ~600 m paints nothing the eye can distinguish.
+pub const MARCH_FAR: f32 = 600.0;
+/// Step growth switches to this beyond STEP_FAR_START: far spans cover many
+/// screen cells each, so coarse sampling is invisible there.
+pub const STEP_GROWTH_FAR: f32 = 0.02;
+pub const STEP_FAR_START: f32 = 250.0;
+/// Distance from the player within which chunks are guaranteed resident;
+/// march queries beyond this use the cheap far-field terrain LOD.
+pub const CHUNK_REACH_M: f32 =
+    CHUNK_LOAD_RADIUS as f32 * CHUNK_SIZE_I32 as f32 * 0.9;
+
 // ── World generation ────────────────────────────────────────────────────
 pub const CHUNK_SIZE_I32: i32 = 64;
 pub const CHUNK_LOAD_RADIUS: i32 = 5;
 pub const CHUNK_GEN_BUDGET_PER_FRAME: usize = 2;
 
 pub const BASE_ELEV: f32 = 8.0;
+/// fBm/ridged octave counts for `raw_terrain_height`. Trimmed from
+/// (3, 4, 4): each saved octave removes a full value-noise evaluation from
+/// every terrain query on the hot bake/march paths.
+pub const CONTINENT_OCTAVES: u8 = 2;
+pub const RIDGE_OCTAVES: u8 = 3;
+pub const HILL_OCTAVES: u8 = 3;
 pub const CONTINENT_SCALE: f32 = 1350.0;
 pub const CONTINENT_LOW: f32 = 0.52;
 pub const CONTINENT_HIGH: f32 = 0.74;
@@ -21,6 +40,11 @@ pub const RIDGE_SCALE: f32 = 500.0;
 pub const HILL_SCALE: f32 = 300.0;
 pub const HILL_AMP: f32 = 4.0;
 pub const MOUNTAIN_AMP: f32 = 30.0;
+/// Low-detail terrain for the far-field ray march: drops the ridge layer
+/// entirely; this substitutes its approximate mean so distant mountain
+/// silhouettes keep plausible height.
+pub const FAR_RIDGE_MEAN: f32 = 0.55;
+
 pub const SEA_LEVEL: f32 = 5.0;
 pub const SAND_BAND: f32 = 1.1;
 pub const SNOW_LINE: f32 = 155.0;
@@ -59,6 +83,14 @@ pub const CURVE_SIGN_KAPPA: f32 = 0.0045;
 pub const SIGN_SPACING: f32 = 60.0;
 pub const SIGN_MARGIN: f32 = 48.0;
 pub const SIGN_LATERAL: f32 = ROAD_HALF_WIDTH + 2.2;
+
+/// Spacing of bake-time centerline samples (`CenterlineCache`). Half-meter
+/// steps land exactly on both vertex coordinates (integers) and material
+/// cell centers (*.5) so cached lookups need no interpolation.
+pub const ROAD_CACHE_STEP: f32 = 0.5;
+/// Extra cached span beyond the chunk rect on each side (rail look-ahead,
+/// slope stencil, blend reach).
+pub const ROAD_CACHE_MARGIN_M: f32 = 6.0;
 
 pub const RAIL_DIST_IN: f32 = ROAD_HALF_WIDTH + 0.3;
 pub const RAIL_DIST_OUT: f32 = ROAD_HALF_WIDTH + 0.65;
