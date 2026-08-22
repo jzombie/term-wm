@@ -89,17 +89,54 @@ pub fn parse_environment(raw: &str) -> Option<Environment> {
     }
 }
 
-/// The single-source environment this build behaves as: [`ENVIRONMENT_ENV_VAR`] (`TERM_WM_ENV`)
-/// when set and valid, else [`default_environment()`].
+/// The single-source environment this build behaves as, in priority order:
+/// the process-level override installed via [`set_override_environment()`]
+/// (CLI `--env`), then [`ENVIRONMENT_ENV_VAR`] (`TERM_WM_ENV`) when set and
+/// valid, else [`default_environment()`].
 ///
 /// Shared by both IPC gateway socket resolution (`gateway_channel_name()`) and project task
 /// filtering (`load_tasks_for_cwd()`). To force a specific environment when running via Cargo,
 /// set `TERM_WM_ENV` explicitly (e.g. `TERM_WM_ENV=prod cargo run --release`).
 pub fn active_environment() -> Environment {
+    if let Some(env) = override_environment() {
+        return env;
+    }
     std::env::var(ENVIRONMENT_ENV_VAR)
         .ok()
         .and_then(|raw| parse_environment(&raw))
         .unwrap_or_else(default_environment)
+}
+
+/// Process-level environment override, installed once by the `term-wm` CLI
+/// (`--env`) before any session or task code runs.
+///
+/// A process-global cell instead of mutating the process environment keeps
+/// the override free of `unsafe`/thread-safety hazards while preserving
+/// [`active_environment()`] as the single source of truth — every consumer
+/// (gateway scoping included) sees the same value. First call wins; later
+/// calls are ignored (the CLI parses/validates its value up front).
+static ENV_OVERRIDE: std::sync::Mutex<Option<Environment>> = std::sync::Mutex::new(None);
+
+/// Install the process-level environment override. First call wins;
+/// subsequent calls have no effect.
+pub fn set_override_environment(env: Environment) {
+    let mut slot = ENV_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner());
+    if slot.is_none() {
+        *slot = Some(env);
+    }
+}
+
+/// Test-only reset for the process-global override cell so tests that touch
+/// it can restore the pristine state for their peers.
+#[cfg(test)]
+pub(crate) fn clear_override_environment() {
+    let mut slot = ENV_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner());
+    *slot = None;
+}
+
+/// Snapshot of the override cell, if one has been installed.
+fn override_environment() -> Option<Environment> {
+    *ENV_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// Whether [`NO_SESSION_PERSISTENCE_ENV_VAR`] is set in this process.
@@ -203,6 +240,36 @@ mod tests {
         assert_eq!(parse_environment("PROD"), Some(Environment::Prod));
         assert_eq!(parse_environment(""), None);
         assert_eq!(parse_environment("production"), None);
+    }
+
+    #[test]
+    #[serial(env)]
+    fn override_beats_env_var_and_heuristic() {
+        clear_override_environment();
+        unsafe {
+            std::env::set_var(ENVIRONMENT_ENV_VAR, "prod");
+        }
+        set_override_environment(Environment::Test);
+        // Beats an explicit TERM_WM_ENV...
+        assert_eq!(active_environment(), Environment::Test);
+        unsafe {
+            std::env::remove_var(ENVIRONMENT_ENV_VAR);
+        }
+        // ...and still beats the compile-time heuristic with the var absent.
+        assert_eq!(active_environment(), Environment::Test);
+        // Restore pristine state for the other active_environment tests.
+        clear_override_environment();
+        assert_eq!(active_environment(), default_environment());
+    }
+
+    #[test]
+    #[serial(env)]
+    fn first_override_call_wins() {
+        clear_override_environment();
+        set_override_environment(Environment::Prod);
+        set_override_environment(Environment::Test);
+        assert_eq!(active_environment(), Environment::Prod);
+        clear_override_environment();
     }
 
     #[test]

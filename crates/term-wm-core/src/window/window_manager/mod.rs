@@ -23,6 +23,10 @@ pub mod system_tags {
     pub struct CommandPalette;
     pub struct HelpOverlay;
     pub struct ExitConfirm;
+    /// Confirmation dialog for stopping the gateway daemon (#298). Kept
+    /// separate from [`ExitConfirm`] so the runner can route each dialog's
+    /// Confirm branch differently (quit vs. shutdown).
+    pub struct StopDaemonConfirm;
 }
 
 use crate::Rect;
@@ -1171,9 +1175,19 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
 
     /// Create a [`ComponentContext`] pre-populated with the application
     /// identity from this window manager's [`AppContext`].
+    ///
+    /// The branding label resolves per frame (#284): when dynamic branding is
+    /// active the current workspace (mirrored into `current_workspace`) feeds
+    /// the workspace → directory → app-name priority chain, so local
+    /// switches and daemon-pushed rebinds show up immediately.
     pub fn component_context(&self, focused: bool) -> ComponentContext {
+        #[cfg(feature = "session-persistence")]
+        let workspace_hint: Option<&str> = Some(self.current_workspace.as_str());
+        #[cfg(not(feature = "session-persistence"))]
+        let workspace_hint: Option<&str> = None;
         ComponentContext::new(focused)
             .with_app_context(Arc::clone(&self.app_ctx))
+            .with_workspace_hint(workspace_hint)
             .with_config(Arc::new(self.config.clone()))
     }
 
@@ -2471,6 +2485,11 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
     pub fn open_exit_confirm_overlay(&mut self, overlay: O) {
         let key = self.overlays.insert(overlay);
         self.register_overlay::<system_tags::ExitConfirm>(key);
+    }
+
+    pub fn open_stop_daemon_confirm_overlay(&mut self, overlay: O) {
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::StopDaemonConfirm>(key);
     }
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
@@ -8901,6 +8920,35 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         )
+    }
+
+    /// #284: the per-frame context's branding label must follow the WM's
+    /// current-workspace mirror — two consecutive frames with different
+    /// mirrors resolve different labels (no caching between renders).
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn component_context_app_name_follows_workspace_mirror_per_frame() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(
+                AppContext::new("term-wm", "0.0.0").with_dynamic_label(Some("proj".to_string())),
+            ),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        // Frame 1: workspace mirror points at "dev".
+        wm.current_workspace = "dev".to_string();
+        assert_eq!(wm.component_context(true).app_name(), "dev");
+
+        // Frame 2: mirror switched to "qa" → next context resolves fresh.
+        wm.current_workspace = "qa".to_string();
+        assert_eq!(wm.component_context(false).app_name(), "qa");
+
+        // Empty mirror falls back to the directory label.
+        wm.current_workspace = String::new();
+        assert_eq!(wm.component_context(true).app_name(), "proj");
     }
 
     #[test]

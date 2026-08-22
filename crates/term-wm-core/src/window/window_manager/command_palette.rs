@@ -549,6 +549,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             Some("⏻"),
             crate::actions::TermWmAction::ExitUi,
         ));
+        // Stop Gateway Daemon: opens a confirmation dialog (never stops
+        // directly). Gated like the workspace group — requires the compiled-in
+        // feature AND the runtime toggle.
+        #[cfg(feature = "session-persistence")]
+        if term_wm_config::runtime::session_persistence_enabled() {
+            items.push(mi(
+                "Stop Gateway Daemon",
+                Some("⏻"),
+                crate::actions::TermWmAction::OpenStopGatewayConfirm,
+            ));
+        }
 
         items
     }
@@ -887,6 +898,60 @@ mod tests {
             !has_workspace_action,
             "workspace actions must not appear when runtime toggle is disabled"
         );
+        // The stop-gateway entry follows the same runtime gating.
+        assert!(
+            !items.iter().any(|entry| matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem {
+                    action: TermWmAction::OpenStopGatewayConfirm,
+                    ..
+                })
+            )),
+            "stop-gateway entry must not appear when runtime toggle is disabled"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_stop_gateway_entry_opens_confirm_dialog() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+
+        // Runtime enabled by default: the SETTINGS & SYSTEM section must offer
+        // "Stop Gateway Daemon" bound to the OPENER action — never the
+        // executor (`StopGatewayDaemon`), which is reachable only from the
+        // confirmation dialog's Confirm branch (#298).
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let mut stop_entries = items.iter().filter(|entry| {
+            matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Stop Gateway Daemon"
+            )
+        });
+        let Some(MenuDisplayItem::Item(MenuItem {
+            action: TermWmAction::OpenStopGatewayConfirm,
+            disabled,
+            ..
+        })) = stop_entries.next()
+        else {
+            panic!("palette must list 'Stop Gateway Daemon' with OpenStopGatewayConfirm");
+        };
+        assert!(!disabled, "stop-gateway entry must be enabled");
+        assert!(
+            stop_entries.next().is_none(),
+            "'Stop Gateway Daemon' must appear exactly once"
+        );
+        assert!(
+            !items.iter().any(|entry| matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem {
+                    action: TermWmAction::StopGatewayDaemon,
+                    ..
+                })
+            )),
+            "the executor action must never be a palette entry"
+        );
     }
 
     #[test]
@@ -1084,6 +1149,7 @@ mod tests {
             cwd: None,
             env: std::collections::HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         }];
         let items = wm.wm_menu_items(&[], "", &tasks, &std::collections::BTreeMap::new());
         assert!(

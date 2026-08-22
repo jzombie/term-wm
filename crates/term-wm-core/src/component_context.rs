@@ -52,6 +52,10 @@ pub struct ComponentContext {
     /// within the focused window. Set by the WindowManager when routing
     /// keyboard events. Components check this to accept/reject key input.
     keyboard_focus_id: Option<HitboxId>,
+    /// Resolved branding label for the Main Menu / FAB (#284): explicit host
+    /// name, or workspace → launch-dir → app-name when dynamic branding is
+    /// active. Recomputed whenever the app context or workspace hint changes.
+    display_name: String,
 }
 
 /// Viewport metadata describing how the component is projected into a
@@ -278,6 +282,7 @@ impl ComponentContext {
             screen_area: None,
             active_hitbox: None,
             keyboard_focus_id: None,
+            display_name: String::new(),
         }
     }
 
@@ -324,9 +329,13 @@ impl ComponentContext {
         self.scroll_handle.clone()
     }
 
-    /// Returns the application name carried by this context.
+    /// Returns the branding label for the Main Menu / FAB.
+    ///
+    /// With static branding (library embedders) this is exactly the explicit
+    /// `app_name`; with dynamic branding (#284) it resolves through
+    /// workspace → launch-directory → app-name for this frame.
     pub fn app_name(&self) -> &str {
-        &self.app_ctx.app_name
+        &self.display_name
     }
 
     /// Returns the application version carried by this context.
@@ -364,10 +373,31 @@ impl ComponentContext {
     /// Return a new `ComponentContext` with an attached [`AppContext`].
     ///
     /// Uses [`Arc::clone`], which is a cheap reference-count bump — the
-    /// underlying strings are not copied.
+    /// underlying strings are not copied. Also resolves the initial branding
+    /// label via [`AppContext::resolve_display_label`] (no workspace hint).
     pub fn with_app_context(mut self, app_ctx: Arc<AppContext>) -> Self {
         self.app_ctx = app_ctx;
+        self.display_name = self.app_ctx.resolve_display_label(None);
         self
+    }
+
+    /// Recompute the branding label with a current-workspace hint (#284).
+    ///
+    /// Called by the WindowManager when building each frame's context so
+    /// workspace switches / daemon-pushed rebinds are reflected immediately
+    /// without any component-level caching. No-op effect for static branding
+    /// (the resolver returns the explicit app name).
+    pub fn with_workspace_hint(mut self, workspace: Option<&str>) -> Self {
+        self.display_name = self.app_ctx.resolve_display_label(workspace);
+        self
+    }
+
+    /// The raw application identity name, ignoring dynamic branding (#284).
+    /// Surfaces the explicit host-app name even when a dynamic label is
+    /// active — useful for diagnostics and system panels that must show the
+    /// binary identity rather than the contextual label.
+    pub fn raw_app_name(&self) -> &str {
+        &self.app_ctx.app_name
     }
 
     /// Return a new `ComponentContext` with a modified `focused` flag.
@@ -507,6 +537,45 @@ impl Default for ComponentContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_name_reflects_dynamic_branding_priority() {
+        // Static (embedder) context: explicit name always wins, hint ignored.
+        let static_ctx = ComponentContext::new(false)
+            .with_app_context(Arc::new(AppContext::new("myapp", "1.0")))
+            .with_workspace_hint(Some("ws-a"));
+        assert_eq!(static_ctx.app_name(), "myapp");
+        assert_eq!(static_ctx.raw_app_name(), "myapp");
+
+        // Dynamic context: workspace hint takes priority over directory/app.
+        let dynamic_ctx = ComponentContext::new(false)
+            .with_app_context(Arc::new(
+                AppContext::new("term-wm", "0.1").with_dynamic_label(Some("proj".to_string())),
+            ))
+            .with_workspace_hint(Some("dev"));
+        assert_eq!(dynamic_ctx.app_name(), "dev");
+        assert_eq!(dynamic_ctx.raw_app_name(), "term-wm");
+    }
+
+    #[test]
+    fn app_name_dynamic_falls_back_to_directory_then_app() {
+        let app_ctx = Arc::new(
+            AppContext::new("term-wm", "0.1").with_dynamic_label(Some("mydir".to_string())),
+        );
+
+        // No workspace hint yet → directory label.
+        let ctx = ComponentContext::new(false).with_app_context(Arc::clone(&app_ctx));
+        assert_eq!(ctx.app_name(), "mydir");
+
+        // Empty/whitespace hint is treated as absent.
+        let ctx = ctx.with_workspace_hint(Some("   "));
+        assert_eq!(ctx.app_name(), "mydir");
+
+        // No directory either → explicit app name.
+        let bare = Arc::new(AppContext::new("term-wm", "0.1").with_dynamic_label(None));
+        let ctx = ComponentContext::new(false).with_app_context(bare);
+        assert_eq!(ctx.app_name(), "term-wm");
+    }
 
     #[test]
     fn direct_mode_defaults_to_false() {

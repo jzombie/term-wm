@@ -180,6 +180,14 @@ pub enum TermWmAction {
     /// Toggle global workspace follow mode (linked workspaces).
     #[cfg(feature = "session-persistence")]
     ToggleWorkspaceFollow,
+    /// Open the stop-gateway confirmation dialog (palette entry). Never
+    /// performs the shutdown itself — that is [`TermWmAction::StopGatewayDaemon`]'s job.
+    #[cfg(feature = "session-persistence")]
+    OpenStopGatewayConfirm,
+    /// Terminate the gateway daemon and every workspace session. Reachable
+    /// ONLY from the stop-gateway confirmation dialog's Confirm branch.
+    #[cfg(feature = "session-persistence")]
+    StopGatewayDaemon,
 
     // --- Project tasks ---
     /// Run a project task (from a discovered tasks.json) in a new terminal window.
@@ -291,6 +299,11 @@ impl TermWmAction {
             | TermWmAction::NewWorkspace
             | TermWmAction::DetachCurrentClient
             | TermWmAction::ToggleWorkspaceFollow => Category::Windows,
+
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::OpenStopGatewayConfirm | TermWmAction::StopGatewayDaemon => {
+                Category::System
+            }
 
             TermWmAction::RunProjectTask(_) => Category::Windows,
 
@@ -442,6 +455,12 @@ impl fmt::Display for TermWmAction {
             TermWmAction::DetachCurrentClient => "Detach Viewer",
             #[cfg(feature = "session-persistence")]
             TermWmAction::ToggleWorkspaceFollow => "Follow Workspaces",
+            #[cfg(feature = "session-persistence")]
+            // The palette label for this flow; the executor variant shares the
+            // name so machine-rendered strings stay consistent (UI-STYLE.md).
+            TermWmAction::OpenStopGatewayConfirm => "Stop Gateway Daemon",
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::StopGatewayDaemon => "Stop Gateway Daemon",
             TermWmAction::RunProjectTask(label) => {
                 return write!(f, "Run Project Task: {label}");
             }
@@ -602,6 +621,12 @@ mod tests {
             (TermWmAction::NewWorkspace, "New Workspace"),
             #[cfg(feature = "session-persistence")]
             (TermWmAction::DetachCurrentClient, "Detach Viewer"),
+            #[cfg(feature = "session-persistence")]
+            (TermWmAction::ToggleWorkspaceFollow, "Follow Workspaces"),
+            #[cfg(feature = "session-persistence")]
+            (TermWmAction::OpenStopGatewayConfirm, "Stop Gateway Daemon"),
+            #[cfg(feature = "session-persistence")]
+            (TermWmAction::StopGatewayDaemon, "Stop Gateway Daemon"),
             (
                 TermWmAction::RunProjectTask("dev: Run".into()),
                 "Run Project Task: dev: Run",

@@ -18,7 +18,7 @@ use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::events::{Event, KeyEvent};
 use term_wm_core::io::{EventSource, RenderTarget};
-use term_wm_core::project_tasks::{self, ProjectTaskConfig};
+use term_wm_core::project_tasks::{self, ProjectTaskConfig, TaskVarContext};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
@@ -34,6 +34,24 @@ const PALETTE_TICK_INTERVAL: Duration = Duration::from_secs(5);
 #[cfg(feature = "session-persistence")]
 const PALETTE_IPC_INTERVAL: Duration = Duration::from_secs(30);
 const USER_REGISTRY_DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// Strict bound on the gateway IPC round trip used while building the
+/// stop-daemon confirmation dialog (#298). An unresponsive daemon socket must
+/// never hang the UI thread.
+#[cfg(feature = "session-persistence")]
+const GATEWAY_COUNT_TIMEOUT_MS: u64 = 200;
+/// Dialog strings for the stop-gateway confirmation (#298).
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_TITLE: &str = "Stop Gateway Daemon";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_WARNING: &str =
+    "Stopping the gateway daemon will terminate every workspace session.";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_CANCEL_LABEL: &str = "Cancel";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_CONFIRM_LABEL: &str = "Stop Gateway Daemon";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_COUNT_UNAVAILABLE: &str = "unavailable";
 use term_wm_ui_components::TerminalComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
 use term_wm_ui_components::default_shell_command;
@@ -403,9 +421,14 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     }
 
     /// Set the current workspace name.
+    ///
+    /// Also refreshes the WM-side mirror immediately so per-frame consumers
+    /// (e.g. dynamic Menu/FAB branding, #284) see the switch without waiting
+    /// for the next palette rebuild.
     #[cfg(feature = "session-persistence")]
     pub fn set_current_workspace(&mut self, name: String) {
         self.current_workspace = name;
+        self.wm.current_workspace = self.current_workspace.clone();
     }
 
     /// Refresh the cached user registry via `ListUsers`.
@@ -593,29 +616,22 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     }
 
     /// Build a `CommandBuilder` for a project task, resolving cwd and env.
+    ///
+    /// Delegates resolution (argv tokenization + `{wm.pid}` substitution +
+    /// cwd/env mapping) to the shared [`project_tasks::resolve_task`] so the
+    /// CLI task runner and the UI spawner stay behaviorally identical.
     fn command_builder_for_task(
         &self,
         task: &ProjectTaskConfig,
     ) -> Option<portable_pty::CommandBuilder> {
-        let argv = task.argv()?;
-        let mut cmd = portable_pty::CommandBuilder::new(&argv[0]);
-        if argv.len() > 1 {
-            cmd.args(&argv[1..]);
-        }
         let base = self.project_root.as_deref().unwrap_or(&self.launch_cwd);
-        let cwd = match task.cwd.as_deref() {
-            Some(c) => {
-                let p = std::path::Path::new(c);
-                if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    base.join(p)
-                }
-            }
-            None => base.to_path_buf(),
-        };
-        cmd.cwd(cwd);
-        for (k, v) in &task.env {
+        let resolved = project_tasks::resolve_task(task, base, &TaskVarContext::default())?;
+        let mut cmd = portable_pty::CommandBuilder::new(&resolved.argv[0]);
+        if resolved.argv.len() > 1 {
+            cmd.args(&resolved.argv[1..]);
+        }
+        cmd.cwd(resolved.cwd);
+        for (k, v) in &resolved.env {
             cmd.env(k, v);
         }
         Some(cmd)
@@ -1104,6 +1120,41 @@ impl<C: Component<TermWmAction> + 'static>
         );
         self.wm
             .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
+    }
+
+    /// Open the stop-gateway-daemon confirmation dialog (#298).
+    ///
+    /// The body must state that every workspace session will be terminated
+    /// and show live counts (workspaces with running sessions / WM windows /
+    /// project-task windows). The gateway count is fetched with a strict
+    /// timeout so an unresponsive daemon socket can never hang the UI thread;
+    /// on failure the count renders as "unavailable" and the dialog still opens.
+    #[cfg(feature = "session-persistence")]
+    fn open_stop_gateway_confirm(&mut self) {
+        const GATEWAY_COUNT_TIMEOUT: std::time::Duration =
+            std::time::Duration::from_millis(GATEWAY_COUNT_TIMEOUT_MS);
+        let workspace_label = match term_session::list_channels_bounded(GATEWAY_COUNT_TIMEOUT) {
+            Ok(resp) => resp
+                .channels
+                .iter()
+                .filter(|ch| ch.session.as_ref().is_some_and(|s| !s.exited))
+                .count()
+                .to_string(),
+            Err(_) => GATEWAY_COUNT_UNAVAILABLE.to_string(),
+        };
+        let windows = self.wm.window_count();
+        let tasks = self.project_task_windows.len();
+        let body = format!(
+            "{GATEWAY_STOP_WARNING}\nActive workspaces: {workspace_label} · Windows: {windows} · Project tasks: {tasks}"
+        );
+        let mut confirm = ConfirmOverlayComponent::new();
+        confirm.set_labels(
+            format!("[ {GATEWAY_STOP_CANCEL_LABEL} ]"),
+            format!("[ {GATEWAY_STOP_CONFIRM_LABEL} ]"),
+        );
+        confirm.open(GATEWAY_STOP_TITLE, &body);
+        self.wm
+            .open_stop_daemon_confirm_overlay(OverlayComponent::StopDaemonConfirm(confirm));
     }
 }
 
@@ -1651,6 +1702,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -1675,6 +1727,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -1699,6 +1752,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -1719,6 +1773,7 @@ mod tests {
             cwd: Some("subdir".into()),
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let cwd = cmd.get_cwd().expect("cwd must be set");
@@ -1742,6 +1797,7 @@ mod tests {
             cwd: None,
             env,
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         assert_eq!(
@@ -1761,6 +1817,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert!(
             app.command_builder_for_task(&task).is_none(),
@@ -1780,6 +1837,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let result = app.spawn_project_task(&task);
         assert!(result.is_err(), "must fail for empty command");
@@ -1800,6 +1858,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let result = app.spawn_project_task(&task);
         assert!(result.is_err(), "must fail for malformed command");
