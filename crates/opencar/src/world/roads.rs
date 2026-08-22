@@ -380,7 +380,7 @@ mod tests {
                 max_lat_err = max_lat_err.max((lat_a - lat_c).abs());
                 let (ax, az) = hw.right_normal(t, &noise);
                 let (cx, cz) = cache.right_normal_at(t);
-                max_nrm_err = max_nrm_err.max(((ax - cx).abs() + (az - cz).abs()));
+                max_nrm_err = max_nrm_err.max((ax - cx).abs() + (az - cz).abs());
             }
             assert!(
                 max_lat_err < 0.02,
