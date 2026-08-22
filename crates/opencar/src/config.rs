@@ -309,6 +309,10 @@ pub const MINIMAP_ROWS: u16 = 8;
 // ── Input ───────────────────────────────────────────────────────────────
 // (Fallback held-key windows live with the steering consts above:
 // TAP_CONFIRM_SECS / INITIAL_DELAY_TIMEOUT_SECS / REPEAT_GAP_SECS.)
+/// Capacity of the buffered terminal writer. Large enough to hold several
+/// full dirty-frame payloads so `present()` issues a handful of big writes
+/// instead of hundreds of tiny blocking syscalls (Terminal.app over SSH).
+pub const OUT_BUF_BYTES: usize = 256 * 1024;
 pub const BOB_PHASE_RATE: f32 = 0.55; // bob phase per meter traveled
 pub const OFFROAD_BOB_MULT: f32 = 3.0;
 

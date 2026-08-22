@@ -1,6 +1,6 @@
 //! Terminal lifecycle + the fixed-timestep game loop.
 
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -92,17 +92,25 @@ fn drive(
     let mut backend = opencar::render::create_backend().map_err(io::Error::other)?;
     let mut last = Instant::now();
 
-    // TODO: Make this a constant
-    // Cap the frame rate at ~60 FPS (16.67 ms per frame)
+    // F1: one big buffered writer for the whole session — collapses the
+    // escape stream into a few large writes per frame. Owned by this scope,
+    // so the underlying stdout lock is released before run() performs
+    // crossterm teardown.
+    let mut out = BufWriter::with_capacity(OUT_BUF_BYTES, stdout);
+
+    // F3 draw gate: cadence anchored to each draw's start; overruns leave
+    // next_draw in the past ⇒ immediate redraw (natural PTY backpressure).
     let target_frame_time = Duration::from_micros(16_667);
+    let mut next_draw = Instant::now();
 
     loop {
         let frame_start = Instant::now();
 
-        // Drain input events.
+        // Drain input events (also the idle yield between draws).
         while event::poll(Duration::from_millis(EVENT_POLL_MILLIS))? {
             match event::read()? {
                 Event::Key(key) => app.on_key(&key),
+                Event::FocusLost => app.on_focus_lost(),
                 Event::Resize(..) => display.resize_if_needed(0, 0), // force repaint
                 _ => {}
             }
@@ -110,7 +118,9 @@ fn drive(
 
         let dt = frame_start.duration_since(last).as_secs_f32();
         last = frame_start;
+        let update_start = Instant::now();
         app.update(dt);
+        let update_ms = update_start.elapsed().as_secs_f32() * 1000.0;
 
         if app.mode == Mode::Quit {
             return Ok(());
@@ -118,10 +128,18 @@ fn drive(
 
         let (cols, rows) = terminal::size()?;
         if cols < MIN_CELLS_W || rows < MIN_CELLS_H {
-            show_message(stdout, cols, rows)?;
+            show_message(&mut out, cols, rows)?;
             continue;
         }
         display.resize_if_needed(cols, rows);
+
+        // Draw gate: skip render+present entirely while ahead of cadence;
+        // input and physics above keep ticking regardless.
+        let draw_started_at = Instant::now();
+        if draw_started_at < next_draw {
+            continue;
+        }
+        next_draw = draw_started_at + target_frame_time;
 
         let cells = {
             let frame = opencar::render::FrameInput {
@@ -133,6 +151,7 @@ fn drive(
                 cells_w: cols,
                 cells_h: rows,
             };
+            let render_start = Instant::now();
             let raw = backend.render(&frame);
             let mut owned = raw.to_vec();
             owned.resize(
@@ -152,9 +171,15 @@ fn drive(
                 app.mode == Mode::Paused,
                 Some(fh.as_str()),
             );
+            app.hud
+                .perf
+                .push(update_ms, render_start.elapsed().as_secs_f32() * 1000.0, 0.0);
             owned
         };
-        display.present(stdout, &cells)?;
+
+        let io_start = Instant::now();
+        display.present(&mut out, &cells)?;
+        app.hud.perf.set_io(io_start.elapsed().as_secs_f32() * 1000.0);
 
         // ── Diagnostics: synchronous dump + clean exit on --debug-frame=N ──
         frame_n += 1;
@@ -182,12 +207,6 @@ fn drive(
                 let _ = img.write_ppm(&dir.join("frame_rgb.ppm"));
                 let _ = write_cells_txt(&cells_clone, cols_usize, &dir.join("frame_cells.txt"));
             });
-        }
-
-        // ── Frame Pacing: Sleep for remaining frame budget ──
-        let elapsed = frame_start.elapsed();
-        if let Some(idle_time) = target_frame_time.checked_sub(elapsed) {
-            std::thread::sleep(idle_time);
         }
     }
 }

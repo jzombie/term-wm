@@ -26,6 +26,42 @@ pub fn draw_ascii(cells: &mut [TermCell], cols: u16, x: u16, y: u16, text: &str,
 pub struct HudState {
     pub show_hud: bool,
     pub show_minimap: bool,
+    /// Display-only frame statistics (F4). Never fed back into pacing.
+    pub perf: PerfStats,
+}
+
+/// Rolling per-segment frame timings, EMA-smoothed for readability.
+#[derive(Clone, Copy)]
+pub struct PerfStats {
+    pub fps: f32,
+    pub update_ms: f32,
+    pub render_ms: f32,
+    pub io_ms: f32,
+}
+
+impl PerfStats {
+    const EMA_ALPHA: f32 = 0.15;
+
+    fn new() -> Self {
+        Self { fps: 0.0, update_ms: 0.0, render_ms: 0.0, io_ms: 0.0 }
+    }
+
+    fn ema(old: f32, new: f32) -> f32 {
+        old + Self::EMA_ALPHA * (new - old)
+    }
+
+    /// Fold one drawn frame's update/render timings in; fps derives from the
+    /// total. `io_ms` arrives after presentation via [`Self::set_io`].
+    pub fn push(&mut self, update_ms: f32, render_ms: f32, _io_ms: f32) {
+        self.update_ms = Self::ema(self.update_ms, update_ms);
+        self.render_ms = Self::ema(self.render_ms, render_ms);
+        let total = self.update_ms.max(0.01) + self.render_ms.max(0.01) + self.io_ms.max(0.01);
+        self.fps = Self::ema(self.fps, 1000.0 / total);
+    }
+
+    pub fn set_io(&mut self, io_ms: f32) {
+        self.io_ms = Self::ema(self.io_ms, io_ms);
+    }
 }
 
 impl Default for HudState {
@@ -36,7 +72,7 @@ impl Default for HudState {
 
 impl HudState {
     pub fn new() -> Self {
-        Self { show_hud: true, show_minimap: false }
+        Self { show_hud: true, show_minimap: false, perf: PerfStats::new() }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -96,8 +132,10 @@ impl HudState {
                 draw_ascii(cells, cols, cols.saturating_sub(12), rows.saturating_sub(1), "OFF-ROAD!", warn);
             }
             let hint = format!(
-                "[{}] WASD drive - Space brake - C cam - M map - P pause - Q quit",
-                backend_name
+                "[{}] WASD drive - Space brake - C cam - M map - H hud - P pause - Q quit  \
+                 {:>4.0}fps u{:.1} r{:.1} io{:.1}",
+                backend_name, self.perf.fps, self.perf.update_ms, self.perf.render_ms,
+                self.perf.io_ms
             );
             draw_ascii(cells, cols, 0, 0, &hint, dim);
             if let Some(h) = frame_hash {
@@ -144,7 +182,7 @@ mod tests {
         let player = Vehicle::new(0.0, 0.0, 0.0);
         let world = World::new(7);
         let traffic = TrafficSystem::new(&player, &world);
-        let hud = HudState { show_hud: true, show_minimap: false };
+        let hud = HudState::new();
         hud.draw(
             &mut cells,
             cols,
@@ -204,7 +242,7 @@ mod m015_tests {
         let player = Vehicle::new(0.0, 0.0, 0.0);
         let world = World::new(7);
         let traffic = TrafficSystem::new(&player, &world);
-        let hud = HudState { show_hud: true, show_minimap: false };
+        let hud = HudState::new();
         hud.draw(
             &mut cells,
             cols,
