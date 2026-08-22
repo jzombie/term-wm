@@ -751,6 +751,7 @@ mod tests {
         assert!(OnAttributedInput::decode_request(&bad).is_err());
         assert!(SubscribeInternalInput::decode_request(&bad).is_err());
         assert!(OnPtyResized::decode_request(&bad).is_err());
+        assert!(OnUserResized::decode_request(&bad).is_err());
     }
 
     #[test]
@@ -851,6 +852,12 @@ mod tests {
         let input = 42usize;
         let bytes = OnUserDisconnected::encode_request(input).unwrap();
         assert_eq!(OnUserDisconnected::decode_request(&bytes).unwrap(), 42);
+    }
+
+    #[test]
+    fn on_user_resized_round_trips() {
+        let bytes = OnUserResized::encode_request((7, 200, 50)).unwrap();
+        assert_eq!(OnUserResized::decode_request(&bytes).unwrap(), (7, 200, 50));
     }
 
     #[test]
@@ -1059,6 +1066,47 @@ impl RpcMethodPrebuffered for OnUserDisconnected {
         let r = bitcode::decode::<OnUserDisconnectedRequest>(bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok(r.conn_id)
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+#[derive(Encode, Decode)]
+struct OnUserResizedRequest {
+    pub conn_id: usize,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Server pushes to `internal_wm_caller` when a viewer resizes its terminal.
+/// Coalesced server-side (trailing edge) so interactive drag-resizes do not
+/// flood the RPC pipeline.
+pub struct OnUserResized;
+
+impl RpcMethodPrebuffered for OnUserResized {
+    const METHOD_ID: u64 = rpc_method_id!("session.on_user_resized");
+
+    type Input = (usize, u16, u16);
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&OnUserResizedRequest {
+            conn_id: input.0,
+            cols: input.1,
+            rows: input.2,
+        }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<OnUserResizedRequest>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok((r.conn_id, r.cols, r.rows))
     }
 
     fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
