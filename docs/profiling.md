@@ -1,3 +1,9 @@
+## Profiling with Debug Symbols
+
+```bash
+CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release
+```
+
 ## Profiling without the daemon
 
 ```bash
