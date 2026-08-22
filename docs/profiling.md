@@ -4,6 +4,45 @@
 CARGO_PROFILE_RELEASE_DEBUG=true CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed cargo build --release -v
 ```
 
+### macOS
+
+Apple provides the `xctrace` command-line utility (part of Xcode Command Line Tools) to record, export, and symbolicate Instruments `.trace` files over SSH without launching the Instruments GUI on the remote host.
+
+**Execution Commands**
+
+* **Attach to a Running Process:**
+```bash
+xcrun xctrace record --template 'Time Profiler' --time-limit 10s --output /tmp/app.trace --attach <PID>
+```
+* **Launch and Profile a Binary:**
+```bash
+xcrun xctrace record --template 'Time Profiler' --time-limit 10s --output /tmp/app.trace --launch -- /path/to/binary --args
+```
+
+* **List Available Profiling Templates:**
+```bash
+xcrun xctrace list templates
+```
+
+**Trace Processing**
+
+* **GUI Inspection (Local):** Transfer the generated `.trace` bundle back to your workstation via `scp` or `rsync`, then open it in `Instruments.app`:
+```bash
+open /path/to/downloaded.trace
+```
+
+* **Headless XML Extraction (Remote):** Export raw sample tables directly on the server to XML for automated stack aggregation:
+```bash
+xcrun xctrace export --input /tmp/app.trace --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' --output /tmp/profile.xml
+```
+
+**Required System Permissions & Operational Restrictions**
+
+* **Developer Mode Authorization:** The SSH user must be authorized to attach debugging tools. Enable tracing rights non-interactively via:
+```bash
+sudo DevToolsSecurity -enable
+```
+
 ## Profiling without the daemon
 
 ```bash
