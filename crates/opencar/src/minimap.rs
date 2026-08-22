@@ -71,7 +71,7 @@ pub fn draw_minimap(
                 let c = &mut cells[idx];
                 if border {
                     c.mask = 0;
-                    c.ch = '·';
+                    c.ch = '.';
                     c.fg = PALETTE[PAL_SKY_HORIZON as usize];
                     c.bg = [8, 8, 10];
                 } else {

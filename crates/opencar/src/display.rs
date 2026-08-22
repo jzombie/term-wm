@@ -121,3 +121,67 @@ mod moveto_tests {
         assert!(!s.contains("\\x1b[2;"), "must not address row 2 for a row-0 cell");
     }
 }
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use crate::braille::TermCell;
+
+    fn grid(cols: u16, rows: u16) -> Vec<TermCell> {
+        vec![TermCell::BLANK; cols as usize * rows as usize]
+    }
+
+    /// M0.15 analyzer: the captured ANSI stream must never contain newline
+    /// bytes and every cursor address must stay inside the grid.
+    #[test]
+    fn capture_stream_is_wrap_safe() {
+        let cols = 20u16;
+        let rows = 6u16;
+        let mut d = TermDisplay::new();
+        d.resize_if_needed(cols, rows);
+        let mut out: Vec<u8> = Vec::new();
+
+        // Two frames of churn across many cells (forces many runs).
+        for frame in 0..2u8 {
+            let mut cells = grid(cols, rows);
+            for (i, cell) in cells.iter_mut().enumerate() {
+                if (i + frame as usize).is_multiple_of(3) {
+                    cell.mask = 0b0101_0101;
+                    cell.fg = [200, 40, 40];
+                }
+            }
+            d.present(&mut out, &cells).expect("capture");
+        }
+
+        assert!(!out.contains(&b'\n'));
+        assert!(!out.contains(&b'\r'));
+
+        // Parse every CSI ... H cursor address.
+        let s = String::from_utf8_lossy(&out);
+        let bytes = s.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            // Find a full CSI sequence: ESC [ params terminator-letter.
+            if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                let start = i + 2;
+                let mut j = start;
+                while j < bytes.len() && !bytes[j].is_ascii_alphabetic() {
+                    j += 1;
+                }
+                assert!(j < bytes.len(), "unterminated CSI");
+                let term = bytes[j] as char;
+                let body = std::str::from_utf8(&bytes[start..j]).expect("utf8");
+                if term == 'H' {
+                    let (r, c) = body.split_once(';').expect("cursor addr form");
+                    let r: u16 = r.parse().expect("row num");
+                    let c: u16 = c.parse().expect("col num");
+                    assert!(r >= 1 && r <= rows, "row out of bounds: {r}");
+                    assert!(c >= 1 && c <= cols, "col out of bounds: {c}");
+                }
+                i = j + 1;
+            } else {
+                i += 1;
+            }
+        }
+    }
+}

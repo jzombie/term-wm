@@ -12,7 +12,8 @@ use opencar::app::{App, Mode};
 use opencar::config::*;
 use opencar::display::TermDisplay;
 
-pub fn run(seed: u32, debug_frame: Option<usize>) -> io::Result<()> {
+
+pub fn run(seed: u32, debug_frame: Option<usize>, capture_out: Option<String>) -> io::Result<()> {
     let mut stdout = io::stdout();
     terminal::enable_raw_mode()?;
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
@@ -29,7 +30,16 @@ pub fn run(seed: u32, debug_frame: Option<usize>) -> io::Result<()> {
         )?;
     }
 
-    let result = drive(&mut stdout, seed, kitty, debug_frame);
+    let result = if let Some(path) = capture_out {
+        let file = std::fs::File::create(&path)?;
+        let mut tee = TeeWriter {
+            out: &mut stdout,
+            cap: file,
+        };
+        drive(&mut tee, seed, kitty, debug_frame)
+    } else {
+        drive(&mut stdout, seed, kitty, debug_frame)
+    };
 
     // Teardown runs no matter how the loop ended.
     if kitty {
@@ -52,6 +62,22 @@ fn show_message(stdout: &mut impl Write, cols: u16, rows: u16) -> io::Result<()>
         msg
     )?;
     stdout.flush()
+}
+
+/// Tees display output into a capture file while still writing to stdout.
+struct TeeWriter<'a> {
+    out: &'a mut dyn Write,
+    cap: std::fs::File,
+}
+impl Write for TeeWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.cap.write_all(buf)?;
+        self.out.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.cap.flush()?;
+        self.out.flush()
+    }
 }
 
 fn drive(
@@ -108,6 +134,8 @@ fn drive(
                 cols as usize * rows as usize,
                 opencar::braille::TermCell::BLANK,
             );
+            // Frame-stability signal: FNV-1a of the rendered grid BEFORE HUD.
+            let fh = opencar::hud::frame_hash(&owned);
             app.hud.draw(
                 &mut owned,
                 cols,
@@ -117,6 +145,7 @@ fn drive(
                 &app.world,
                 backend.name(),
                 app.mode == Mode::Paused,
+                Some(fh.as_str()),
             );
             owned
         };
@@ -153,12 +182,17 @@ fn drive(
 }
 
 fn main() -> io::Result<()> {
-    let seed = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(1337);
-    let debug_frame = std::env::args()
-        .find(|a| a.starts_with("--debug-frame"))
-        .and_then(|a| a.split('=').nth(1).and_then(|n| n.parse::<usize>().ok()));
-    run(seed, debug_frame)
+    let mut seed = 1337u32;
+    let mut debug_frame = None;
+    let mut capture_out = None;
+    for a in std::env::args().skip(1) {
+        if let Some(v) = a.strip_prefix("--debug-frame=") {
+            debug_frame = v.parse::<usize>().ok();
+        } else if let Some(v) = a.strip_prefix("--capture-out=") {
+            capture_out = Some(v.to_string());
+        } else if let Ok(n) = a.parse::<u32>() {
+            seed = n;
+        }
+    }
+    run(seed, debug_frame, capture_out)
 }
