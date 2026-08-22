@@ -1,4 +1,4 @@
-## Profiling with Debug Symbols
+## Profiling with Debug Symbols (Verbose)
 
 ```bash
 CARGO_PROFILE_RELEASE_DEBUG=true CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed cargo build --release -v
