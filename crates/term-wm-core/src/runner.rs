@@ -164,7 +164,9 @@ fn dispatch_action<
             app.wm().set_keyboard_focus(key, id);
         }
         TermWmAction::PasteClipboard => {
-            if let Some(text) = app.wm().clipboard_mut().and_then(|cb| cb.get().ok()) {
+            if app.wm().clipboard_enabled()
+                && let Some(text) = app.wm().clipboard_mut().and_then(|cb| cb.get().ok())
+            {
                 queue.push_back((key, TermWmAction::ClipboardPaste(text)));
             }
         }
@@ -2167,7 +2169,10 @@ mod tests {
             }
         }
         let mut wm = WindowManager::<TestComponent>::with_config(
-            crate::wm_config::WmConfig::default(),
+            crate::wm_config::WmConfig {
+                clipboard_enabled: false,
+                ..Default::default()
+            },
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
             None,
             crate::window::LayerManager::new(),
@@ -2180,7 +2185,7 @@ mod tests {
         dispatch_action(&mut app, k, TermWmAction::PasteClipboard, &mut queue);
         assert!(
             queue.is_empty(),
-            "PasteClipboard must not queue anything when clipboard is None"
+            "PasteClipboard must not queue anything when clipboard is disabled"
         );
     }
 
