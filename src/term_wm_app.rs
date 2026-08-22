@@ -1716,4 +1716,133 @@ mod tests {
         let result = app.spawn_project_task(&task);
         assert!(result.is_err(), "must fail for malformed command");
     }
+
+    // ── Thin delegates + accessor tests ──
+
+    #[test]
+    fn quit_requested_defaults_false() {
+        let app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(!app.quit_requested(), "should default to false");
+    }
+
+    #[test]
+    fn request_quit_sets_flag() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.request_quit();
+        assert!(app.quit_requested(), "should be true after request_quit");
+    }
+
+    #[test]
+    fn set_window_title_does_not_panic() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app.open_window(AppRootComponent::Custom(NoopComponent));
+        app.set_window_title(key, "test title");
+    }
+
+    #[test]
+    fn engine_returns_mut_reference() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let _engine = app.engine();
+    }
+
+    #[test]
+    fn draw_renderer_returns_mut_reference() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let _renderer = app.draw_renderer();
+    }
+
+    #[test]
+    fn wm_returns_mut_reference() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let _wm = app.wm();
+    }
+
+    #[test]
+    fn on_panic_shows_debug_log() {
+        use term_wm_core::window::WindowState;
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let debug_key = app
+            .debug_key
+            .expect("debug_key must be set after construction");
+        // Debug log starts unmapped.
+        assert_eq!(
+            app.wm().window_state(debug_key),
+            Some(WindowState::Unmapped)
+        );
+        app.on_panic();
+        assert_eq!(app.wm().window_state(debug_key), Some(WindowState::Mapped));
+    }
+
+    #[test]
+    fn toggle_debug_window_shows_and_hides() {
+        use term_wm_core::window::WindowState;
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app
+            .debug_key
+            .expect("debug_key must be set after construction");
+        // Starts hidden.
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+        // First toggle shows it.
+        app.toggle_debug_window();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Mapped));
+        // Second toggle hides it.
+        app.toggle_debug_window();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+    }
+
+    #[test]
+    fn toggle_system_panel_shows_and_hides() {
+        use term_wm_core::window::WindowState;
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = app
+            .system_panel_key
+            .expect("system_panel_key must be set after construction");
+        // Starts hidden.
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+        // First toggle shows it.
+        app.toggle_system_panel();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Mapped));
+        // Second toggle hides it.
+        app.toggle_system_panel();
+        assert_eq!(app.wm().window_state(key), Some(WindowState::Unmapped));
+    }
+
+    #[test]
+    fn open_help_overlay_creates_overlay() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(app.wm().overlay_keys().is_empty(), "no overlay before open");
+        app.open_help_overlay();
+        assert!(
+            !app.wm().overlay_keys().is_empty(),
+            "overlay must be present after open"
+        );
+    }
+
+    #[test]
+    fn open_exit_confirm_creates_overlay() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        assert!(app.wm().overlay_keys().is_empty(), "no overlay before open");
+        app.open_exit_confirm();
+        assert!(
+            !app.wm().overlay_keys().is_empty(),
+            "overlay must be present after open"
+        );
+    }
+
+    #[test]
+    fn handle_app_event_records_key() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let event = Event::Key(KeyEvent::new(
+            term_wm_core::events::KeyCode::Char('a'),
+            term_wm_core::events::KeyModifiers::NONE,
+            term_wm_core::events::KeyKind::Press,
+        ));
+        let handled = app.handle_app_event(&event);
+        assert!(!handled, "handle_app_event always returns false");
+        let last = app.last_key.borrow();
+        assert!(
+            last.is_some(),
+            "last_key must be set after handling a key event"
+        );
+    }
 }

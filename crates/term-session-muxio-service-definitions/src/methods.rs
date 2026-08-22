@@ -760,6 +760,193 @@ mod tests {
         assert!(RPC_ERROR_LIVE_SESSIONS.starts_with("gateway:"));
         assert!(RPC_ERROR_LIVE_PARTICIPANTS.starts_with("gateway:"));
     }
+
+    // ── New RPC method roundtrips ──
+
+    #[test]
+    fn push_output_round_trips() {
+        let input = b"hello world".to_vec();
+        let bytes = PushOutput::encode_request(input.clone()).unwrap();
+        assert_eq!(PushOutput::decode_request(&bytes).unwrap(), input);
+        assert_eq!(
+            PushOutput::decode_response(&PushOutput::encode_response(()).unwrap()).unwrap(),
+            ()
+        );
+    }
+
+    #[test]
+    fn write_input_round_trips() {
+        let input = (42u64, vec![1u8, 2, 3, 4]);
+        let bytes = WriteInput::encode_request(input.clone()).unwrap();
+        let decoded = WriteInput::decode_request(&bytes).unwrap();
+        assert_eq!(decoded.0, 42);
+        assert_eq!(decoded.1, vec![1u8, 2, 3, 4]);
+    }
+
+    #[test]
+    fn list_users_round_trips() {
+        let channel = "dev/main".to_string();
+        let bytes = ListUsers::encode_request(channel.clone()).unwrap();
+        assert_eq!(ListUsers::decode_request(&bytes).unwrap(), channel);
+
+        let response = ListUsersResponse {
+            users: vec![
+                UserInfo {
+                    conn_id: 1,
+                    user: "alice".into(),
+                    hostname: "host1".into(),
+                    ssh_ip: Some("10.0.0.1".into()),
+                    ssh_port: Some(2222),
+                    cols: 120,
+                    rows: 40,
+                    connected_at_unix: 1700000000,
+                    pid: 12345,
+                },
+                UserInfo {
+                    conn_id: 2,
+                    user: "bob".into(),
+                    hostname: "host2".into(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                    cols: 80,
+                    rows: 24,
+                    connected_at_unix: 1700000100,
+                    pid: 67890,
+                },
+            ],
+        };
+        let resp_bytes = ListUsers::encode_response(response.clone()).unwrap();
+        let decoded = ListUsers::decode_response(&resp_bytes).unwrap();
+        assert_eq!(decoded.users.len(), 2);
+        assert_eq!(decoded.users[0].user, "alice");
+        assert_eq!(decoded.users[0].ssh_port, Some(2222));
+        assert_eq!(decoded.users[1].user, "bob");
+        assert_eq!(decoded.users[1].ssh_port, None);
+    }
+
+    #[test]
+    fn on_user_connected_round_trips() {
+        let info = UserInfo {
+            conn_id: 7,
+            user: "carol".into(),
+            hostname: "laptop".into(),
+            ssh_ip: Some("192.168.1.100".into()),
+            ssh_port: Some(5555),
+            cols: 200,
+            rows: 50,
+            connected_at_unix: 1700000200,
+            pid: 99999,
+        };
+        let bytes = OnUserConnected::encode_request(info.clone()).unwrap();
+        let decoded = OnUserConnected::decode_request(&bytes).unwrap();
+        assert_eq!(decoded.conn_id, 7);
+        assert_eq!(decoded.user, "carol");
+        assert_eq!(decoded.ssh_port, Some(5555));
+        assert_eq!(decoded.cols, 200);
+        assert_eq!(decoded.pid, 99999);
+    }
+
+    #[test]
+    fn on_user_disconnected_round_trips() {
+        let input = 42usize;
+        let bytes = OnUserDisconnected::encode_request(input).unwrap();
+        assert_eq!(OnUserDisconnected::decode_request(&bytes).unwrap(), 42);
+    }
+
+    #[test]
+    fn on_workspace_entered_round_trips() {
+        let input = "ws-123/main".to_string();
+        let bytes = OnWorkspaceEntered::encode_request(input.clone()).unwrap();
+        assert_eq!(OnWorkspaceEntered::decode_request(&bytes).unwrap(), input);
+    }
+
+    #[test]
+    fn attach_round_trips() {
+        let req = AttachRequest {
+            channel: "dev/main".into(),
+            hostname: "laptop".into(),
+            pid: 12345,
+            user: "alice".into(),
+            version: "0.1.0".into(),
+            ssh_ip: Some("10.0.0.1".into()),
+            ssh_port: Some(2222),
+        };
+        let bytes = Attach::encode_request(req.clone()).unwrap();
+        let decoded = Attach::decode_request(&bytes).unwrap();
+        assert_eq!(decoded.channel, "dev/main");
+        assert_eq!(decoded.hostname, "laptop");
+        assert_eq!(decoded.pid, 12345);
+        assert_eq!(decoded.user, "alice");
+        assert_eq!(decoded.version, "0.1.0");
+        assert_eq!(decoded.ssh_ip, Some("10.0.0.1".into()));
+        assert_eq!(decoded.ssh_port, Some(2222));
+
+        let resp_bytes = Attach::encode_response(99usize).unwrap();
+        assert_eq!(Attach::decode_response(&resp_bytes).unwrap(), 99);
+    }
+
+    #[test]
+    fn spawn_round_trips() {
+        let req = SpawnRequest {
+            cmd: Some(vec!["bash".into(), "--login".into()]),
+            cols: 120,
+            rows: 40,
+            cwd: None,
+        };
+        let bytes = Spawn::encode_request(req).unwrap();
+        let decoded = Spawn::decode_request(&bytes).unwrap();
+        assert_eq!(decoded.cmd, Some(vec!["bash".into(), "--login".into()]));
+        assert_eq!(decoded.cols, 120);
+        assert_eq!(decoded.rows, 40);
+        assert!(decoded.cwd.is_none());
+
+        let resp = SpawnResponse {
+            id: 42,
+            cols: 120,
+            rows: 40,
+        };
+        let resp_bytes = Spawn::encode_response(resp).unwrap();
+        let decoded_resp = Spawn::decode_response(&resp_bytes).unwrap();
+        assert_eq!(decoded_resp.id, 42);
+        assert_eq!(decoded_resp.cols, 120);
+        assert_eq!(decoded_resp.rows, 40);
+    }
+
+    #[test]
+    fn resize_pty_round_trips() {
+        let input = (5u64, 200u16, 60u16);
+        let bytes = ResizePty::encode_request(input).unwrap();
+        assert_eq!(ResizePty::decode_request(&bytes).unwrap(), (5, 200, 60));
+
+        let resp = (200u16, 60u16);
+        let resp_bytes = ResizePty::encode_response(resp).unwrap();
+        assert_eq!(ResizePty::decode_response(&resp_bytes).unwrap(), (200, 60));
+    }
+
+    #[test]
+    fn close_session_round_trips() {
+        let input = 42u64;
+        let bytes = CloseSession::encode_request(input).unwrap();
+        assert_eq!(CloseSession::decode_request(&bytes).unwrap(), 42);
+        assert_eq!(
+            CloseSession::decode_response(&CloseSession::encode_response(()).unwrap()).unwrap(),
+            ()
+        );
+    }
+
+    #[test]
+    fn write_input_encode_response_is_unit() {
+        let resp_bytes = WriteInput::encode_response(()).unwrap();
+        assert!(resp_bytes.is_empty());
+        assert_eq!(WriteInput::decode_response(&resp_bytes).unwrap(), ());
+    }
+
+    #[test]
+    fn push_output_encode_response_is_unit() {
+        let resp_bytes = PushOutput::encode_response(()).unwrap();
+        assert!(resp_bytes.is_empty());
+        assert_eq!(PushOutput::decode_response(&resp_bytes).unwrap(), ());
+    }
 }
 
 // ── OnPtyResized (server calls client to notify geometry change) ─────
