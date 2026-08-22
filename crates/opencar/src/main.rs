@@ -4,14 +4,14 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::{cursor, execute, terminal};
 
 use opencar::app::{App, Mode};
 use opencar::config::*;
 use opencar::display::TermDisplay;
-
 
 pub fn run(seed: u32, debug_frame: Option<usize>, capture_out: Option<String>) -> io::Result<()> {
     let mut stdout = io::stdout();
@@ -92,7 +92,12 @@ fn drive(
     let mut backend = opencar::render::create_backend().map_err(io::Error::other)?;
     let mut last = Instant::now();
 
+    // Cap the frame rate at ~60 FPS (16.67 ms per frame)
+    let target_frame_time = Duration::from_micros(16_667);
+
     loop {
+        let frame_start = Instant::now();
+
         // Drain input events.
         while event::poll(Duration::from_millis(EVENT_POLL_MILLIS))? {
             match event::read()? {
@@ -102,9 +107,8 @@ fn drive(
             }
         }
 
-        let now = Instant::now();
-        let dt = now.duration_since(last).as_secs_f32();
-        last = now;
+        let dt = frame_start.duration_since(last).as_secs_f32();
+        last = frame_start;
         app.update(dt);
 
         if app.mode == Mode::Quit {
@@ -166,7 +170,7 @@ fn drive(
             let cols_usize = cols as usize;
             let cells_clone = cells.clone();
             std::thread::spawn(move || {
-                use opencar::render::image::{write_cells_txt, ImageBuffer};
+                use opencar::render::image::{ImageBuffer, write_cells_txt};
                 let img = ImageBuffer {
                     w,
                     h,
@@ -177,6 +181,12 @@ fn drive(
                 let _ = img.write_ppm(&dir.join("frame_rgb.ppm"));
                 let _ = write_cells_txt(&cells_clone, cols_usize, &dir.join("frame_cells.txt"));
             });
+        }
+
+        // ── Frame Pacing: Sleep for remaining frame budget ──
+        let elapsed = frame_start.elapsed();
+        if let Some(idle_time) = target_frame_time.checked_sub(elapsed) {
+            std::thread::sleep(idle_time);
         }
     }
 }
