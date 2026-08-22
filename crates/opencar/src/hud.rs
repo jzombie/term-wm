@@ -23,6 +23,22 @@ pub fn draw_ascii(cells: &mut [TermCell], cols: u16, x: u16, y: u16, text: &str,
     }
 }
 
+/// Total, panic-free span clear: writes BLANK over up to `len` cells
+/// starting at `(x, y)`, clamped to the grid (A2).
+pub fn clear_span(cells: &mut [TermCell], cols: usize, x: usize, y: usize, len: usize) {
+    if cols == 0 || len == 0 {
+        return;
+    }
+    let start_x = x.min(cols);
+    let safe_len = len.min(cols - start_x);
+    let start_idx = y.saturating_mul(cols).saturating_add(start_x);
+    if start_idx >= cells.len() {
+        return;
+    }
+    let end_idx = (start_idx + safe_len).min(cells.len());
+    cells[start_idx..end_idx].fill(TermCell::BLANK);
+}
+
 pub struct HudState {
     pub show_hud: bool,
     pub show_minimap: bool,
@@ -103,7 +119,8 @@ impl HudState {
 
         if self.show_hud {
             let kmh = player.kmh();
-            let buf = kmh.to_string();
+            // Constant-width digits: no ghosting on contraction (A2).
+            let buf = format!("{:>3}", kmh);
             let label = "km/h ";
             draw_ascii(
                 cells,
@@ -139,6 +156,10 @@ impl HudState {
             draw_ascii(cells, cols, 1 + label.len() as u16 + 4 + bar_w + 1, rows.saturating_sub(1), gear, bright);
             if player.offroad && kmh > 5 {
                 draw_ascii(cells, cols, cols.saturating_sub(12), rows.saturating_sub(1), "OFF-ROAD!", warn);
+            } else {
+                // A2: clear the fixed span so a hidden warning leaves no
+                // stale text behind.
+                clear_span(cells, cols as usize, cols.saturating_sub(12) as usize, rows.saturating_sub(1) as usize, 9);
             }
             let hint = format!(
                 "[{}] WASD drive - Space brake - C cam - M map - H hud - P pause - Q quit  \

@@ -209,6 +209,9 @@ pub struct TermDisplay {
     /// Emit exact 24-bit RGB instead of indexed xterm-256 (G2 payload diet
     /// opt-out).
     truecolor: bool,
+    /// B: SGR attributes established for this session/repaint boundary?
+    /// When false, an `\x1b[0m` is emitted before any cell output.
+    cold_start_done: bool,
 }
 
 impl TermDisplay {
@@ -221,6 +224,7 @@ impl TermDisplay {
             cur_bg: None,
             cursor: None,
             truecolor,
+            cold_start_done: false,
         }
     }
 
@@ -373,6 +377,7 @@ impl TermDisplay {
         self.cur_fg = None;
         self.cur_bg = None;
         self.cursor = None;
+        self.cold_start_done = false;
     }
 
     /// Emit `cells` (length must match the grid) to `out`.
@@ -383,7 +388,32 @@ impl TermDisplay {
     /// only when the next dirty cell is not the immediate successor of the
     /// last written one.
     pub fn present<W: Write>(&mut self, out: &mut W, cells: &[TermCell]) -> std::io::Result<()> {
-        debug_assert_eq!(cells.len(), self.cols as usize * self.rows as usize);
+        // Zero-dimension early exit (no stride math, no emitter calls).
+        if cells.is_empty() || self.cols == 0 || self.rows == 0 {
+            return Ok(());
+        }
+
+        // In-present defense-in-depth: on any length mismatch (resize races,
+        // caller-ordering anomalies) realign the baseline, invalidate tracked
+        // state, and issue a one-shot clear+reset so the repaint starts from
+        // a pristine surface.
+        let expected = self.cols as usize * self.rows as usize;
+        if self.prev.len() != expected || cells.len() != expected {
+            self.prev.clear();
+            self.prev.resize(expected, TermCell { mask: 0xFF, fg: [255; 3], bg: [255; 3], ch: '?' });
+            self.cur_fg = None;
+            self.cur_bg = None;
+            self.cursor = None;
+            self.cold_start_done = false;
+            out.write_all(b"\x1b[2J\x1b[0m")?;
+        }
+
+        // Cold start: explicit attribute reset before first cell output so
+        // host terminal themes can never bleed into untouched cells.
+        if !self.cold_start_done {
+            out.write_all(b"\x1b[0m")?;
+            self.cold_start_done = true;
+        }
 
         for cy in 0..self.rows as usize {
             for cx in 0..self.cols as usize {
@@ -449,6 +479,19 @@ impl TermDisplay {
             }
         }
         out.flush()
+    }
+}
+
+#[cfg(test)]
+impl TermDisplay {
+    pub(crate) fn test_cursor(&self) -> Option<(u16, u16)> {
+        self.cursor
+    }
+    pub(crate) fn test_fg(&self) -> Option<[u8; 3]> {
+        self.cur_fg
+    }
+    pub(crate) fn test_bg(&self) -> Option<[u8; 3]> {
+        self.cur_bg
     }
 }
 
@@ -799,3 +842,265 @@ mod stream_tests {
             "colors must stay suppressed"
         );
     }
+
+/// SGR color state as carried by the wire protocol.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SgrColor {
+    Indexed(u8),
+    Rgb([u8; 3]),
+}
+
+/// Virtual terminal: interprets EXACTLY the byte sequences our emitter
+/// produces and maintains physical cursor + color + screen state.
+///
+/// Invariants asserted by the harness after every frame:
+/// 1. simulated cursor == tracked cursor (desync = the "chaos" bug class);
+/// 2. simulated SGR state == tracked emitted state;
+/// 3. every grid cell's glyph matches the input cells (glyph writes are
+///    unconditional on dirty cells — the self-healing doctrine).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // test parser: malformed streams should panic loudly
+mod vt_harness {
+    use super::*;
+    use crate::braille::TermCell;
+
+    const SENTINEL_CH: char = ' ';
+
+    struct VtSim {
+        w: usize,
+        h: usize,
+        col: usize,
+        row: usize,
+        fg: Option<SgrColor>,
+        bg: Option<SgrColor>,
+        screen: Vec<char>,
+    }
+
+    impl VtSim {
+        fn new(w: usize, h: usize) -> Self {
+            Self {
+                w,
+                h,
+                col: 0,
+                row: 0,
+                fg: None,
+                bg: None,
+                screen: vec![SENTINEL_CH; w * h],
+            }
+        }
+
+        fn resize(&mut self, w: usize, h: usize) {
+            self.w = w;
+            self.h = h;
+            self.screen = vec![SENTINEL_CH; w * h];
+            self.col = 0;
+            self.row = 0;
+            self.fg = None;
+            self.bg = None;
+        }
+
+        fn write_glyph(&mut self, ch: char) {
+            // Screen stores glyph chars only; SGR state is tracked separately
+            // and compared against the emitter's tracked state each frame.
+            self.screen[self.row * self.w + self.col] = ch;
+        }
+
+        /// Feed raw emitter bytes. Panics on any sequence outside the
+        /// emitter's vocabulary — new sequences must extend this parser.
+        fn feed(&mut self, bytes: &[u8]) {
+            let mut i = 0usize;
+            while i < bytes.len() {
+                match bytes[i] {
+                    0x1B => {
+                        assert_eq!(bytes[i + 1], b'[', "only CSI supported");
+                        let start = i + 2;
+                        let mut j = start;
+                        while j < bytes.len() && !bytes[j].is_ascii_alphabetic() {
+                            j += 1;
+                        }
+                        let term = bytes[j] as char;
+                        let body = std::str::from_utf8(&bytes[start..j]).unwrap();
+                        match term {
+                            'H' => {
+                                let (r, c) = body.split_once(';').unwrap();
+                                self.row = r.parse::<usize>().unwrap().saturating_sub(1);
+                                self.col = c.parse::<usize>().unwrap().saturating_sub(1);
+                            }
+                            'C' | 'B' | 'A' => {
+                                let n: usize =
+                                    if body.is_empty() { 1 } else { body.parse().unwrap() };
+                                match term {
+                                    'C' => self.col = (self.col + n).min(self.w - 1),
+                                    'B' => self.row += n,
+                                    'A' => self.row = self.row.saturating_sub(n),
+                                    _ => unreachable!(),
+                                }
+                            }
+                            'm' => {
+                                let parts: Vec<&str> = body.split(';').collect();
+                                let mut k = 0usize;
+                                while k < parts.len() {
+                                    match parts[k] {
+                                        "0" => {
+                                            self.fg = None;
+                                            self.bg = None;
+                                            k += 1;
+                                        }
+                                        "38" | "48" => {
+                                            let mut slot =
+                                                |v: SgrColor| if parts[k] == "38" { self.fg = Some(v) } else { self.bg = Some(v) };
+                                            if parts[k + 1] == "5" {
+                                                slot(SgrColor::Indexed(
+                                                    parts[k + 2].parse().unwrap(),
+                                                ));
+                                                k += 3;
+                                            } else {
+                                                slot(SgrColor::Rgb([
+                                                    parts[k + 2].parse().unwrap(),
+                                                    parts[k + 3].parse().unwrap(),
+                                                    parts[k + 4].parse().unwrap(),
+                                                ]));
+                                                k += 5;
+                                            }
+                                        }
+                                        p => panic!("unsupported SGR param {p}"),
+                                    }
+                                }
+                            }
+                            t => panic!("unsupported CSI terminator {t}"),
+                        }
+                        i = j + 1;
+                    }
+                    b'\n' => {
+                        self.row += 1;
+                        i += 1;
+                    }
+                    b'\r' => {
+                        self.col = 0;
+                        i += 1;
+                    }
+                    _ => {
+                        // UTF-8 printable glyph (braille 3-byte or ASCII).
+                        let len = utf8_len(bytes[i]);
+                        let s = std::str::from_utf8(&bytes[i..i + len]).unwrap();
+                        let ch = s.chars().next().unwrap();
+                        self.write_glyph(ch);
+                        // DECAWM off: clamp at last column.
+                        if self.col + 1 < self.w {
+                            self.col += 1;
+                        }
+                        i += len;
+                    }
+                }
+            }
+        }
+    }
+
+    fn utf8_len(b: u8) -> usize {
+        if b < 0x80 {
+            1
+        } else if b >> 5 == 0b110 {
+            2
+        } else if b >> 4 == 0b1110 {
+            3
+        } else {
+            4
+        }
+    }
+
+    fn lcg(seed: &mut u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *seed >> 33
+    }
+
+    #[test]
+    fn virtual_terminal_state_parity_matrix() {
+        for truecolor in [false, true] {
+            for seed in [7u64, 0xC0FFEE] {
+                let mut rng = seed;
+                let mut w = 4 + (lcg(&mut rng) as usize % 30);
+                let mut h = 3 + (lcg(&mut rng) as usize % 12);
+
+                let mut d = TermDisplay::new(truecolor);
+                d.resize_if_needed(w as u16, h as u16);
+                let mut sim = VtSim::new(w, h);
+                let mut cells = vec![TermCell::BLANK; w * h];
+                let mut stream = Vec::new();
+
+                d.present(&mut stream, &cells).expect("initial");
+                sim.feed(&stream);
+
+                for _frame in 0..24 {
+                    let n_dirty = 1 + (lcg(&mut rng) as usize) % (w * h / 2 + 1);
+                    for _ in 0..n_dirty {
+                        let x = (lcg(&mut rng) as usize) % w;
+                        let y = (lcg(&mut rng) as usize) % h;
+                        let i = y * w + x;
+                        cells[i].mask = (lcg(&mut rng) % 256) as u8;
+                        cells[i].fg = [
+                            (lcg(&mut rng) % 256) as u8,
+                            (lcg(&mut rng) % 256) as u8,
+                            (lcg(&mut rng) % 256) as u8,
+                        ];
+                        cells[i].bg = [
+                            (lcg(&mut rng) % 256) as u8,
+                            (lcg(&mut rng) % 256) as u8,
+                            (lcg(&mut rng) % 256) as u8,
+                        ];
+                        cells[i].ch = if lcg(&mut rng) % 11 == 0 {
+                            ['W', 'A', '9', ':'][(lcg(&mut rng) % 4) as usize]
+                        } else {
+                            '\0'
+                        };
+                    }
+
+                    if lcg(&mut rng) % 9 == 0 {
+                        w = 4 + (lcg(&mut rng) as usize % 26);
+                        h = 3 + (lcg(&mut rng) as usize % 10);
+                        d.resize_if_needed(w as u16, h as u16);
+                        sim.resize(w, h);
+                        cells.resize(w * h, TermCell::BLANK);
+                    }
+
+                    let mut out = Vec::new();
+                    d.present(&mut out, &cells).expect("present");
+                    sim.feed(&out);
+
+                    // Invariant 1+2: cursor and SGR state parity.
+                    assert_eq!(
+                        Some((sim.col as u16, sim.row as u16)),
+                        d.test_cursor(),
+                        "cursor desync ({truecolor}, seed {seed})"
+                    );
+                    assert_eq!(
+                        d.test_fg().map(|c| rgb_to_xterm256(c)),
+                        sim.fg.map(|c| match c {
+                            SgrColor::Indexed(i) => i,
+                            SgrColor::Rgb(v) => rgb_to_xterm256(v),
+                        }),
+                        "fg parity ({truecolor}, seed {seed})"
+                    );
+                    assert_eq!(
+                        d.test_bg().map(|c| rgb_to_xterm256(c)),
+                        sim.bg.map(|c| match c {
+                            SgrColor::Indexed(i) => i,
+                            SgrColor::Rgb(v) => rgb_to_xterm256(v),
+                        }),
+                        "bg parity ({truecolor}, seed {seed})"
+                    );
+
+                    // Invariant 3: full glyph-grid parity.
+                    for i in 0..cells.len() {
+                        assert_eq!(
+                            sim.screen[i], cells[i].glyph(),
+                            "screen glyph drift at cell {i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

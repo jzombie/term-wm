@@ -148,6 +148,10 @@ fn drive(
     let target_frame_time = Duration::from_micros(16_667);
     let mut last_draw_started: Option<Instant> = None;
     let mut next_draw = Instant::now();
+
+    // PERF-CLOSEOUT A: one persistent cell buffer reused across frames —
+    // render_into sizes/overwrites it; no per-frame allocation or copy.
+    let mut cells: Vec<opencar::braille::TermCell> = Vec::new();
     // G3 adaptive-cadence state.
     let mut gate_state = GateState::Nominal;
     let mut slow_windows = 0u32;
@@ -203,39 +207,31 @@ fn drive(
         };
         next_draw = draw_started_at + target_frame_time * gate_mult;
 
-        let cells = {
-            let frame = opencar::render::FrameInput {
-                world: &app.world,
-                cam: &app.cam,
-                player: &app.player,
-                traffic: &app.traffic,
-                env: &app.env,
-                cells_w: cols,
-                cells_h: rows,
-            };
-            let render_start = Instant::now();
-            let raw = backend.render(&frame);
-            let mut owned = raw.to_vec();
-            owned.resize(
-                cols as usize * rows as usize,
-                opencar::braille::TermCell::BLANK,
-            );
-            // Frame-stability signal: FNV-1a of the rendered grid BEFORE HUD.
-            let fh = opencar::hud::frame_hash(&owned);
-            app.hud.draw(
-                &mut owned,
-                cols,
-                rows,
-                &app.player,
-                &app.traffic,
-                &app.world,
-                backend.name(),
-                app.mode == Mode::Paused,
-                Some(fh.as_str()),
-            );
-            app.hud.perf.set_render(render_start.elapsed().as_secs_f32() * 1000.0);
-            owned
+        let frame = opencar::render::FrameInput {
+            world: &app.world,
+            cam: &app.cam,
+            player: &app.player,
+            traffic: &app.traffic,
+            env: &app.env,
+            cells_w: cols,
+            cells_h: rows,
         };
+        let render_start = Instant::now();
+        backend.render_into(&frame, &mut cells);
+        // Frame-stability signal: FNV-1a of the rendered grid BEFORE HUD.
+        let fh = opencar::hud::frame_hash(&cells);
+        app.hud.draw(
+            &mut cells,
+            cols,
+            rows,
+            &app.player,
+            &app.traffic,
+            &app.world,
+            backend.name(),
+            app.mode == Mode::Paused,
+            Some(fh.as_str()),
+        );
+        app.hud.perf.set_render(render_start.elapsed().as_secs_f32() * 1000.0);
 
         let io_start = Instant::now();
         display.present(&mut out, &cells)?;

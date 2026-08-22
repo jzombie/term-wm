@@ -58,6 +58,15 @@ impl FrameInput<'_> {
 /// The dual-backend seam.
 pub trait Renderer {
     fn render(&mut self, frame: &FrameInput) -> &[TermCell];
+    /// Render into a caller-owned persistent cell buffer (PERF-CLOSEOUT A):
+    /// no per-frame allocation on this path. `out` is sized to
+    /// `cells_w × cells_h` and fully overwritten.
+    fn render_into(&mut self, frame: &FrameInput, out: &mut Vec<TermCell>) {
+        let cells = self.render(frame);
+        let len = frame.cells_w as usize * frame.cells_h as usize;
+        out.clear();
+        out.extend_from_slice(&cells[..len]);
+    }
     fn name(&self) -> &'static str;
     /// Owned copy of the last rendered RGB buffer + dimensions.
     fn frame_snapshot(&self) -> (Vec<u8>, usize, usize);
@@ -272,6 +281,21 @@ impl Renderer for CpuBackend {
     }
 
     fn render(&mut self, frame: &FrameInput) -> &[TermCell] {
+        let mut cells = std::mem::take(&mut self.cells);
+        self.render_into(frame, &mut cells);
+        self.cells = cells;
+        &self.cells
+    }
+
+    /// PERF-CLOSEOUT A: zero-allocation path — the braille encoder writes
+    /// straight into the caller-owned buffer (sized here), so `drive()` can
+    /// reuse one persistent Vec across frames.
+    fn render_into(&mut self, frame: &FrameInput, out: &mut Vec<TermCell>) {
+        let len = frame.cells_w as usize * frame.cells_h as usize;
+        if out.len() != len {
+            out.clear();
+            out.resize(len, TermCell::BLANK);
+        }
         let pw = frame.world_cells().0 * 2;
         let ph = frame.world_cells().1 * 4;
         self.img.resize_if_needed(pw, ph);
@@ -326,9 +350,8 @@ impl Renderer for CpuBackend {
             &self.noise_table,
             frame.env.noise_offset,
             DEFAULT_CELL_ASPECT,
-            &mut self.cells,
+            out,
         );
-        &self.cells
     }
 }
 
