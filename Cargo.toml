@@ -1,7 +1,7 @@
 [package]
 name = "term-wm"
-description = "A cross-platform terminal multiplexer, window manager, Ratatui component library, and runtime."
-keywords = ["window-manager", "multiplexer", "terminal", "tui", "cross-platform"]
+description = "The Spatial Terminal Desktop Environment for Remote Workspaces — floating windows, BSP tiling, persistent sessions, and zero-prefix input passthrough over SSH."
+keywords = ["terminal", "tui", "window-manager", "ssh", "workspace"]
 categories = [
     "command-line-utilities",
     "emulators",
