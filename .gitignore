@@ -9,3 +9,5 @@ samply.json
 DEBUG.sh
 *.log
 .build/
+*.patch
+*.diff
