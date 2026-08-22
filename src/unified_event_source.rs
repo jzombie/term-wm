@@ -2270,8 +2270,7 @@ mod tests {
     #[cfg(feature = "session-persistence")]
     fn take_user_resized_drains_accumulator() {
         use super::EventSource;
-        let mut source =
-            make_source_with_session_fields(Vec::new(), Vec::new(), Vec::new(), None);
+        let mut source = make_source_with_session_fields(Vec::new(), Vec::new(), Vec::new(), None);
         source.user_resized = vec![(3, 100, 30), (7, 200, 50)];
         let taken = EventSource::take_user_resized(&mut source);
         assert_eq!(taken, vec![(3, 100, 30), (7, 200, 50)]);

@@ -1180,9 +1180,7 @@ pub async fn run_gateway(
                 if size_changed {
                     // Coalesce WM notifications: store the latest size and
                     // schedule the trailing-edge flush task once per window.
-                    guard
-                        .pending_wm_resizes
-                        .insert(ctx.conn_id, (cols, rows));
+                    guard.pending_wm_resizes.insert(ctx.conn_id, (cols, rows));
                     if !guard.wm_resize_flush_scheduled {
                         guard.wm_resize_flush_scheduled = true;
                         spawn_wm_resize_flush(&state, channel.clone());

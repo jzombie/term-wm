@@ -384,8 +384,8 @@ fn run() -> io::Result<()> {
                     .register_prebuffered(OnUserResized::METHOD_ID, move |payload, _ctx| {
                         let tx = tx.clone();
                         async move {
-                            let (conn_id, cols, rows) =
-                                OnUserResized::decode_request(&payload).map_err(|e| {
+                            let (conn_id, cols, rows) = OnUserResized::decode_request(&payload)
+                                .map_err(|e| {
                                     Box::new(e) as Box<dyn std::error::Error + Send + Sync>
                                 })?;
                             let _ = tx.try_send(UnifiedEvent::UserResized((conn_id, cols, rows)));
