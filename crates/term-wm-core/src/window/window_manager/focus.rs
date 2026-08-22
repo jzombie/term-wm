@@ -59,52 +59,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.bring_to_front_key(key);
         self.mark_layout_dirty();
 
-        // If the command palette is open, rebuild its items with the new
-        // focus state so "Switch to" and window management buttons reflect
-        // the currently focused window.
-        if !self.command_menu_visible() {
-            return;
-        }
-        let Some(palette_key) =
-            self.get_overlay::<crate::window::window_manager::system_tags::CommandPalette>()
-        else {
-            return;
-        };
-
-        // Build fresh items BEFORE accessing the overlay (borrow checker).
-        use crate::components::MenuDisplayItem;
-        let items = self.wm_menu_items(&self.cached_workspaces, &self.current_workspace);
-        let supported = &self.supported_menu_actions;
-        let filtered: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = items
-            .into_iter()
-            .filter(|entry| match entry {
-                MenuDisplayItem::Item(item) => {
-                    let always_pass = matches!(
-                        item.action,
-                        crate::actions::TermWmAction::FocusWindow(_)
-                            | crate::actions::TermWmAction::MaximizeWindow(_)
-                            | crate::actions::TermWmAction::MinimizeWindow(_)
-                            | crate::actions::TermWmAction::CloseWindow(_)
-                            | crate::actions::TermWmAction::SendSuperKeyToWindow(_)
-                            | crate::actions::TermWmAction::SendSuperKeyToFocusedWindow
-                    );
-                    #[cfg(feature = "session-persistence")]
-                    let always_pass = always_pass
-                        || (term_wm_config::runtime::session_persistence_enabled()
-                            && matches!(
-                                item.action,
-                                crate::actions::TermWmAction::SwitchWorkspace(_)
-                                    | crate::actions::TermWmAction::NewWorkspace
-                            ));
-                    supported.contains(&item.action) || always_pass
-                }
-                MenuDisplayItem::Separator => true,
-            })
-            .collect();
-
-        if let Some(overlay) = self.overlays.get_mut(palette_key) {
-            overlay.set_menu_items(filtered);
-        }
+        self.refresh_palette_items();
     }
 
     #[expect(dead_code)]

@@ -86,6 +86,32 @@ pub trait EventSource {
     fn last_event_owner(&self) -> Option<usize> {
         None
     }
+
+    /// Take accumulated workspace-entered notifications since the last drain.
+    fn take_workspace_entered(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Take accumulated user-connected events since the last drain.
+    fn take_user_connected(&mut self) -> Vec<crate::user_registry::UserEntry> {
+        Vec::new()
+    }
+
+    /// Take accumulated user-disconnected events since the last drain.
+    fn take_user_disconnected(&mut self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    /// Take accumulated user-resized events since the last drain as
+    /// `(conn_id, cols, rows)` tuples.
+    fn take_user_resized(&mut self) -> Vec<(usize, u16, u16)> {
+        Vec::new()
+    }
+
+    /// Take a refreshed user cache snapshot if available.
+    fn take_user_cache_refreshed(&mut self) -> Option<Vec<crate::user_registry::UserEntry>> {
+        None
+    }
 }
 
 impl<T: EventSource + ?Sized> EventSource for &mut T {
@@ -147,6 +173,26 @@ impl<T: EventSource + ?Sized> EventSource for &mut T {
 
     fn last_event_owner(&self) -> Option<usize> {
         (**self).last_event_owner()
+    }
+
+    fn take_workspace_entered(&mut self) -> Vec<String> {
+        (**self).take_workspace_entered()
+    }
+
+    fn take_user_connected(&mut self) -> Vec<crate::user_registry::UserEntry> {
+        (**self).take_user_connected()
+    }
+
+    fn take_user_disconnected(&mut self) -> Vec<usize> {
+        (**self).take_user_disconnected()
+    }
+
+    fn take_user_resized(&mut self) -> Vec<(usize, u16, u16)> {
+        (**self).take_user_resized()
+    }
+
+    fn take_user_cache_refreshed(&mut self) -> Option<Vec<crate::user_registry::UserEntry>> {
+        (**self).take_user_cache_refreshed()
     }
 }
 

@@ -7,8 +7,12 @@
 //!   single flush timer per key, buffering the latest payload without pushing
 //!   the deadline back.
 
+mod debouncer;
 mod delayed_release_bool;
 mod keyed_task_debouncer;
+mod periodic_ticker;
 
+pub use debouncer::Debouncer;
 pub use delayed_release_bool::DelayedReleaseBool;
 pub use keyed_task_debouncer::KeyedTaskDebouncer;
+pub use periodic_ticker::PeriodicTicker;

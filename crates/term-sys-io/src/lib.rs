@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 //! Low-level cross-platform OS I/O primitives for term-wm.
 //!
 //! This leaf crate is the **single** home for all unsafe process-global

@@ -18,6 +18,8 @@ pub struct MenuComponent {
     selected: usize,
     nav_keys: KeyBindings,
     pub show_header: bool,
+    /// When true, keyboard navigation and selection clamping skip disabled items.
+    pub skip_disabled: bool,
 }
 
 impl MenuComponent {
@@ -27,17 +29,18 @@ impl MenuComponent {
             selected: 0,
             nav_keys: KeyBindings::default(),
             show_header: true,
+            skip_disabled: false,
         }
     }
 
     pub fn set_items(&mut self, items: Vec<MenuItem<TermWmAction>>) {
         self.items = items.into_iter().map(MenuDisplayItem::Item).collect();
-        self.selected = clamp_selected(self.selected, &self.items);
+        self.selected = clamp_selected(self.selected, &self.items, self.skip_disabled);
     }
 
     pub fn set_display_items(&mut self, items: Vec<MenuDisplayItem<TermWmAction>>) {
         self.items = items;
-        self.selected = clamp_selected(self.selected, &self.items);
+        self.selected = clamp_selected(self.selected, &self.items, self.skip_disabled);
     }
 
     pub fn items(&self) -> &[MenuDisplayItem<TermWmAction>] {
@@ -49,7 +52,7 @@ impl MenuComponent {
     }
 
     pub fn set_selected(&mut self, index: usize) {
-        self.selected = clamp_selected(index, &self.items);
+        self.selected = clamp_selected(index, &self.items, self.skip_disabled);
     }
 
     pub fn selected_action(&self) -> Option<&TermWmAction> {
@@ -68,7 +71,10 @@ impl MenuComponent {
         let mut idx = self.selected as isize;
         for _ in 0..total {
             idx = (idx + direction).rem_euclid(total as isize);
-            if !matches!(self.items[idx as usize], MenuDisplayItem::Separator) {
+            let skip = matches!(self.items[idx as usize], MenuDisplayItem::Separator)
+                || (self.skip_disabled
+                    && matches!(&self.items[idx as usize], MenuDisplayItem::Item(item) if item.disabled));
+            if !skip {
                 self.selected = idx as usize;
                 return;
             }
@@ -250,18 +256,34 @@ impl MenuComponent {
     }
 }
 
-/// Clamp selection index to a valid non-separator position.
-fn clamp_selected(mut idx: usize, items: &[MenuDisplayItem<TermWmAction>]) -> usize {
+/// Clamp selection index to a valid non-separator (and optionally non-disabled) position.
+fn clamp_selected(
+    mut idx: usize,
+    items: &[MenuDisplayItem<TermWmAction>],
+    skip_disabled: bool,
+) -> usize {
     if items.is_empty() {
         return 0;
     }
     idx = idx.min(items.len().saturating_sub(1));
-    // If the clamped position is a separator, move up until we find an item.
-    while matches!(items.get(idx), Some(MenuDisplayItem::Separator)) {
-        if idx == 0 {
-            break;
+    let is_invalid = |pos: usize| -> bool {
+        matches!(items.get(pos), Some(MenuDisplayItem::Separator))
+            || (skip_disabled
+                && matches!(&items[pos], MenuDisplayItem::Item(item) if item.disabled))
+    };
+    if is_invalid(idx) {
+        let start = idx;
+        let total = items.len();
+        loop {
+            idx = (idx + 1) % total;
+            if !is_invalid(idx) {
+                break;
+            }
+            if idx == start {
+                idx = 0;
+                break;
+            }
         }
-        idx -= 1;
     }
     idx
 }

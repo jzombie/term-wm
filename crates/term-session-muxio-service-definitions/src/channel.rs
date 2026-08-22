@@ -100,8 +100,8 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
 /// Deterministic and static by default: `TERM_WM_GATEWAY` env override wins
 /// wholesale at runtime; otherwise the gateway resolves to
 /// `{namespace}/<env>/<user>/gateway` where `{namespace}` is [`GATEWAY_NAMESPACE`],
-/// `<env>` is the active environment (`TERM_WM_ENV`, defaulting to `dev` in
-/// debug / `prod` in release builds), and `<user>` is the current OS user.
+/// `<env>` is the active environment returned by [`active_environment()`] (the same
+/// single source of truth used for project task gating), and `<user>` is the current OS user.
 /// Environment-scoping keeps dev builds from ever attaching to (or tearing
 /// down) production gateways while the shared namespace keeps all binaries
 /// interoperating on the same socket family. No build-time entropy is

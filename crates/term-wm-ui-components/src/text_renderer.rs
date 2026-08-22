@@ -36,6 +36,10 @@ pub struct TextRendererComponent {
     /// underscore, for double-click word selection. Default (empty) treats
     /// hyphens and other punctuation as word boundaries.
     word_extra_chars: String,
+    /// Cached visual height per line (only valid when wrap=true and width matches).
+    line_heights: RefCell<Vec<usize>>,
+    /// Clamped width (max(1)) for which line_heights is valid.
+    line_heights_width: Cell<u16>,
 }
 
 impl fmt::Debug for TextRendererComponent {
@@ -66,16 +70,26 @@ impl Component<TermWmAction> for TextRendererComponent {
         let backend = crate::helpers::downcast_ratatui(backend);
         let viewport_cache = self.viewport_cache.get();
 
-        // Calculate Metrics
-        let usable_width = area.width.max(1) as usize;
+        // Calculate Metrics — cached wrapped heights to avoid redundant Paragraph layout
+        let usable_width = area.width.max(1);
         let content_height = if self.wrap {
-            compute_display_lines(&self.text, usable_width as u16)
+            if self.line_heights_width.get() != usable_width {
+                self.line_heights.borrow_mut().clear();
+                self.line_heights_width.set(usable_width);
+            }
+            let mut heights = self.line_heights.borrow_mut();
+            if heights.is_empty() {
+                for line in &self.text.lines {
+                    heights.push(actual_wrapped_height(line, usable_width));
+                }
+            }
+            heights.iter().copied().sum::<usize>().max(1)
         } else {
             self.text.lines.len().max(1)
         };
 
         let content_width = if self.wrap {
-            usable_width
+            usable_width as usize
         } else {
             self.text
                 .lines
@@ -99,15 +113,12 @@ impl Component<TermWmAction> for TextRendererComponent {
 
         const RULE_PLACEHOLDER: &str = "\0RULE\0";
 
-        let mut visual_heights: Vec<usize> = Vec::with_capacity(self.text.lines.len());
-        for line in &self.text.lines {
-            let vh = if self.wrap {
-                actual_wrapped_height(line, area.width)
-            } else {
-                1
-            };
-            visual_heights.push(vh);
-        }
+        let visual_heights: Vec<usize> = if self.wrap {
+            // Reuse cached heights — avoids second Paragraph pass per line
+            self.line_heights.borrow().clone()
+        } else {
+            vec![1; self.text.lines.len()]
+        };
 
         let mut cum_visual = 0usize;
         let mut y_cursor = area.y;
@@ -292,12 +303,15 @@ impl TextRendererComponent {
             content_width: Cell::new(0),
             content_height: Cell::new(0),
             word_extra_chars: DEFAULT_WORD_EXTRA_CHARS.to_string(),
+            line_heights: RefCell::new(Vec::new()),
+            line_heights_width: Cell::new(0),
         }
     }
 
     pub fn set_text(&mut self, text: Text<'static>) {
         self.text = text;
         self.link_map.clear();
+        self.line_heights.borrow_mut().clear();
     }
 
     pub fn set_linkified_text(
@@ -308,10 +322,16 @@ impl TextRendererComponent {
         let (text, link_map) = linkified_to_text(linkified, theme);
         self.text = text;
         self.link_map = link_map;
+        self.line_heights.borrow_mut().clear();
     }
 
     pub fn set_wrap(&mut self, wrap: bool) {
-        self.wrap = wrap;
+        if self.wrap != wrap {
+            self.wrap = wrap;
+            self.line_heights.borrow_mut().clear();
+        } else {
+            self.wrap = wrap;
+        }
     }
 
     pub fn set_selection_enabled(&mut self, enabled: bool) {
@@ -832,6 +852,7 @@ fn actual_wrapped_height(line: &Line<'_>, width: u16) -> usize {
     last.max(1)
 }
 
+#[allow(dead_code)]
 fn compute_display_lines(text: &Text<'_>, width: u16) -> usize {
     text.lines
         .iter()

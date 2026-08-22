@@ -1,3 +1,4 @@
+#![cfg(feature = "session-persistence")]
 #![allow(clippy::unwrap_used)]
 
 use muxio_rpc_service::prebuffered::RpcMethodPrebuffered;
@@ -318,6 +319,13 @@ async fn session_mouse_bytes_forwarded() {
 async fn session_osc52_in_output() {
     let mock = get_mock_bin();
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_output")).await;
+
+    // Subscribe FIRST so the listener is active before output is written.
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
     Spawn::call(
         &*client,
         SpawnRequest {
@@ -329,11 +337,6 @@ async fn session_osc52_in_output() {
     )
     .await
     .unwrap();
-
-    let (_, mut reader) = client
-        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
-        .await
-        .unwrap();
 
     // Wait for the complete payload (not just the `52;` header) so a payload
     // split across broadcast chunks can never break the wait early.
@@ -354,6 +357,13 @@ async fn session_osc52_in_output() {
 async fn session_osc52_via_osc52extractor() {
     let mock = get_mock_bin();
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_extractor")).await;
+
+    // Subscribe FIRST so the listener is active before output is written.
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
     Spawn::call(
         &*client,
         SpawnRequest {
@@ -365,11 +375,6 @@ async fn session_osc52_via_osc52extractor() {
     )
     .await
     .unwrap();
-
-    let (_, mut reader) = client
-        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
-        .await
-        .unwrap();
 
     let mut extractor = Osc52Extractor::new();
     let mut prev_tail: [u8; 8] = [0; 8];
@@ -418,7 +423,8 @@ async fn session_osc52_via_osc52extractor() {
 #[serial]
 async fn session_osc52_late_subscribe_gets_retained_output() {
     let mock = get_mock_bin();
-    let (client, _conn_id, guard) = spawn_session(&test_channel("test/osc52_retained")).await;
+    let channel = test_channel("test/osc52_retained");
+    let (client, _conn_id, guard) = spawn_session(&channel).await;
     Spawn::call(
         &*client,
         SpawnRequest {
@@ -431,12 +437,19 @@ async fn session_osc52_late_subscribe_gets_retained_output() {
     .await
     .unwrap();
 
-    // The `osc52` mock writes the payload, sleeps 500 ms, then exits. Wait well
-    // past exit + the polling task's detection interval so the session is torn
-    // down and its final output retained in the channel cache. The test is
-    // deterministic either way: subscribe-before-exit is served by the live
-    // early drain, subscribe-after-exit by the retained cache.
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    // Poll until the server marks the session as exited, instead of relying on
+    // a fixed sleep that can race under heavy CPU load (e.g. --all-features).
+    let channel_name = channel.to_string();
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        let resp = list_channels(&client).await;
+        if let Some(ch) = resp.channels.iter().find(|c| c.name == channel_name)
+            && ch.session.as_ref().is_some_and(|s| s.exited)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
@@ -1664,6 +1677,7 @@ async fn list_channels_reports_client_identity() {
             user: "alice".to_string(),
             version: "9.9.9".to_string(),
             ssh_ip: Some("192.168.1.50".to_string()),
+            ssh_port: Some(54321),
         },
     )
     .await
@@ -1852,6 +1866,8 @@ async fn rebind_workspace_pushes_target_to_attached_viewer() {
     RebindWorkspace::call(
         &*client,
         RebindWorkspaceRequest {
+            scope: term_session_muxio_service_definitions::RebindScope::CallerOnly,
+            initiator_conn_id: None,
             source_channel: source.to_string(),
             target: "ws-123/main".to_string(),
         },
@@ -1903,6 +1919,8 @@ async fn rebind_workspace_to_unknown_source_sends_no_push() {
     RebindWorkspace::call(
         &*client,
         RebindWorkspaceRequest {
+            scope: term_session_muxio_service_definitions::RebindScope::CallerOnly,
+            initiator_conn_id: None,
             source_channel: "test/rebind-nobody".to_string(),
             target: "ws-123/main".to_string(),
         },

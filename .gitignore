@@ -4,6 +4,7 @@ lcov.info
 .DS_Store
 *.save
 samply.json
+.codegraph
 
 DEBUG.sh
 *.log

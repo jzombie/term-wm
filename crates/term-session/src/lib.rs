@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod auto_spawn;
 
 pub use muxio_tokio_rpc_ipc_client as rpc_client;
@@ -220,9 +222,24 @@ pub fn kill_client(channel: &str, conn_id: usize) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("kill client: {e}")))
 }
 
-/// Request the gateway to rebind all viewers attached to `source_channel`
-/// over to the `target` workspace.
+/// Request the gateway to rebind viewers attached to `source_channel`
+/// over to the `target` workspace (CallerOnly by default, falls back to single viewer if initiator is None).
 pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Result<()> {
+    request_workspace_rebind_with_scope(
+        source_channel,
+        target,
+        term_session_muxio_service_definitions::RebindScope::CallerOnly,
+        None,
+    )
+}
+
+/// Request rebind with explicit scope and optional initiator.
+pub fn request_workspace_rebind_with_scope(
+    source_channel: &str,
+    target: &str,
+    scope: term_session_muxio_service_definitions::RebindScope,
+    initiator_conn_id: Option<usize>,
+) -> io::Result<()> {
     let source_owned = source_channel.to_string();
     let target_owned = target.to_string();
     with_gateway(move |client| async move {
@@ -234,11 +251,25 @@ pub fn request_workspace_rebind(source_channel: &str, target: &str) -> io::Resul
             RebindWorkspaceRequest {
                 source_channel: source_owned,
                 target: target_owned,
+                scope,
+                initiator_conn_id,
             },
         )
         .await
     })?
     .map_err(|e| io::Error::other(format!("rebind workspace: {e}")))
+}
+
+/// List connected users on a channel.
+pub fn list_users(
+    channel: &str,
+) -> io::Result<term_session_muxio_service_definitions::ListUsersResponse> {
+    let ch = channel.to_string();
+    with_gateway(move |client| async move {
+        use term_session_muxio_service_definitions::ListUsers;
+        ListUsers::call(&*client, ch).await
+    })?
+    .map_err(|e| io::Error::other(format!("list users: {e}")))
 }
 
 /// Stop the gateway daemon.

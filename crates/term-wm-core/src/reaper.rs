@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -5,20 +6,25 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "pty")]
 use crossbeam_channel::{Sender, bounded};
 
 /// Capacity of the channel between `reaper.reap()` calls and the background
 /// reaper thread.
+#[cfg(feature = "pty")]
 const REAPER_CHANNEL_CAPACITY: usize = 64;
 
 /// How long the reaper thread blocks when there are no zombies (essentially
 /// idle sleep — the thread serves only as a canary).
+#[cfg(feature = "pty")]
 const REAPER_IDLE_TIMEOUT: Duration = Duration::from_secs(3600);
 
 /// How aggressively the reaper polls when zombies are present (50 ms).
+#[cfg(feature = "pty")]
 const REAPER_ACTIVE_TICK: Duration = Duration::from_millis(50);
 
 /// Grace period before escalating from SIGHUP to SIGKILL.
+#[cfg(feature = "pty")]
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A zombie child process and its reader thread, moved out of a closed `Window`.
@@ -59,12 +65,17 @@ impl ZombieChild {
 ///
 /// On Drop, the reaper thread is signalled to shut down. It force-kills
 /// all remaining children and joins all reader threads.
+#[cfg(feature = "pty")]
 pub struct Reaper {
     tx: Sender<ZombieChild>,
     _handle: JoinHandle<()>,
     shutdown: Arc<AtomicBool>,
 }
 
+#[cfg(not(feature = "pty"))]
+pub struct Reaper;
+
+#[cfg(feature = "pty")]
 impl Reaper {
     pub fn new(shutdown_timeout: Duration) -> Self {
         let (tx, rx) = bounded::<ZombieChild>(REAPER_CHANNEL_CAPACITY);
@@ -153,6 +164,7 @@ impl Reaper {
     }
 }
 
+#[cfg(feature = "pty")]
 impl Default for Reaper {
     fn default() -> Self {
         Self::new(DEFAULT_SHUTDOWN_TIMEOUT)
@@ -160,13 +172,31 @@ impl Default for Reaper {
 }
 
 impl Drop for Reaper {
+    #[cfg(feature = "pty")]
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
+    }
+    #[cfg(not(feature = "pty"))]
+    fn drop(&mut self) {}
+}
+
+#[cfg(not(feature = "pty"))]
+impl Reaper {
+    pub fn new(_: Duration) -> Self {
+        Reaper
+    }
+    pub fn reap(&self, _: ()) {}
+}
+
+#[cfg(not(feature = "pty"))]
+impl Default for Reaper {
+    fn default() -> Self {
+        Reaper
     }
 }
 
 #[allow(clippy::unwrap_used)]
-#[cfg(test)]
+#[cfg(all(test, feature = "pty"))]
 mod tests {
     use super::*;
     use portable_pty::{Child, ChildKiller, ExitStatus};
@@ -248,7 +278,10 @@ mod tests {
 
     impl ChildKiller for SharedMockChild {
         fn kill(&mut self) -> io::Result<()> {
-            self.inner.lock().unwrap().kill_count += 1;
+            self.inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .kill_count += 1;
             Ok(())
         }
         fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
@@ -258,7 +291,7 @@ mod tests {
 
     impl Child for SharedMockChild {
         fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if inner.exited {
                 Ok(Some(
                     inner
@@ -342,10 +375,10 @@ mod tests {
         let (_child, state) = SharedMockChild::new();
         r.reap(make_shared_zombie(state.clone()));
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 1
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1
         });
         assert!(
-            state.lock().unwrap().kill_count >= 1,
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1,
             "reaper should send SIGHUP (kill) within 2s"
         );
         drop(r);
@@ -355,14 +388,15 @@ mod tests {
     fn reaper_reaps_exited_child() {
         let r = Reaper::new(Duration::from_secs(5));
         let (_child, state) = SharedMockChild::new();
-        state.lock().unwrap().exited = true;
-        state.lock().unwrap().exit_status = Some(ExitStatus::with_exit_code(0));
+        state.lock().unwrap_or_else(|e| e.into_inner()).exited = true;
+        state.lock().unwrap_or_else(|e| e.into_inner()).exit_status =
+            Some(ExitStatus::with_exit_code(0));
         r.reap(make_shared_zombie(state.clone()));
 
         // The reaper should send SIGHUP, then on the next tick see
         // that the child has exited and drop it (removing from its vec).
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 1
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1
         });
         drop(r);
     }
@@ -374,15 +408,64 @@ mod tests {
         r.reap(make_shared_zombie(state.clone()));
 
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 1
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1
         });
         wait_for(Duration::from_secs(2), || {
-            state.lock().unwrap().kill_count >= 2
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 2
         });
         assert!(
-            state.lock().unwrap().kill_count >= 2,
+            state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 2,
             "reaper should send SIGKILL after shutdown_timeout elapses"
         );
+        drop(r);
+    }
+
+    /// When multiple zombies are sent and the reaper is dropped after a short
+    /// delay, the shutdown drain path must kill all children and join all reader
+    /// threads without deadlocking.
+    #[test]
+    fn reaper_drains_burst_on_shutdown() {
+        let r = Reaper::new(Duration::from_millis(50));
+        let states: Vec<_> = (0..5)
+            .map(|_| {
+                let (_child, state) = SharedMockChild::new();
+                r.reap(make_shared_zombie(state.clone()));
+                state
+            })
+            .collect();
+        // Give the reaper thread a chance to wake up and start processing
+        // the zombies, then drop to exercise the shutdown drain path.
+        thread::sleep(Duration::from_millis(200));
+        drop(r);
+        // Verify all children were killed (SIGHUP at minimum)
+        for state in &states {
+            assert!(
+                state.lock().unwrap_or_else(|e| e.into_inner()).kill_count >= 1,
+                "all zombies must be killed during shutdown drain"
+            );
+        }
+    }
+}
+
+#[cfg(all(test, not(feature = "pty")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stub_reaper_new() {
+        let r = Reaper::new(Duration::from_secs(5));
+        r.reap(());
+    }
+
+    #[test]
+    fn stub_reaper_default() {
+        let r = Reaper;
+        r.reap(());
+    }
+
+    #[test]
+    fn stub_reaper_drop() {
+        let r = Reaper::new(Duration::from_secs(1));
         drop(r);
     }
 }

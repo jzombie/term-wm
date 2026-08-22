@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 //! Central compile-time feature flags and runtime configuration for term-wm.
 //!
 //! This leaf crate (std-only, bottom of the dependency graph) is the single

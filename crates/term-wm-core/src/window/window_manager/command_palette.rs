@@ -4,6 +4,26 @@ use std::time::{Duration, Instant};
 use term_wm_layout_engine::LayoutRect;
 
 use super::{OverlayKey, WindowManager};
+
+// TODO: Dedupe in codebase (term-session has a similar version)
+/// Format a `connected_at_unix` timestamp into a compact uptime string.
+#[cfg(feature = "session-persistence")]
+fn format_uptime(connected_at_unix: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(connected_at_unix);
+    let diff = now.saturating_sub(connected_at_unix);
+    if diff < 60 {
+        format!("{diff}s")
+    } else if diff < 3_600 {
+        format!("{}m", diff / 60)
+    } else if diff < 86_400 {
+        format!("{}h", diff / 3_600)
+    } else {
+        format!("{}d {}h", diff / 86_400, (diff % 86_400) / 3_600)
+    }
+}
 use crate::actions::{EventResult, TermWmAction, WmInputMode};
 use crate::components::{Component, Overlay, WmComponent};
 use crate::events::Event;
@@ -102,11 +122,66 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         self.close_command_palette();
     }
 
+    /// Rebuild the command palette's action list from current WM state and
+    /// apply it to the overlay if visible. Used to refresh a stale palette
+    /// when users connect/disconnect, workspaces change, or focus shifts.
+    pub fn refresh_palette_items(&mut self) {
+        if !self.command_menu_visible() {
+            return;
+        }
+        let Some(palette_key) = self.get_overlay::<system_tags::CommandPalette>() else {
+            return;
+        };
+
+        use crate::components::MenuDisplayItem;
+        let items = self.wm_menu_items(
+            &self.cached_workspaces,
+            &self.current_workspace,
+            &self.project_tasks,
+            &self.all_users_by_ws,
+        );
+        let supported = &self.supported_menu_actions;
+        let filtered: Vec<MenuDisplayItem<TermWmAction>> = items
+            .into_iter()
+            .filter(|entry| match entry {
+                MenuDisplayItem::Item(item) => {
+                    let always_pass = matches!(
+                        item.action,
+                        TermWmAction::FocusWindow(_)
+                            | TermWmAction::MaximizeWindow(_)
+                            | TermWmAction::MinimizeWindow(_)
+                            | TermWmAction::CloseWindow(_)
+                            | TermWmAction::SendSuperKeyToWindow(_)
+                            | TermWmAction::SendSuperKeyToFocusedWindow
+                            | TermWmAction::RunProjectTask(_)
+                    );
+                    #[cfg(feature = "session-persistence")]
+                    let always_pass = always_pass
+                        || (term_wm_config::runtime::session_persistence_enabled()
+                            && matches!(
+                                item.action,
+                                TermWmAction::SwitchWorkspace(_)
+                                    | TermWmAction::NewWorkspace
+                                    | TermWmAction::ToggleWorkspaceFollow
+                            ));
+                    item.disabled || supported.contains(&item.action) || always_pass
+                }
+                MenuDisplayItem::Separator => true,
+            })
+            .collect();
+
+        if let Some(overlay) = self.overlays.get_mut(palette_key) {
+            overlay.set_menu_items(filtered);
+        }
+    }
+
     // TODO: Workspaces & current_workspace should be derived from context, I think
     pub fn wm_menu_items(
         &self,
         workspaces: &[String],
         current_workspace: &str,
+        project_tasks: &[crate::project_tasks::ProjectTaskConfig],
+        all_users_by_ws: &std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
         use crate::window::WindowState;
@@ -119,6 +194,299 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .get_system_window::<system_tags::SystemPanel>()
             .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
 
+        let _mouse_label = if self.mouse_capture_enabled {
+            "Mouse: Disable Capture"
+        } else {
+            "Mouse: Enable Capture"
+        };
+        let _clipboard_label = if self.clipboard_enabled {
+            "Clipboard: Disable"
+        } else {
+            "Clipboard: Enable"
+        };
+        let _debug_label = if debug_log_visible {
+            "System: Disable Debug Log"
+        } else {
+            "System: Enable Debug Log"
+        };
+        let _panel_label = if system_panel_visible {
+            "System: Disable Panel"
+        } else {
+            "System: Enable Panel"
+        };
+
+        let mi = |label: &'static str,
+                  icon: Option<&'static str>,
+                  action: crate::actions::TermWmAction| {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon,
+                action,
+                disabled: false,
+            })
+        };
+
+        let header = |title: &'static str| {
+            MenuDisplayItem::Item(MenuItem {
+                label: format!("── {} ──", title).into(),
+                icon: None,
+                action: crate::actions::TermWmAction::CloseMenu,
+                disabled: true,
+            })
+        };
+
+        #[cfg(feature = "session-persistence")]
+        let info_item = |label: String| {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon: None,
+                action: crate::actions::TermWmAction::CloseMenu,
+                disabled: true,
+            })
+        };
+
+        let focused = self.focused_window();
+        let has_active = self.windows.contains_key(focused);
+
+        let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = Vec::new();
+
+        // ─────────────────────────────────────────────────────────
+        // 1. QUICK ACTIONS & TASKS
+        // ─────────────────────────────────────────────────────────
+        items.push(header("QUICK ACTIONS"));
+        items.push(mi(
+            "Resume",
+            Some("▶"),
+            crate::actions::TermWmAction::CloseMenu,
+        ));
+        items.push(mi(
+            "New Terminal",
+            Some("+"),
+            crate::actions::TermWmAction::NewTerminal,
+        ));
+
+        #[cfg(feature = "project-tasks")]
+        {
+            for task in project_tasks.iter().filter(|t| t.argv().is_some()) {
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: task.label.clone().into(),
+                    icon: Some("▶"),
+                    action: crate::actions::TermWmAction::RunProjectTask(task.label.clone()),
+                    disabled: false,
+                }));
+            }
+        }
+        #[cfg(not(feature = "project-tasks"))]
+        {
+            let _ = project_tasks;
+        }
+        items.push(MenuDisplayItem::Separator);
+
+        // ─────────────────────────────────────────────────────────
+        // 2. WORKSPACES & COLLABORATION (Consolidated)
+        // ─────────────────────────────────────────────────────────
+        #[cfg(feature = "session-persistence")]
+        if term_wm_config::runtime::session_persistence_enabled() {
+            items.push(header("WORKSPACES & COLLABORATION"));
+            items.push(mi(
+                "New Workspace",
+                Some("+"),
+                crate::actions::TermWmAction::NewWorkspace,
+            ));
+
+            let follow_label = if self.workspace_follow_enabled {
+                "Follow Workspaces: Disable"
+            } else {
+                "Follow Workspaces: Enable"
+            };
+            let follow_icon = if self.workspace_follow_enabled {
+                Some("◎")
+            } else {
+                Some("○")
+            };
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: follow_label.into(),
+                icon: follow_icon,
+                action: crate::actions::TermWmAction::ToggleWorkspaceFollow,
+                disabled: false,
+            }));
+
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: "Detach Viewer".into(),
+                icon: Some("-"),
+                action: crate::actions::TermWmAction::DetachCurrentClient,
+                disabled: false,
+            }));
+
+            if !workspaces.is_empty() {
+                for ws in workspaces {
+                    let is_current = ws == current_workspace;
+                    let label = if is_current {
+                        format!("Switch to Workspace: {ws} (current)")
+                    } else {
+                        format!("Switch to Workspace: {ws}")
+                    };
+
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: label.into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
+                        disabled: is_current,
+                    }));
+
+                    let render_primary = |u: &crate::user_registry::UserEntry| {
+                        let mut label = format!("    └ {}@{}", u.user, u.hostname);
+                        if let Some(ip) = &u.ssh_ip {
+                            if let Some(port) = u.ssh_port {
+                                label.push_str(&format!(" ({}:{})", ip, port));
+                            } else {
+                                label.push_str(&format!(" ({})", ip));
+                            }
+                        }
+                        label
+                    };
+                    let render_detail = |u: &crate::user_registry::UserEntry| -> Option<String> {
+                        let mut parts = Vec::new();
+                        if u.cols > 0 && u.rows > 0 {
+                            parts.push(format!("{}×{}", u.cols, u.rows));
+                        }
+                        if u.connected_at_unix > 0 {
+                            parts.push(format_uptime(u.connected_at_unix));
+                        }
+                        // conn_id is the strongest discriminator for same user+IP
+                        parts.push(format!("#{}", u.conn_id));
+                        if u.pid != 0 {
+                            parts.push(format!("pid {}", u.pid));
+                        }
+                        if parts.is_empty() {
+                            None
+                        } else {
+                            Some(format!("      {}", parts.join(" · ")))
+                        }
+                    };
+                    let push_user = |u: &crate::user_registry::UserEntry,
+                                     items: &mut Vec<
+                        crate::components::MenuDisplayItem<crate::actions::TermWmAction>,
+                    >| {
+                        items.push(info_item(render_primary(u)));
+                        if let Some(detail) = render_detail(u) {
+                            items.push(info_item(detail));
+                        }
+                    };
+                    let users_exist = all_users_by_ws.get(ws).is_some_and(|u| !u.is_empty());
+                    if users_exist {
+                        for u in &all_users_by_ws[ws] {
+                            push_user(u, &mut items);
+                        }
+                    } else if ws == current_workspace && !self.user_registry.is_empty() {
+                        for (_key, u) in self.user_registry.iter() {
+                            push_user(u, &mut items);
+                        }
+                    }
+                }
+            }
+            items.push(MenuDisplayItem::Separator);
+        }
+
+        let _ = (workspaces, current_workspace, all_users_by_ws);
+
+        // ─────────────────────────────────────────────────────────
+        // 3. WINDOW MANAGEMENT
+        // ─────────────────────────────────────────────────────────
+        if has_active {
+            items.push(header("WINDOW MANAGEMENT"));
+            let raw_title = self.window_title(focused);
+            let title = crate::utils::truncate_with_ellipsis(&raw_title, 25);
+            let super_key = self
+                .keybindings()
+                .combos_for(crate::actions::TermWmAction::OpenCommandPalette)
+                .first()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "Super".to_string());
+
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: format!("Send {} to {}", super_key, title).into(),
+                icon: Some("A"),
+                action: crate::actions::TermWmAction::SendSuperKeyToWindow(focused),
+                disabled: false,
+            }));
+
+            items.push(MenuDisplayItem::Item(MenuItem {
+                label: format!("Close {}", title).into(),
+                icon: Some("X"),
+                action: crate::actions::TermWmAction::CloseWindow(focused),
+                disabled: !self.window(focused).is_some_and(|w| w.closable()),
+            }));
+
+            let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
+            if !self.is_monocle() {
+                let max_label = if is_maxed {
+                    format!("Restore {}", title)
+                } else {
+                    format!("Maximize {}", title)
+                };
+                let max_icon = if is_maxed { "─" } else { "▢" };
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: max_label.into(),
+                    icon: Some(max_icon),
+                    action: crate::actions::TermWmAction::MaximizeWindow(focused),
+                    disabled: false,
+                }));
+                items.push(MenuDisplayItem::Item(MenuItem {
+                    label: format!("Minimize {}", title).into(),
+                    icon: Some("_"),
+                    action: crate::actions::TermWmAction::MinimizeWindow(focused),
+                    disabled: false,
+                }));
+            }
+
+            let switch_titles = self.window_titles();
+            if !switch_titles.is_empty() {
+                for (key, switch_title) in switch_titles {
+                    items.push(MenuDisplayItem::Item(MenuItem {
+                        label: format!("Switch to: {}", switch_title).into(),
+                        icon: Some("→"),
+                        action: crate::actions::TermWmAction::FocusWindow(key),
+                        disabled: key == focused,
+                    }));
+                }
+            }
+            items.push(MenuDisplayItem::Separator);
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // 4. VIEW & LAYOUT
+        // ─────────────────────────────────────────────────────────
+        items.push(header("VIEW & LAYOUT"));
+        items.push(mi(
+            self.monocle_mode.action_label(),
+            Some("▢"),
+            crate::actions::TermWmAction::ToggleMonocle,
+        ));
+
+        let layout_label = if self.managed_layout.is_some() {
+            "View: Float Windows"
+        } else {
+            "View: Tile Windows"
+        };
+        let mut tile_item = mi(
+            layout_label,
+            Some("⊞"),
+            crate::actions::TermWmAction::ToggleTiling,
+        );
+        if self.is_monocle()
+            && let MenuDisplayItem::Item(ref mut item) = tile_item
+        {
+            item.disabled = true;
+        }
+        items.push(tile_item);
+        items.push(MenuDisplayItem::Separator);
+
+        // ─────────────────────────────────────────────────────────
+        // 5. SETTINGS & SYSTEM
+        // ─────────────────────────────────────────────────────────
+        items.push(header("SETTINGS & SYSTEM"));
+
         let mouse_label = if self.mouse_capture_enabled {
             "Mouse: Disable Capture"
         } else {
@@ -129,6 +497,30 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         } else {
             "Clipboard: Enable"
         };
+
+        items.push(mi(
+            mouse_label,
+            Some("◆"),
+            crate::actions::TermWmAction::ToggleMouseCapture,
+        ));
+        items.push(mi(
+            clipboard_label,
+            Some("■"),
+            crate::actions::TermWmAction::ToggleClipboardMode,
+        ));
+        items.push(mi(
+            "Paste",
+            Some("■"),
+            crate::actions::TermWmAction::PasteClipboard,
+        ));
+
+        let debug_log_visible = self
+            .get_system_window::<system_tags::DebugLog>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+        let system_panel_visible = self
+            .get_system_window::<system_tags::SystemPanel>()
+            .is_some_and(|k| self.window_state(k) == Some(WindowState::Mapped));
+
         let debug_label = if debug_log_visible {
             "System: Disable Debug Log"
         } else {
@@ -140,201 +532,23 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             "System: Enable Panel"
         };
 
-        fn mi(
-            label: &'static str,
-            icon: Option<&'static str>,
-            action: crate::actions::TermWmAction,
-        ) -> MenuDisplayItem<crate::actions::TermWmAction> {
-            MenuDisplayItem::Item(MenuItem {
-                label: label.into(),
-                icon,
-                action,
-                disabled: false,
-            })
-        }
+        items.push(mi(
+            debug_label,
+            Some("≣"),
+            crate::actions::TermWmAction::ToggleDebugWindow,
+        ));
+        items.push(mi(
+            panel_label,
+            Some("*"),
+            crate::actions::TermWmAction::ToggleSystemPanel,
+        ));
 
-        let focused = self.focused_window();
-        let has_active = self.windows.contains_key(focused);
-
-        let mut items: Vec<MenuDisplayItem<crate::actions::TermWmAction>> = vec![
-            // Top group
-            mi("Resume", Some("▶"), crate::actions::TermWmAction::CloseMenu),
-            mi(
-                "New Terminal",
-                Some("+"),
-                crate::actions::TermWmAction::NewTerminal,
-            ),
-            MenuDisplayItem::Separator,
-        ];
-
-        // Workspace group — always show "New Workspace"
-        #[cfg(feature = "session-persistence")]
-        if term_wm_config::runtime::session_persistence_enabled() {
-            items.push(mi(
-                "New Workspace",
-                Some("+"),
-                crate::actions::TermWmAction::NewWorkspace,
-            ));
-
-            if !workspaces.is_empty() {
-                for ws in workspaces {
-                    items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Switch to Workspace: {ws}").into(),
-                        icon: Some("→"),
-                        action: crate::actions::TermWmAction::SwitchWorkspace(ws.clone()),
-                        disabled: ws == current_workspace,
-                    }));
-                }
-            }
-            items.push(MenuDisplayItem::Item(MenuItem {
-                label: "Detach Viewer".into(),
-                icon: Some("-"),
-                action: crate::actions::TermWmAction::DetachCurrentClient,
-                disabled: false,
-            }));
-            items.push(MenuDisplayItem::Separator);
-        }
-
-        // TODO: Comment why this is needed
-        let _ = (workspaces, current_workspace);
-
-        // Window management group (directly below top group)
-        {
-            if has_active {
-                let raw_title = self.window_title(focused);
-                let title = crate::utils::truncate_with_ellipsis(&raw_title, 25);
-                let super_key = self
-                    .keybindings()
-                    .combos_for(crate::actions::TermWmAction::OpenCommandPalette)
-                    .first()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "Super".to_string());
-
-                // Send SUPER key to window
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Send {} to {}", super_key, title).into(),
-                    icon: Some("A"),
-                    action: crate::actions::TermWmAction::SendSuperKeyToWindow(focused),
-                    disabled: false,
-                }));
-
-                // Close window (disabled for non-closable windows)
-                items.push(MenuDisplayItem::Item(MenuItem {
-                    label: format!("Close {}", title).into(),
-                    icon: Some("X"),
-                    action: crate::actions::TermWmAction::CloseWindow(focused),
-                    disabled: !self.window(focused).is_some_and(|w| w.closable()),
-                }));
-
-                // Maximize / Restore
-                let is_maxed = self.window(focused).is_some_and(|w| w.is_maximized());
-                if !self.is_monocle() {
-                    items.push(MenuDisplayItem::Item(MenuItem {
-                        label: (if is_maxed {
-                            format!("Restore {}", title)
-                        } else {
-                            format!("Maximize {}", title)
-                        })
-                        .into(),
-                        icon: Some(if is_maxed { "─" } else { "▢" }),
-                        action: crate::actions::TermWmAction::MaximizeWindow(focused),
-                        disabled: false,
-                    }));
-                    items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Minimize {}", title).into(),
-                        icon: Some("_"),
-                        action: crate::actions::TermWmAction::MinimizeWindow(focused),
-                        disabled: false,
-                    }));
-                }
-
-                // Switch to windows
-                let switch_titles = self.window_titles();
-                if !switch_titles.is_empty() {
-                    items.push(MenuDisplayItem::Separator);
-                    for (key, switch_title) in switch_titles {
-                        items.push(MenuDisplayItem::Item(MenuItem {
-                            label: format!("Switch to: {}", switch_title).into(),
-                            icon: Some("→"),
-                            action: crate::actions::TermWmAction::FocusWindow(key),
-                            disabled: key == focused,
-                        }));
-                    }
-                }
-            }
-        }
-
-        // View group
-        {
-            items.push(MenuDisplayItem::Separator);
-            items.push(mi(
-                self.monocle_mode.action_label(),
-                Some("▢"),
-                crate::actions::TermWmAction::ToggleMonocle,
-            ));
-            {
-                let label = if self.managed_layout.is_some() {
-                    "View: Float Windows"
-                } else {
-                    "View: Tile Windows"
-                };
-                let mut item = mi(label, Some("⊞"), crate::actions::TermWmAction::ToggleTiling);
-                if self.is_monocle()
-                    && let MenuDisplayItem::Item(ref mut mi) = item
-                {
-                    mi.disabled = true;
-                }
-                items.push(item);
-            }
-        }
-
-        // Settings groups
-        {
-            {
-                items.push(MenuDisplayItem::Separator);
-                items.push(mi(
-                    mouse_label,
-                    Some("◆"),
-                    crate::actions::TermWmAction::ToggleMouseCapture,
-                ));
-                items.push(mi(
-                    clipboard_label,
-                    Some("■"),
-                    crate::actions::TermWmAction::ToggleClipboardMode,
-                ));
-                items.push(mi(
-                    "Paste",
-                    Some("■"),
-                    crate::actions::TermWmAction::PasteClipboard,
-                ));
-            }
-
-            items.push(MenuDisplayItem::Separator);
-
-            {
-                items.push(mi(
-                    debug_label,
-                    Some("≣"),
-                    crate::actions::TermWmAction::ToggleDebugWindow,
-                ));
-                items.push(mi(
-                    panel_label,
-                    Some("*"),
-                    crate::actions::TermWmAction::ToggleSystemPanel,
-                ));
-            }
-        }
-
-        // Help/Exit as last group
-        {
-            items.push(MenuDisplayItem::Separator);
-            items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
-            items.push(mi(
-                "Exit UI",
-                Some("⏻"),
-                crate::actions::TermWmAction::ExitUi,
-            ));
-        }
+        items.push(mi("Help", Some("?"), crate::actions::TermWmAction::Help));
+        items.push(mi(
+            "Exit UI",
+            Some("⏻"),
+            crate::actions::TermWmAction::ExitUi,
+        ));
 
         items
     }
@@ -592,7 +806,7 @@ mod tests {
         wm.focus_window_key(key);
         wm.set_window_title(key, "alpha");
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
@@ -600,13 +814,13 @@ mod tests {
             )
         });
         let idx = switcher_idx.expect("Switch to entry present");
+        assert!(idx > 0, "Switch to should not be first item");
+        // 5-section layout: Switch to is after MinimizeWindow, not necessarily after Separator
         assert!(
-            matches!(&items[idx - 1], MenuDisplayItem::Separator),
-            "separator must precede the Switch to list"
-        );
-        assert!(
-            matches!(&items[idx - 2], MenuDisplayItem::Item(_)),
-            "window controls must precede the separator"
+            items[..idx]
+                .iter()
+                .any(|e| matches!(e, MenuDisplayItem::Separator)),
+            "at least one separator must precede Switch to list"
         );
     }
 
@@ -622,7 +836,7 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "");
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,
@@ -636,6 +850,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_omits_workspace_group_when_runtime_disabled() {
         use crate::components::{MenuDisplayItem, MenuItem};
@@ -646,7 +861,12 @@ mod tests {
             session_persistence: false,
         });
 
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "default");
+        let items = wm.wm_menu_items(
+            &["dev".into(), "prod".into()],
+            "default",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
 
         // Restore the default so parallel tests see the expected state.
         term_wm_config::runtime::init(term_wm_config::runtime::RuntimeConfig::default());
@@ -670,6 +890,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_shows_workspace_group_when_runtime_enabled() {
         use crate::components::{MenuDisplayItem, MenuItem};
@@ -678,7 +899,12 @@ mod tests {
         // Runtime enabled by default: the workspace group must offer
         // New Workspace, Switch to Workspace entries (current one disabled),
         // and Detach Viewer.
-        let items = wm.wm_menu_items(&["dev".into(), "prod".into()], "dev");
+        let items = wm.wm_menu_items(
+            &["dev".into(), "prod".into()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
 
         let mut workspace: Vec<(String, bool)> = items
             .iter()
@@ -702,10 +928,309 @@ mod tests {
             vec![
                 ("Detach Viewer".to_string(), false),
                 ("New Workspace".to_string(), false),
-                ("Switch to Workspace: dev".to_string(), true),
+                ("Switch to Workspace: dev (current)".to_string(), true),
                 ("Switch to Workspace: prod".to_string(), false),
             ],
             "workspace group must list all actions, disabling the current workspace"
         );
+    }
+
+    #[test]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_renders_5_titled_section_headers() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        use crate::window::WindowState;
+        let mut wm = make_wm::<TestOverlay>();
+        let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+
+        let headers: Vec<String> = items
+            .iter()
+            .filter_map(|entry| match entry {
+                MenuDisplayItem::Item(MenuItem {
+                    label,
+                    disabled: true,
+                    ..
+                }) if label.starts_with("── ") => Some(label.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(headers.contains(&"── QUICK ACTIONS ──".to_string()));
+        #[cfg(feature = "session-persistence")]
+        assert!(headers.contains(&"── WORKSPACES & COLLABORATION ──".to_string()));
+        assert!(headers.contains(&"── WINDOW MANAGEMENT ──".to_string()));
+        assert!(headers.contains(&"── VIEW & LAYOUT ──".to_string()));
+        assert!(headers.contains(&"── SETTINGS & SYSTEM ──".to_string()));
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_nests_users_under_workspaces() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+
+        let mut users_by_ws = std::collections::BTreeMap::new();
+        users_by_ws.insert(
+            "dev".to_string(),
+            vec![crate::user_registry::UserEntry {
+                conn_id: 1,
+                user: "alice".to_string(),
+                hostname: "host-a".to_string(),
+                ssh_ip: Some("192.168.1.50".to_string()),
+                ssh_port: Some(54321),
+                cols: 0,
+                rows: 0,
+                connected_at_unix: 0,
+                pid: 4242,
+            }],
+        );
+
+        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+
+        let ws_idx = items.iter().position(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)"
+        )).expect("workspace entry found");
+
+        let primary = &items[ws_idx + 1];
+        assert!(
+            matches!(primary, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ alice@host-a (192.168.1.50:54321)"),
+            "primary user line must be nested directly beneath the workspace entry"
+        );
+        let detail = &items[ws_idx + 2];
+        assert!(
+            matches!(detail, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label.contains("#1") && label.contains("pid 4242")),
+            "detail line must contain discriminator (#conn and pid): {detail:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_user_registry_fallback_nested() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut wm = make_wm::<TestOverlay>();
+        wm.user_registry.upsert(
+            1,
+            "bob".to_string(),
+            "host-b".to_string(),
+            Some("10.0.0.1".to_string()),
+            None,
+            0,
+            0,
+            0,
+            0,
+        );
+
+        // Empty all_users_by_ws map forces fallback to local user_registry for current_workspace
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+        );
+
+        let ws_idx = items.iter().position(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)"
+        )).expect("workspace entry found");
+
+        let user_item = &items[ws_idx + 1];
+        assert!(
+            matches!(user_item, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label == "    └ bob@host-b (10.0.0.1)"),
+            "local user registry fallback must render nested under current workspace"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_workspace_follow_toggle_state() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut wm = make_wm::<TestOverlay>();
+
+        wm.workspace_follow_enabled = false;
+        let items_off = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        assert!(items_off.iter().any(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, icon: Some("○"), action: TermWmAction::ToggleWorkspaceFollow, .. })
+                if label == "Follow Workspaces: Enable"
+        )));
+
+        wm.workspace_follow_enabled = true;
+        let items_on = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        assert!(items_on.iter().any(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, icon: Some("◎"), action: TermWmAction::ToggleWorkspaceFollow, .. })
+                if label == "Follow Workspaces: Disable"
+        )));
+    }
+
+    #[test]
+    #[cfg(not(feature = "project-tasks"))]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_hides_project_tasks_when_feature_disabled() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+        let tasks = vec![crate::project_tasks::ProjectTaskConfig {
+            label: "should-be-hidden".into(),
+            command: Some("echo hello".into()),
+            args: None,
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            environments: Vec::new(),
+        }];
+        let items = wm.wm_menu_items(&[], "", &tasks, &std::collections::BTreeMap::new());
+        assert!(
+            !items.iter().any(|entry| matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem {
+                    action: TermWmAction::RunProjectTask(_),
+                    ..
+                })
+            )),
+            "RunProjectTask must be hidden when project-tasks feature is disabled"
+        );
+        // No separator leak after Quick Actions when tasks are hidden
+        let quick_actions_sep_idx = items
+            .iter()
+            .position(|e| matches!(e, MenuDisplayItem::Separator))
+            .expect("at least one separator");
+        assert!(
+            quick_actions_sep_idx < 5,
+            "first separator should be after Quick Actions, not leaked from tasks"
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "session-persistence"))]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_hides_workspaces_when_feature_disabled_at_compile_time() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+        let mut users_by_ws = std::collections::BTreeMap::new();
+        users_by_ws.insert(
+            "dev".to_string(),
+            vec![crate::user_registry::UserEntry {
+                conn_id: 1,
+                user: "alice".to_string(),
+                hostname: "host".to_string(),
+                ssh_ip: None,
+                ssh_port: None,
+                cols: 0,
+                rows: 0,
+                connected_at_unix: 0,
+                pid: 0,
+            }],
+        );
+        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+        assert!(
+            !items.iter().any(|e| matches!(e, MenuDisplayItem::Item(MenuItem { label, .. }) if label.contains("Workspace") || label.contains("Follow Workspaces"))),
+            "workspace UI must be hidden when session-persistence feature is disabled at compile time"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_user_renders_size_and_uptime() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Connected 90 seconds ago -> should show "1m" (or close)
+        let connected_at = now.saturating_sub(90);
+        let mut users_by_ws = std::collections::BTreeMap::new();
+        users_by_ws.insert(
+            "dev".to_string(),
+            vec![crate::user_registry::UserEntry {
+                conn_id: 1,
+                user: "alice".to_string(),
+                hostname: "host-a".to_string(),
+                ssh_ip: None,
+                ssh_port: None,
+                cols: 80,
+                rows: 24,
+                connected_at_unix: connected_at,
+                pid: 1234,
+            }],
+        );
+        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+        let ws_idx = items
+            .iter()
+            .position(|entry| {
+                matches!(entry, MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Switch to Workspace: dev (current)")
+            })
+            .expect("workspace entry found");
+        // Primary line
+        let primary = &items[ws_idx + 1];
+        match primary {
+            MenuDisplayItem::Item(MenuItem {
+                label,
+                disabled: true,
+                ..
+            }) => {
+                assert!(
+                    label.contains("alice@host-a"),
+                    "primary must contain user@host: {label}"
+                );
+                // size/uptime moved to detail line, primary must not be overly long
+                assert!(label.len() < 40, "primary line must stay compact: {label}");
+            }
+            other => panic!("unexpected primary item: {other:?}"),
+        }
+        // Detail line contains size, uptime, discriminator
+        let detail = &items[ws_idx + 2];
+        match detail {
+            MenuDisplayItem::Item(MenuItem {
+                label,
+                disabled: true,
+                ..
+            }) => {
+                assert!(
+                    label.contains("80×24"),
+                    "detail must contain terminal size: {label}"
+                );
+                assert!(
+                    label.contains('m') || label.contains('s'),
+                    "detail must contain uptime: {label}"
+                );
+                assert!(label.contains("#1"), "detail must contain conn id: {label}");
+                assert!(
+                    label.contains("pid 1234"),
+                    "detail must contain pid: {label}"
+                );
+            }
+            other => panic!("unexpected detail item: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn format_uptime_produces_expected_strings() {
+        // Zero diff
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(format_uptime(now), "0s");
+        // 45s ago
+        assert_eq!(format_uptime(now.saturating_sub(45)), "45s");
+        // 5 minutes ago
+        let five_min = format_uptime(now.saturating_sub(300));
+        assert_eq!(five_min, "5m");
+        // 2 hours ago
+        let two_hours = format_uptime(now.saturating_sub(7200));
+        assert_eq!(two_hours, "2h");
+        // 1 day 2 hours ago
+        let day = format_uptime(now.saturating_sub(86400 + 7200));
+        assert_eq!(day, "1d 2h");
     }
 }

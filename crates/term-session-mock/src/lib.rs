@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 //! Shared test helpers for the `term-session-mock` binary.
 //!
 //! Every test suite that needs the mock binary (the session server integration
@@ -63,12 +65,37 @@ fn resolve_bin(bin_name: &str) -> Option<PathBuf> {
 /// Invoke `cargo build` for this crate so the binaries exist in the target
 /// directory. Uses the crate's own `Cargo.toml` so it works regardless of
 /// which workspace directory the test process happens to run from.
+///
+/// Under `cargo llvm-cov` the test binary lives in a separate target directory
+/// (e.g. `target/llvm-cov-target/debug/`). We detect this by walking up from
+/// `current_exe()` and pass `--target-dir` so the mock binary lands next to
+/// the test binary rather than in the default `target/debug/`.
 fn build_bin() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-    let status = std::process::Command::new(env!("CARGO"))
-        .arg("build")
-        .arg("--manifest-path")
-        .arg(&manifest)
+    let mut cmd = std::process::Command::new(env!("CARGO"));
+    cmd.arg("build").arg("--manifest-path").arg(&manifest);
+
+    // Detect a non-default target directory from the test executable path.
+    // current_exe() → …/target/<NAME>/debug/deps/test_exe → pop deps →
+    // …/target/<NAME>/debug → pop debug → …/target/<NAME> → this is the
+    // target dir root that we need to pass back.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut p = exe;
+        p.pop(); // deps/
+        if p.ends_with("deps") {
+            p.pop(); // debug/
+        }
+        p.pop(); // <target-name>/
+        // p is now …/target/<target-name> — but we need the parent of that
+        // (i.e. …/target/) plus the <target-name> as the target dir.
+        // Actually llvm-cov sets the target dir to e.g. target/llvm-cov-target,
+        // so the full path IS the target dir.
+        if p.exists() {
+            cmd.arg("--target-dir").arg(&p);
+        }
+    }
+
+    let status = cmd
         .status()
         .expect("failed to spawn `cargo build` for term-session-mock");
     if !status.success() {

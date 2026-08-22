@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub mod input_encoding;
 #[cfg(windows)]
 pub mod job_object;

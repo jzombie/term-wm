@@ -1,43 +1,4 @@
-//! The `view!` proc-macro — declarative construction of term-wm component trees.
-//!
-//! Expands to fully-monomorphized Rust that a developer could hand-write:
-//! container constructors, leaf component constructors, and generated delegate
-//! enums for heterogeneous sibling sets. The result is a value implementing
-//! [`Component`](term_wm_core::components::Component) — there is no runtime tree, no reactivity, no reconciliation,
-//! no `Box`/`dyn`.
-//!
-//! ```text
-//! view! {
-//!     <VStack gap=1>
-//!         <Label text="Status" />
-//!         <Button label="Refresh" action={TermWmAction::OpenCommandPalette} />
-//!         { &mut self.terminal }                       // borrowed component
-//!     </VStack>
-//! }
-//! ```
-//!
-//! Tiers:
-//! 1. **Layout-primitive tags**: `<VStack>`/`<Column>`, `<HStack>`/`<Row>`,
-//!    `<Center width height>`, `<Grid cols rows>` (constraint strings parsed at
-//!    compile time into `GridConstraint`s).
-//! 2. **Built-in component tags**: `<Label text>`, `<Button label action|onClick>`.
-//! 3. **Expression braces** `{ expr }`: any expression yielding a `Component`
-//!    (owned, or `&mut C` via the blanket impl) — no registry needed for
-//!    third-party or fallible components.
-//!
-//! # Path resolution
-//!
-//! Generated code resolves the component/core/render crates via
-//! [`proc_macro_crate`], so it works from both the umbrella and the leaf
-//! crates without circular dependencies:
-//! - Consumers that depend on the `term-wm` umbrella (or the crate itself)
-//!   get `::term_wm::` paths (the umbrella re-exports `term_wm_core::*` +
-//!   `term_wm_ui_components::*` and `RenderBackend`).
-//! - Leaf consumers (e.g. `term-wm-sys-ui-components`, which the umbrella
-//!   depends on and therefore cannot re-depend on it) get
-//!   `::term_wm_ui_components::`, `::term_wm_core::` and
-//!   `::term_wm_render::` paths. Renamed dependencies are honored via the name
-//!   `crate_name` reports.
+#![doc = include_str!("../README.md")]
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};

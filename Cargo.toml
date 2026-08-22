@@ -47,7 +47,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Jeremy Harris <jeremy.harris@zenosmosis.com>"]
-version = "0.10.2-alpha"
+version = "0.10.3-alpha"
 edition = "2024"
 repository = "https://github.com/jzombie/term-wm"
 license = "MIT OR Apache-2.0"
@@ -70,6 +70,7 @@ hostname = "0.4.2"
 indoc = "2.0.7"
 insta = "1.48.0"
 interprocess = "2.4.3"
+json_comments = "0.2.2"
 libc = "0.2.186"
 line-ending = "1.5.1"
 linkify = "0.11.0"
@@ -90,6 +91,8 @@ quote = "1.0.47"
 ratatui = "0.30.0"
 resvg = "0.48.1"
 rstml = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 serial_test = "4.0.1"
 shell-words = "1.1.1"
 slotmap = "1.1"
@@ -97,27 +100,27 @@ smallvec = "1.15"
 strum = { version = "0.28", features = ["derive"] }
 syn = "3.0.3"
 tempfile = "3.24.0"
-term-clipboard = { path = "crates/term-clipboard", version = "0.10.2-alpha" }
-term-session = { path = "crates/term-session", version = "0.10.2-alpha" }
-term-session-client = { path = "crates/term-session-client", version = "0.10.2-alpha" }
-term-session-mock = { path = "crates/term-session-mock", version = "0.10.2-alpha" }
-term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.10.2-alpha" }
-term-session-server = { path = "crates/term-session-server", version = "0.10.2-alpha" }
-term-sys-io = { path = "crates/term-sys-io", version = "0.10.2-alpha" }
-term-wm = { path = ".", version = "0.10.2-alpha" }
-term-wm-config = { path = "crates/term-wm-config", version = "0.10.2-alpha" }
-term-wm-console = { path = "crates/term-wm-console", version = "0.10.2-alpha" }
-term-wm-core = { path = "crates/term-wm-core", version = "0.10.2-alpha" }
-term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.10.2-alpha" }
-term-wm-events = { path = "crates/term-wm-events", version = "0.10.2-alpha" }
-term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.10.2-alpha" }
-term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.10.2-alpha" }
-term-wm-render = { path = "crates/term-wm-render", version = "0.10.2-alpha" }
-term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.10.2-alpha" }
-term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.10.2-alpha" }
-term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.10.2-alpha" }
-term-wm-view = { path = "crates/term-wm-view", version = "0.10.2-alpha" }
-term-wm-vt100 = "0.16.2-patch3"
+term-clipboard = { path = "crates/term-clipboard", version = "0.10.3-alpha" }
+term-session = { path = "crates/term-session", version = "0.10.3-alpha" }
+term-session-client = { path = "crates/term-session-client", version = "0.10.3-alpha" }
+term-session-mock = { path = "crates/term-session-mock", version = "0.10.3-alpha" }
+term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.10.3-alpha" }
+term-session-server = { path = "crates/term-session-server", version = "0.10.3-alpha" }
+term-sys-io = { path = "crates/term-sys-io", version = "0.10.3-alpha" }
+term-wm = { path = ".", version = "0.10.3-alpha" }
+term-wm-config = { path = "crates/term-wm-config", version = "0.10.3-alpha" }
+term-wm-console = { path = "crates/term-wm-console", version = "0.10.3-alpha" }
+term-wm-core = { path = "crates/term-wm-core", version = "0.10.3-alpha", default-features = false }
+term-wm-crossterm-adapter = { path = "crates/term-wm-crossterm-adapter", version = "0.10.3-alpha" }
+term-wm-events = { path = "crates/term-wm-events", version = "0.10.3-alpha" }
+term-wm-layout-engine = { path = "crates/term-wm-layout-engine", version = "0.10.3-alpha" }
+term-wm-pty-engine = { path = "crates/term-wm-pty-engine", version = "0.10.3-alpha" }
+term-wm-render = { path = "crates/term-wm-render", version = "0.10.3-alpha" }
+term-wm-sys-ui-components = { path = "crates/term-wm-sys-ui-components", version = "0.10.3-alpha" }
+term-wm-ui-components = { path = "crates/term-wm-ui-components", version = "0.10.3-alpha" }
+term-wm-ui-facade = { path = "crates/term-wm-ui-facade", version = "0.10.3-alpha" }
+term-wm-view = { path = "crates/term-wm-view", version = "0.10.3-alpha" }
+term-wm-vt100 = "0.16.2-patch4"
 textwrap = "0.16.2"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
@@ -143,7 +146,9 @@ windows-sys = { version = "0.61", features = [
 unwrap_used = "deny"
 
 [features]
-default = ["session-persistence"]
+default = ["session-persistence", "project-tasks", "pty"]
+pty = ["term-wm-core/pty"]
+project-tasks = ["term-wm-core/project-tasks"]
 session-persistence = [
     "dep:term-session",
     "dep:tokio",
@@ -198,6 +203,7 @@ term-session-mock = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }
 term-wm-render = { workspace = true }
+term-wm-vt100 = { workspace = true }
 tokio = { workspace = true }
 
 [lints]
