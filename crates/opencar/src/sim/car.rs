@@ -66,16 +66,31 @@ impl Vehicle {
         self.brake = input.brake;
         self.handbrake = input.handbrake;
 
-        // Steering slew toward input.
-        let max_step = STEER_SMOOTH_RATE * dt;
-        self.steer_sm += (input.steer - self.steer_sm).clamp(-max_step, max_step);
-
-        // Speed-sensitive steering authority: saturating ramp off idle with a
-        // floor so parking-speed maneuvering works; the stability factor
-        // trims authority as speed approaches MAX (finite turn radius).
-        let sf = (self.speed.abs() / LOW_SPEED_REF).clamp(LOW_SPEED_FLOOR, 1.0)
-            * (1.0 - HIGH_SPEED_STABILITY * (self.speed.abs() / MAX_SPEED));
-        self.heading += self.steer_sm * STEER_RATE * sf * dt * self.speed.signum();
+        // ── Steering: kinematic bicycle model, zero assists ──
+        // `steer_sm` is the FRONT-WHEEL ANGLE (radians). The keyed angle cap
+        // shrinks with v² so lateral acceleration never exceeds the grip
+        // budget; the wheel itself always slews at a crisp fixed rate, and
+        // auto-centers at a fixed rate on release. No speed gate: full lock
+        // is available whenever grip allows it.
+        let angle_cap = if self.speed.abs() > 0.1 {
+            (WHEELBASE * MAX_LAT_ACCEL / (self.speed * self.speed))
+                .atan()
+                .min(ANGLE_LOCK)
+        } else {
+            ANGLE_LOCK
+        };
+        if input.steer != 0.0 {
+            self.steer_sm += input.steer * STEER_WHEEL_RATE * dt;
+            // Re-clamp every tick: accelerating through a corner tightens
+            // the live wheel limit in real time.
+            self.steer_sm = self.steer_sm.clamp(-angle_cap, angle_cap);
+        } else {
+            let step = STEER_RECENTER_RATE * dt;
+            self.steer_sm -= self.steer_sm.clamp(-step, step);
+        }
+        // Yaw from the bicycle model; reverse flips the sign naturally and a
+        // stationary car cannot rotate in place.
+        self.heading += (self.speed / WHEELBASE) * self.steer_sm.tan() * dt;
 
         // Surface state BEFORE integration (affects drag this step).
         self.offroad = world.is_offroad_at(self.x, self.z);
@@ -189,55 +204,99 @@ mod tests {
         v.speed = -5.0; // reversing
         let steer_right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
         v.update(SIM_TICK_DT, steer_right, &w);
-        // In reverse, steering right turns heading the other way.
+        // Bicycle yaw carries speed's sign: reverse+right decreases heading.
         assert!(v.heading < 0.0, "reverse+right should decrease heading, got {}", v.heading);
     }
 
     #[test]
-    fn crawl_speed_keeps_steering_alive() {
-        // Authority must never die at low speed: the floor keeps a crawl-speed
-        // full-lock turn turning (old model ramped linearly from zero).
+    fn standstill_cannot_spin() {
+        // Full lock cranks the wheel but a stationary car never rotates.
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
-        v.speed = 1.0;
+        let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        for _ in 0..30 {
+            v.update(SIM_TICK_DT, right, &w);
+        }
+        assert!(
+            (v.steer_sm - ANGLE_LOCK).abs() < 1e-3,
+            "wheel should sit at full lock, got {}",
+            v.steer_sm
+        );
+        assert_eq!(v.heading, 0.0, "heading must not move at standstill");
+    }
+
+    #[test]
+    fn parking_turn_is_tight() {
+        // Just above walking pace the car must turn sharply — this is the
+        // case the old zero-at-idle authority curve made impossible.
+        let (mut v, mut w) = on_road();
+        w.ensure_chunks_around(v.x, v.z, usize::MAX);
+        v.speed = 1.4; // ~5 km/h
         let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
         let h0 = v.heading;
         for _ in 0..30 {
             v.update(SIM_TICK_DT, right, &w);
         }
         let turned = (v.heading - h0).abs();
-
-        // Exact analytic expectation for this scripted input: steer_sm slews
-        // toward full lock while the authority floor bounds sf from below.
-        // Drag bleeds a little speed, hence the loose tolerance.
-        let sf =
-            ((1.0_f32 / LOW_SPEED_REF).clamp(LOW_SPEED_FLOOR, 1.0)) * (1.0 - HIGH_SPEED_STABILITY / MAX_SPEED);
-        let mut steer_sm = 0.0_f32;
-        let mut expect = 0.0_f32;
-        for _ in 0..30 {
-            steer_sm = (steer_sm + STEER_SMOOTH_RATE * SIM_TICK_DT).min(1.0);
-            expect += steer_sm * STEER_RATE * sf * SIM_TICK_DT;
-        }
         assert!(
-            (turned - expect).abs() < 1e-3,
-            "crawl yaw {turned} should match floor-authority prediction {expect}"
+            turned > 0.08,
+            "parking turn over half a second gave only {turned:.4} rad (~{}°)",
+            turned.to_degrees()
         );
-        // And it must be far above what the dead-at-idle old curve produced
-        // (~0.02 rad for the same script): the whole point of the floor.
-        assert!(turned > 0.1, "crawl yaw {turned} still too weak");
     }
 
     #[test]
-    fn top_speed_turn_radius_is_finite_arcade() {
-        // At MAX_SPEED the retained authority must give a workable radius:
-        // radius = v / omega with omega = STEER_RATE * (1 - HIGH_SPEED_STABILITY)
-        // (slew fully saturated after warm-up). Old tuning gave ~315 m.
-        let sf_top = 1.0 - HIGH_SPEED_STABILITY;
-        let omega = STEER_RATE * sf_top;
-        let radius = MAX_SPEED / omega;
+    fn high_speed_steer_respects_grip_budget() {
+        // At MAX_SPEED the angle cap must bound lateral acceleration to
+        // MAX_LAT_ACCEL exactly (cap was derived from that budget).
+        let (mut v, mut w) = on_road();
+        w.ensure_chunks_around(v.x, v.z, usize::MAX);
+        let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        let expected_cap = (WHEELBASE * MAX_LAT_ACCEL / (MAX_SPEED * MAX_SPEED)).atan();
+        // Slew to the cap while pinning speed at vmax (white-box override of
+        // drag decay so the test measures geometry, not the engine curve).
+        for _ in 0..30 {
+            v.speed = MAX_SPEED;
+            v.update(SIM_TICK_DT, right, &w);
+        }
         assert!(
-            radius < 120.0,
-            "top-speed turn radius {radius:.0} m is still undrivable"
+            (v.steer_sm - expected_cap).abs() < 2e-3,
+            "steady wheel {} should equal grip-derived cap {expected_cap}",
+            v.steer_sm
+        );
+        let h0 = v.heading;
+        let ticks = 20;
+        for _ in 0..ticks {
+            v.speed = MAX_SPEED;
+            v.update(SIM_TICK_DT, right, &w);
+        }
+        let omega = (v.heading - h0).abs() / (ticks as f32 * SIM_TICK_DT);
+        let lat_accel = MAX_SPEED * omega;
+        assert!(
+            lat_accel <= MAX_LAT_ACCEL * 1.02 && lat_accel >= MAX_LAT_ACCEL * 0.9,
+            "lateral accel {lat_accel:.2} m/s² escaped the {MAX_LAT_ACCEL} budget"
+        );
+    }
+
+    #[test]
+    fn wheel_recenters_at_fixed_rate_on_release() {
+        let (mut v, mut w) = on_road();
+        w.ensure_chunks_around(v.x, v.z, usize::MAX);
+        v.speed = 10.0;
+        let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        for _ in 0..15 {
+            v.update(SIM_TICK_DT, right, &w);
+        }
+        assert!(v.steer_sm.abs() > 0.01, "wheel should be off center");
+        let neutral = VehicleInput { throttle: 0.0, brake: 0.0, steer: 0.0, handbrake: false };
+        // Fixed-rate recenter: |δ| shrinks by RECENTER·dt per tick.
+        for _ in 0..20 {
+            v.update(SIM_TICK_DT, neutral, &w);
+        }
+        assert!(
+            v.steer_sm.abs() < 1e-3,
+            "wheel should be centered after release, got {}",
+            v.steer_sm
         );
     }
 }

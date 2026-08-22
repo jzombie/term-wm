@@ -146,21 +146,32 @@ pub const DRAG_COEFF: f32 = 0.0012;
 pub const ROLL_RESIST: f32 = 0.045;
 pub const OFFROAD_DRAG_MULT: f32 = 1.8;
 pub const OFFROAD_MAX_SPEED: f32 = 35.0;
-/// Yaw rate at full lock and reference speed. The old 0.5 rad/s gave a
-/// ~315 m turn radius at top speed — undrivable at highway pace.
-pub const STEER_RATE: f32 = 1.4;
-/// Gentle pull toward the lane tangent while on asphalt (rad/s max).
-pub const LANE_MAGNETISM: f32 = 0.026;
-/// Magnetism only applies while deliberate steering input is below this
-/// magnitude, so it never fights the player's corrections near road edges.
-pub const LANE_MAGNET_STEER_GATE: f32 = 0.25;
-pub const STEER_SMOOTH_RATE: f32 = 6.0; // input slew per second
-pub const LOW_SPEED_REF: f32 = 10.0; // full steering authority below this
-/// Minimum steering-authority fraction at crawl speed so maneuvering works
-/// from a standstill instead of ramping linearly from zero.
-pub const LOW_SPEED_FLOOR: f32 = 0.35;
-/// Steering authority retained at top speed (was 0.62 ⇒ 38 % left).
-pub const HIGH_SPEED_STABILITY: f32 = 0.45;
+
+// ── Steering (kinematic bicycle model, zero assists) ────────────────────
+/// Physical front-wheel lock at low speed (~32°).
+pub const ANGLE_LOCK: f32 = 0.56;
+/// Axle length for the yaw model: yaw_rate = v/L · tan(δ).
+pub const WHEELBASE: f32 = 2.6;
+/// Grip budget: the speed-dependent angle cap bounds lateral acceleration
+/// to this value, so highway cruising stays stable while parking turns stay
+/// razor-tight. cap = atan(L · MAX_LAT_ACCEL / v²), clamped by ANGLE_LOCK.
+pub const MAX_LAT_ACCEL: f32 = 22.0;
+/// Wheel slew rate toward the keyed angle — reaches full lock in ~140 ms.
+pub const STEER_WHEEL_RATE: f32 = 4.0;
+/// Fixed-rate auto-centering when the steering keys are neutral.
+pub const STEER_RECENTER_RATE: f32 = 4.0;
+
+// ── Keyboard input fallback (non-kitty terminals) ───────────────────────
+/// Steering tap window: an un-confirmed tap never outlives this.
+pub const TAP_CONFIRM_SECS: f32 = 0.15;
+/// Throttle/brake provisional window: covers the OS initial repeat delay so
+/// holds don't stutter; expires into Released if no auto-repeat arrives.
+pub const INITIAL_DELAY_TIMEOUT_SECS: f32 = 0.5;
+/// Reduced input applied during the throttle/brake provisional window.
+pub const PROVISIONAL_FORCE: f32 = 0.25;
+/// Once a hold is confirmed by an auto-repeat, silence longer than this
+/// releases the control.
+pub const REPEAT_GAP_SECS: f32 = 0.15;
 pub const COLLIDE_RADIUS: f32 = 2.4;
 /// Longitudinal acceleration used by the camera pitch response.
 pub const PITCH_RESPONSE: f32 = 0.010; // rad per m/s²
@@ -173,8 +184,9 @@ pub const CAM_Y_SPRING: f32 = 9.0;
 pub const CAM_YAW_RATE: f32 = 4.6;
 pub const CAM_SPEED_PULLBACK: f32 = 0.07;
 pub const CAM_MIN_CLEARANCE: f32 = 0.7;
-/// Cornering roll gain: roll = ROLL_GAIN * steer_sm * speed.
-pub const ROLL_GAIN: f32 = 0.0035;
+/// Cornering roll gain: roll = ROLL_GAIN * wheel_angle * speed.
+/// Retuned for bicycle-model angles (±0.56 rad) — was 0.0035 at ±1 input.
+pub const ROLL_GAIN: f32 = 0.006;
 pub const ROLL_MAX: f32 = 0.35;
 pub const ROLL_EPS: f32 = 0.004;
 /// Weight-transfer pitch from longitudinal accel.
@@ -295,9 +307,8 @@ pub const MINIMAP_COLS: u16 = 20;
 pub const MINIMAP_ROWS: u16 = 8;
 
 // ── Input ───────────────────────────────────────────────────────────────
-/// Held-key heartbeat timeout when the terminal lacks key-release events.
-/// Must exceed the worst-case OS initial auto-repeat delay (~500 ms).
-pub const FALLBACK_HELD_TIMEOUT_SECS: f32 = 5.0;
+// (Fallback held-key windows live with the steering consts above:
+// TAP_CONFIRM_SECS / INITIAL_DELAY_TIMEOUT_SECS / REPEAT_GAP_SECS.)
 pub const BOB_PHASE_RATE: f32 = 0.55; // bob phase per meter traveled
 pub const OFFROAD_BOB_MULT: f32 = 3.0;
 
