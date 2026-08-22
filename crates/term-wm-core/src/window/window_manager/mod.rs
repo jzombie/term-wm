@@ -2443,6 +2443,23 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         self.windows.len()
     }
 
+    /// Return the number of user-created windows, excluding registered
+    /// system windows.
+    ///
+    /// System windows (Debug Log, System Panel) are auto-created at app
+    /// construction and stay hidden until toggled, so they are infrastructure
+    /// rather than user content. Counts like the stop-gateway dialog's
+    /// "Windows:" line (#298) must reflect what the user actually opened,
+    /// not this background inventory. Minimized (Iconic) windows still count:
+    /// their processes keep running and would be terminated with the session.
+    pub fn user_window_count(&self) -> usize {
+        let system_keys: Vec<WindowKey> = self.system_windows.values().copied().collect();
+        self.windows
+            .keys()
+            .filter(|k| !system_keys.contains(k))
+            .count()
+    }
+
     /// Return keys of all windows in `WindowState::Mapped`.
     pub fn mapped_windows(&self) -> Vec<WindowKey> {
         self.windows
@@ -8957,6 +8974,31 @@ mod tests {
         let bogus = WindowKey::default();
         wm.set_window_title(bogus, "x");
         assert!(wm.window(bogus).is_none());
+    }
+
+    /// #298: `user_window_count` must exclude registered system windows
+    /// (Debug Log, System Panel are auto-created and hidden at app startup),
+    /// while still counting minimized user windows.
+    #[test]
+    fn user_window_count_excludes_system_windows() {
+        use crate::window::window_manager::system_tags;
+
+        let mut wm = make_wm_for_titles();
+        let a = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let b = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let sys = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.register_system_window::<system_tags::DebugLog>(sys);
+        // Minimized windows keep their processes alive; they still count.
+        wm.transition_window(b, WindowState::Mapped);
+        wm.transition_window(b, WindowState::Iconic);
+
+        assert_eq!(wm.window_count(), 3, "raw count includes system windows");
+        assert_eq!(
+            wm.user_window_count(),
+            2,
+            "user count excludes the registered system window"
+        );
+        let _ = a;
     }
 
     #[test]

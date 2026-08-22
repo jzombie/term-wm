@@ -1142,7 +1142,7 @@ impl<C: Component<TermWmAction> + 'static>
                 .to_string(),
             Err(_) => GATEWAY_COUNT_UNAVAILABLE.to_string(),
         };
-        let windows = self.wm.window_count();
+        let windows = self.wm.user_window_count();
         let tasks = self.project_task_windows.len();
         let body = format!(
             "{GATEWAY_STOP_WARNING}\nActive workspaces: {workspace_label} · Windows: {windows} · Project tasks: {tasks}"
