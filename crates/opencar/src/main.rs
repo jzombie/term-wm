@@ -23,6 +23,12 @@ pub fn run(
     terminal::enable_raw_mode()?;
     execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
 
+    // T6: disable autowrap (DECAWM). Writing the bottom-right cell can no
+    // longer trigger an implicit scroll that corrupts buffer alignment.
+    // Restored during teardown below.
+    write!(stdout, "\x1b[?7l")?;
+    stdout.flush()?;
+
     // Kitty keyboard protocol: real Press/Repeat/Release when supported.
     let kitty = terminal::supports_keyboard_enhancement().unwrap_or(false);
     if kitty {
@@ -47,6 +53,8 @@ pub fn run(
     };
 
     // Teardown runs no matter how the loop ended.
+    write!(stdout, "\x1b[?7h")?;
+    stdout.flush()?;
     if kitty {
         execute!(stdout, PopKeyboardEnhancementFlags)?;
     }

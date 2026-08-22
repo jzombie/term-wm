@@ -8,6 +8,7 @@
 use std::io::Write;
 
 use crate::braille::TermCell;
+use crate::config::*;
 
 /// Variable-length decimal ASCII rendering of one u8 (`5` → `"5"`, len 1;
 /// fixed 3-digit padding would bloat every TrueColor sequence by ~35 %).
@@ -141,6 +142,15 @@ fn write_num(out: &mut impl Write, v: u8) -> std::io::Result<()> {
 
 /// Cursor coordinates are u16 (up to 5 digits) and appear once per dirty
 /// *run* — a tiny direct emitter beats a 65 K-entry table here.
+fn decimal_len(mut v: u16) -> usize {
+    let mut len = 1usize;
+    while v >= 10 {
+        len += 1;
+        v /= 10;
+    }
+    len
+}
+
 fn write_u16(out: &mut impl Write, mut v: u16) -> std::io::Result<()> {
     let mut buf = [0u8; 5];
     let mut len = 0usize;
@@ -230,6 +240,121 @@ impl TermDisplay {
         }
     }
 
+    /// T1: single merged dual-color SGR (`38;5;X;48;5;Y`) instead of two
+    /// commands when both colors change on the same cell.
+    fn set_both(&mut self, out: &mut impl Write, fg: [u8; 3], bg: [u8; 3]) -> std::io::Result<()> {
+        if self.truecolor {
+            out.write_all(b"\x1b[38;2;")?;
+            write_num(out, fg[0])?;
+            out.write_all(b";")?;
+            write_num(out, fg[1])?;
+            out.write_all(b";")?;
+            write_num(out, fg[2])?;
+            out.write_all(b";48;2;")?;
+            write_num(out, bg[0])?;
+            out.write_all(b";")?;
+            write_num(out, bg[1])?;
+            out.write_all(b";")?;
+            write_num(out, bg[2])?;
+            out.write_all(b"m")
+        } else {
+            let fi = rgb_to_xterm256(fg);
+            let bi = rgb_to_xterm256(bg);
+            out.write_all(b"\x1b[38;5;")?;
+            write_num(out, fi)?;
+            out.write_all(b";48;5;")?;
+            write_num(out, bi)?;
+            out.write_all(b"m")
+        }
+    }
+
+    /// V1 hysteresis: is `new` close enough to the last *emitted* color that
+    /// skipping the SGR is imperceptible?
+    /// Indexed mode compares post-quantization indices (lossless); truecolor
+    /// uses a small per-channel RGB epsilon.
+    fn close_to_emitted(&self, emitted: Option<[u8; 3]>, new: [u8; 3]) -> bool {
+        let Some(prev) = emitted else { return false };
+        if self.truecolor {
+            let d0 = (prev[0] as i32 - new[0] as i32).abs();
+            let d1 = (prev[1] as i32 - new[1] as i32).abs();
+            let d2 = (prev[2] as i32 - new[2] as i32).abs();
+            d0.max(d1).max(d2) <= COLOR_SKIP_EPS
+        } else {
+            rgb_to_xterm256(prev) == rgb_to_xterm256(new)
+        }
+    }
+
+    /// Move the terminal cursor to `(tx, ty)` using the cheapest correct
+    /// sequence (V2/T2/T3 selection table):
+    ///
+    /// | condition | emission |
+    /// |---|---|
+    /// | Δy==1, target col 0, cur col 0 | `\n` |
+    /// | Δy==1, target col 0, cur col >0 | `\r\n` |
+    /// | Δy==1, same non-zero column | `\n` (LF preserves column) |
+    /// | same column, 2≤\|Δy\|≤MAX, strictly shorter than absolute | `\x1b[{N}B`/`A` |
+    /// | Δy==0, 1≤Δx≤MAX | `\x1b[C` / `\x1b[{N}C` |
+    /// | anything else | absolute `\x1b[Y;XH` |
+    ///
+    /// Absolute wins ties by design — every absolute reposition doubles as a
+    /// state resync point after any PTY anomaly.
+    fn move_cursor(&mut self, out: &mut impl Write, tx: u16, ty: u16) -> std::io::Result<()> {
+        let target = (tx, ty);
+        if self.cursor == Some(target) {
+            return Ok(());
+        }
+        if let Some((cx, cy)) = self.cursor {
+            let dy = ty as i32 - cy as i32;
+            let dx = tx as i32 - cx as i32;
+            if dy == 1 {
+                if tx == 0 {
+                    // Column reset required unless we are already there.
+                    if cx == 0 {
+                        out.write_all(b"\n")?;
+                    } else {
+                        out.write_all(b"\r\n")?;
+                    }
+                    self.cursor = Some(target);
+                    return Ok(());
+                }
+                if dx == 0 {
+                    out.write_all(b"\n")?;
+                    self.cursor = Some(target);
+                    return Ok(());
+                }
+            }
+            // Same-column parameterized vertical jumps (cost-compared).
+            if dx == 0 && (2..=CURSOR_REL_ROW_MAX).contains(&dy.abs()) {
+                let n = dy.unsigned_abs() as u16;
+                let rel_len = 2 + decimal_len(n) + 1;
+                let abs_len = 2 + decimal_len(ty.saturating_add(1)) + 1 + decimal_len(tx.saturating_add(1)) + 1;
+                if rel_len < abs_len {
+                    out.write_all(CSI)?;
+                    write_u16(out, n)?;
+                    out.write_all(if dy > 0 { b"B" } else { b"A" })?;
+                    self.cursor = Some(target);
+                    return Ok(());
+                }
+            }
+            // Relative forward within a row (T2).
+            if dy == 0 && dx > 0 && dx <= CURSOR_REL_MOVE_MAX as i32 {
+                let n = dx as u16;
+                if n == 1 {
+                    out.write_all(b"\x1b[C")?;
+                } else {
+                    out.write_all(CSI)?;
+                    write_u16(out, n)?;
+                    out.write_all(b"C")?;
+                }
+                self.cursor = Some(target);
+                return Ok(());
+            }
+        }
+        move_to(out, tx, ty)?;
+        self.cursor = Some(target);
+        Ok(())
+    }
+
     /// Resize tracking (clears the diff cache so everything repaints).
     pub fn resize_if_needed(&mut self, cols: u16, rows: u16) {
         if self.cols == cols && self.rows == rows {
@@ -268,31 +393,55 @@ impl TermDisplay {
                     continue;
                 }
 
-                let target = (cx as u16, cy as u16);
-                if self.cursor != Some(target) {
-                    move_to(out, target.0, target.1)?;
+                self.move_cursor(out, cx as u16, cy as u16)?;
+
+                // T1 + V1: merged dual-color SGR, suppressed entirely when
+                // the change is beneath perceptual threshold (text cells
+                // always resync exactly).
+                let is_text = cell.ch != '\0';
+                let fg_changed = self.cur_fg != Some(cell.fg);
+                let bg_changed = self.cur_bg != Some(cell.bg);
+                if fg_changed || bg_changed {
+                    let fg_emit =
+                        is_text || fg_changed && !self.close_to_emitted(self.cur_fg, cell.fg);
+                    let bg_emit =
+                        is_text || bg_changed && !self.close_to_emitted(self.cur_bg, cell.bg);
+                    match (fg_emit, bg_emit) {
+                        (true, true) => self.set_both(out, cell.fg, cell.bg)?,
+                        (true, false) => self.set_fg(out, cell.fg)?,
+                        (false, true) => self.set_bg(out, cell.bg)?,
+                        (false, false) => {}
+                    }
+                    // Track emitted state ONLY for colors actually sent —
+                    // suppressed updates leave terminal + tracker in sync.
+                    if fg_emit {
+                        self.cur_fg = Some(cell.fg);
+                    }
+                    if bg_emit {
+                        self.cur_bg = Some(cell.bg);
+                    }
                 }
 
-                if self.cur_fg != Some(cell.fg) {
-                    self.set_fg(out, cell.fg)?;
-                    self.cur_fg = Some(cell.fg);
-                }
-                if self.cur_bg != Some(cell.bg) {
-                    self.set_bg(out, cell.bg)?;
-                    self.cur_bg = Some(cell.bg);
-                }
-
-                let glyph = cell.glyph();
-                let mut buf = [0u8; 4];
-                out.write_all(glyph.encode_utf8(&mut buf).as_bytes())?;
-
-                // Track where the terminal's cursor now sits (auto-advance,
-                // including wrap to column 0 of the next row).
-                self.cursor = if cx as u16 + 1 >= self.cols {
-                    if cy as u16 + 1 >= self.rows { None } else { Some((0, cy as u16 + 1)) }
+                // T4: static braille bytes on the hot path; HUD text keeps
+                // the encode fallback. Dirty cells ALWAYS rewrite their
+                // glyph: the redundant write continuously re-anchors the
+                // terminal to our intended state (removing this made the
+                // stream fragile to any cursor/color drift).
+                if cell.ch == '\0' {
+                    out.write_all(&TermCell::BRAILLE_UTF8[cell.mask as usize])?;
                 } else {
-                    Some((cx as u16 + 1, cy as u16))
-                };
+                    let glyph = cell.glyph();
+                    let mut buf = [0u8; 4];
+                    out.write_all(glyph.encode_utf8(&mut buf).as_bytes())?;
+                }
+
+                // T6 (DECAWM off): printing at the last column clamps the
+                // cursor in place instead of wrapping.
+                self.cursor = Some(if cx as u16 + 1 >= self.cols {
+                    (self.cols.saturating_sub(1), cy as u16)
+                } else {
+                    (cx as u16 + 1, cy as u16)
+                });
 
                 if idx < self.prev.len() {
                     self.prev[idx] = cell;
@@ -328,7 +477,17 @@ mod moveto_tests {
         d.present(&mut out, &cells).expect("in-memory writer");
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("\x1b[1;1H"), "first move must target row1,col1: {s:?}");
-        assert!(!s.contains('\n') && !s.contains('\r'), "no embedded newlines: {s:?}");
+        // T3: row advances are explicit \r\n pairs; a lone LF or CR is
+        // always a bug (misaligned columns / stray scroll risk).
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\n' {
+                panic!("bare LF in stream: {s:?}");
+            }
+            if c == '\r' {
+                assert_eq!(chars.next(), Some('\n'), "CR must pair with LF: {s:?}");
+            }
+        }
         assert!(!s.contains("\\x1b[2;"), "must not address row 2 for a row-0 cell");
     }
 
@@ -428,9 +587,174 @@ mod quantizer_tests {
 
         let s_tc = String::from_utf8_lossy(&out_tc);
         let s_idx = String::from_utf8_lossy(&out_idx);
-        assert!(s_tc.contains("\x1b[38;2;255;0;0m"), "truecolor path: {s_tc:?}");
-        assert!(s_idx.contains("\x1b[38;5;196m"), "indexed path: {s_idx:?}");
+        // Both fg and bg change vs the sentinel ⇒ T1 MERGED dual-color SGR.
+        assert!(
+            s_tc.contains("\x1b[38;2;255;0;0") && s_tc.contains(";48;2;0;0;0m"),
+            "truecolor merged: {s_tc:?}"
+        );
+        assert!(
+            s_idx.contains("\x1b[38;5;196;48;5;16m"),
+            "indexed merged: {s_idx:?}"
+        );
         assert!(!s_idx.contains(";2;"), "indexed must not leak TrueColor: {s_idx:?}");
         assert!(out_idx.len() < out_tc.len(), "indexed payload must be smaller");
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use crate::braille::TermCell;
+
+    fn grid(cols: u16, rows: u16) -> Vec<TermCell> {
+        vec![TermCell::BLANK; cols as usize * rows as usize]
+    }
+
+    fn red(mask: u8) -> TermCell {
+        TermCell { mask, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }
+    }
+
+    #[test]
+    fn relative_forward_used_for_small_gaps() {
+        // Two frames: frame 1 paints the baseline, frame 2 dirties cols 0
+        // and 3 — leaving a genuine 2-cell clean gap for the relative move.
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(10, 2);
+        let mut cells = grid(10, 2);
+        let mut out = Vec::new();
+        d.present(&mut out, &cells).expect("baseline");
+
+        cells[0] = red(0xFF);
+        cells[3] = red(0xFF);
+        let mut f2 = Vec::new();
+        d.present(&mut f2, &cells).expect("f2");
+        let s = String::from_utf8_lossy(&f2);
+        assert!(s.contains("\x1b[2C"), "expected relative forward: {s:?}");
+        assert_eq!(s.match_indices('H').count(), 1, "one absolute home only");
+    }
+
+    #[test]
+    fn row_advance_uses_crlf_not_absolute() {
+        // Frame 1 baseline; frame 2 dirties ONLY the two probe cells, so the
+        // transition from end-of-row-0 to (0,1) crosses a clean gap and must
+        // take the 2-byte `\r\n`.
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(8, 2);
+        let mut cells = grid(8, 2);
+        let mut out = Vec::new();
+        d.present(&mut out, &cells).expect("baseline");
+
+        cells[7] = red(0xFF);   // last col, row 0
+        cells[8] = red(0x0F);   // first col, row 1
+        let mut f2 = Vec::new();
+        d.present(&mut f2, &cells).expect("f2");
+        let s = String::from_utf8_lossy(&f2);
+        assert!(s.contains("\r\n"), "row transition must use CRLF: {s:?}");
+        assert!(!s.contains("\x1b[2;1H"), "must not absolutely address (0,1)");
+    }
+
+    #[test]
+    fn multi_row_vertical_uses_parameterized_jump() {
+        // Frame 1 = baseline; frame 2 dirties (0,0) and (0,5) — rows 1–4 at
+        // col 0 are clean, so Δy=5 must ride the parameterized jump.
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(4, 8);
+        let mut cells = grid(4, 8);
+        let mut out = Vec::new();
+        d.present(&mut out, &cells).expect("baseline");
+
+        cells[3] = red(0xFF);     // (3,0) — last column; DECAWM clamp pins cursor here
+        cells[3 + 5 * 4] = red(0xF0); // (3,5)
+        let mut f2 = Vec::new();
+        d.present(&mut f2, &cells).expect("f2");
+        let s = String::from_utf8_lossy(&f2);
+        assert!(s.contains("\x1b[7A"), "up-jump to (3,0) from clamped bottom-right: {s:?}");
+        assert!(s.contains("\x1b[5B"), "expected parameterized down-jump: {s:?}");
+        // Pure vertical same-column hops are strictly cheaper than absolute
+        // moves here — no `H` should appear at all.
+        assert_eq!(s.match_indices('H').count(), 0);
+    }
+
+    #[test]
+    fn decawm_clamp_suppresses_move_on_last_column() {
+        // Single-row grid: the probe cell is both last-in-scan-order AND on
+        // the last column, so the DECAWM clamp pins the cursor exactly there.
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(4, 1);
+        let mut cells = grid(4, 1);
+        cells[3] = red(0xFF); // (3,0)
+        let mut f1 = Vec::new();
+        d.present(&mut f1, &cells).expect("f1");
+
+        cells[3].mask = 0x0F;
+        let mut f2 = Vec::new();
+        d.present(&mut f2, &cells).expect("f2");
+        let s = String::from_utf8_lossy(&f2);
+        assert!(
+            !s.contains('H'),
+            "clamped cursor must suppress the MoveTo on repaint: {s:?}"
+        );
+        // Colors unchanged ⇒ only the glyph itself may appear.
+        assert!(!s.contains("38;5"), "no SGR expected either: {s:?}");
+    }
+
+    #[test]
+    fn hysteresis_indexed_skips_identical_quantized_index() {
+        // 1×1 grid: nothing else can disturb the global SGR state between
+        // frames, making the hysteresis contract directly observable.
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(1, 1);
+        let mut cells = vec![TermCell { mask: 0xFF, fg: [255, 0, 0], bg: [0, 0, 0], ch: '\0' }];
+        let mut f1 = Vec::new();
+        d.present(&mut f1, &cells).expect("f1");
+        assert!(String::from_utf8_lossy(&f1).contains("38;5;196"));
+
+        // Same quantized index (196), tiny RGB drift ⇒ fully silent.
+        cells[0].fg = [252, 3, 3];
+        let mut f2 = Vec::new();
+        d.present(&mut f2, &cells).expect("f2");
+        assert!(
+            f2.is_empty(),
+            "index-stable change must emit nothing: {:?}",
+            String::from_utf8_lossy(&f2)
+        );
+
+        // Real change resyncs.
+        cells[0].fg = [0, 255, 0];
+        let mut f3 = Vec::new();
+        d.present(&mut f3, &cells).expect("f3");
+        assert!(String::from_utf8_lossy(&f3).contains("38;5;46"));
+    }
+
+    #[test]
+    fn text_cells_are_exempt_from_hysteresis() {
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(1, 1);
+        let mut cells = vec![TermCell { mask: 0, fg: [255, 0, 0], bg: [0, 0, 0], ch: 'A' }];
+        let mut f1 = Vec::new();
+        d.present(&mut f1, &cells).expect("f1");
+
+        cells[0].fg = [252, 3, 3]; // identical quantized index, but TEXT.
+        let mut f2 = Vec::new();
+        d.present(&mut f2, &cells).expect("f2");
+        assert!(
+            String::from_utf8_lossy(&f2).contains("38;5"),
+            "text glyphs must always resync exact color"
+        );
+    }
+
+    #[test]
+    fn presentation_never_clears_the_screen() {
+        let mut d = TermDisplay::new(false);
+        d.resize_if_needed(6, 3);
+        let mut all = Vec::new();
+        let cells = grid(6, 3);
+        d.present(&mut all, &cells).expect("f1");
+        d.resize_if_needed(8, 4); // force full repaint path
+        let mut cells2 = grid(8, 4);
+        cells2[5] = red(0xF0);
+        d.present(&mut all, &cells2).expect("f2");
+        let s = String::from_utf8_lossy(&all);
+        assert!(!s.contains("2J"), "presentation must never clear: {s:?}");
     }
 }

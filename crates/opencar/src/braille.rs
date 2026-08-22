@@ -23,8 +23,31 @@ pub struct TermCell {
     pub ch: char,
 }
 
+
+/// Build the static braille UTF-8 table: `mask i` encodes code point
+/// `U+2800 + i` as its 3-byte UTF-8 sequence.
+const fn build_braille_utf8() -> [[u8; 3]; 256] {
+    let mut table = [[0u8; 3]; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let code = 0x2800u32 + i as u32;
+        table[i] = [
+            (0xE0 | (code >> 12)) as u8,
+            (0x80 | ((code >> 6) & 0x3F)) as u8,
+            (0x80 | (code & 0x3F)) as u8,
+        ];
+        i += 1;
+    }
+    table
+}
+
 impl TermCell {
     pub const BLANK: TermCell = TermCell { mask: 0, fg: [0, 0, 0], bg: [0, 0, 0], ch: '\0' };
+
+    /// Pre-encoded UTF-8 bytes for every braille pattern
+    /// (`U+2800 + mask`, indexed by mask). The presentation hot path writes
+    /// a 3-byte slice copy instead of running `char::encode_utf8` per cell.
+    pub const BRAILLE_UTF8: [[u8; 3]; 256] = build_braille_utf8();
 
     /// Unicode braille glyph for this cell.
     pub fn glyph(&self) -> char {
@@ -33,7 +56,6 @@ impl TermCell {
         }
         char::from_u32(0x2800 + self.mask as u32).unwrap_or(' ')
     }
-
     pub fn is_blank(&self) -> bool {
         self.mask == 0 && self.ch == '\0'
     }

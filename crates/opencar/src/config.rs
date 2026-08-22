@@ -320,6 +320,15 @@ pub const CADENCE_BLOCKED_SHARE: f32 = 0.30;
 pub const CADENCE_SLOW_WINDOWS: u32 = 3;
 /// Consecutive clean draws before the gate returns to nominal.
 pub const CADENCE_CLEAN_WINDOWS: u32 = 2;
+/// Max columns a relative forward cursor move (`\x1b[N C`) will span before
+/// falling back to absolute positioning.
+pub const CURSOR_REL_MOVE_MAX: u16 = 3;
+/// Max rows for parameterized vertical jumps (`\x1b[{N}B`/`A`); larger gaps
+/// use absolute moves.
+pub const CURSOR_REL_ROW_MAX: i32 = 9;
+/// Per-channel RGB tolerance for skipping imperceptible SGR updates
+/// (truecolor mode; indexed mode skips on identical quantized indices).
+pub const COLOR_SKIP_EPS: i32 = 8;
 pub const BOB_PHASE_RATE: f32 = 0.55; // bob phase per meter traveled
 pub const OFFROAD_BOB_MULT: f32 = 3.0;
 
