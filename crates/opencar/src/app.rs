@@ -349,13 +349,6 @@ mod keys_tests {
     use super::*;
     use std::time::Duration;
 
-    fn t(secs: u64) -> Instant {
-        Instant::now() - Duration::from_secs(secs)
-    }
-    fn ms(n: u64) -> Instant {
-        Instant::now() + Duration::from_millis(0) - Duration::from_millis(n)
-    }
-
     #[test]
     fn steering_tap_expires_within_tap_window() {
         let mut keys = HeldKeys::new(false);

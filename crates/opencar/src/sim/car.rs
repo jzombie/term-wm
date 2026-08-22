@@ -214,6 +214,7 @@ mod tests {
         let (mut v, mut w) = on_road();
         w.ensure_chunks_around(v.x, v.z, usize::MAX);
         let right = VehicleInput { throttle: 0.0, brake: 0.0, steer: 1.0, handbrake: false };
+        let h0 = v.heading;
         for _ in 0..30 {
             v.update(SIM_TICK_DT, right, &w);
         }
@@ -222,7 +223,7 @@ mod tests {
             "wheel should sit at full lock, got {}",
             v.steer_sm
         );
-        assert_eq!(v.heading, 0.0, "heading must not move at standstill");
+        assert_eq!(v.heading, h0, "heading must not move at standstill");
     }
 
     #[test]
@@ -273,7 +274,7 @@ mod tests {
         let omega = (v.heading - h0).abs() / (ticks as f32 * SIM_TICK_DT);
         let lat_accel = MAX_SPEED * omega;
         assert!(
-            lat_accel <= MAX_LAT_ACCEL * 1.02 && lat_accel >= MAX_LAT_ACCEL * 0.9,
+            (MAX_LAT_ACCEL * 0.9..=MAX_LAT_ACCEL * 1.02).contains(&lat_accel),
             "lateral accel {lat_accel:.2} m/s² escaped the {MAX_LAT_ACCEL} budget"
         );
     }
