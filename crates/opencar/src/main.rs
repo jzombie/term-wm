@@ -182,7 +182,13 @@ fn drive(
 }
 
 fn main() -> io::Result<()> {
-    let mut seed = 1337u32;
+    let mut seed = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| (d.as_nanos() as u64 ^ 0x9E3779B97F4A7C15) as u32)
+            .unwrap_or(1337)
+    };
     let mut debug_frame = None;
     let mut capture_out = None;
     for a in std::env::args().skip(1) {

@@ -103,8 +103,19 @@ impl App {
         let mut world = World::new(seed);
         let roads = *world.roads();
         let noise = *world.noise();
-        let start = roads.ew().point(0.0, LANE_OFFSETS[0], &noise);
-        let tan = roads.ew().tangent(0.0, &noise);
+        let mut rng_state = seed as u64 ^ 0x9E3779B97F4A7C15u64;
+        let mut rng = || {
+            rng_state = rng_state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (rng_state >> 32) as u32
+        };
+        let use_ew = (rng() & 1) == 0;
+        let t0 = (rng() % 4000) as f32 - 2000.0;
+        let lane = (rng() as usize) % LANE_OFFSETS.len();
+        let hw = if use_ew { roads.ew() } else { roads.ns() };
+        let start = hw.point(t0, LANE_OFFSETS[lane], &noise);
+        let tan = hw.tangent(t0, &noise);
         let heading = tan.0.atan2(tan.1);
         let mut player = Vehicle::new(start.0, start.1, heading);
         player.y = world.height_at(player.x, player.z);
