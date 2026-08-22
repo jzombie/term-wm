@@ -59,6 +59,7 @@ impl TermDisplay {
                 let idx = cy * self.cols as usize + cx;
                 let cell = cells[idx];
                 if idx < self.prev.len() && self.prev[idx] == cell {
+                    run_active = false;
                     continue;
                 }
                 if !run_active {
