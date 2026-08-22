@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
     ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
-    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected,
+    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected, OnUserResized,
     OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
     RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope,
     RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
@@ -36,6 +36,11 @@ const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_
 /// How often the output polling task wakes to re-check the session's exit
 /// status, as a fallback for a missed or raced PTY EOF notification.
 const SESSION_EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Trailing-edge coalescing window for `OnUserResized` pushes to the internal
+/// WM. Interactive drag-resizes fire `ResizePty` at high frequency; batching
+/// them keeps the WM notification pipeline from flooding.
+const RESIZE_NOTIFY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Upper bound on the per-channel `output_cache` retained when a session exits
 /// with no subscribers attached. Only the last `MAX_RETAINED_OUTPUT_BYTES` of
@@ -162,6 +167,12 @@ struct ChannelState {
     internal_wm_caller: Option<RpcIpcConnectionContextHandle>,
     /// The `conn_id` of the subscribing WM connection (for disconnect cleanup).
     internal_wm_conn_id: Option<usize>,
+    /// Latest reported size per client awaiting the trailing-edge
+    /// `OnUserResized` flush to the internal WM. Keyed by `conn_id`.
+    pending_wm_resizes: HashMap<usize, (u16, u16)>,
+    /// Whether a detached trailing-edge flush task is already scheduled for
+    /// this channel; guards against spawning duplicate flush tasks.
+    wm_resize_flush_scheduled: bool,
 }
 
 /// Gateway coordination. Two tiers:
@@ -228,6 +239,8 @@ impl ChannelState {
             input_mode: InputMode::RawPty,
             internal_wm_caller: None,
             internal_wm_conn_id: None,
+            pending_wm_resizes: HashMap::new(),
+            wm_resize_flush_scheduled: false,
         }
     }
 
@@ -780,6 +793,56 @@ async fn notify_user_disconnected(state: &ServerState, channel: &ChannelName, co
     }
 }
 
+/// Deliver one coalesced `OnUserResized` notification. Fire-and-forget.
+fn notify_user_resized(
+    caller: RpcIpcConnectionContextHandle,
+    conn_id: usize,
+    cols: u16,
+    rows: u16,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = OnUserResized::call(&caller, (conn_id, cols, rows)).await {
+            tracing::debug!(error = ?e, "Failed to deliver OnUserResized");
+        }
+    });
+}
+
+/// Schedule the trailing-edge `OnUserResized` flush for a channel.
+///
+/// Called from the `ResizePty` handler while the channel lock is held: the
+/// handler has already stored the latest size into `pending_wm_resizes`. The
+/// first caller marks `wm_resize_flush_scheduled` and spawns ONE detached task
+/// that sleeps `RESIZE_NOTIFY_DEBOUNCE`, then drains every pending entry under
+/// a fresh lock before dropping it to send the RPCs — so rapid resize bursts
+/// during interactive drags collapse into ≤1 batch per window and the final
+/// size is always delivered.
+fn spawn_wm_resize_flush(state: &SharedState, name: ChannelName) {
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        tokio::time::sleep(RESIZE_NOTIFY_DEBOUNCE).await;
+        let Some(ch) = resolve_channel(&state, &name).await else {
+            // Channel reaped mid-window; the scheduled flag dies with the state.
+            return;
+        };
+        let pending = {
+            let mut guard = ch.lock().await;
+            guard.wm_resize_flush_scheduled = false;
+            std::mem::take(&mut guard.pending_wm_resizes)
+        };
+        if pending.is_empty() {
+            return;
+        }
+        if let Some(caller) = {
+            let guard = ch.lock().await;
+            guard.internal_wm_caller.clone()
+        } {
+            for (conn_id, (cols, rows)) in pending {
+                notify_user_resized(caller.clone(), conn_id, cols, rows);
+            }
+        }
+    });
+}
+
 /// Spawn a detached escalation task for a kill-requested session, returning
 /// its `JoinHandle` so the caller (e.g. shutdown teardown) can await it.
 ///
@@ -1104,9 +1167,24 @@ pub async fn run_gateway(
                     .await
                     .ok_or_else(|| rpc_err("channel not found"))?;
                 let mut guard = ch.lock().await;
+                let size_changed = match guard.clients.get(&ctx.conn_id) {
+                    // Skip entirely when the reported geometry is unchanged —
+                    // no state mutation, no WM notification.
+                    Some(client) => (client.cols, client.rows) != (cols, rows),
+                    None => false,
+                };
                 if let Some(client) = guard.clients.get_mut(&ctx.conn_id) {
                     client.cols = cols;
                     client.rows = rows;
+                }
+                if size_changed {
+                    // Coalesce WM notifications: store the latest size and
+                    // schedule the trailing-edge flush task once per window.
+                    guard.pending_wm_resizes.insert(ctx.conn_id, (cols, rows));
+                    if !guard.wm_resize_flush_scheduled {
+                        guard.wm_resize_flush_scheduled = true;
+                        spawn_wm_resize_flush(&state, channel.clone());
+                    }
                 }
                 guard.recalculate_pty_size();
                 let (ncols, nrows) = guard
@@ -2183,6 +2261,41 @@ mod tests {
     }
 
     // ── Batch 4: notify_user_connected/disconnected ──────────────────
+
+    #[tokio::test]
+    async fn wm_resize_flush_drains_latest_sizes_and_clears_flag() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse");
+        {
+            let ch = resolve_channel(&state, &name).await.expect("channel");
+            let mut guard = ch.lock().await;
+            // Simulate two clients resizing during one debounce window.
+            guard.pending_wm_resizes.insert(1, (80, 24));
+            guard.pending_wm_resizes.insert(2, (120, 40));
+            guard.wm_resize_flush_scheduled = true;
+        }
+        spawn_wm_resize_flush(&state, name.clone());
+        tokio::time::sleep(RESIZE_NOTIFY_DEBOUNCE + std::time::Duration::from_millis(150)).await;
+        let ch = resolve_channel(&state, &name).await.expect("channel");
+        let guard = ch.lock().await;
+        assert!(
+            guard.pending_wm_resizes.is_empty(),
+            "flush task must drain every pending resize entry"
+        );
+        assert!(
+            !guard.wm_resize_flush_scheduled,
+            "flush task must clear the scheduled flag"
+        );
+    }
+
+    #[test]
+    fn wm_resize_pending_state_defaults_empty() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let channel = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert!(channel.pending_wm_resizes.is_empty());
+        assert!(!channel.wm_resize_flush_scheduled);
+    }
 
     #[tokio::test]
     async fn notify_user_connected_skips_when_single_client() {

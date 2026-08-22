@@ -378,6 +378,28 @@ fn run() -> io::Result<()> {
             {
                 let tx = tx.clone();
                 use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
+                use term_session::protocol::OnUserResized;
+                client
+                    .get_endpoint()
+                    .register_prebuffered(OnUserResized::METHOD_ID, move |payload, _ctx| {
+                        let tx = tx.clone();
+                        async move {
+                            let (conn_id, cols, rows) = OnUserResized::decode_request(&payload)
+                                .map_err(|e| {
+                                    Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                                })?;
+                            let _ = tx.try_send(UnifiedEvent::UserResized((conn_id, cols, rows)));
+                            OnUserResized::encode_response(()).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })
+                        }
+                    })
+                    .await
+                    .expect("register OnUserResized");
+            }
+            {
+                let tx = tx.clone();
+                use muxio_rpc_service_endpoint::RpcServiceEndpointInterface;
                 use term_session::protocol::OnWorkspaceEntered;
                 client
                     .get_endpoint()
@@ -745,8 +767,12 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
         self.inner.on_user_registry_changed();
     }
 
-    fn poll_palette_tick(&mut self) {
-        self.inner.poll_palette_tick();
+    fn on_user_resized(&mut self, conn_id: usize, cols: u16, rows: u16) -> bool {
+        self.inner.on_user_resized(conn_id, cols, rows)
+    }
+
+    fn poll_palette_tick(&mut self) -> bool {
+        self.inner.poll_palette_tick()
     }
 
     fn palette_tick_deadline(&self) -> Option<std::time::Duration> {

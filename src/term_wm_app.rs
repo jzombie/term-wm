@@ -122,6 +122,28 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 ///     app.run()
 /// }
 /// ```
+/// Patch one user's terminal size across every workspace bucket of an
+/// `all_users_by_ws` map. Returns `true` when at least one entry changed.
+#[cfg(feature = "session-persistence")]
+fn patch_users_by_ws(
+    map: &mut std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
+    conn_id: usize,
+    cols: u16,
+    rows: u16,
+) -> bool {
+    let mut changed = false;
+    for users in map.values_mut() {
+        for u in users.iter_mut() {
+            if u.conn_id == conn_id && (u.cols != cols || u.rows != rows) {
+                u.cols = cols;
+                u.rows = rows;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 pub struct TermWmApp<C = NoopComponent>
 where
     C: Component<TermWmAction> + 'static,
@@ -891,7 +913,28 @@ impl<C: Component<TermWmAction> + 'static>
         self.user_registry_debouncer.trigger();
     }
 
-    fn poll_palette_tick(&mut self) {
+    fn on_user_resized(&mut self, conn_id: usize, cols: u16, rows: u16) -> bool {
+        // Filter no-op sizes and unknown conn ids — never arm redraws for them.
+        if !self.wm.user_registry.update_size(conn_id, cols, rows) {
+            return false;
+        }
+        // Patch the palette's data source in BOTH copies so a rebuilt item
+        // cache shows the new size without waiting for an IPC round-trip.
+        #[cfg(feature = "session-persistence")]
+        let patched_visible = patch_users_by_ws(&mut self.all_users_by_ws, conn_id, cols, rows)
+            && patch_users_by_ws(&mut self.wm.all_users_by_ws, conn_id, cols, rows);
+        #[cfg(not(feature = "session-persistence"))]
+        let patched_visible = true;
+        if !self.wm.command_menu_visible() || !patched_visible {
+            return false;
+        }
+        // Rebuild the overlay's cached display items now; the runner's
+        // redraw latch paints them on this same iteration.
+        self.wm.refresh_palette_items();
+        true
+    }
+
+    fn poll_palette_tick(&mut self) -> bool {
         if !self.wm.command_menu_visible() {
             self.palette_tick_ticker.reset();
             #[cfg(feature = "session-persistence")]
@@ -899,8 +942,9 @@ impl<C: Component<TermWmAction> + 'static>
                 self.palette_ipc_ticker.reset();
             }
             self.user_registry_debouncer.reset();
-            return;
+            return false;
         }
+        let mut mutated = false;
         // Flush pending registry updates (trailing-edge debounce)
         if self.user_registry_debouncer.poll() {
             #[cfg(feature = "session-persistence")]
@@ -911,6 +955,7 @@ impl<C: Component<TermWmAction> + 'static>
                 self.wm.all_users_by_ws = self.all_users_by_ws.clone();
             }
             self.wm.refresh_palette_items();
+            mutated = true;
         }
         let need_tick = self.palette_tick_ticker.poll();
         #[cfg(feature = "session-persistence")]
@@ -918,7 +963,7 @@ impl<C: Component<TermWmAction> + 'static>
         #[cfg(not(feature = "session-persistence"))]
         let need_ipc = false;
         if !need_tick && !need_ipc {
-            return;
+            return mutated;
         }
         if need_ipc {
             #[cfg(feature = "session-persistence")]
@@ -931,7 +976,9 @@ impl<C: Component<TermWmAction> + 'static>
         }
         if need_tick || need_ipc {
             self.wm.refresh_palette_items();
+            mutated = true;
         }
+        mutated
     }
 
     fn palette_tick_deadline(&self) -> Option<Duration> {
@@ -1336,9 +1383,50 @@ mod tests {
     #[test]
     fn poll_palette_tick_resets_when_palette_closed() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
-        // Palette starts closed — poll should be a no-op that resets tickers.
-        app.poll_palette_tick();
+        // Palette starts closed — poll should be a no-op that resets tickers
+        // and reports no mutation.
+        assert!(!app.poll_palette_tick());
         // No panic, no side effects.
+    }
+
+    /// `poll_palette_tick` is strictly edge-triggered while the palette is
+    /// open: exactly one `true` per expired source, then `false` again —
+    /// never a level-triggered spin that would regress idle redraw behavior.
+    #[test]
+    fn poll_palette_tick_is_edge_triggered_when_open() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.open_command_palette();
+        // Force the uptime ticker due immediately instead of waiting out the
+        // full tick interval.
+        app.palette_tick_ticker.reset();
+        assert!(
+            app.poll_palette_tick(),
+            "first poll with an expired ticker must report mutation"
+        );
+        assert!(
+            !app.poll_palette_tick(),
+            "second consecutive poll must be false — consume-on-read only"
+        );
+    }
+
+    /// `on_user_resized` filters unknown conn ids and no-op sizes.
+    #[test]
+    fn on_user_resized_rejects_unknown_conn_id_and_noop() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        app.wm()
+            .user_registry
+            .upsert(1, "alice".into(), "host".into(), None, None, 80, 24, 0, 0);
+        // Unknown conn id → false.
+        assert!(!app.on_user_resized(99, 120, 40));
+        // Same-size no-op → false.
+        assert!(!app.on_user_resized(1, 80, 24));
+        // Real change with palette closed → registry patched but not flagged.
+        assert!(app.wm().user_registry.get_by_conn_id(1).unwrap().cols == 80);
+        assert!(!app.on_user_resized(1, 120, 40));
+        assert_eq!(app.wm().user_registry.get_by_conn_id(1).unwrap().cols, 120);
+        assert_eq!(app.wm().user_registry.get_by_conn_id(1).unwrap().rows, 40);
+        // Palette still closed — subsequent same-size event is a no-op again.
+        assert!(!app.on_user_resized(1, 120, 40));
     }
 
     /// `palette_tick_deadline` returns None when palette is not visible.

@@ -80,6 +80,25 @@ impl UserRegistry {
         key
     }
 
+    /// Patch `cols`/`rows` in place for an existing entry.
+    ///
+    /// Returns `true` only when the entry exists **and** the reported
+    /// dimensions actually differ, so callers never flag spurious mutations
+    /// for no-op resizes or unknown connection ids.
+    pub fn update_size(&mut self, conn_id: usize, cols: u16, rows: u16) -> bool {
+        if let Some(&key) = self.by_conn_id.get(&conn_id)
+            && let Some(entry) = self.users.get_mut(key)
+        {
+            if entry.cols == cols && entry.rows == rows {
+                return false;
+            }
+            entry.cols = cols;
+            entry.rows = rows;
+            return true;
+        }
+        false
+    }
+
     /// Remove a user by connection ID. Returns true if found.
     pub fn remove_by_conn_id(&mut self, conn_id: usize) -> bool {
         if let Some(key) = self.by_conn_id.remove(&conn_id) {
@@ -170,6 +189,22 @@ mod tests {
         assert!(r.remove_by_conn_id(1));
         assert!(r.is_empty());
         assert!(!r.remove_by_conn_id(1));
+    }
+
+    #[test]
+    fn update_size_reports_change() {
+        let mut r = UserRegistry::new();
+        r.upsert(1, "alice".into(), "host".into(), None, None, 80, 24, 0, 0);
+        // Real change → true and entry patched.
+        assert!(r.update_size(1, 120, 40));
+        let entry = r.get_by_conn_id(1).expect("must exist");
+        assert_eq!((entry.cols, entry.rows), (120, 40));
+        // Same-size no-op → false, values untouched.
+        assert!(!r.update_size(1, 120, 40));
+        let entry = r.get_by_conn_id(1).expect("must exist");
+        assert_eq!((entry.cols, entry.rows), (120, 40));
+        // Unknown conn_id → false.
+        assert!(!r.update_size(99, 10, 10));
     }
 
     #[test]

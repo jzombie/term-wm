@@ -99,10 +99,28 @@ pub trait WindowManagerHost<
     /// palette if visible.
     fn on_user_registry_changed(&mut self) {}
 
+    /// Apply one user-resize notification (`conn_id`, new `cols`/`rows`).
+    ///
+    /// Implementations patch their user-registry and palette caches and
+    /// rebuild any visible command-palette items so the next frame shows the
+    /// new size. Returns `true` only for real mutations on a visible palette;
+    /// `false` for no-op sizes, unknown conn ids, or a hidden palette so the
+    /// runner never arms the pacer pointlessly. Default: no-op.
+    fn on_user_resized(&mut self, _conn_id: usize, _cols: u16, _rows: u16) -> bool {
+        false
+    }
+
     /// Periodic tick for palette uptime/size polling. Called every loop
-    /// iteration; implementation should throttle to ~1s and no-op when
-    /// palette is not visible.
-    fn poll_palette_tick(&mut self) {}
+    /// iteration; implementation should throttle to the configured tick
+    /// interval and no-op when palette is not visible.
+    ///
+    /// Strictly edge-triggered: returns `true` ONLY on iterations where a
+    /// mutation actually executed (debounce flush or ticker fired — all
+    /// consume-on-read), so the runner can arm one redraw per real change
+    /// without spinning while idle.
+    fn poll_palette_tick(&mut self) -> bool {
+        false
+    }
 
     /// Deadline until next palette tick. Used to clamp sleep when palette
     /// is visible so uptime seconds advance.
@@ -509,6 +527,14 @@ where
                     .push_notification(label, std::time::Duration::from_secs(3));
                 user_changed = true;
             }
+            // Resize notifications patch the registry and palette caches
+            // directly; only real mutations on a visible palette flag a
+            // refresh (guarded inside `on_user_resized`).
+            for (conn_id, cols, rows) in driver.take_user_resized() {
+                if app.on_user_resized(conn_id, cols, rows) {
+                    user_changed = true;
+                }
+            }
             if let Some(users) = driver.take_user_cache_refreshed() {
                 app.wm().user_registry.clear();
                 for user in users {
@@ -531,7 +557,14 @@ where
             }
 
             // Periodic palette tick for uptime/size polling while open.
-            app.poll_palette_tick();
+            // Palette content may have mutated during this idle iteration
+            // (registry change, debounce flush, uptime tick) — arm the pacer
+            // via the redraw latch so the None branch actually paints the
+            // rebuilt items instead of waiting for the next input event.
+            let palette_mutated = app.poll_palette_tick();
+            if user_changed || palette_mutated {
+                driver.request_redraw();
+            }
 
             // Update monocle mode on resize
             if let Some(Event::Resize(width, _height)) = &event {

@@ -47,6 +47,9 @@ pub enum UnifiedEvent {
     /// A remote user disconnected.
     #[cfg(feature = "session-persistence")]
     UserDisconnected(usize),
+    /// A user resized their terminal (server-coalesced `(conn_id, cols, rows)`).
+    #[cfg(feature = "session-persistence")]
+    UserResized((usize, u16, u16)),
     /// Fresh snapshot of connected users from `ListUsers`.
     #[cfg(feature = "session-persistence")]
     UserCacheRefreshed(Vec<term_session::protocol::UserInfo>),
@@ -123,6 +126,9 @@ pub struct UnifiedEventSource {
     /// Accumulated user-disconnected events.
     #[cfg(feature = "session-persistence")]
     user_disconnected: Vec<usize>,
+    /// Accumulated user-resized events as `(conn_id, cols, rows)` tuples.
+    #[cfg(feature = "session-persistence")]
+    user_resized: Vec<(usize, u16, u16)>,
     /// Latest user cache snapshot.
     #[cfg(feature = "session-persistence")]
     user_cache_refreshed: Option<Vec<term_session::protocol::UserInfo>>,
@@ -184,6 +190,8 @@ impl UnifiedEventSource {
                 user_connected: Vec::new(),
                 #[cfg(feature = "session-persistence")]
                 user_disconnected: Vec::new(),
+                #[cfg(feature = "session-persistence")]
+                user_resized: Vec::new(),
                 #[cfg(feature = "session-persistence")]
                 user_cache_refreshed: None,
             },
@@ -253,6 +261,10 @@ impl UnifiedEventSource {
                 #[cfg(feature = "session-persistence")]
                 Ok(UnifiedEvent::UserDisconnected(conn_id)) => {
                     self.user_disconnected.push(conn_id);
+                }
+                #[cfg(feature = "session-persistence")]
+                Ok(UnifiedEvent::UserResized(resized)) => {
+                    self.user_resized.push(resized);
                 }
                 #[cfg(feature = "session-persistence")]
                 Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
@@ -367,6 +379,12 @@ impl UnifiedEventSource {
                 UnifiedPoll::RenderDue
             }
             #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserResized(resized) => {
+                self.user_resized.push(resized);
+                self.frame_pacer.notify_pending(Instant::now());
+                UnifiedPoll::RenderDue
+            }
+            #[cfg(feature = "session-persistence")]
             UnifiedEvent::UserCacheRefreshed(users) => {
                 self.user_cache_refreshed = Some(users);
                 self.frame_pacer.notify_pending(Instant::now());
@@ -433,6 +451,11 @@ impl UnifiedEventSource {
             #[cfg(feature = "session-persistence")]
             UnifiedEvent::UserDisconnected(conn_id) => {
                 self.user_disconnected.push(conn_id);
+                None
+            }
+            #[cfg(feature = "session-persistence")]
+            UnifiedEvent::UserResized(resized) => {
+                self.user_resized.push(resized);
                 None
             }
             #[cfg(feature = "session-persistence")]
@@ -715,6 +738,10 @@ impl EventSource for UnifiedEventSource {
                             self.user_disconnected.push(id);
                         }
                         #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserResized(resized)) => {
+                            self.user_resized.push(resized);
+                        }
+                        #[cfg(feature = "session-persistence")]
                         Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
                             self.user_cache_refreshed = Some(users);
                         }
@@ -771,6 +798,10 @@ impl EventSource for UnifiedEventSource {
                     #[cfg(feature = "session-persistence")]
                     Ok(UnifiedEvent::UserDisconnected(id)) => {
                         self.user_disconnected.push(id);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserResized(resized)) => {
+                        self.user_resized.push(resized);
                     }
                     #[cfg(feature = "session-persistence")]
                     Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
@@ -859,6 +890,10 @@ impl EventSource for UnifiedEventSource {
                             self.user_disconnected.push(id);
                         }
                         #[cfg(feature = "session-persistence")]
+                        Ok(UnifiedEvent::UserResized(resized)) => {
+                            self.user_resized.push(resized);
+                        }
+                        #[cfg(feature = "session-persistence")]
                         Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
                             self.user_cache_refreshed = Some(users);
                         }
@@ -915,6 +950,10 @@ impl EventSource for UnifiedEventSource {
                     #[cfg(feature = "session-persistence")]
                     Ok(UnifiedEvent::UserDisconnected(id)) => {
                         self.user_disconnected.push(id);
+                    }
+                    #[cfg(feature = "session-persistence")]
+                    Ok(UnifiedEvent::UserResized(resized)) => {
+                        self.user_resized.push(resized);
                     }
                     #[cfg(feature = "session-persistence")]
                     Ok(UnifiedEvent::UserCacheRefreshed(users)) => {
@@ -1027,6 +1066,17 @@ impl EventSource for UnifiedEventSource {
         std::mem::take(&mut self.user_disconnected)
     }
 
+    fn take_user_resized(&mut self) -> Vec<(usize, u16, u16)> {
+        #[cfg(feature = "session-persistence")]
+        {
+            std::mem::take(&mut self.user_resized)
+        }
+        #[cfg(not(feature = "session-persistence"))]
+        {
+            Vec::new()
+        }
+    }
+
     #[cfg(feature = "session-persistence")]
     fn take_user_cache_refreshed(&mut self) -> Option<Vec<term_wm_core::user_registry::UserEntry>> {
         self.user_cache_refreshed.take().map(|users| {
@@ -1109,6 +1159,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -1209,6 +1261,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1300,6 +1354,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1356,6 +1412,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -1424,6 +1482,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         assert_eq!(
@@ -1463,6 +1523,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         assert_eq!(
@@ -1499,6 +1561,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -1546,6 +1610,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -1598,6 +1664,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -1640,6 +1708,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -1702,6 +1772,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         console_tx.send(key_evt(KeyCode::Char('a'))).unwrap();
@@ -1747,6 +1819,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -1804,6 +1878,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
         for _ in 0..3 {
@@ -1854,6 +1930,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -1911,6 +1989,8 @@ mod tests {
             user_connected: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
             #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
@@ -2021,6 +2101,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -2084,6 +2166,8 @@ mod tests {
             #[cfg(feature = "session-persistence")]
             user_disconnected: Vec::new(),
             #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
             user_cache_refreshed: None,
         };
 
@@ -2135,6 +2219,7 @@ mod tests {
             workspace_entered,
             user_connected,
             user_disconnected,
+            user_resized: Vec::new(),
             user_cache_refreshed,
         }
     }
@@ -2179,6 +2264,17 @@ mod tests {
         let taken = EventSource::take_user_disconnected(&mut source);
         assert_eq!(taken, vec![3, 7]);
         assert!(EventSource::take_user_disconnected(&mut source).is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn take_user_resized_drains_accumulator() {
+        use super::EventSource;
+        let mut source = make_source_with_session_fields(Vec::new(), Vec::new(), Vec::new(), None);
+        source.user_resized = vec![(3, 100, 30), (7, 200, 50)];
+        let taken = EventSource::take_user_resized(&mut source);
+        assert_eq!(taken, vec![(3, 100, 30), (7, 200, 50)]);
+        assert!(EventSource::take_user_resized(&mut source).is_empty());
     }
 
     #[test]
@@ -2264,6 +2360,7 @@ mod tests {
             workspace_entered: Vec::new(),
             user_connected: Vec::new(),
             user_disconnected: Vec::new(),
+            user_resized: Vec::new(),
             user_cache_refreshed: None,
         };
 
@@ -2306,6 +2403,7 @@ mod tests {
             workspace_entered: Vec::new(),
             user_connected: Vec::new(),
             user_disconnected: Vec::new(),
+            user_resized: Vec::new(),
             user_cache_refreshed: None,
         };
 
@@ -2347,6 +2445,7 @@ mod tests {
             workspace_entered: Vec::new(),
             user_connected: Vec::new(),
             user_disconnected: Vec::new(),
+            user_resized: Vec::new(),
             user_cache_refreshed: None,
         };
 
@@ -2387,6 +2486,7 @@ mod tests {
             workspace_entered: Vec::new(),
             user_connected: Vec::new(),
             user_disconnected: Vec::new(),
+            user_resized: Vec::new(),
             user_cache_refreshed: None,
         };
 
@@ -2436,6 +2536,7 @@ mod tests {
             workspace_entered: Vec::new(),
             user_connected: Vec::new(),
             user_disconnected: Vec::new(),
+            user_resized: Vec::new(),
             user_cache_refreshed: None,
         };
 
