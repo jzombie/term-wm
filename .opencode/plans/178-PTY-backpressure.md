@@ -1,3 +1,5 @@
+> _Can PTY backpressure be monitored as a metric in the HUD?_
+
 <code_review_analysis>
 The performance disparity between a Linux Virtual Terminal Interface (VTI) / Linux console and macOS `Terminal.app` is an architectural boundary issue regarding how terminal emulators process stream input:
 
