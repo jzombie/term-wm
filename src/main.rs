@@ -1115,7 +1115,8 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "session-persistence")]
+    // Process-global-state tests exist under every feature combination, so
+    // the serial attribute is imported unconditionally.
     use serial_test::serial;
     #[cfg(feature = "session-persistence")]
     use term_wm_core::actions::TermWmAction;
@@ -1343,179 +1344,38 @@ mod tests {
         );
     }
 
-    /// Serializes tests that mutate process-global environment variables
-    /// (`TERM_WM_GATEWAY` / `TERM_WM_ENV` / `TERM_WM_NO_SESSION_PERSISTENCE`),
-    /// which are unsafe to read/write concurrently.
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Dedicated host runtime for shared test gateways. Never dropped: the
-    /// process-lifetime task keeps each socket alive for every test that
-    /// dials it, on any thread, with no locks involved.
-    #[cfg(feature = "session-persistence")]
-    fn test_gateway_runtime() -> &'static tokio::runtime::Runtime {
-        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-        RT.get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .expect("test gateway runtime")
-        })
-    }
-
-    /// Ensure a live gateway is reachable at `gw`, spawning one on the
-    /// shared test runtime when necessary. Returns the resolved name.
-    ///
-    /// NOTE: panics here are swallowed by the global debug-log panic hook
-    /// installed by init_system_windows(); diagnostics go through
-    /// eprintln! instead of assert messages.
-    #[cfg(feature = "session-persistence")]
-    fn ensure_gateway(gw: term_session::ChannelName) -> String {
-        use term_session_muxio_service_definitions::probe_ipc_endpoint;
-        if !probe_ipc_endpoint(&gw) {
-            test_gateway_runtime().spawn({
-                let gw = gw.clone();
-                async move {
-                    let _ = term_session::server::run_gateway(gw).await;
-                }
-            });
-            for _ in 0..150 {
-                if probe_ipc_endpoint(&gw) {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-        }
-        if !probe_ipc_endpoint(&gw) {
-            eprintln!("DIAG: gateway {gw} unreachable after spawn attempt (stale socket file?)");
-            panic!("test gateway must be reachable");
-        }
-        gw.to_string()
-    }
-
-    /// Default-endpoint variant for tests that merely need a REACHABLE
-    /// daemon. Under `cargo test` this resolves to the dev namespace
-    /// (`term-wm/dev/<user>/gateway`), which installed daemons never occupy,
-    /// so unit tests cannot collide with real sessions.
-    #[cfg(feature = "session-persistence")]
-    fn ensure_test_gateway() -> String {
-        ensure_gateway(term_session::gateway_channel_name())
-    }
-
-    /// Hardening E2E (#298): drive the REAL stop-gateway flow against a LIVE
-    /// in-process daemon. Open the confirmation through actual dispatch,
-    /// verify the body carries live gateway-derived counts, deliver an Enter
-    /// to the overlay (user pressing Confirm), execute the forced shutdown,
-    /// and prove the daemon socket actually dies.
-    ///
-    /// The runner's Layer-1 branch (Confirm => close + executor) is replicated
-    /// here call-for-call; its routing is separately pinned by
-    /// `dispatch_action_routes_stop_gateway_actions_to_host` in term-wm-core.
-    #[cfg(feature = "session-persistence")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    // Follows the suite's env-isolation pattern: hold env_lock() for the
-    // whole flow so TERM_WM_GATEWAY stays pinned to this test's unique
-    // socket (clippy's across-await lint is intentionally allowed; nothing
-    // inside ever waits on another test holding the same mutex).
-    #[allow(clippy::await_holding_lock)]
-    async fn stop_gateway_daemon_e2e_from_app_actions() {
-        let _guard = env_lock();
-        use term_session::protocol::probe_ipc_endpoint;
-        use term_wm_core::actions::ConfirmAction;
-        use term_wm_core::events::KeyEvent;
-        use term_wm_core::events::{KeyCode, KeyKind, KeyModifiers};
-        use term_wm_core::window::window_manager::system_tags;
-
-        static NEXT_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let id = NEXT_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let gw = term_session::ChannelName::parse(&format!("term-wm/testgw-stop-{id}"))
-            .expect("unique gateway");
-        unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gw.to_string());
-        }
-
-        // Live in-process daemon on that isolated socket.
-        let server = tokio::spawn({
-            let gw = gw.clone();
-            async move {
-                let _ = term_session::server::run_gateway(gw).await;
-            }
-        });
-        let mut up = false;
-        for _ in 0..100 {
-            if probe_ipc_endpoint(&gw) {
-                up = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        assert!(up, "gateway must be reachable before the dialog opens");
-
-        let mut app = test_app();
-
-        // 1. Palette action opens the dialog; body carries gateway-derived counts.
-        assert!(app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm));
-        assert!(app.inner.wm().stop_daemon_confirm_visible());
-        let (title, body) = {
-            let key = app
-                .inner
-                .wm()
-                .get_overlay::<system_tags::StopDaemonConfirm>()
-                .expect("stop-daemon overlay present");
-            match app.inner.wm().overlay_for_key_mut(key) {
-                Some(OverlayComponent::StopDaemonConfirm(c)) => {
-                    (c.dialog_title().to_string(), c.body_text().to_string())
-                }
-                _ => panic!("wrong overlay variant"),
-            }
-        };
-        assert_eq!(title, "Stop Gateway Daemon");
-        assert!(
-            body.contains("Active workspaces:"),
-            "live counts line missing: {body}"
-        );
-
-        // 2. Enter on the overlay resolves to Confirm (default selection).
-        let enter = Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-            KeyKind::Press,
-        ));
-        assert_eq!(
-            app.inner.wm().handle_stop_daemon_confirm_event(&enter),
-            Some(ConfirmAction::Confirm)
-        );
-
-        // 3. Runner branch replicated: close, then execute the forced shutdown.
-        app.inner.wm().close_stop_daemon_confirm();
-        assert!(!app.inner.wm().stop_daemon_confirm_visible());
-        assert!(app.handle_custom_action(&TermWmAction::StopGatewayDaemon));
-
-        // 4. The daemon socket must actually die.
-        let mut down = false;
-        for _ in 0..50 {
-            if !probe_ipc_endpoint(&gw) {
-                down = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        assert!(down, "gateway socket must be gone after forced shutdown");
-
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server).await;
-        unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+    /// Guardrail for the Windows CI stabilization: the unit-test binary must
+    /// never re-acquire real IPC helpers. Live gateway lifecycle coverage
+    /// belongs in tests/integration_session.rs, which owns bounded daemon
+    /// helpers and runs in its own process.
+    #[test]
+    fn unit_binary_contains_no_gateway_ipc_helpers() {
+        let src = include_str!("main.rs");
+        // Needles are assembled via concat! so this file never contains a
+        // complete banned identifier, which would self-match.
+        let banned = [
+            concat!("ensure_", "gateway"),
+            concat!("ensure_test_", "gateway"),
+            concat!("test_gateway_", "runtime"),
+            concat!("probe_ipc_", "endpoint"),
+            concat!("with_", "gateway"),
+            concat!("arm_", "watchdog"),
+            concat!("install_diagnostic_panic_", "hook"),
+        ];
+        for needle in banned {
+            assert!(
+                !src.contains(needle),
+                "src/main.rs must not reference '{needle}': \
+                 unit tests are hermetic; use tests/integration_session.rs"
+            );
         }
     }
 
     /// `runtime_config_for` enables persistence when neither the flag nor the
     /// env var is present.
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_enabled_without_flag_or_env() {
-        let _guard = env_lock();
         unsafe {
             std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
         }
@@ -1524,8 +1384,8 @@ mod tests {
 
     /// The `--no-session-persistence` flag alone disables persistence.
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_flag_disables_persistence() {
-        let _guard = env_lock();
         unsafe {
             std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
         }
@@ -1534,8 +1394,8 @@ mod tests {
 
     /// The `TERM_WM_NO_SESSION_PERSISTENCE` env var alone disables persistence.
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_env_disables_persistence() {
-        let _guard = env_lock();
         unsafe {
             std::env::set_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR, "1");
         }
@@ -1547,8 +1407,8 @@ mod tests {
 
     /// Both sources together still disable persistence (OR semantics).
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_flag_and_env_both_disable() {
-        let _guard = env_lock();
         unsafe {
             std::env::set_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR, "1");
         }
@@ -1560,8 +1420,8 @@ mod tests {
 
     #[cfg(feature = "session-persistence")]
     #[test]
+    #[serial(process_global_state)]
     fn help_shows_resolved_gateway() {
-        let _guard = env_lock();
         // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
         // otherwise change the rendered footer.
         unsafe {
@@ -1599,7 +1459,7 @@ mod tests {
     /// must fall through as unhandled (`false`) — the runtime toggle's contract.
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn handle_custom_action_returns_false_when_runtime_disabled() {
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {
@@ -1630,10 +1490,12 @@ mod tests {
     /// gateway name avoids colliding with a real daemon.
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn handle_custom_action_consumes_workspace_actions() {
-        // Reachable daemon on the dev namespace; no process-env mutation.
-        let _gw_socket = ensure_test_gateway();
+        // Hermetic: a guaranteed-dead unique channel. Workspace actions must
+        // be consumed even when every gateway connect fails instantly; IPC
+        // errors are logged inside the handlers, never bubbled.
+        let _gateway = PinnedGatewayEnv::pin(dead_gateway_channel("ws"));
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {
             session_persistence: session_persistence_enabled(),
@@ -1668,7 +1530,7 @@ mod tests {
     /// (it is matched before the persistence guard).
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn run_project_task_works_without_persistence() {
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {
@@ -1691,57 +1553,68 @@ mod tests {
     /// The stop-gateway palette action opens the confirmation overlay and is
     /// consumed; the executor action is likewise consumed without quitting.
     /// Neither may ever surface as an unhandled fall-through (#298).
+    ///
+    /// Hermetic helpers below: `PinnedGatewayEnv` RAII-pins the gateway env
+    /// var and `dead_gateway_channel` mints unique never-spawned channels, so
+    /// connects fail instantly on every platform.
+    #[cfg(feature = "session-persistence")]
+    struct PinnedGatewayEnv(#[allow(dead_code)] String);
+
+    #[cfg(feature = "session-persistence")]
+    impl PinnedGatewayEnv {
+        /// Pin the gateway env var to `value` for the guard's lifetime.
+        ///
+        /// SAFETY: callers hold `#[serial(process_global_state)]`, so no
+        /// other thread reads or writes the environment while the guard is
+        /// alive.
+        fn pin(value: String) -> Self {
+            unsafe {
+                std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &value);
+            }
+            Self(value)
+        }
+    }
+
+    #[cfg(feature = "session-persistence")]
+    impl Drop for PinnedGatewayEnv {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+            }
+        }
+    }
+
+    /// Unique guaranteed-dead channel for hermetic failure-path tests: never
+    /// spawned, so connects fail instantly on every platform.
+    #[cfg(feature = "session-persistence")]
+    fn dead_gateway_channel(tag: &str) -> String {
+        static NEXT_DEAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let n = NEXT_DEAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("term-wm/testgw-dead-{}-{tag}-{n}", std::process::id())
+    }
+
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn handle_custom_action_consumes_stop_gateway_actions() {
-        // Dedicated gateway: the forced shutdown below REALLY kills it,
-        // proving the executor end-to-end without touching the shared
-        // instance other tests dial.
-        static NEXT_STOP_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let stop_id = NEXT_STOP_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let gw_socket = ensure_gateway(
-            term_session::ChannelName::parse(&format!(
-                "term-wm/testgw-stop-{}-{stop_id}",
-                std::process::id()
-            ))
-            .expect("dedicated gateway name"),
-        );
-        // Pin dialog reads AND forced shutdown to THIS gateway.
-        let _env_guard = env_lock();
-        unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &gw_socket);
-        }
-        let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
-        // stderr into tracing and captures panics into the debug buffer).
-        {
-            use std::io::Write as _;
-            std::panic::set_hook(Box::new(|info| {
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/twm-panic.log")
-                {
-                    let _ = writeln!(f, "PANIC: {info}");
-                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
-                }
-            }));
-        }
+        // Hermetic (#Windows-CI): TERM_WM_GATEWAY points at a guaranteed-dead
+        // unique channel, so every connect fails instantly on all platforms.
+        // The assertions pin what the UNIT layer owns: palette consumption,
+        // overlay visibility, Enter-to-Confirm resolution, close behavior,
+        // and executor consumption with the IPC error toasted rather than
+        // bubbled. Real forced-shutdown RPC semantics (socket actually dies)
+        // are proven end-to-end in tests/integration_session.rs.
+        let _gateway = PinnedGatewayEnv::pin(dead_gateway_channel("stop"));
+
+        let mut app = test_app();
 
         let opened = app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm);
-        if !opened {
-            eprintln!("DIAG: OpenStopGatewayConfirm not consumed");
-        }
         assert!(
             opened,
             "OpenStopGatewayConfirm must be consumed by the host"
         );
-        let visible = app.inner.wm().stop_daemon_confirm_visible();
-        if !visible {
-            eprintln!("DIAG: stop-daemon overlay not visible");
-        }
         assert!(
-            visible,
+            app.inner.wm().stop_daemon_confirm_visible(),
             "OpenStopGatewayConfirm must render the stop-daemon confirm overlay"
         );
 
@@ -1763,36 +1636,24 @@ mod tests {
 
         // Cancel path (fresh overlay): closing clears visibility.
         app.inner.wm().close_stop_daemon_confirm();
-        assert!(!app.inner.wm().stop_daemon_confirm_visible());
-
-        // The executor arm runs for real against the DEDICATED gateway:
-        // forced shutdown, then prove the socket dies.
-        assert!(app.handle_custom_action(&TermWmAction::StopGatewayDaemon));
-
-        use term_session_muxio_service_definitions::probe_ipc_endpoint;
-        let gw = term_session::ChannelName::parse(&gw_socket).expect("parse gw");
-        let mut down = false;
-        for _ in 0..50 {
-            if !probe_ipc_endpoint(&gw) {
-                down = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
         assert!(
-            down,
-            "dedicated gateway socket must die after forced shutdown"
+            !app.inner.wm().stop_daemon_confirm_visible(),
+            "closing must clear stop-daemon overlay visibility"
         );
 
-        unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
-        }
+        // The executor arm consumes unconditionally: the unreachable gateway
+        // makes `stop_gateway` fail fast and that failure is toasted, never
+        // bubbled as an unhandled action.
+        assert!(
+            app.handle_custom_action(&TermWmAction::StopGatewayDaemon),
+            "StopGatewayDaemon must be consumed even when the gateway is unreachable"
+        );
     }
 
     /// `ToggleWorkspaceFollow` toggles the flag and pushes a notification.
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn toggle_workspace_follow_toggles_flag() {
         let mut app = test_app();
         let initially_enabled = app.inner.wm().workspace_follow_enabled;
@@ -1820,9 +1681,11 @@ mod tests {
     /// `RebindScope::AllViewers` branch (vs `CallerOnly` when disabled).
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn switch_workspace_follow_enabled_uses_all_viewers_scope() {
-        let _gw_socket = ensure_test_gateway();
+        // Hermetic: guaranteed-dead unique channel (see
+        // handle_custom_action_consumes_workspace_actions).
+        let _gateway = PinnedGatewayEnv::pin(dead_gateway_channel("switch"));
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {
             session_persistence: session_persistence_enabled(),
@@ -1831,21 +1694,7 @@ mod tests {
             session_persistence: true,
         });
 
-        let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
-        // stderr into tracing and captures panics into the debug buffer).
-        {
-            use std::io::Write as _;
-            std::panic::set_hook(Box::new(|info| {
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/twm-panic.log")
-                {
-                    let _ = writeln!(f, "PANIC: {info}");
-                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
-                }
-            }));
-        }
+        let mut app = test_app();
 
         // Enable follow mode, then switch workspace
         app.inner.wm().workspace_follow_enabled = true;
