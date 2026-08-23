@@ -1332,6 +1332,165 @@ mod tests {
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Dedicated host runtime for shared test gateways. Never dropped: the
+    /// process-lifetime task keeps each socket alive for every test that
+    /// dials it, on any thread, with no locks involved.
+    fn test_gateway_runtime() -> &'static tokio::runtime::Runtime {
+        static RT: std::sync::OnceLock<tokio::runtime::Runtime> =
+            std::sync::OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("test gateway runtime")
+        })
+    }
+
+    /// Ensure a live gateway is reachable at `gw`, spawning one on the
+    /// shared test runtime when necessary. Returns the resolved name.
+    ///
+    /// NOTE: panics here are swallowed by the global debug-log panic hook
+    /// installed by init_system_windows(); diagnostics go through
+    /// eprintln! instead of assert messages.
+    fn ensure_gateway(gw: term_session::ChannelName) -> String {
+        use term_session_muxio_service_definitions::probe_ipc_endpoint;
+        if !probe_ipc_endpoint(&gw) {
+            test_gateway_runtime().spawn({
+                let gw = gw.clone();
+                async move {
+                    let _ = term_session::server::run_gateway(gw).await;
+                }
+            });
+            for _ in 0..150 {
+                if probe_ipc_endpoint(&gw) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        if !probe_ipc_endpoint(&gw) {
+            eprintln!(
+                "DIAG: gateway {gw} unreachable after spawn attempt (stale socket file?)"
+            );
+            panic!("test gateway must be reachable");
+        }
+        gw.to_string()
+    }
+
+    /// Default-endpoint variant for tests that merely need a REACHABLE
+    /// daemon. Under `cargo test` this resolves to the dev namespace
+    /// (`term-wm/dev/<user>/gateway`), which installed daemons never occupy,
+    /// so unit tests cannot collide with real sessions.
+    fn ensure_test_gateway() -> String {
+        ensure_gateway(term_session::gateway_channel_name())
+    }
+
+    /// Hardening E2E (#298): drive the REAL stop-gateway flow against a LIVE
+    /// in-process daemon. Open the confirmation through actual dispatch,
+    /// verify the body carries live gateway-derived counts, deliver an Enter
+    /// to the overlay (user pressing Confirm), execute the forced shutdown,
+    /// and prove the daemon socket actually dies.
+    ///
+    /// The runner's Layer-1 branch (Confirm => close + executor) is replicated
+    /// here call-for-call; its routing is separately pinned by
+    /// `dispatch_action_routes_stop_gateway_actions_to_host` in term-wm-core.
+    #[cfg(feature = "session-persistence")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Follows the suite's env-isolation pattern: hold env_lock() for the
+    // whole flow so TERM_WM_GATEWAY stays pinned to this test's unique
+    // socket (clippy's across-await lint is intentionally allowed; nothing
+    // inside ever waits on another test holding the same mutex).
+    #[allow(clippy::await_holding_lock)]
+    async fn stop_gateway_daemon_e2e_from_app_actions() {
+        let _guard = env_lock();
+        use term_session::protocol::probe_ipc_endpoint;
+        use term_wm_core::events::{KeyCode, KeyModifiers, KeyKind};
+        use term_wm_core::events::KeyEvent;
+        use term_wm_core::window::window_manager::system_tags;
+        use term_wm_core::actions::ConfirmAction;
+
+        static NEXT_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let gw = term_session::ChannelName::parse(&format!("term-wm/testgw-stop-{id}"))
+            .expect("unique gateway");
+        unsafe {
+            std::env::set_var(
+                term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR,
+                gw.to_string(),
+            );
+        }
+
+        // Live in-process daemon on that isolated socket.
+        let server = tokio::spawn({
+            let gw = gw.clone();
+            async move {
+                let _ = term_session::server::run_gateway(gw).await;
+            }
+        });
+        let mut up = false;
+        for _ in 0..100 {
+            if probe_ipc_endpoint(&gw) {
+                up = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(up, "gateway must be reachable before the dialog opens");
+
+        let mut app = test_app();
+
+        // 1. Palette action opens the dialog; body carries gateway-derived counts.
+        assert!(app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm));
+        assert!(app.inner.wm().stop_daemon_confirm_visible());
+        let (title, body) = {
+            let key = app
+                .inner
+                .wm()
+                .get_overlay::<system_tags::StopDaemonConfirm>()
+                .expect("stop-daemon overlay present");
+            match app.inner.wm().overlay_for_key_mut(key) {
+                Some(OverlayComponent::StopDaemonConfirm(c)) => {
+                    (c.dialog_title().to_string(), c.body_text().to_string())
+                }
+                _ => panic!("wrong overlay variant"),
+            }
+        };
+        assert_eq!(title, "Stop Gateway Daemon");
+        assert!(
+            body.contains("Active workspaces:"),
+            "live counts line missing: {body}"
+        );
+
+        // 2. Enter on the overlay resolves to Confirm (default selection).
+        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE, KeyKind::Press));
+        assert_eq!(
+            app.inner.wm().handle_stop_daemon_confirm_event(&enter),
+            Some(ConfirmAction::Confirm)
+        );
+
+        // 3. Runner branch replicated: close, then execute the forced shutdown.
+        app.inner.wm().close_stop_daemon_confirm();
+        assert!(!app.inner.wm().stop_daemon_confirm_visible());
+        assert!(app.handle_custom_action(&TermWmAction::StopGatewayDaemon));
+
+        // 4. The daemon socket must actually die.
+        let mut down = false;
+        for _ in 0..50 {
+            if !probe_ipc_endpoint(&gw) {
+                down = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(down, "gateway socket must be gone after forced shutdown");
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server).await;
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
+    }
+
     /// `runtime_config_for` enables persistence when neither the flag nor the
     /// env var is present.
     #[test]
@@ -1453,17 +1612,15 @@ mod tests {
     #[test]
     #[serial(runtime_config)]
     fn handle_custom_action_consumes_workspace_actions() {
+        // Reachable daemon on the dev namespace; no process-env mutation.
+        let _gw_socket = ensure_test_gateway();
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
-        let _guard = env_lock();
         let prev = RuntimeConfig {
             session_persistence: session_persistence_enabled(),
         };
         init(RuntimeConfig {
             session_persistence: true,
         });
-        unsafe {
-            std::env::set_var("TERM_WM_GATEWAY", "term-wm/coverage-test-gw");
-        }
 
         let mut app = test_app();
         assert!(app.handle_custom_action(&TermWmAction::SwitchWorkspace("prod".into())));
@@ -1473,9 +1630,6 @@ mod tests {
         assert!(app.handle_custom_action(&TermWmAction::DetachCurrentClient));
 
         init(prev);
-        unsafe {
-            std::env::remove_var("TERM_WM_GATEWAY");
-        }
     }
 
     /// `RunProjectTask` with a nonexistent task label returns false
@@ -1521,24 +1675,102 @@ mod tests {
     #[test]
     #[serial(runtime_config)]
     fn handle_custom_action_consumes_stop_gateway_actions() {
-        let mut app = test_app();
+        // Dedicated gateway: the forced shutdown below REALLY kills it,
+        // proving the executor end-to-end without touching the shared
+        // instance other tests dial.
+        static NEXT_STOP_GW: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let stop_id = NEXT_STOP_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let gw_socket = ensure_gateway(term_session::ChannelName::parse(&format!(
+            "term-wm/testgw-stop-{}-{stop_id}",
+            std::process::id()
+        ))
+        .expect("dedicated gateway name"));
+        // Pin dialog reads AND forced shutdown to THIS gateway.
+        let _env_guard = env_lock();
+        unsafe {
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &gw_socket);
+        }
+        let mut app = test_app();        // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
+        // stderr into tracing and captures panics into the debug buffer).
+        {
+            use std::io::Write as _;
+            std::panic::set_hook(Box::new(|info| {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/twm-panic.log")
+                {
+                    let _ = writeln!(f, "PANIC: {info}");
+                    let _ = writeln!(
+                        f,
+                        "{:?}",
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+            }));
+        }
 
+
+        let opened =
+            app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm);
+        if !opened {
+            eprintln!("DIAG: OpenStopGatewayConfirm not consumed");
+        }
         assert!(
-            app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm),
+            opened,
             "OpenStopGatewayConfirm must be consumed by the host"
         );
+        let visible = app.inner.wm().stop_daemon_confirm_visible();
+        if !visible {
+            eprintln!("DIAG: stop-daemon overlay not visible");
+        }
         assert!(
-            app.inner.wm().stop_daemon_confirm_visible(),
+            visible,
             "OpenStopGatewayConfirm must render the stop-daemon confirm overlay"
         );
 
-        // Cancel path closes the overlay.
+        // Confirm path FIRST (overlay still open): Enter resolves to Confirm.
+        {
+            use term_wm_core::actions::ConfirmAction;
+            use term_wm_core::events::{
+                KeyCode, KeyEvent, KeyKind, KeyModifiers,
+            };
+            let enter = Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            ));
+            assert_eq!(
+                app.inner.wm().handle_stop_daemon_confirm_event(&enter),
+                Some(ConfirmAction::Confirm),
+                "Enter must resolve to Confirm on the open overlay"
+            );
+        }
+
+        // Cancel path (fresh overlay): closing clears visibility.
         app.inner.wm().close_stop_daemon_confirm();
         assert!(!app.inner.wm().stop_daemon_confirm_visible());
 
-        // The executor arm must be consumed too (no gateway running in this
-        // test, so it takes the error-toast branch — still handled).
+        // The executor arm runs for real against the DEDICATED gateway:
+        // forced shutdown, then prove the socket dies.
         assert!(app.handle_custom_action(&TermWmAction::StopGatewayDaemon));
+
+        use term_session_muxio_service_definitions::probe_ipc_endpoint;
+        let gw = term_session::ChannelName::parse(&gw_socket).expect("parse gw");
+        let mut down = false;
+        for _ in 0..50 {
+            if !probe_ipc_endpoint(&gw) {
+                down = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(down, "dedicated gateway socket must die after forced shutdown");
+
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
     }
 
     /// `ToggleWorkspaceFollow` toggles the flag and pushes a notification.
@@ -1574,19 +1806,35 @@ mod tests {
     #[test]
     #[serial(runtime_config)]
     fn switch_workspace_follow_enabled_uses_all_viewers_scope() {
+        let _gw_socket = ensure_test_gateway();
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
-        let _guard = env_lock();
         let prev = RuntimeConfig {
             session_persistence: session_persistence_enabled(),
         };
         init(RuntimeConfig {
             session_persistence: true,
         });
-        unsafe {
-            std::env::set_var("TERM_WM_GATEWAY", "term-wm/coverage-test-gw-follow");
+
+        let mut app = test_app();        // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
+        // stderr into tracing and captures panics into the debug buffer).
+        {
+            use std::io::Write as _;
+            std::panic::set_hook(Box::new(|info| {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/twm-panic.log")
+                {
+                    let _ = writeln!(f, "PANIC: {info}");
+                    let _ = writeln!(
+                        f,
+                        "{:?}",
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+            }));
         }
 
-        let mut app = test_app();
         // Enable follow mode, then switch workspace
         app.inner.wm().workspace_follow_enabled = true;
         assert!(
@@ -1595,9 +1843,6 @@ mod tests {
         );
 
         init(prev);
-        unsafe {
-            std::env::remove_var("TERM_WM_GATEWAY");
-        }
     }
 
     #[test]

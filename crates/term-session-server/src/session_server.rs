@@ -711,6 +711,34 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
         })
     };
     let Some(channel) = channel else {
+        // Subscribe-only connection (an inner WM that never attached): its
+        // death must still release what it owned. Find the channel whose
+        // internal WM is THIS connection and clear its hooks + stats.
+        let channels = state.channels.read().await;
+        let mut owned: Option<ChannelName> = None;
+        for (name, ch) in channels.iter() {
+            let guard = ch.lock().await;
+            if guard.internal_wm_conn_id == Some(conn_id) {
+                owned = Some(name.clone());
+                break;
+            }
+        }
+        drop(channels);
+        if let Some(name) = owned
+            && let Some(ch) = resolve_channel(state, &name).await
+        {
+            let mut guard = ch.lock().await;
+            guard.wm_stats_by_conn.remove(&conn_id);
+            guard.internal_wm_caller = None;
+            guard.internal_wm_conn_id = None;
+            guard.input_mode = InputMode::RawPty;
+            drop(guard);
+            state
+                .internal_channels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&name.to_string());
+        }
         return;
     };
     let Some(ch) = resolve_channel(state, &channel).await else {
@@ -2121,6 +2149,58 @@ mod tests {
         assert_eq!(guard.input_mode, InputMode::RawPty);
         assert_eq!(guard.internal_wm_conn_id, None);
         assert!(guard.internal_wm_caller.is_none());
+    }
+
+    /// A subscribe-only internal WM (never attached) that disconnects must
+    /// release its own channel's hooks and stats — the unattached early-return
+    /// path previously skipped all cleanup.
+    #[tokio::test]
+    async fn evict_conn_cleans_unattached_internal_wm_channel() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse channel");
+        {
+            let ch = state
+                .channels
+                .read()
+                .await
+                .get(&name)
+                .expect("channel exists")
+                .clone();
+            let mut guard = ch.lock().await;
+            guard.internal_wm_conn_id = Some(42);
+            guard.input_mode = InputMode::AttributedIpc { wm_conn_id: 42 };
+            guard.wm_stats_by_conn.insert(42, (3, 2));
+        }
+        state
+            .internal_channels
+            .lock()
+            .unwrap()
+            .insert("test/coalesce".to_string());
+
+        // No ConnEntry exists for conn 42: it subscribed without attaching.
+        evict_conn(&state, 42).await;
+
+        let ch = state
+            .channels
+            .read()
+            .await
+            .get(&name)
+            .expect("channel exists")
+            .clone();
+        let guard = ch.lock().await;
+        assert!(guard.wm_stats_by_conn.is_empty(), "stats released");
+        assert_eq!(guard.internal_wm_conn_id, None);
+        assert!(guard.internal_wm_caller.is_none());
+        assert_eq!(guard.input_mode, InputMode::RawPty);
+        assert!(
+            !state
+                .internal_channels
+                .lock()
+                .unwrap()
+                .contains("test/coalesce"),
+            "internal_channels must lose the channel"
+        );
     }
 
     #[test]

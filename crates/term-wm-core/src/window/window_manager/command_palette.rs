@@ -1064,6 +1064,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_renders_totals_line_under_workspace() {
         use crate::components::{MenuDisplayItem, MenuItem};
@@ -1104,6 +1105,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "session-persistence")]
     #[serial(wm_menu_items)]
     fn wm_menu_items_totals_zero_and_singular_forms() {
         use crate::components::{MenuDisplayItem, MenuItem};
