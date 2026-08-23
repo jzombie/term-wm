@@ -1350,6 +1350,7 @@ mod tests {
     /// Dedicated host runtime for shared test gateways. Never dropped: the
     /// process-lifetime task keeps each socket alive for every test that
     /// dials it, on any thread, with no locks involved.
+    #[cfg(feature = "session-persistence")]
     fn test_gateway_runtime() -> &'static tokio::runtime::Runtime {
         static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
         RT.get_or_init(|| {
