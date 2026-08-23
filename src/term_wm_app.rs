@@ -151,25 +151,32 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// }
 /// ```
 /// Patch one user's terminal size across every workspace bucket of an
-/// `all_users_by_ws` map. Returns `true` when at least one entry changed.
+/// `all_users_by_ws` map. Returns `(present, changed)`: whether any entry
+/// with `conn_id` exists at all, and whether at least one entry actually
+/// changed dimensions. The `present` flag lets callers distinguish a cache
+/// miss (needs reconciliation) from a same-size no-op (#306).
 #[cfg(feature = "session-persistence")]
 fn patch_users_by_ws(
     map: &mut std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
     conn_id: usize,
     cols: u16,
     rows: u16,
-) -> bool {
+) -> (bool, bool) {
+    let mut present = false;
     let mut changed = false;
     for users in map.values_mut() {
         for u in users.iter_mut() {
-            if u.conn_id == conn_id && (u.cols != cols || u.rows != rows) {
-                u.cols = cols;
-                u.rows = rows;
-                changed = true;
+            if u.conn_id == conn_id {
+                present = true;
+                if u.cols != cols || u.rows != rows {
+                    u.cols = cols;
+                    u.rows = rows;
+                    changed = true;
+                }
             }
         }
     }
-    changed
+    (present, changed)
 }
 
 pub struct TermWmApp<C = NoopComponent>
@@ -1074,24 +1081,44 @@ impl<C: Component<TermWmAction> + 'static>
     }
 
     fn on_user_resized(&mut self, conn_id: usize, cols: u16, rows: u16) -> bool {
-        // Filter no-op sizes and unknown conn ids — never arm redraws for them.
-        if !self.wm.user_registry.update_size(conn_id, cols, rows) {
-            return false;
-        }
+        // Distinguish "conn not present" from "same-size no-op": dropping a
+        // miss outright permanently silences real-time updates for that
+        // client (#306). A miss must reconcile through the full IPC refresh.
+        let registry_known = self.wm.user_registry.get_by_conn_id(conn_id).is_some();
+        let registry_changed = if registry_known {
+            self.wm.user_registry.update_size(conn_id, cols, rows)
+        } else {
+            false
+        };
         // Patch the palette's data source in BOTH copies so a rebuilt item
         // cache shows the new size without waiting for an IPC round-trip.
         #[cfg(feature = "session-persistence")]
-        let patched_visible = patch_users_by_ws(&mut self.all_users_by_ws, conn_id, cols, rows)
-            && patch_users_by_ws(&mut self.wm.all_users_by_ws, conn_id, cols, rows);
+        let (app_hit, app_changed) =
+            patch_users_by_ws(&mut self.all_users_by_ws, conn_id, cols, rows);
+        #[cfg(feature = "session-persistence")]
+        let (wm_hit, wm_changed) =
+            patch_users_by_ws(&mut self.wm.all_users_by_ws, conn_id, cols, rows);
         #[cfg(not(feature = "session-persistence"))]
-        let patched_visible = true;
-        if !self.wm.command_menu_visible() || !patched_visible {
-            return false;
+        let (app_hit, app_changed) = (true, false);
+        #[cfg(not(feature = "session-persistence"))]
+        let (wm_hit, wm_changed) = (true, false);
+
+        let fully_known = registry_known && app_hit && wm_hit;
+        if fully_known {
+            let any_changed = registry_changed || app_changed || wm_changed;
+            if !any_changed || !self.wm.command_menu_visible() {
+                return false;
+            }
+            // Rebuild the overlay's cached display items now; the runner's
+            // redraw latch paints them on this same iteration.
+            self.wm.refresh_palette_items();
+            return true;
         }
-        // Rebuild the overlay's cached display items now; the runner's
-        // redraw latch paints them on this same iteration.
-        self.wm.refresh_palette_items();
-        true
+        // Cache miss: request reconciliation only while the palette is
+        // visible. Size labels render solely inside the palette overlay, so
+        // a closed palette must not wake the frame pacer; it heals on open
+        // via `open_command_palette` -> `refresh_workspace_cache`.
+        self.wm.command_menu_visible()
     }
 
     fn poll_palette_tick(&mut self) -> bool {
@@ -1634,14 +1661,16 @@ mod tests {
         );
     }
 
-    /// `on_user_resized` filters unknown conn ids and no-op sizes.
+    /// `on_user_resized` no-ops unchanged sizes, patches known entries in
+    /// place, and requests reconciliation for unknown conn ids only while
+    /// the palette is visible (#306).
     #[test]
-    fn on_user_resized_rejects_unknown_conn_id_and_noop() {
+    fn on_user_resized_noop_and_reconcile_semantics() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         app.wm()
             .user_registry
             .upsert(1, "alice".into(), "host".into(), None, None, 80, 24, 0, 0);
-        // Unknown conn id → false.
+        // Palette closed: unknown conn id → false, no redraw work requested.
         assert!(!app.on_user_resized(99, 120, 40));
         // Same-size no-op → false.
         assert!(!app.on_user_resized(1, 80, 24));
@@ -1652,6 +1681,10 @@ mod tests {
         assert_eq!(app.wm().user_registry.get_by_conn_id(1).unwrap().rows, 40);
         // Palette still closed — subsequent same-size event is a no-op again.
         assert!(!app.on_user_resized(1, 120, 40));
+        // Palette open: unknown conn id requests the debounced reconcile so a
+        // full IPC refresh registers it instead of dropping the event (#306).
+        app.open_command_palette();
+        assert!(app.on_user_resized(99, 200, 50));
     }
 
     /// `palette_tick_deadline` returns None when palette is not visible.

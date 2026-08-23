@@ -237,6 +237,47 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Insert or update one client's reported geometry, creating the entry from
+/// connection metadata (`seed`) when the connection has no entry yet. A
+/// newly created entry always counts as changed so the caller schedules WM
+/// notifications and PTY recalculation for first-time reporters (#306).
+/// Returns `true` when the stored geometry differs from the reported one;
+/// unchanged reports mutate nothing.
+fn upsert_client_geometry(
+    clients: &mut HashMap<usize, ClientEntry>,
+    conn_id: usize,
+    seed: Option<ClientEntry>,
+    cols: u16,
+    rows: u16,
+) -> bool {
+    match clients.get_mut(&conn_id) {
+        Some(client) => {
+            let changed = (client.cols, client.rows) != (cols, rows);
+            client.cols = cols;
+            client.rows = rows;
+            changed
+        }
+        None => {
+            clients.insert(
+                conn_id,
+                seed.unwrap_or_else(|| ClientEntry {
+                    caller: None,
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                    cols,
+                    rows,
+                }),
+            );
+            true
+        }
+    }
+}
+
 impl ChannelState {
     fn new(
         cmd: Vec<String>,
@@ -1068,35 +1109,27 @@ pub async fn run_gateway(
                     conns.get(&ctx.conn_id).cloned()
                 };
                 let mut guard = ch.lock().await;
-                let entry = guard
-                    .clients
-                    .entry(ctx.conn_id)
-                    .or_insert_with(|| ClientEntry {
-                        caller: conn_meta.as_ref().map(|c| c.handle.clone()),
-                        hostname: conn_meta
-                            .as_ref()
-                            .map(|c| c.hostname.clone())
-                            .unwrap_or_default(),
-                        connected_at_unix: conn_meta
-                            .as_ref()
-                            .map(|c| c.connected_at_unix)
-                            .unwrap_or(0),
-                        pid: conn_meta.as_ref().map(|c| c.pid).unwrap_or(0),
-                        user: conn_meta
-                            .as_ref()
-                            .map(|c| c.user.clone())
-                            .unwrap_or_default(),
-                        version: conn_meta
-                            .as_ref()
-                            .map(|c| c.version.clone())
-                            .unwrap_or_default(),
-                        ssh_ip: conn_meta.as_ref().and_then(|c| c.ssh_ip.clone()),
-                        ssh_port: conn_meta.as_ref().and_then(|c| c.ssh_port),
-                        cols,
-                        rows,
-                    });
-                entry.cols = cols;
-                entry.rows = rows;
+                // Register/update this client's geometry, creating the entry
+                // from connection metadata when absent.
+                let seed = conn_meta.as_ref().map(|meta| ClientEntry {
+                    caller: Some(meta.handle.clone()),
+                    hostname: meta.hostname.clone(),
+                    connected_at_unix: meta.connected_at_unix,
+                    pid: meta.pid,
+                    user: meta.user.clone(),
+                    version: meta.version.clone(),
+                    ssh_ip: meta.ssh_ip.clone(),
+                    ssh_port: meta.ssh_port,
+                    cols,
+                    rows,
+                });
+                let _size_changed = upsert_client_geometry(
+                    &mut guard.clients,
+                    ctx.conn_id,
+                    seed,
+                    cols,
+                    rows,
+                );
 
                 // Prepare user-connected notification (sole-user suppressed)
                 let pending_user_connected = if guard.clients.len() > 1 {
@@ -1215,20 +1248,36 @@ pub async fn run_gateway(
                 let Some(channel) = channel else {
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
+                // Fetch the connection's metadata before locking the channel
+                // (never hold two locks). A conn without an entry yet gets one
+                // on demand so late resize reporters are never ignored (#306).
+                let conn_meta = {
+                    let conns = state.conns.read().await;
+                    conns.get(&ctx.conn_id).cloned()
+                };
                 let ch = resolve_channel(state.as_ref(), &channel)
                     .await
                     .ok_or_else(|| rpc_err("channel not found"))?;
                 let mut guard = ch.lock().await;
-                let size_changed = match guard.clients.get(&ctx.conn_id) {
-                    // Skip entirely when the reported geometry is unchanged —
-                    // no state mutation, no WM notification.
-                    Some(client) => (client.cols, client.rows) != (cols, rows),
-                    None => false,
-                };
-                if let Some(client) = guard.clients.get_mut(&ctx.conn_id) {
-                    client.cols = cols;
-                    client.rows = rows;
-                }
+                let seed = conn_meta.map(|meta| ClientEntry {
+                    caller: Some(meta.handle.clone()),
+                    hostname: meta.hostname,
+                    connected_at_unix: meta.connected_at_unix,
+                    pid: meta.pid,
+                    user: meta.user,
+                    version: meta.version,
+                    ssh_ip: meta.ssh_ip,
+                    ssh_port: meta.ssh_port,
+                    cols,
+                    rows,
+                });
+                let size_changed = upsert_client_geometry(
+                    &mut guard.clients,
+                    ctx.conn_id,
+                    seed,
+                    cols,
+                    rows,
+                );
                 if size_changed {
                     // Coalesce WM notifications: store the latest size and
                     // schedule the trailing-edge flush task once per window.
@@ -2355,6 +2404,58 @@ mod tests {
         assert_eq!(info.clients.len(), 3);
         let ids: Vec<_> = info.clients.iter().map(|c| c.conn_id).collect();
         assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    // ── upsert_client_geometry (#306) ────────────────────────────────
+
+    #[test]
+    fn upsert_client_geometry_creates_missing_entry_and_reports_changed() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        // Seed metadata must land on the on-demand entry so late resize
+        // reporters show up fully identified in ListChannels/ListUsers.
+        let seed = Some(ClientEntry {
+            caller: None,
+            hostname: "late-host".to_string(),
+            connected_at_unix: 42,
+            pid: 4242,
+            user: "alice".to_string(),
+            version: "1.0.0".to_string(),
+            ssh_ip: None,
+            ssh_port: None,
+            cols: 100,
+            rows: 30,
+        });
+        assert!(
+            upsert_client_geometry(&mut ch.clients, 7, seed, 100, 30),
+            "a newly created entry always counts as changed"
+        );
+        let entry = ch.clients.get(&7).expect("entry created on demand");
+        assert_eq!((entry.cols, entry.rows), (100, 30));
+        assert_eq!(entry.hostname, "late-host");
+        assert_eq!(entry.pid, 4242);
+    }
+
+    #[test]
+    fn upsert_client_geometry_updates_existing_entry_and_reports_changed() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert!(upsert_client_geometry(&mut ch.clients, 3, None, 80, 24));
+        // A different reported size patches in place and reports the change.
+        assert!(upsert_client_geometry(&mut ch.clients, 3, None, 120, 40));
+        let entry = ch.clients.get(&3).expect("entry stays present");
+        assert_eq!((entry.cols, entry.rows), (120, 40));
+    }
+
+    #[test]
+    fn upsert_client_geometry_same_size_reports_unchanged() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert!(upsert_client_geometry(&mut ch.clients, 5, None, 80, 24));
+        // Re-reporting identical geometry mutates nothing and reports false,
+        // so no WM notification or PTY recalculation is scheduled.
+        assert!(!upsert_client_geometry(&mut ch.clients, 5, None, 80, 24));
+        assert_eq!(ch.clients.len(), 1);
     }
 
     // ── Batch 3: evict_conn ──────────────────────────────────────────

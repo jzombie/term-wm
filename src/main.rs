@@ -666,21 +666,36 @@ fn run() -> io::Result<()> {
                     }
                 });
             }
-            // Async refresh of user cache after subscribe
+            // Periodic user-cache re-sync (#306): runs on its OWN task so this
+            // listener task keeps processing RPC notifications uninterrupted.
+            // The first tick fires immediately, preserving the previous
+            // post-subscribe one-shot refresh while healing stale conn_ids
+            // (cold-start races, viewer reconnects) every interval.
             {
+                // Re-sync cadence for the internal WM's user registry. Shorter
+                // than the palette's 30s IPC poll so registry gaps heal well
+                // before a user would notice stale palette entries.
+                const USER_CACHE_REFRESH_INTERVAL: std::time::Duration =
+                    std::time::Duration::from_secs(15);
                 let tx = tx.clone();
                 let client = client.clone();
                 let channel = channel.clone();
                 tokio::spawn(async move {
                     use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
                     use term_session::protocol::ListUsers;
-                    let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
-                    match ListUsers::call(client_ref, channel).await {
-                        Ok(resp) => {
-                            let _ = tx.try_send(UnifiedEvent::UserCacheRefreshed(resp.users));
-                        }
-                        Err(e) => {
-                            tracing::debug!("ListUsers refresh failed: {e:?}");
+                    let mut interval = tokio::time::interval(USER_CACHE_REFRESH_INTERVAL);
+                    loop {
+                        interval.tick().await;
+                        // Annotated ref mirrors the stats-reporter pattern
+                        // above; deref coercion unwraps the Arc cleanly.
+                        let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
+                        match ListUsers::call(client_ref, channel.clone()).await {
+                            Ok(resp) => {
+                                let _ = tx.try_send(UnifiedEvent::UserCacheRefreshed(resp.users));
+                            }
+                            Err(e) => {
+                                tracing::debug!("ListUsers refresh failed: {e:?}");
+                            }
                         }
                     }
                 });
