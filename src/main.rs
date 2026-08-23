@@ -1377,6 +1377,92 @@ mod tests {
         }
     }
 
+    /// Shared, append-only breadcrumb buffer for one armed test: the TEST
+    /// thread pushes phase markers through a cloned handle and the watchdog
+    /// thread reads the SAME buffer when firing (thread-locals would be
+    /// invisible across that boundary).
+    #[cfg(feature = "session-persistence")]
+    type Breadcrumbs = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+    /// Record a phase boundary into a test's shared breadcrumb buffer.
+    #[cfg(feature = "session-persistence")]
+    macro_rules! phase {
+        ($phases:expr, $($a:tt)*) => {{
+            $phases
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(format!($($a)*));
+        }};
+    }
+
+    /// RAII disarm handle for a test watchdog.
+    #[cfg(feature = "session-persistence")]
+    struct WatchdogGuard {
+        done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        #[allow(dead_code)]
+        label: &'static str,
+    }
+
+    #[cfg(feature = "session-persistence")]
+    impl Drop for WatchdogGuard {
+        fn drop(&mut self) {
+            self.done.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Arm a hard 90s wall-clock bound around one test. On expiry, dump the
+    /// test's breadcrumbs to stderr AND a per-process temp log, then exit the
+    /// runner with 101 so CI goes red immediately WITH evidence instead of
+    /// hanging until the job timeout. Expected never to fire: every gateway
+    /// operation beneath it is bounded (`with_gateway_timeout`,
+    /// `probe_ipc_endpoint`), but an unknown regression outside those layers
+    /// must still fail fast and name its stage.
+    ///
+    /// Tradeoff (deliberate): expiry forfeits other in-flight tests'
+    /// individual reporting; long-term cure is relocating real-IPC e2e
+    /// coverage into a dedicated integration target with process isolation.
+    #[cfg(feature = "session-persistence")]
+    fn arm_watchdog(label: &'static str, phases: Breadcrumbs) -> WatchdogGuard {
+        use std::sync::Arc;
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done_thread = Arc::clone(&done);
+        let deadline = std::time::Duration::from_secs(90);
+        std::thread::Builder::new()
+            .name(format!("watchdog-{label}"))
+            .spawn(move || {
+                // Wall-clock deadline via monotonic Instant: thread::sleep
+                // only guarantees a MINIMUM, so accumulating nominal step
+                // durations would inflate the bound under loaded CI
+                // schedulers.
+                let start = std::time::Instant::now();
+                let step = std::time::Duration::from_millis(250);
+                while start.elapsed() < deadline {
+                    if done_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(step);
+                }
+                // Re-check so a test finishing exactly now wins the race.
+                if done_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let crumbs = phases
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .join("\n  ");
+                let path = std::env::temp_dir().join(format!("twm-watchdog-{label}.log"));
+                let banner = format!(
+                    "WATCHDOG {label} exceeded {deadline:?}:\n  {crumbs}\nlog: {}\n",
+                    path.display()
+                );
+                eprintln!("{banner}");
+                let _ = std::fs::write(&path, banner);
+                std::process::exit(101);
+            })
+            .expect("spawn watchdog");
+        WatchdogGuard { done, label }
+    }
+
     /// Install the diagnostic panic hook (logs to a per-process temp file,
     /// then forwards to the previously registered hook so default stderr
     /// panic output is preserved) and return the RAII guard.
@@ -1485,20 +1571,22 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn stop_gateway_daemon_e2e_from_app_actions() {
+        let phases: Breadcrumbs = Default::default();
+        let _wd = arm_watchdog("stop_gateway_daemon_e2e", std::sync::Arc::clone(&phases));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .expect("e2e test runtime");
         rt.block_on(async {
-            stop_gateway_daemon_e2e_from_app_actions_inner().await;
+            stop_gateway_daemon_e2e_from_app_actions_inner(std::sync::Arc::clone(&phases)).await;
         });
     }
 
     /// Body of [`stop_gateway_daemon_e2e_from_app_actions`], kept async so
     /// the gateway server task, probe loops, and IPC calls read naturally.
     #[cfg(feature = "session-persistence")]
-    async fn stop_gateway_daemon_e2e_from_app_actions_inner() {
+    async fn stop_gateway_daemon_e2e_from_app_actions_inner(phases: Breadcrumbs) {
         use term_session::protocol::probe_ipc_endpoint;
         use term_wm_core::actions::ConfirmAction;
         use term_wm_core::events::KeyEvent;
@@ -1509,6 +1597,7 @@ mod tests {
         let id = NEXT_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let gw = term_session::ChannelName::parse(&format!("term-wm/testgw-stop-{id}"))
             .expect("unique gateway");
+        phase!(phases, "set TERM_WM_GATEWAY to {gw}");
         unsafe {
             std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gw.to_string());
         }
@@ -1528,9 +1617,11 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
+        phase!(phases, "gateway reachable: {up}");
         assert!(up, "gateway must be reachable before the dialog opens");
 
         let mut app = test_app();
+        phase!(phases, "app built; opening stop-daemon dialog");
 
         // 1. Palette action opens the dialog; body carries gateway-derived counts.
         // The persistence gate is process-global state; surface it on failure
@@ -1574,6 +1665,7 @@ mod tests {
         // 3. Runner branch replicated: close, then execute the forced shutdown.
         app.inner.wm().close_stop_daemon_confirm();
         assert!(!app.inner.wm().stop_daemon_confirm_visible());
+        phase!(phases, "dialog confirmed; executing forced shutdown");
         assert!(
             app.handle_custom_action(&TermWmAction::StopGatewayDaemon),
             "StopGatewayDaemon not consumed; session_persistence_enabled() = {}",
@@ -1590,6 +1682,11 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
+        phase!(
+            phases,
+            "shutdown probe done: down={down} waited={:?}",
+            shutdown_started.elapsed()
+        );
         assert!(
             down,
             "gateway socket must be gone after forced shutdown (waited {:?})",
@@ -1653,6 +1750,11 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn help_shows_resolved_gateway() {
+        let phases: Breadcrumbs = Default::default();
+        let _wd = arm_watchdog(
+            "help_shows_resolved_gateway",
+            std::sync::Arc::clone(&phases),
+        );
         // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
         // otherwise change the rendered footer.
         unsafe {
@@ -1723,7 +1825,10 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn handle_custom_action_consumes_workspace_actions() {
+        let phases: Breadcrumbs = Default::default();
+        let _wd = arm_watchdog("consumes_workspace_actions", std::sync::Arc::clone(&phases));
         // Reachable daemon on the dev namespace; no process-env mutation.
+        phase!(phases, "ensure_test_gateway");
         let _gw_socket = ensure_test_gateway();
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {
@@ -1786,11 +1891,18 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn handle_custom_action_consumes_stop_gateway_actions() {
+        let phases: Breadcrumbs = Default::default();
+        let _wd = arm_watchdog(
+            "consumes_stop_gateway_actions",
+            std::sync::Arc::clone(&phases),
+        );
         // Dedicated gateway: the forced shutdown below REALLY kills it,
         // proving the executor end-to-end without touching the shared
         // instance other tests dial.
         static NEXT_STOP_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let stop_id = NEXT_STOP_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let pid = std::process::id();
+        phase!(phases, "ensure_gateway testgw-stop-{pid}-{stop_id}");
         let gw_socket = ensure_gateway(
             term_session::ChannelName::parse(&format!(
                 "term-wm/testgw-stop-{}-{stop_id}",
@@ -1802,6 +1914,7 @@ mod tests {
         unsafe {
             std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &gw_socket);
         }
+        phase!(phases, "gateway env pinned; building app");
         // Diagnostic panic hook: capture panics with backtraces into a
         // per-process temp log, then forward to the previous hook so default
         // stderr output survives. RAII-restored so a mid-test failure can
@@ -1810,6 +1923,7 @@ mod tests {
 
         let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
         // stderr into tracing and captures panics into the debug buffer).
+        phase!(phases, "app built; opening stop-daemon dialog");
 
         let opened = app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm);
         if !opened {
@@ -1862,6 +1976,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        phase!(phases, "shutdown probe done: down={down}");
         assert!(
             down,
             "dedicated gateway socket must die after forced shutdown"
@@ -1905,6 +2020,12 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn switch_workspace_follow_enabled_uses_all_viewers_scope() {
+        let phases: Breadcrumbs = Default::default();
+        let _wd = arm_watchdog(
+            "switch_workspace_all_viewers",
+            std::sync::Arc::clone(&phases),
+        );
+        phase!(phases, "ensure_test_gateway");
         let _gw_socket = ensure_test_gateway();
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {

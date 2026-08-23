@@ -1,6 +1,6 @@
 use std::fmt;
 
-use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
+use interprocess::local_socket::{GenericNamespaced, prelude::*};
 use term_wm_config::env::active_environment;
 pub use term_wm_config::env::{
     GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE, SESSION_ACTIVE_ENV_VAR, SESSION_GATEWAY_ENV_VAR,
@@ -8,6 +8,12 @@ pub use term_wm_config::env::{
 
 /// Default workspace name (namespace when no `/` is present).
 pub const DEFAULT_WORKSPACE: &str = "default";
+
+/// Client-side cap for one reachability-probe connect. Interprocess defaults
+/// to `ConnectWaitMode::Unbounded`, which on Windows parks in a kernel wait
+/// indefinitely when a server instance is busy; probes must stay finite.
+/// The 2s floor rides out named-pipe allocation latency on loaded CI workers.
+const PROBE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2000);
 
 /// Default session channel name within a workspace.
 pub const SESSION_CHANNEL_NAME: &str = "main";
@@ -88,11 +94,28 @@ impl fmt::Display for ChannelName {
 /// `RpcIpcServer::serve` and `RpcIpcClient`, so it always targets the socket
 /// location the library chose on the current platform (Linux abstract
 /// namespace, macOS `/tmp`, Windows named pipes).
+///
+/// The client connect carries a hard [`PROBE_CONNECT_TIMEOUT`]:
+/// interprocess defaults to `ConnectWaitMode::Unbounded`, which on Windows
+/// parks in a kernel wait indefinitely when a server instance is busy (a
+/// freshly spawned daemon still serving a previous connection), so probes
+/// must stay finite or callers can hang forever.
 pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
     let Ok(name) = channel.to_string().to_ns_name::<GenericNamespaced>() else {
         return false;
     };
-    Stream::connect(name).is_ok()
+    match interprocess::local_socket::ConnectOptions::new()
+        .name(name)
+        .wait_mode(interprocess::ConnectWaitMode::Timeout(
+            PROBE_CONNECT_TIMEOUT,
+        ))
+        .connect_sync()
+    {
+        Ok(_) => true,
+        // Timed out waiting for a free instance; treated as unreachable.
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => false,
+        Err(_) => false,
+    }
 }
 
 /// Resolve the logical gateway channel name.

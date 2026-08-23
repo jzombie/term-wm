@@ -127,7 +127,7 @@ const GATEWAY_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// Connect to the gateway daemon and run `op` with a live client. Spawns an
 /// OS thread so the new Tokio runtime is fully isolated from any runtime
 /// already active on the calling thread (avoids the `block_on`-inside-runtime
-/// panic). Bounded by [`GATEWAY_CALL_TIMEOUT`]; see
+/// panic). Bounded by a fixed per-exchange deadline; see
 /// [`with_gateway_timeout`] for the deadline semantics.
 pub fn with_gateway<F, Fut, T>(op: F) -> io::Result<T>
 where
