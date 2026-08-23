@@ -1476,14 +1476,29 @@ mod tests {
     /// here call-for-call; its routing is separately pinned by
     /// `dispatch_action_routes_stop_gateway_actions_to_host` in term-wm-core.
     #[cfg(feature = "session-persistence")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     // Mutates process-global state (TERM_WM_GATEWAY) and reads the global
     // RuntimeConfig via App::handle_custom_action, so it must never overlap
     // any other test that touches those singletons. One shared serial_test
-    // key covers env vars, runtime::init callers, and the panic-hook test;
-    // no ad-hoc mutex and nothing is held across await points.
+    // key covers env vars, runtime::init callers, and the panic-hook tests;
+    // the body is driven by a dedicated runtime below, keeping every member
+    // of this serial group on serial_test's sync path.
+    #[test]
     #[serial(process_global_state)]
-    async fn stop_gateway_daemon_e2e_from_app_actions() {
+    fn stop_gateway_daemon_e2e_from_app_actions() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("e2e test runtime");
+        rt.block_on(async {
+            stop_gateway_daemon_e2e_from_app_actions_inner().await;
+        });
+    }
+
+    /// Body of [`stop_gateway_daemon_e2e_from_app_actions`], kept async so
+    /// the gateway server task, probe loops, and IPC calls read naturally.
+    #[cfg(feature = "session-persistence")]
+    async fn stop_gateway_daemon_e2e_from_app_actions_inner() {
         use term_session::protocol::probe_ipc_endpoint;
         use term_wm_core::actions::ConfirmAction;
         use term_wm_core::events::KeyEvent;
