@@ -95,7 +95,7 @@ impl fmt::Display for ChannelName {
 /// location the library chose on the current platform (Linux abstract
 /// namespace, macOS `/tmp`, Windows named pipes).
 ///
-/// The client connect carries a hard [`PROBE_CONNECT_TIMEOUT`]:
+/// The client connect carries a hard timeout (`PROBE_CONNECT_TIMEOUT`):
 /// interprocess defaults to `ConnectWaitMode::Unbounded`, which on Windows
 /// parks in a kernel wait indefinitely when a server instance is busy (a
 /// freshly spawned daemon still serving a previous connection), so probes
