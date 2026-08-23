@@ -1115,7 +1115,8 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "session-persistence")]
+    // Process-global-state tests exist under every feature combination, so
+    // the serial attribute is imported unconditionally.
     use serial_test::serial;
     #[cfg(feature = "session-persistence")]
     use term_wm_core::actions::TermWmAction;
@@ -1343,12 +1344,72 @@ mod tests {
         );
     }
 
-    /// Serializes tests that mutate process-global environment variables
-    /// (`TERM_WM_GATEWAY` / `TERM_WM_ENV` / `TERM_WM_NO_SESSION_PERSISTENCE`),
-    /// which are unsafe to read/write concurrently.
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    /// A panic hook as accepted by `std::panic::set_hook`.
+    #[cfg(feature = "session-persistence")]
+    type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static>;
+
+    /// Shared slot holding the previously installed panic hook while a test's
+    /// diagnostic hook is active: the replacement hook chains into it, and
+    /// the RAII guard takes it back out to restore on scope exit (pass, fail,
+    /// or unwind).
+    #[cfg(feature = "session-persistence")]
+    type ChainedHookSlot = std::sync::Arc<std::sync::Mutex<Option<PanicHook>>>;
+
+    /// RAII guard: restores the chained panic hook in `Drop`, so mid-test
+    /// assertion panics can never leave the diagnostic hook installed for
+    /// later tests. `install_diagnostic_panic_hook` returns this; no trailing
+    /// restore call is needed.
+    #[cfg(feature = "session-persistence")]
+    struct PanicHookGuard(Option<ChainedHookSlot>);
+
+    #[cfg(feature = "session-persistence")]
+    impl Drop for PanicHookGuard {
+        fn drop(&mut self) {
+            if let Some(slot) = self.0.take() {
+                // Poison tolerance: a panic inside the forwarded hook poisons
+                // this mutex; restoration must still happen, so recover the
+                // inner value regardless of the poison flag.
+                let mut guard = slot.lock().unwrap_or_else(|poison| poison.into_inner());
+                if let Some(prev) = guard.take() {
+                    std::panic::set_hook(prev);
+                }
+            }
+        }
+    }
+
+    /// Install the diagnostic panic hook (logs to a per-process temp file,
+    /// then forwards to the previously registered hook so default stderr
+    /// panic output is preserved) and return the RAII guard.
+    #[cfg(feature = "session-persistence")]
+    fn install_diagnostic_panic_hook() -> PanicHookGuard {
+        use std::io::Write as _;
+        let slot: ChainedHookSlot =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(std::panic::take_hook())));
+        let chained = std::sync::Arc::clone(&slot);
+        std::panic::set_hook(Box::new(move |info| {
+            // Per-process filename: concurrent test binaries during
+            // `cargo test --workspace` never contend on one file, and stale
+            // cross-UID files cannot break opens of a fresh name.
+            let log_path =
+                std::env::temp_dir().join(format!("twm-panic-{}.log", std::process::id()));
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_path)
+            {
+                let _ = writeln!(f, "PANIC: {info}");
+                let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
+            }
+            // Forward to the previously registered hook. The slot lock is
+            // held across the call by necessity (PanicHook is not Clone): the
+            // only contenders are sibling invocations and Drop, which
+            // tolerates poisoning above, and nothing re-enters this mutex.
+            let guard = chained.lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Some(prev) = guard.as_ref() {
+                prev(info);
+            }
+        }));
+        PanicHookGuard(Some(slot))
     }
 
     /// Dedicated host runtime for shared test gateways. Never dropped: the
@@ -1416,13 +1477,13 @@ mod tests {
     /// `dispatch_action_routes_stop_gateway_actions_to_host` in term-wm-core.
     #[cfg(feature = "session-persistence")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    // Follows the suite's env-isolation pattern: hold env_lock() for the
-    // whole flow so TERM_WM_GATEWAY stays pinned to this test's unique
-    // socket (clippy's across-await lint is intentionally allowed; nothing
-    // inside ever waits on another test holding the same mutex).
-    #[allow(clippy::await_holding_lock)]
+    // Mutates process-global state (TERM_WM_GATEWAY) and reads the global
+    // RuntimeConfig via App::handle_custom_action, so it must never overlap
+    // any other test that touches those singletons. One shared serial_test
+    // key covers env vars, runtime::init callers, and the panic-hook test;
+    // no ad-hoc mutex and nothing is held across await points.
+    #[serial(process_global_state)]
     async fn stop_gateway_daemon_e2e_from_app_actions() {
-        let _guard = env_lock();
         use term_session::protocol::probe_ipc_endpoint;
         use term_wm_core::actions::ConfirmAction;
         use term_wm_core::events::KeyEvent;
@@ -1457,7 +1518,13 @@ mod tests {
         let mut app = test_app();
 
         // 1. Palette action opens the dialog; body carries gateway-derived counts.
-        assert!(app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm));
+        // The persistence gate is process-global state; surface it on failure
+        // so a concurrent-config regression names itself.
+        assert!(
+            app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm),
+            "OpenStopGatewayConfirm not consumed; session_persistence_enabled() = {}",
+            term_wm_config::runtime::session_persistence_enabled()
+        );
         assert!(app.inner.wm().stop_daemon_confirm_visible());
         let (title, body) = {
             let key = app
@@ -1492,9 +1559,14 @@ mod tests {
         // 3. Runner branch replicated: close, then execute the forced shutdown.
         app.inner.wm().close_stop_daemon_confirm();
         assert!(!app.inner.wm().stop_daemon_confirm_visible());
-        assert!(app.handle_custom_action(&TermWmAction::StopGatewayDaemon));
+        assert!(
+            app.handle_custom_action(&TermWmAction::StopGatewayDaemon),
+            "StopGatewayDaemon not consumed; session_persistence_enabled() = {}",
+            term_wm_config::runtime::session_persistence_enabled()
+        );
 
         // 4. The daemon socket must actually die.
+        let shutdown_started = std::time::Instant::now();
         let mut down = false;
         for _ in 0..50 {
             if !probe_ipc_endpoint(&gw) {
@@ -1503,7 +1575,11 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        assert!(down, "gateway socket must be gone after forced shutdown");
+        assert!(
+            down,
+            "gateway socket must be gone after forced shutdown (waited {:?})",
+            shutdown_started.elapsed()
+        );
 
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server).await;
         unsafe {
@@ -1514,8 +1590,8 @@ mod tests {
     /// `runtime_config_for` enables persistence when neither the flag nor the
     /// env var is present.
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_enabled_without_flag_or_env() {
-        let _guard = env_lock();
         unsafe {
             std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
         }
@@ -1524,8 +1600,8 @@ mod tests {
 
     /// The `--no-session-persistence` flag alone disables persistence.
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_flag_disables_persistence() {
-        let _guard = env_lock();
         unsafe {
             std::env::remove_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR);
         }
@@ -1534,8 +1610,8 @@ mod tests {
 
     /// The `TERM_WM_NO_SESSION_PERSISTENCE` env var alone disables persistence.
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_env_disables_persistence() {
-        let _guard = env_lock();
         unsafe {
             std::env::set_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR, "1");
         }
@@ -1547,8 +1623,8 @@ mod tests {
 
     /// Both sources together still disable persistence (OR semantics).
     #[test]
+    #[serial(process_global_state)]
     fn runtime_config_flag_and_env_both_disable() {
-        let _guard = env_lock();
         unsafe {
             std::env::set_var(term_wm_config::env::NO_SESSION_PERSISTENCE_ENV_VAR, "1");
         }
@@ -1560,8 +1636,8 @@ mod tests {
 
     #[cfg(feature = "session-persistence")]
     #[test]
+    #[serial(process_global_state)]
     fn help_shows_resolved_gateway() {
-        let _guard = env_lock();
         // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
         // otherwise change the rendered footer.
         unsafe {
@@ -1599,7 +1675,7 @@ mod tests {
     /// must fall through as unhandled (`false`) — the runtime toggle's contract.
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn handle_custom_action_returns_false_when_runtime_disabled() {
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {
@@ -1630,7 +1706,7 @@ mod tests {
     /// gateway name avoids colliding with a real daemon.
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn handle_custom_action_consumes_workspace_actions() {
         // Reachable daemon on the dev namespace; no process-env mutation.
         let _gw_socket = ensure_test_gateway();
@@ -1668,7 +1744,7 @@ mod tests {
     /// (it is matched before the persistence guard).
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn run_project_task_works_without_persistence() {
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = RuntimeConfig {
@@ -1693,7 +1769,7 @@ mod tests {
     /// Neither may ever surface as an unhandled fall-through (#298).
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn handle_custom_action_consumes_stop_gateway_actions() {
         // Dedicated gateway: the forced shutdown below REALLY kills it,
         // proving the executor end-to-end without touching the shared
@@ -1708,25 +1784,17 @@ mod tests {
             .expect("dedicated gateway name"),
         );
         // Pin dialog reads AND forced shutdown to THIS gateway.
-        let _env_guard = env_lock();
         unsafe {
             std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &gw_socket);
         }
+        // Diagnostic panic hook: capture panics with backtraces into a
+        // per-process temp log, then forward to the previous hook so default
+        // stderr output survives. RAII-restored so a mid-test failure can
+        // never leak the hook into other tests.
+        let _panic_guard = install_diagnostic_panic_hook();
+
         let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
         // stderr into tracing and captures panics into the debug buffer).
-        {
-            use std::io::Write as _;
-            std::panic::set_hook(Box::new(|info| {
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/twm-panic.log")
-                {
-                    let _ = writeln!(f, "PANIC: {info}");
-                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
-                }
-            }));
-        }
 
         let opened = app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm);
         if !opened {
@@ -1792,7 +1860,7 @@ mod tests {
     /// `ToggleWorkspaceFollow` toggles the flag and pushes a notification.
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn toggle_workspace_follow_toggles_flag() {
         let mut app = test_app();
         let initially_enabled = app.inner.wm().workspace_follow_enabled;
@@ -1820,7 +1888,7 @@ mod tests {
     /// `RebindScope::AllViewers` branch (vs `CallerOnly` when disabled).
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn switch_workspace_follow_enabled_uses_all_viewers_scope() {
         let _gw_socket = ensure_test_gateway();
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
@@ -1833,19 +1901,7 @@ mod tests {
 
         let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
         // stderr into tracing and captures panics into the debug buffer).
-        {
-            use std::io::Write as _;
-            std::panic::set_hook(Box::new(|info| {
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/twm-panic.log")
-                {
-                    let _ = writeln!(f, "PANIC: {info}");
-                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
-                }
-            }));
-        }
+        let _panic_guard = install_diagnostic_panic_hook();
 
         // Enable follow mode, then switch workspace
         app.inner.wm().workspace_follow_enabled = true;
