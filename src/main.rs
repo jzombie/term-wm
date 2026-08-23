@@ -162,6 +162,10 @@ fn runtime_config_for(no_session_persistence_flag: bool) -> term_wm_config::runt
 }
 
 /// Exit-code base for children terminated by a signal (`128 + signal`).
+/// Only meaningful on Unix: signal-death exit codes do not exist on Windows
+/// (`exit_code_of` maps them to generic failure there), so this stays
+/// compile-gated to avoid dead code on non-Unix targets.
+#[cfg(unix)]
 const TASK_SIGNAL_EXIT_BASE: i32 = 128;
 
 /// Mirrors `term_session::DEFAULT_WORKSPACE`; duplicated as a literal because
