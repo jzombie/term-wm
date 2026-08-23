@@ -770,7 +770,7 @@ impl App {
         #[cfg(feature = "session-persistence")] inner_session_stats_tx: Option<
             tokio::sync::mpsc::Sender<(u32, u32)>,
         >,
-        #[cfg(not(feature = "session-persistence"))] inner_session_stats_tx: (),
+        #[cfg(not(feature = "session-persistence"))] _inner_session_stats_tx: (),
     ) -> io::Result<Self> {
         // #284: the bundled binary opts into dynamic Menu/FAB branding —
         // workspace name → launch-directory name → app-name. Library
@@ -1353,6 +1353,7 @@ mod tests {
     /// NOTE: panics here are swallowed by the global debug-log panic hook
     /// installed by init_system_windows(); diagnostics go through
     /// eprintln! instead of assert messages.
+    #[cfg(feature = "session-persistence")]
     fn ensure_gateway(gw: term_session::ChannelName) -> String {
         use term_session_muxio_service_definitions::probe_ipc_endpoint;
         if !probe_ipc_endpoint(&gw) {
@@ -1382,6 +1383,7 @@ mod tests {
     /// daemon. Under `cargo test` this resolves to the dev namespace
     /// (`term-wm/dev/<user>/gateway`), which installed daemons never occupy,
     /// so unit tests cannot collide with real sessions.
+    #[cfg(feature = "session-persistence")]
     fn ensure_test_gateway() -> String {
         ensure_gateway(term_session::gateway_channel_name())
     }
