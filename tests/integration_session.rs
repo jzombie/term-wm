@@ -1937,6 +1937,77 @@ async fn rebind_workspace_to_unknown_source_sends_no_push() {
     guard.shutdown().await;
 }
 
+/// An inner WM reports its live counts over its SUBSCRIBED connection
+/// (`SubscribeInternalInput` first, then `ReportWmStats`); `ListWmStats`
+/// aggregates them per channel. The subscribing connection never attaches,
+/// mirroring production; a non-subscribed connection is rejected, and the
+/// entry disappears once the WM disconnects.
+#[tokio::test]
+async fn wm_stats_report_then_list_then_evict() {
+    use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+    use term_session_muxio_service_definitions::{
+        ListWmStats, ReportWmStats, SubscribeInternalInput, SubscribeInternalInputRequest,
+    };
+
+    let channel = test_channel("test/wm-stats");
+    // Creates the channel/session plus one attached VIEWER connection.
+    let (_viewer, _conn_id, guard) = spawn_session(&channel).await;
+
+    // The inner WM connects and subscribes ONLY — production flow has no
+    // Attach on this connection, so it never appears in conn_to_channel.
+    let wm_client = connect_client_with_retry(guard.socket()).await;
+    let channel_for_sub = channel.to_string();
+    let wm_ref: &term_session::rpc_client::RpcIpcClient = &wm_client;
+    SubscribeInternalInput::call(
+        wm_ref,
+        SubscribeInternalInputRequest {
+            channel: channel_for_sub,
+        },
+    )
+    .await
+    .expect("subscribe internal input");
+
+    ReportWmStats::call(&*wm_client, (3u32, 2u32))
+        .await
+        .expect("report wm stats from subscribed wm");
+
+    let resp = ListWmStats::call(&*wm_client, ()).await.expect("list wm stats");
+    let mine = resp
+        .stats
+        .iter()
+        .find(|s| s.channel == channel.to_string())
+        .expect("reported channel must be listed");
+    assert_eq!((mine.windows, mine.tasks_running), (3, 2));
+
+    // A connection that did NOT subscribe as the internal WM is rejected.
+    let outsider = connect_client_with_retry(guard.socket()).await;
+    attach_client(&outsider, &channel).await;
+    assert!(
+        ReportWmStats::call(&*outsider, (9u32, 9u32)).await.is_err(),
+        "non-internal-wm connections must not be able to report stats"
+    );
+
+    // Once the subscribing WM disconnects, its entry disappears. Eviction is
+    // asynchronous, so poll briefly instead of sleeping a fixed interval.
+    drop(wm_client);
+    let mut gone = false;
+    for _ in 0..40 {
+        let resp = ListWmStats::call(&*outsider, ()).await.expect("list after evict");
+        if !resp.stats.iter().any(|s| s.channel == channel.to_string()) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        gone,
+        "evicted wm's entry must be removed after disconnect, got {:?}",
+        ListWmStats::call(&*outsider, ()).await.expect("final list").stats
+    );
+
+    guard.shutdown().await;
+}
+
 /// The term-wm launcher must exit immediately (no retry loop) when the nesting
 /// guard fires. Spawns `term-wm` inside an environment where
 /// `TERM_SESSION_GATEWAY` matches `TERM_WM_GATEWAY` (same-gateway inception),

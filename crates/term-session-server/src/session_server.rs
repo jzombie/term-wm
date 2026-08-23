@@ -12,13 +12,14 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
-    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected, OnUserResized,
-    OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope,
-    RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    SendAttributedInput, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
-    SubscribeInternalInput, UserInfo, WriteInput,
+    ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, ListWmStats,
+    ListWmStatsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
+    OnUserConnected, OnUserDisconnected, OnUserResized, OnWorkspaceEntered, OnWorkspaceRebind,
+    OnWorkspaceRebindRequest, ReportWmStats, RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS,
+    RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope, RebindWorkspace, ResizePty,
+    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput, SessionInfo,
+    ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput, UserInfo,
+    WmStatsEntry, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -173,6 +174,11 @@ struct ChannelState {
     /// Whether a detached trailing-edge flush task is already scheduled for
     /// this channel; guards against spawning duplicate flush tasks.
     wm_resize_flush_scheduled: bool,
+    /// Latest live WM counts (windows, running tasks) reported per connected
+    /// reporter. Keyed by `conn_id` so multiple reporters on one channel
+    /// aggregate independently and a single disconnect only drops its own
+    /// contribution (`ListWmStats` sums the values).
+    wm_stats_by_conn: HashMap<usize, (u32, u32)>,
 }
 
 /// Gateway coordination. Two tiers:
@@ -202,6 +208,20 @@ type SharedState = Arc<ServerState>;
 
 fn rpc_err(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
     Box::new(std::io::Error::other(message.to_string()))
+}
+
+/// Sum one channel's per-conn WM stats; `None` when no reporter exists
+/// (unknown, not zero).
+fn sum_wm_stats(stats: &HashMap<usize, (u32, u32)>) -> Option<(u32, u32)> {
+    if stats.is_empty() {
+        return None;
+    }
+    let mut acc = (0u32, 0u32);
+    for &(w, t) in stats.values() {
+        acc.0 = acc.0.saturating_add(w);
+        acc.1 = acc.1.saturating_add(t);
+    }
+    Some(acc)
 }
 
 /// Lift an `io::Error` into the boxed handler error type.
@@ -241,6 +261,7 @@ impl ChannelState {
             internal_wm_conn_id: None,
             pending_wm_resizes: HashMap::new(),
             wm_resize_flush_scheduled: false,
+            wm_stats_by_conn: HashMap::new(),
         }
     }
 
@@ -698,6 +719,9 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     let mut guard = ch.lock().await;
     guard.clients.remove(&conn_id);
     guard.subscribers.retain(|s| s.conn_id != conn_id);
+    // Drop only THIS connection's WM-stats contribution; other reporters on
+    // the channel keep theirs (ListWmStats sums what remains).
+    guard.wm_stats_by_conn.remove(&conn_id);
     // If the disconnected client was the internal WM, revert to RawPty mode
     let is_internal = guard.internal_wm_conn_id == Some(conn_id);
     if is_internal {
@@ -1474,6 +1498,81 @@ pub async fn run_gateway(
         .await
         .map_err(|e| format!("register ListUsers: {e:?}"))?;
 
+    // ── ReportWmStats (inner WM -> server) ───────────────────────────
+    // Only the connection that subscribed as this channel's internal WM may
+    // report. Ownership is resolved via `internal_wm_conn_id` (recorded by
+    // SubscribeInternalInput) — NOT `conn_to_channel`, which only tracks
+    // attached viewers and never contains a subscribe-only WM connection.
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ReportWmStats::METHOD_ID, move |payload, ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let (windows, tasks_running) =
+                    ReportWmStats::decode_request(&payload).map_err(boxed_io)?;
+                let conn_id = ctx.conn_id;
+                // Find the channel whose internal WM is THIS connection.
+                let channels = state.channels.read().await;
+                let mut owned: Option<ChannelName> = None;
+                for (name, ch) in channels.iter() {
+                    let guard = ch.lock().await;
+                    if guard.internal_wm_conn_id == Some(conn_id) {
+                        owned = Some(name.clone());
+                        break;
+                    }
+                }
+                drop(channels);
+                let Some(name) = owned else {
+                    return Err(rpc_err(RPC_ERROR_UNATTACHED));
+                };
+                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let mut guard = ch.lock().await;
+                    debug_assert_eq!(guard.internal_wm_conn_id, Some(conn_id));
+                    guard.wm_stats_by_conn.insert(conn_id, (windows, tasks_running));
+                    ReportWmStats::encode_response(()).map_err(boxed_io)
+                } else {
+                    Err(rpc_err("report_wm_stats: channel vanished"))
+                }
+            }
+        })
+        .await
+        .map_err(|e| format!("register ReportWmStats: {e:?}"))?;
+
+    // ── ListWmStats ──────────────────────────────────────────────────
+    // One entry per channel with at least one reporter; windows/tasks are
+    // summed across all reporting connections on the channel.
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ListWmStats::METHOD_ID, move |_payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let channels = {
+                    let chans = state.channels.read().await;
+                    chans
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect::<Vec<_>>()
+                };
+                let mut stats: Vec<WmStatsEntry> = Vec::with_capacity(channels.len());
+                for (name, ch) in channels {
+                    let guard = ch.lock().await;
+                    if let Some((windows, tasks_running)) =
+                        sum_wm_stats(&guard.wm_stats_by_conn)
+                    {
+                        stats.push(WmStatsEntry {
+                            channel: name.to_string(),
+                            windows,
+                            tasks_running,
+                        });
+                    }
+                }
+                stats.sort_by(|a, b| a.channel.cmp(&b.channel));
+                ListWmStats::encode_response(ListWmStatsResponse { stats }).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ListWmStats: {e:?}"))?;
+
     // ── KillChannel ──────────────────────────────────────────────────
     let st = Arc::clone(&state);
     endpoint
@@ -2031,6 +2130,87 @@ mod tests {
         assert_eq!(channel.input_mode, InputMode::RawPty);
         assert_eq!(channel.internal_wm_conn_id, None);
         assert!(channel.internal_wm_caller.is_none());
+        assert!(
+            channel.wm_stats_by_conn.is_empty(),
+            "no WM stats are reported until a connection reports them"
+        );
+    }
+
+    // ── WmStats (per-conn reporting + aggregation) ────────────────────
+
+    #[test]
+    fn sum_wm_stats_sums_across_reporters_and_none_when_absent() {
+        use super::sum_wm_stats;
+        assert!(sum_wm_stats(&HashMap::new()).is_none());
+        let stats = HashMap::from([(1usize, (3u32, 1u32)), (2usize, (4u32, 0u32))]);
+        assert_eq!(sum_wm_stats(&stats), Some((7, 1)));
+    }
+
+    #[tokio::test]
+    async fn evict_conn_drops_only_that_conns_wm_stats() {
+        // Two reporters on the same channel; evicting one must keep the
+        // other's contribution intact.
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse channel");
+        for conn_id in [7usize, 9usize] {
+            state.conns.write().await.insert(
+                conn_id,
+                ConnEntry {
+                    handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                        write_tx: mpsc::unbounded_channel().0,
+                        conn_id,
+                        is_connected: Arc::new(AtomicBool::new(true)),
+                        dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+                    })),
+                    state: ConnState::Attached(name.clone()),
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                },
+            );
+            state
+                .conn_to_channel
+                .lock()
+                .unwrap()
+                .insert(conn_id, "test/coalesce".to_string());
+        }
+        {
+            let ch = state
+                .channels
+                .read()
+                .await
+                .get(&name)
+                .expect("channel exists")
+                .clone();
+            let mut guard = ch.lock().await;
+            guard.wm_stats_by_conn.insert(7, (2, 1));
+            guard.wm_stats_by_conn.insert(9, (5, 0));
+        }
+
+        evict_conn(&state, 7).await;
+
+        let ch = state
+            .channels
+            .read()
+            .await
+            .get(&name)
+            .expect("channel exists")
+            .clone();
+        let guard = ch.lock().await;
+        assert_eq!(
+            guard.wm_stats_by_conn.get(&9),
+            Some(&(5, 0)),
+            "the surviving reporter's stats must remain"
+        );
+        assert!(
+            !guard.wm_stats_by_conn.contains_key(&7),
+            "only the evicted connection's stats are removed"
+        );
     }
 
     // ── Batch 1: retain_final_output ─────────────────────────────────

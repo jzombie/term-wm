@@ -496,10 +496,18 @@ fn run() -> io::Result<()> {
     // For internal sessions, spawn a Muxio listener that receives structured
     // events from the server and pipes them into the event source via pty_wakeup_tx.
     #[cfg(feature = "session-persistence")]
+    let mut inner_session_stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>> = None;
+    #[cfg(not(feature = "session-persistence"))]
+    let inner_session_stats_tx = ();
+    #[cfg(feature = "session-persistence")]
     if cli.internal_session && term_wm_config::runtime::session_persistence_enabled() {
         let tx = pty_wakeup_tx.clone();
         let channel = term_session::ChannelName::session(&workspace).to_string();
         let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
+        // Queue the WM's live counts flow through; drained by a task inside
+        // the listener below that reports over the subscribed connection.
+        let (stats_tx, mut stats_rx) = tokio::sync::mpsc::channel::<(u32, u32)>(16);
+        inner_session_stats_tx = Some(stats_tx);
         rt.spawn(async move {
             use term_session::protocol::OnAttributedInput;
             use term_session::protocol::RpcMethodPrebuffered;
@@ -639,6 +647,25 @@ fn run() -> io::Result<()> {
                 return;
             }
             tracing::info!("Attributed input listener subscribed");
+
+            // Ordered WM-stats reporting over THIS connection: it is the one
+            // registered as the channel's internal WM, which the gateway
+            // requires before accepting stats. FIFO single consumer, so rapid
+            // mutations can never arrive out of order (#298).
+            {
+                use term_session::protocol::ReportWmStats;
+                let client = client.clone();
+                tokio::spawn(async move {
+                    while let Some((windows, tasks_running)) = stats_rx.recv().await {
+                        let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
+                        if let Err(e) =
+                            ReportWmStats::call(client_ref, (windows, tasks_running)).await
+                        {
+                            tracing::debug!("wm stats report failed: {e:?}");
+                        }
+                    }
+                });
+            }
             // Async refresh of user cache after subscribe
             {
                 let tx = tx.clone();
@@ -678,6 +705,7 @@ fn run() -> io::Result<()> {
         pty_wakeup_tx,
         workspace,
         event_owner,
+        inner_session_stats_tx,
     )?;
 
     let mut output = ConsoleRenderTarget::new()?;
@@ -739,6 +767,10 @@ impl App {
         pty_wakeup_tx: Sender<UnifiedEvent>,
         workspace: String,
         event_owner: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+        #[cfg(feature = "session-persistence")]
+        inner_session_stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>>,
+        #[cfg(not(feature = "session-persistence"))]
+        inner_session_stats_tx: (),
     ) -> io::Result<Self> {
         // #284: the bundled binary opts into dynamic Menu/FAB branding —
         // workspace name → launch-directory name → app-name. Library
@@ -768,6 +800,12 @@ impl App {
             current_workspace: workspace,
             event_owner,
         };
+        // Hand the app the ordered stats queue so publish_wm_stats() reports
+        // over the subscribed internal-WM connection (#298).
+        #[cfg(feature = "session-persistence")]
+        if let Some(stats_tx) = inner_session_stats_tx {
+            app.inner.set_stats_reporter(stats_tx);
+        }
 
         // One window per command (shell + the command as input), then default
         // shells to fill `num_windows`. `commands` is owned and consumed here.
@@ -784,6 +822,10 @@ impl App {
                 tracing::error!("Window spawn error: {}", e);
             }
         }
+        // Announce our initial window/task counts so cross-workspace totals
+        // include this instance even before any user mutation (#298).
+        #[cfg(feature = "session-persistence")]
+        app.inner.publish_wm_stats();
 
         app.open_help_overlay();
         Ok(app)

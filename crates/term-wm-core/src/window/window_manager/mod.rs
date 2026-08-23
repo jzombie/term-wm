@@ -6,6 +6,8 @@ pub(crate) mod layer_manager;
 mod layout;
 mod overlays;
 
+pub use command_palette::WorkspaceTotals;
+
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -441,6 +443,10 @@ pub struct WindowManager<
     pub project_tasks: Vec<crate::project_tasks::ProjectTaskConfig>,
     /// Cached connected users by workspace for palette rebuild on focus change.
     pub all_users_by_ws: std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
+    /// Cached per-workspace WM totals (windows, running tasks) for palette
+    /// rebuild on focus change (#298).
+    #[cfg(feature = "session-persistence")]
+    pub cached_workspace_totals: WorkspaceTotals,
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
@@ -962,6 +968,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             current_workspace: String::new(),
             project_tasks: Vec::new(),
             all_users_by_ws: std::collections::BTreeMap::new(),
+            #[cfg(feature = "session-persistence")]
+            cached_workspace_totals: std::collections::BTreeMap::new(),
         }
     }
 
@@ -6765,7 +6773,7 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6843,7 +6851,7 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {

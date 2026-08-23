@@ -233,6 +233,12 @@ impl ConfirmOverlayComponent {
         self.confirm_label = confirm.into();
     }
 
+    /// The currently configured `(cancel, confirm)` labels (brackets
+    /// included), e.g. for assertions or diagnostics.
+    pub fn labels(&self) -> (&str, &str) {
+        (&self.cancel_label, &self.confirm_label)
+    }
+
     pub fn close(&mut self) {
         self.dialog.set_visible(false);
         self.visible = false;

@@ -5,6 +5,8 @@ lcov.info
 *.save
 samply.json
 .codegraph
+*.patch
+*.diff
 
 DEBUG.sh
 *.log
