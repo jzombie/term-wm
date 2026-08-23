@@ -1318,8 +1318,8 @@ impl<C: Component<TermWmAction> + 'static>
 }
 
 /// Build the stop-gateway confirmation body (#298): the termination warning,
-/// the resolved gateway IPC channel being targeted, then live totals across
-/// all workspaces. Pure so tests can pin the exact layout.
+/// live totals across all workspaces, then the resolved gateway IPC channel
+/// being targeted. Pure so tests can pin the exact layout.
 #[cfg(feature = "session-persistence")]
 fn stop_gateway_dialog_body(
     channel: &str,
@@ -1328,7 +1328,7 @@ fn stop_gateway_dialog_body(
     tasks: &str,
 ) -> String {
     format!(
-        "{GATEWAY_STOP_WARNING}\n{GATEWAY_STOP_CHANNEL_LABEL}: {channel}\nActive workspaces: {workspace_label} · Total windows: {windows} · Running tasks: {tasks}"
+        "{GATEWAY_STOP_WARNING}\nActive workspaces: {workspace_label} · Total windows: {windows} · Running tasks: {tasks}\n{GATEWAY_STOP_CHANNEL_LABEL}: {channel}"
     )
 }
 
