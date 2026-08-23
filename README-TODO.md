@@ -4,12 +4,13 @@ Outstanding items for the rebranded README. Tracked here (rather than as comment
 
 ## Media Swap
 
-- [ ] Replace the two static PNG screenshot `<div>` blocks near the top of `README.md` with the three launch demo GIFs once recorded.
+- [ ] Replace the two static PNG screenshot `<div>` blocks near the top of `README.md` with the four launch demo GIFs once recorded.
   - The blocks to replace are the `<div align="center">` image sections directly under the headline (hotlinked from `jzombie/live-assets`, currently Linux v0.9.28-alpha + macOS v0.9.0-alpha).
-  - Shot list and recording scenarios: [docs/launch/launch-checklist.md](docs/launch/launch-checklist.md)
+  - Shot list and recording scenarios: [.opencode/plans/launch/launch-checklist.md](.opencode/plans/launch/launch-checklist.md)
     - Scenario 1: spatial drag + ghost snapping
     - Scenario 2: autonomous Direct Input transition
     - Scenario 3: mobile Monocle + FAB dodging
+    - Scenario 4: directory workspace naming + palette totals
 
 ## Post-Swap Follow-ups
 
