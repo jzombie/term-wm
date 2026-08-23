@@ -1351,8 +1351,7 @@ mod tests {
     /// process-lifetime task keeps each socket alive for every test that
     /// dials it, on any thread, with no locks involved.
     fn test_gateway_runtime() -> &'static tokio::runtime::Runtime {
-        static RT: std::sync::OnceLock<tokio::runtime::Runtime> =
-            std::sync::OnceLock::new();
+        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
         RT.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -1386,9 +1385,7 @@ mod tests {
             }
         }
         if !probe_ipc_endpoint(&gw) {
-            eprintln!(
-                "DIAG: gateway {gw} unreachable after spawn attempt (stale socket file?)"
-            );
+            eprintln!("DIAG: gateway {gw} unreachable after spawn attempt (stale socket file?)");
             panic!("test gateway must be reachable");
         }
         gw.to_string()
@@ -1422,20 +1419,17 @@ mod tests {
     async fn stop_gateway_daemon_e2e_from_app_actions() {
         let _guard = env_lock();
         use term_session::protocol::probe_ipc_endpoint;
-        use term_wm_core::events::{KeyCode, KeyModifiers, KeyKind};
-        use term_wm_core::events::KeyEvent;
-        use term_wm_core::window::window_manager::system_tags;
         use term_wm_core::actions::ConfirmAction;
+        use term_wm_core::events::KeyEvent;
+        use term_wm_core::events::{KeyCode, KeyKind, KeyModifiers};
+        use term_wm_core::window::window_manager::system_tags;
 
         static NEXT_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let id = NEXT_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let gw = term_session::ChannelName::parse(&format!("term-wm/testgw-stop-{id}"))
             .expect("unique gateway");
         unsafe {
-            std::env::set_var(
-                term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR,
-                gw.to_string(),
-            );
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gw.to_string());
         }
 
         // Live in-process daemon on that isolated socket.
@@ -1480,7 +1474,11 @@ mod tests {
         );
 
         // 2. Enter on the overlay resolves to Confirm (default selection).
-        let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE, KeyKind::Press));
+        let enter = Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
         assert_eq!(
             app.inner.wm().handle_stop_daemon_confirm_event(&enter),
             Some(ConfirmAction::Confirm)
@@ -1695,20 +1693,21 @@ mod tests {
         // Dedicated gateway: the forced shutdown below REALLY kills it,
         // proving the executor end-to-end without touching the shared
         // instance other tests dial.
-        static NEXT_STOP_GW: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(1);
+        static NEXT_STOP_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let stop_id = NEXT_STOP_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let gw_socket = ensure_gateway(term_session::ChannelName::parse(&format!(
-            "term-wm/testgw-stop-{}-{stop_id}",
-            std::process::id()
-        ))
-        .expect("dedicated gateway name"));
+        let gw_socket = ensure_gateway(
+            term_session::ChannelName::parse(&format!(
+                "term-wm/testgw-stop-{}-{stop_id}",
+                std::process::id()
+            ))
+            .expect("dedicated gateway name"),
+        );
         // Pin dialog reads AND forced shutdown to THIS gateway.
         let _env_guard = env_lock();
         unsafe {
             std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &gw_socket);
         }
-        let mut app = test_app();        // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
+        let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
         // stderr into tracing and captures panics into the debug buffer).
         {
             use std::io::Write as _;
@@ -1719,18 +1718,12 @@ mod tests {
                     .open("/tmp/twm-panic.log")
                 {
                     let _ = writeln!(f, "PANIC: {info}");
-                    let _ = writeln!(
-                        f,
-                        "{:?}",
-                        std::backtrace::Backtrace::force_capture()
-                    );
+                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
                 }
             }));
         }
 
-
-        let opened =
-            app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm);
+        let opened = app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm);
         if !opened {
             eprintln!("DIAG: OpenStopGatewayConfirm not consumed");
         }
@@ -1750,9 +1743,7 @@ mod tests {
         // Confirm path FIRST (overlay still open): Enter resolves to Confirm.
         {
             use term_wm_core::actions::ConfirmAction;
-            use term_wm_core::events::{
-                KeyCode, KeyEvent, KeyKind, KeyModifiers,
-            };
+            use term_wm_core::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
             let enter = Event::Key(KeyEvent::new(
                 KeyCode::Enter,
                 KeyModifiers::NONE,
@@ -1783,7 +1774,10 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        assert!(down, "dedicated gateway socket must die after forced shutdown");
+        assert!(
+            down,
+            "dedicated gateway socket must die after forced shutdown"
+        );
 
         unsafe {
             std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
@@ -1832,7 +1826,7 @@ mod tests {
             session_persistence: true,
         });
 
-        let mut app = test_app();        // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
+        let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
         // stderr into tracing and captures panics into the debug buffer).
         {
             use std::io::Write as _;
@@ -1843,11 +1837,7 @@ mod tests {
                     .open("/tmp/twm-panic.log")
                 {
                     let _ = writeln!(f, "PANIC: {info}");
-                    let _ = writeln!(
-                        f,
-                        "{:?}",
-                        std::backtrace::Backtrace::force_capture()
-                    );
+                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
                 }
             }));
         }

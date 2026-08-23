@@ -1123,13 +1123,8 @@ pub async fn run_gateway(
                     cols,
                     rows,
                 });
-                let _size_changed = upsert_client_geometry(
-                    &mut guard.clients,
-                    ctx.conn_id,
-                    seed,
-                    cols,
-                    rows,
-                );
+                let _size_changed =
+                    upsert_client_geometry(&mut guard.clients, ctx.conn_id, seed, cols, rows);
 
                 // Prepare user-connected notification (sole-user suppressed)
                 let pending_user_connected = if guard.clients.len() > 1 {
@@ -1271,13 +1266,8 @@ pub async fn run_gateway(
                     cols,
                     rows,
                 });
-                let size_changed = upsert_client_geometry(
-                    &mut guard.clients,
-                    ctx.conn_id,
-                    seed,
-                    cols,
-                    rows,
-                );
+                let size_changed =
+                    upsert_client_geometry(&mut guard.clients, ctx.conn_id, seed, cols, rows);
                 if size_changed {
                     // Coalesce WM notifications: store the latest size and
                     // schedule the trailing-edge flush task once per window.

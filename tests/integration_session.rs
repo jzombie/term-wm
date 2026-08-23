@@ -1959,16 +1959,17 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
 
     let mut viewers = Vec::new();
     let mut wms = Vec::new();
-    for (channel, stats) in [
-        (ch_a.clone(), (3u32, 2u32)),
-        (ch_b.clone(), (1u32, 1u32)),
-    ] {
+    for (channel, stats) in [(ch_a.clone(), (3u32, 2u32)), (ch_b.clone(), (1u32, 1u32))] {
         let viewer = connect_client_with_retry(guard.socket()).await;
         attach_client(&viewer, &channel).await;
         Spawn::call(
             &*viewer,
             SpawnRequest {
-                cmd: Some(vec![mock.clone(), "sleep".into(), LONG_SLEEP_MS.to_string()]),
+                cmd: Some(vec![
+                    mock.clone(),
+                    "sleep".into(),
+                    LONG_SLEEP_MS.to_string(),
+                ]),
                 cols: TEST_COLS,
                 rows: TEST_ROWS,
                 cwd: None,
@@ -1985,7 +1986,9 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
         )
         .await
         .expect("subscribe internal input");
-        ReportWmStats::call(&*wm, stats).await.expect("report stats");
+        ReportWmStats::call(&*wm, stats)
+            .await
+            .expect("report stats");
         viewers.push((channel.clone(), viewer));
         wms.push((channel.clone(), wm));
     }
@@ -2002,7 +2005,9 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
     let resp = list_channels(guard.client()).await;
     assert_eq!(resp.channels.len(), 2, "both workspaces present");
     assert!(resp.channels.iter().all(|c| c.session.is_some()));
-    let stats = ListWmStats::call(&**guard.client(), ()).await.expect("stats");
+    let stats = ListWmStats::call(&**guard.client(), ())
+        .await
+        .expect("stats");
     assert_eq!(stats.stats.len(), 2);
 
     // "Exit UI" on workspace A: the inner WM quits, dropping BOTH of its
@@ -2029,7 +2034,10 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
             Ok(Some(_)) => continue,
         }
     }
-    assert!(stream_ended, "workspace A session stream must end after Exit UI");
+    assert!(
+        stream_ended,
+        "workspace A session stream must end after Exit UI"
+    );
 
     // 2. A's channel is gone or sessionless; B keeps a live session.
     let mut a_gone = false;
@@ -2038,8 +2046,7 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
         let resp = list_channels(guard.client()).await;
         let a = resp.channels.iter().find(|c| c.name == ch_a.to_string());
         let b = resp.channels.iter().find(|c| c.name == ch_b.to_string());
-        let a_dead = a.is_none()
-            || a.unwrap().session.as_ref().is_none_or(|s| s.exited);
+        let a_dead = a.is_none() || a.unwrap().session.as_ref().is_none_or(|s| s.exited);
         b_alive = b.is_some_and(|c| c.session.as_ref().is_some_and(|s| !s.exited));
         if a_dead && b_alive {
             a_gone = true;
@@ -2057,7 +2064,9 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
     let mut stats_a_gone = false;
     let mut stats_b_ok = false;
     for _ in 0..40 {
-        let resp = ListWmStats::call(&**guard.client(), ()).await.expect("stats");
+        let resp = ListWmStats::call(&**guard.client(), ())
+            .await
+            .expect("stats");
         stats_a_gone = !resp.stats.iter().any(|s| s.channel == ch_a.to_string());
         stats_b_ok = resp
             .stats
