@@ -75,6 +75,10 @@ pub struct CommandPaletteComponent {
     last_list_area: LayoutRect,
     cached_menu_items: Vec<MenuDisplayItem<TermWmAction>>,
     items_dirty: bool,
+    /// Query the list was last ranked against. When the live query differs,
+    /// rerank resets the selection to 0 so a changed query always lands on
+    /// the best match instead of carrying a stale index.
+    last_ranked_query: String,
 }
 
 /// Internal cache entry parallel to `active_nodes`.
@@ -138,6 +142,7 @@ impl CommandPaletteComponent {
             last_list_area: LayoutRect::default(),
             cached_menu_items: Vec::new(),
             items_dirty: true,
+            last_ranked_query: String::new(),
         }
     }
 
@@ -328,6 +333,15 @@ impl CommandPaletteComponent {
             items
         };
 
+        // A changed query must land on the best match, never carry a stale
+        // index from the previously ranked list. Same-query re-ranks (data
+        // refreshes) keep the clamp-only path so a live refresh never yanks
+        // keyboard navigation.
+        if self.query != self.last_ranked_query {
+            self.selected = 0;
+            self.last_ranked_query = self.query.clone();
+        }
+
         // Clamp selection, only adjust if current is disabled
         if self.filtered_items.is_empty() {
             self.selected = 0;
@@ -482,6 +496,15 @@ impl CommandPaletteComponent {
             });
             items
         };
+
+        // A changed query must land on the best match, never carry a stale
+        // index from the previously ranked list. Same-query re-ranks (data
+        // refreshes) keep the clamp-only path so a live refresh never yanks
+        // keyboard navigation.
+        if self.query != self.last_ranked_query {
+            self.selected = 0;
+            self.last_ranked_query = self.query.clone();
+        }
 
         // Clamp selection, only adjust if current is disabled
         if self.filtered_items.is_empty() {
@@ -1034,6 +1057,83 @@ mod tests {
     fn selected_stable_id_returns_correct_id() {
         let palette = make_palette_with_items();
         assert_eq!(palette.selected_stable_id(), Some("core:new_terminal"));
+    }
+
+    /// Build a palette whose display cache holds three ranked entries: two
+    /// "new"-matching actions in section order, then a non-matching one.
+    fn make_ranking_palette() -> (CommandPaletteComponent, CommandRegistry) {
+        use term_wm_core::command_menu::{CommandAction, CommandName, CommandNode};
+        let mut registry = CommandRegistry::new();
+        let mut active_nodes = Vec::new();
+        for (label, action, icon) in [
+            // Identical haystack shapes so fuzzy scores tie exactly, mirroring
+            // the real palette where both entries carry the same prefix
+            // pattern; ties then resolve by registry order.
+            ("New Terminal", TermWmAction::NewTerminal, None),
+            ("New Thing", TermWmAction::CloseMenu, None),
+            ("Help", TermWmAction::Help, Some("?")),
+        ] {
+            let node = CommandNode {
+                stable_id: format!("core:{}", label.replace(' ', "_").to_lowercase()),
+                name: CommandName::Static(label.to_string()),
+                description: None,
+                action: CommandAction::AppAction(action),
+                icon,
+                required_context: ContextMask::NONE,
+                owner_id: None,
+                disabled: false,
+            };
+            let id = registry.register(node);
+            active_nodes.push(ActivePaletteNode::Node(id));
+        }
+        let mut palette = CommandPaletteComponent::new();
+        palette.active_nodes = active_nodes;
+        palette.rebuild_data_cache(&registry);
+        (palette, registry)
+    }
+
+    #[test]
+    fn rerank_resets_selection_when_query_changes() {
+        let (mut palette, registry) = make_ranking_palette();
+        let mut fmatch = FuzzyMatch::new();
+        let mru = MruRanker::new();
+
+        // Idle ranking with an empty query, then simulate prior navigation
+        // leaving a stale selection index.
+        palette.rerank_with_registry(&mut fmatch, &mru, &registry);
+        palette.selected = 2;
+
+        // Typing a new query must snap back to the best match, not clamp the
+        // stale index into the filtered list (which would land on the second
+        // entry).
+        palette.query = "new".to_string();
+        palette.query_dirty = true;
+        palette.rerank_with_registry(&mut fmatch, &mru, &registry);
+
+        assert_eq!(palette.selected, 0, "changed query resets selection");
+        assert_eq!(
+            palette.filtered_items[palette.selected].display_name, "New Terminal",
+            "top-ranked match must be selected"
+        );
+    }
+
+    #[test]
+    fn rerank_same_query_keeps_selection_for_live_refresh() {
+        let (mut palette, registry) = make_ranking_palette();
+        let mut fmatch = FuzzyMatch::new();
+        let mru = MruRanker::new();
+
+        palette.query = "new".to_string();
+        palette.rerank_with_registry(&mut fmatch, &mru, &registry);
+        // User navigated down; a background data refresh re-ranks with the
+        // SAME query and must not yank keyboard-driven selection.
+        palette.selected = 1;
+        palette.mark_data_dirty();
+        palette.rebuild_data_cache(&registry);
+        palette.rerank_with_registry(&mut fmatch, &mru, &registry);
+
+        assert_eq!(palette.selected, 1, "same-query re-rank clamps only");
+        assert_eq!(palette.filtered_items[1].display_name, "New Thing");
     }
 
     #[test]

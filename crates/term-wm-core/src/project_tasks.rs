@@ -10,6 +10,20 @@ use term_wm_config::env::{Environment, parse_environment};
 /// The sole task file path, resolved from the WM launch directory.
 pub const TERM_WM_TASKS_PATH: &str = ".term-wm/tasks.json";
 
+/// Placeholder substituted with the PID of the term-wm process that spawns
+/// the task (UI spawner or CLI runner). Lets tasks.json target the WM itself,
+/// e.g. `xcrun xctrace record ... --attach {wm.pid}`.
+pub const WM_PID_PLACEHOLDER: &str = "{wm.pid}";
+
+/// Canonical platform string for macOS as compared against
+/// [`std::env::consts::OS`].
+pub const PLATFORM_MACOS: &str = "macos";
+
+/// Accepted alias for [`PLATFORM_MACOS`] in tasks.json `platforms` lists so
+/// authors may use either the OS-reported spelling (`macos`) or the classic
+/// Darwin spelling (`darwin`).
+pub const PLATFORM_DARWIN_ALIAS: &str = "darwin";
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct ProjectTaskConfig {
     pub label: String,
@@ -23,6 +37,38 @@ pub struct ProjectTaskConfig {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub environments: Vec<String>,
+    /// Platform guard: `None` (or empty) means every platform. Entries are
+    /// matched case-insensitively against `std::env::consts::OS`, with
+    /// `darwin` accepted as an alias for `macos`.
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
+}
+
+/// Variables available during `{...}` placeholder substitution in task strings.
+///
+/// `pid` is the OS PID of the term-wm process performing the spawn — the UI
+/// (WM) process for palette-launched tasks, the CLI process for
+/// `--task`-launched ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskVarContext {
+    pub pid: u32,
+}
+
+impl Default for TaskVarContext {
+    fn default() -> Self {
+        Self {
+            pid: std::process::id(),
+        }
+    }
+}
+
+/// Substitute registered placeholders in a task string.
+///
+/// Currently registered: [`WM_PID_PLACEHOLDER`]. Unknown `{...}` sequences are
+/// left verbatim so future placeholders and literal braces in user commands
+/// survive unchanged.
+pub fn substitute_vars(input: &str, ctx: &TaskVarContext) -> String {
+    input.replace(WM_PID_PLACEHOLDER, &ctx.pid.to_string())
 }
 
 /// Discovery result: the project root (dir where the file was found) + tasks.
@@ -41,24 +87,40 @@ impl ProjectTaskConfig {
     /// - If `command` is omitted or whitespace-only and `args` is present,
     ///   returns `args` directly (args-only form).
     /// - Returns `None` on empty/malformed results.
+    ///
+    /// Uses a default [`TaskVarContext`] (current process PID); prefer
+    /// [`ProjectTaskConfig::argv_resolved`] when the substitution context is
+    /// known by the caller.
     pub fn argv(&self) -> Option<Vec<String>> {
+        self.argv_resolved(&TaskVarContext::default())
+    }
+
+    /// Like [`ProjectTaskConfig::argv`], but substitutes `{...}` placeholders
+    /// (`{wm.pid}`) BEFORE shell-words tokenization so a substituted value can
+    /// never be split into stray tokens, even inside quoted segments.
+    pub fn argv_resolved(&self, ctx: &TaskVarContext) -> Option<Vec<String>> {
         #[cfg(feature = "project-tasks")]
         {
-            let command = self.command.as_deref().filter(|s| !s.trim().is_empty());
+            let command = self
+                .command
+                .as_deref()
+                .map(|c| substitute_vars(c, ctx))
+                .filter(|s| !s.trim().is_empty());
             let mut argv: Vec<String> = Vec::new();
             if let Some(cmd) = command {
-                match shell_words::split(cmd) {
+                match shell_words::split(&cmd) {
                     Ok(tokens) if !tokens.is_empty() => argv = tokens,
                     _ => return None,
                 }
             }
             if let Some(args) = &self.args {
-                argv.extend(args.iter().cloned());
+                argv.extend(args.iter().map(|a| substitute_vars(a, ctx)));
             }
             if argv.is_empty() { None } else { Some(argv) }
         }
         #[cfg(not(feature = "project-tasks"))]
         {
+            let (_ctx, _task) = (ctx, self);
             None
         }
     }
@@ -73,6 +135,33 @@ impl ProjectTaskConfig {
                 .environments
                 .iter()
                 .any(|e| parse_environment(e.trim()) == Some(env))
+    }
+
+    /// Whether this task should run on the current platform.
+    ///
+    /// A missing or empty `platforms` list means every platform. Entries are
+    /// matched case-insensitively against [`std::env::consts::OS`], with
+    /// `darwin` accepted as an alias for `macos`. Unknown platform strings
+    /// simply never match.
+    pub fn visible_on_platform(&self) -> bool {
+        match &self.platforms {
+            None => true,
+            Some(list) if list.is_empty() => true,
+            Some(list) => list
+                .iter()
+                .any(|p| normalize_platform(p) == std::env::consts::OS),
+        }
+    }
+}
+
+/// Normalize a tasks.json platform entry: trim, lowercase, and map the
+/// `darwin` alias to the canonical `macos` spelling.
+fn normalize_platform(raw: &str) -> String {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    if trimmed == PLATFORM_DARWIN_ALIAS {
+        PLATFORM_MACOS.to_string()
+    } else {
+        trimmed
     }
 }
 
@@ -91,7 +180,11 @@ pub fn load_tasks_for_cwd(cwd: &Path) -> Option<ProjectTasks> {
                     Some(tasks) => {
                         return Some(ProjectTasks {
                             root: dir.to_path_buf(),
-                            tasks: tasks.into_iter().filter(|t| t.visible_in(active)).collect(),
+                            tasks: tasks
+                                .into_iter()
+                                .filter(|t| t.visible_in(active))
+                                .filter(|t| t.visible_on_platform())
+                                .collect(),
                         });
                     }
                     None => {
@@ -116,6 +209,60 @@ fn parse_tasks_str(content: &str) -> Result<Vec<ProjectTaskConfig>, serde_json::
     use json_comments::StripComments;
     let stripped = StripComments::new(content.as_bytes());
     serde_json::from_reader::<_, Vec<ProjectTaskConfig>>(stripped)
+}
+
+/// Fully-resolved execution parameters for a task, shared by the UI spawner
+/// (`CommandBuilder`) and the CLI runner (stdio-inheriting `std::process`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTask {
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: HashMap<String, String>,
+}
+
+/// Resolve a task into concrete argv/cwd/env values.
+///
+/// - `argv`: placeholder-substituted and shell-words-tokenized.
+/// - `cwd`: the task's `cwd` when absolute; joined under `root` when relative
+///   (substituted first); `base.to_path_buf()` when absent.
+/// - `env`: per-task overrides with placeholders substituted in values.
+///
+/// Returns `None` when the task has no usable command. Mirrors the historical
+/// `TermWmApp::command_builder_for_task` semantics with
+/// `base = root.unwrap_or(launch_cwd)` — here the caller passes that base
+/// explicitly so both entry points share one implementation.
+pub fn resolve_task(
+    task: &ProjectTaskConfig,
+    base: &Path,
+    vars: &TaskVarContext,
+) -> Option<ResolvedTask> {
+    #[cfg(feature = "project-tasks")]
+    {
+        let argv = task.argv_resolved(vars)?;
+        let cwd = match task.cwd.as_deref() {
+            Some(c) => {
+                let substituted = substitute_vars(c, vars);
+                let p = Path::new(&substituted);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    base.join(p)
+                }
+            }
+            None => base.to_path_buf(),
+        };
+        let env = task
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), substitute_vars(v, vars)))
+            .collect();
+        Some(ResolvedTask { argv, cwd, env })
+    }
+    #[cfg(not(feature = "project-tasks"))]
+    {
+        let (_task, _base, _vars) = (task, base, vars);
+        None
+    }
 }
 
 #[allow(dead_code)]
@@ -180,6 +327,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert_eq!(
             task.argv(),
@@ -201,6 +349,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert_eq!(task.argv(), Some(vec!["cargo".into(), "build".into()]));
     }
@@ -214,6 +363,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert_eq!(task.argv(), Some(vec!["cargo".into(), "check".into()]));
     }
@@ -227,6 +377,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert_eq!(task.argv(), None);
     }
@@ -240,6 +391,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert_eq!(task.argv(), None);
     }
@@ -255,6 +407,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert!(task.visible_in(Environment::Dev));
         assert!(task.visible_in(Environment::Prod));
@@ -270,6 +423,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: vec!["dev".into()],
+            platforms: None,
         };
         assert!(task.visible_in(Environment::Dev));
         assert!(!task.visible_in(Environment::Prod));
@@ -285,6 +439,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: vec!["prod".into(), "test".into()],
+            platforms: None,
         };
         assert!(!task.visible_in(Environment::Dev));
         assert!(task.visible_in(Environment::Prod));
@@ -300,6 +455,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: vec!["staging".into()],
+            platforms: None,
         };
         assert!(!task.visible_in(Environment::Dev));
         assert!(!task.visible_in(Environment::Prod));
@@ -485,6 +641,7 @@ mod tests {
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert_eq!(
             task.argv(),
@@ -495,6 +652,250 @@ mod tests {
                 "--help".into()
             ])
         );
+    }
+
+    // ── String substitution ({wm.pid}) ──────────────────────────────────
+
+    fn ctx_with_pid(pid: u32) -> TaskVarContext {
+        TaskVarContext { pid }
+    }
+
+    #[test]
+    fn substitute_replaces_wm_pid_placeholder() {
+        let ctx = ctx_with_pid(4242);
+        assert_eq!(substitute_vars("attach {wm.pid}", &ctx), "attach 4242");
+        assert_eq!(substitute_vars("{wm.pid}", &ctx), "4242");
+        assert_eq!(substitute_vars("no placeholder", &ctx), "no placeholder");
+    }
+
+    #[test]
+    fn substitute_leaves_unknown_placeholders() {
+        let ctx = ctx_with_pid(1);
+        assert_eq!(substitute_vars("{other} {wm.pid}", &ctx), "{other} 1");
+        assert_eq!(substitute_vars("{wm.pidX}", &ctx), "{wm.pidX}");
+        assert_eq!(substitute_vars("{} {wm.pid", &ctx), "{} {wm.pid");
+    }
+
+    #[test]
+    fn argv_resolved_substitutes_command_and_args() {
+        let task = ProjectTaskConfig {
+            label: "profile".into(),
+            command: Some("xcrun xctrace record --attach {wm.pid}".into()),
+            args: Some(vec!["--output".into(), "/tmp/{wm.pid}.trace".into()]),
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let argv = task.argv_resolved(&ctx_with_pid(77)).expect("argv");
+        assert_eq!(
+            argv,
+            vec![
+                "xcrun".to_string(),
+                "xctrace".to_string(),
+                "record".to_string(),
+                "--attach".to_string(),
+                "77".to_string(),
+                "--output".to_string(),
+                "/tmp/77.trace".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn substitution_runs_before_shell_words_split() {
+        // A quoted segment containing the placeholder must stay ONE token
+        // after tokenization — proving substitution precedes splitting.
+        let task = ProjectTaskConfig {
+            label: "quoted".into(),
+            command: Some("trace --template 'Time Profiler {wm.pid}'".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let argv = task.argv_resolved(&ctx_with_pid(9)).expect("argv");
+        assert_eq!(argv.len(), 3);
+        assert_eq!(argv[2], "Time Profiler 9");
+    }
+
+    #[test]
+    fn argv_default_ctx_uses_process_pid_or_none_placeholder_match() {
+        // Default-context argv() must behave like argv_resolved with the
+        // current process PID when placeholders are absent.
+        let task = ProjectTaskConfig {
+            label: "plain".into(),
+            command: Some("echo hi".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        assert_eq!(task.argv(), task.argv_resolved(&TaskVarContext::default()));
+    }
+
+    // ── Platform gating ─────────────────────────────────────────────────
+
+    fn os_str() -> String {
+        std::env::consts::OS.to_string()
+    }
+
+    #[test]
+    fn visible_on_platform_when_list_missing_or_empty() {
+        let mk = |platforms: Option<Vec<String>>| ProjectTaskConfig {
+            label: "p".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms,
+        };
+        assert!(mk(None).visible_on_platform());
+        assert!(mk(Some(Vec::new())).visible_on_platform());
+    }
+
+    #[test]
+    fn visible_on_platform_matches_current_os_case_insensitively() {
+        let task = ProjectTaskConfig {
+            label: "native".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: Some(vec![os_str().to_uppercase()]),
+        };
+        assert!(task.visible_on_platform());
+    }
+
+    #[test]
+    fn visible_on_platform_hides_foreign_os() {
+        let foreign = if os_str() == "linux" {
+            "macos"
+        } else {
+            "linux"
+        };
+        let task = ProjectTaskConfig {
+            label: "foreign".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: Some(vec![foreign.into()]),
+        };
+        assert!(!task.visible_on_platform());
+    }
+
+    #[test]
+    fn visible_on_platform_darwin_alias_matches_only_macos() {
+        let task = ProjectTaskConfig {
+            label: "apple".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: Some(vec!["Darwin".into()]),
+        };
+        assert_eq!(task.visible_on_platform(), os_str() == PLATFORM_MACOS);
+    }
+
+    #[test]
+    fn platform_filter_applies_at_load() {
+        let dir = tempfile::tempdir().expect("tempdir failed");
+        let tasks_path = dir.path().join(TERM_WM_TASKS_PATH);
+        fs::create_dir_all(tasks_path.parent().expect("has parent")).expect("mkdir");
+        fs::write(
+            &tasks_path,
+            format!(
+                r#"[
+                    {{"label": "native", "command": "echo", "platforms": ["{}"]}},
+                    {{"label": "foreign", "command": "echo", "platforms": ["not-an-os"]}},
+                    {{"label": "all", "command": "echo"}}
+                ]"#,
+                os_str()
+            ),
+        )
+        .expect("write");
+
+        let result = load_tasks_for_cwd(dir.path()).expect("load");
+        let labels: Vec<&str> = result.tasks.iter().map(|t| t.label.as_str()).collect();
+        assert_eq!(labels, vec!["native", "all"]);
+    }
+
+    // ── resolve_task ────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_task_builds_argv_cwd_env() {
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("attach {wm.pid}".into()),
+            args: Some(vec!["{wm.pid}".into()]),
+            cwd: Some("logs".into()),
+            env: [("OUT".to_string(), "/tmp/{wm.pid}.txt".to_string())].into(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let base = Path::new("/project");
+        let resolved = resolve_task(&task, base, &ctx_with_pid(55)).expect("resolved");
+        assert_eq!(
+            resolved.argv,
+            vec!["attach".to_string(), "55".to_string(), "55".to_string()]
+        );
+        assert_eq!(resolved.cwd, Path::new("/project/logs"));
+        assert_eq!(
+            resolved.env.get("OUT").map(String::as_str),
+            Some("/tmp/55.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_task_keeps_absolute_cwd() {
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: Some("/abs/dir".into()),
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let resolved =
+            resolve_task(&task, Path::new("/project"), &ctx_with_pid(1)).expect("resolved");
+        assert_eq!(resolved.cwd, Path::new("/abs/dir"));
+    }
+
+    #[test]
+    fn resolve_task_defaults_cwd_to_base() {
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let resolved = resolve_task(&task, Path::new("/base"), &ctx_with_pid(1)).expect("resolved");
+        assert_eq!(resolved.cwd, Path::new("/base"));
+    }
+
+    #[test]
+    fn resolve_task_none_on_empty_command() {
+        let task = ProjectTaskConfig {
+            label: "t".into(),
+            command: Some("   ".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        assert!(resolve_task(&task, Path::new("/b"), &ctx_with_pid(1)).is_none());
     }
 }
 
@@ -511,6 +912,7 @@ mod tests_disabled {
             cwd: None,
             env: std::collections::HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert_eq!(
             task.argv(),

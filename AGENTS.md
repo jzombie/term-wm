@@ -45,6 +45,18 @@ UI String Style
 - Full rules, the canonical action-name list, and stable terminology live in
   [docs/UI-STYLE.md](./docs/UI-STYLE.md).
 
+Prose Punctuation (No Em/En Dashes)
+- Do NOT use em dashes (`—`) or en dashes (`–`) as punctuation in prose:
+  documentation, changelog entries, commit messages, PR descriptions, code
+  comments, and user-facing copy. Heavy dash usage reads as machine-generated.
+- Restructure instead with commas, parentheses, colons, semicolons, or separate
+  sentences. Example: "shows live counts: workspaces, windows, and tasks" or
+  "shows live counts (workspaces, windows, tasks)" rather than "shows live
+  counts — workspaces, windows, tasks —".
+- This does not apply to hyphens that are part of content: CLI flags
+  (`--list-tasks`), compound modifiers (`1-based`, `case-insensitive`),
+  kebab-case identifiers, or spelled ranges ("pages 3-5").
+
 Component Trait Requirements
 - Every component must implement the shared `Component` trait (e.g., `resize`, `render`, `handle_event`) and import the trait with `use crate::components::Component;` when needed.
 

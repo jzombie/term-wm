@@ -5,6 +5,12 @@ use term_wm_layout_engine::LayoutRect;
 
 use super::{OverlayKey, WindowManager};
 
+/// Per-workspace live WM totals (windows, still-running tasks), keyed by
+/// workspace name. Reported by each instance to the gateway and surfaced in
+/// the palette's workspace list (#298). A missing entry means unknown (no
+/// reporting connection), not zero.
+pub type WorkspaceTotals = std::collections::BTreeMap<String, (u32, u32)>;
+
 // TODO: Dedupe in codebase (term-session has a similar version)
 /// Format a `connected_at_unix` timestamp into a compact uptime string.
 #[cfg(feature = "session-persistence")]
@@ -134,11 +140,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         };
 
         use crate::components::MenuDisplayItem;
+        #[cfg(feature = "session-persistence")]
+        let totals = &self.cached_workspace_totals;
+        #[cfg(not(feature = "session-persistence"))]
+        let totals = &WorkspaceTotals::new();
         let items = self.wm_menu_items(
             &self.cached_workspaces,
             &self.current_workspace,
             &self.project_tasks,
             &self.all_users_by_ws,
+            totals,
         );
         let supported = &self.supported_menu_actions;
         let filtered: Vec<MenuDisplayItem<TermWmAction>> = items
@@ -182,6 +193,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         current_workspace: &str,
         project_tasks: &[crate::project_tasks::ProjectTaskConfig],
         all_users_by_ws: &std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
+        workspace_totals: &WorkspaceTotals,
     ) -> Vec<crate::components::MenuDisplayItem<crate::actions::TermWmAction>> {
         use crate::components::{MenuDisplayItem, MenuItem};
         use crate::window::WindowState;
@@ -334,6 +346,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
                         disabled: is_current,
                     }));
 
+                    // Live windows/tasks totals for this workspace (#298).
+                    // Absent entry = unknown (no reporting connection); a
+                    // present zero-zero entry renders as an empty workspace.
+                    if let Some(&(windows, tasks)) = workspace_totals.get(ws) {
+                        let window_word = if windows == 1 { "window" } else { "windows" };
+                        let task_word = if tasks == 1 { "task" } else { "tasks" };
+                        items.push(info_item(format!(
+                            "    └ {windows} {window_word} · {tasks} running {task_word}"
+                        )));
+                    }
+
                     let render_primary = |u: &crate::user_registry::UserEntry| {
                         let mut label = format!("    └ {}@{}", u.user, u.hostname);
                         if let Some(ip) = &u.ssh_ip {
@@ -388,7 +411,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             items.push(MenuDisplayItem::Separator);
         }
 
-        let _ = (workspaces, current_workspace, all_users_by_ws);
+        let _ = (
+            workspaces,
+            current_workspace,
+            all_users_by_ws,
+            workspace_totals,
+        );
 
         // ─────────────────────────────────────────────────────────
         // 3. WINDOW MANAGEMENT
@@ -444,7 +472,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             if !switch_titles.is_empty() {
                 for (key, switch_title) in switch_titles {
                     items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Switch to: {}", switch_title).into(),
+                        label: format!("Switch to Window: {}", switch_title).into(),
                         icon: Some("→"),
                         action: crate::actions::TermWmAction::FocusWindow(key),
                         disabled: key == focused,
@@ -549,6 +577,17 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             Some("⏻"),
             crate::actions::TermWmAction::ExitUi,
         ));
+        // Stop Gateway Daemon: opens a confirmation dialog (never stops
+        // directly). Gated like the workspace group — requires the compiled-in
+        // feature AND the runtime toggle.
+        #[cfg(feature = "session-persistence")]
+        if term_wm_config::runtime::session_persistence_enabled() {
+            items.push(mi(
+                "Stop Gateway Daemon",
+                Some("⏻"),
+                crate::actions::TermWmAction::OpenStopGatewayConfirm,
+            ));
+        }
 
         items
     }
@@ -806,11 +845,18 @@ mod tests {
         wm.focus_window_key(key);
         wm.set_window_title(key, "alpha");
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
-                MenuDisplayItem::Item(MenuItem { label, .. }) if label.starts_with("Switch to: ")
+                MenuDisplayItem::Item(MenuItem { label, .. })
+                    if label.starts_with("Switch to Window: ")
             )
         });
         let idx = switcher_idx.expect("Switch to entry present");
@@ -836,11 +882,18 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,
-                MenuDisplayItem::Item(MenuItem { label, .. }) if label.starts_with("Switch to: ")
+                MenuDisplayItem::Item(MenuItem { label, .. })
+                    if label.starts_with("Switch to Window: ")
             )
         });
         assert!(
@@ -866,6 +919,7 @@ mod tests {
             "default",
             &[],
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
         );
 
         // Restore the default so parallel tests see the expected state.
@@ -887,6 +941,66 @@ mod tests {
             !has_workspace_action,
             "workspace actions must not appear when runtime toggle is disabled"
         );
+        // The stop-gateway entry follows the same runtime gating.
+        assert!(
+            !items.iter().any(|entry| matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem {
+                    action: TermWmAction::OpenStopGatewayConfirm,
+                    ..
+                })
+            )),
+            "stop-gateway entry must not appear when runtime toggle is disabled"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_stop_gateway_entry_opens_confirm_dialog() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+
+        // Runtime enabled by default: the SETTINGS & SYSTEM section must offer
+        // "Stop Gateway Daemon" bound to the OPENER action — never the
+        // executor (`StopGatewayDaemon`), which is reachable only from the
+        // confirmation dialog's Confirm branch (#298).
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
+        let mut stop_entries = items.iter().filter(|entry| {
+            matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem { label, .. }) if label == "Stop Gateway Daemon"
+            )
+        });
+        let Some(MenuDisplayItem::Item(MenuItem {
+            action: TermWmAction::OpenStopGatewayConfirm,
+            disabled,
+            ..
+        })) = stop_entries.next()
+        else {
+            panic!("palette must list 'Stop Gateway Daemon' with OpenStopGatewayConfirm");
+        };
+        assert!(!disabled, "stop-gateway entry must be enabled");
+        assert!(
+            stop_entries.next().is_none(),
+            "'Stop Gateway Daemon' must appear exactly once"
+        );
+        assert!(
+            !items.iter().any(|entry| matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem {
+                    action: TermWmAction::StopGatewayDaemon,
+                    ..
+                })
+            )),
+            "the executor action must never be a palette entry"
+        );
     }
 
     #[test]
@@ -903,6 +1017,7 @@ mod tests {
             &["dev".into(), "prod".into()],
             "dev",
             &[],
+            &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
         );
 
@@ -935,6 +1050,87 @@ mod tests {
         );
     }
 
+    // ── Per-workspace WM totals (#298) ──────────────────────────────────
+
+    fn workspace_totals_tests_common(
+        totals: &WorkspaceTotals,
+    ) -> Vec<crate::components::MenuDisplayItem<TermWmAction>> {
+        let wm = make_wm::<TestOverlay>();
+        wm.wm_menu_items(
+            &["dev".into()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+            totals,
+        )
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_renders_totals_line_under_workspace() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let mut totals = WorkspaceTotals::new();
+        totals.insert("dev".to_string(), (3, 1));
+        let items = workspace_totals_tests_common(&totals);
+
+        let ws_idx = items
+            .iter()
+            .position(|entry| {
+                matches!(
+                    entry,
+                    MenuDisplayItem::Item(MenuItem { label, .. })
+                        if label == "Switch to Workspace: dev (current)"
+                )
+            })
+            .expect("workspace entry found");
+        let next = &items[ws_idx + 1];
+        assert!(
+            matches!(next, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. })
+                if label == "    └ 3 windows · 1 running task"),
+            "totals line must sit directly under the workspace entry: {next:?}"
+        );
+    }
+
+    #[test]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_omits_totals_line_when_unknown() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let items = workspace_totals_tests_common(&WorkspaceTotals::new());
+        assert!(
+            !items.iter().any(|entry| matches!(
+                entry,
+                MenuDisplayItem::Item(MenuItem { label, .. }) if label.contains("running task")
+            )),
+            "no totals line may render without a stats entry (unknown != zero)"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_totals_zero_and_singular_forms() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+
+        let mut zero = WorkspaceTotals::new();
+        zero.insert("dev".to_string(), (0, 0));
+        let items = workspace_totals_tests_common(&zero);
+        assert!(items.iter().any(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, .. })
+                if label == "    └ 0 windows · 0 running tasks"
+        )));
+
+        let mut single = WorkspaceTotals::new();
+        single.insert("dev".to_string(), (1, 1));
+        let items = workspace_totals_tests_common(&single);
+        assert!(items.iter().any(|entry| matches!(
+            entry,
+            MenuDisplayItem::Item(MenuItem { label, .. })
+                if label == "    └ 1 window · 1 running task"
+        )));
+    }
+
     #[test]
     #[serial(wm_menu_items)]
     fn wm_menu_items_renders_5_titled_section_headers() {
@@ -945,7 +1141,13 @@ mod tests {
         wm.transition_window(key, WindowState::Mapped);
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
 
         let headers: Vec<String> = items
             .iter()
@@ -990,7 +1192,13 @@ mod tests {
             }],
         );
 
-        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &users_by_ws,
+            &std::collections::BTreeMap::new(),
+        );
 
         let ws_idx = items.iter().position(|entry| matches!(
             entry,
@@ -1033,6 +1241,7 @@ mod tests {
             "dev",
             &[],
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
         );
 
         let ws_idx = items.iter().position(|entry| matches!(
@@ -1055,7 +1264,13 @@ mod tests {
         let mut wm = make_wm::<TestOverlay>();
 
         wm.workspace_follow_enabled = false;
-        let items_off = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items_off = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         assert!(items_off.iter().any(|entry| matches!(
             entry,
             MenuDisplayItem::Item(MenuItem { label, icon: Some("○"), action: TermWmAction::ToggleWorkspaceFollow, .. })
@@ -1063,7 +1278,13 @@ mod tests {
         )));
 
         wm.workspace_follow_enabled = true;
-        let items_on = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items_on = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         assert!(items_on.iter().any(|entry| matches!(
             entry,
             MenuDisplayItem::Item(MenuItem { label, icon: Some("◎"), action: TermWmAction::ToggleWorkspaceFollow, .. })
@@ -1084,8 +1305,15 @@ mod tests {
             cwd: None,
             env: std::collections::HashMap::new(),
             environments: Vec::new(),
+            platforms: None,
         }];
-        let items = wm.wm_menu_items(&[], "", &tasks, &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &tasks,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         assert!(
             !items.iter().any(|entry| matches!(
                 entry,
@@ -1128,7 +1356,13 @@ mod tests {
                 pid: 0,
             }],
         );
-        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &users_by_ws,
+            &std::collections::BTreeMap::new(),
+        );
         assert!(
             !items.iter().any(|e| matches!(e, MenuDisplayItem::Item(MenuItem { label, .. }) if label.contains("Workspace") || label.contains("Follow Workspaces"))),
             "workspace UI must be hidden when session-persistence feature is disabled at compile time"
@@ -1162,7 +1396,13 @@ mod tests {
                 pid: 1234,
             }],
         );
-        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws);
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &users_by_ws,
+            &std::collections::BTreeMap::new(),
+        );
         let ws_idx = items
             .iter()
             .position(|entry| {

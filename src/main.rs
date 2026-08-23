@@ -16,6 +16,7 @@ use term_wm::unified_event_source::{UnifiedEvent, UnifiedEventSource};
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::components::Component;
 use term_wm_core::events::Event;
+use term_wm_core::project_tasks::{ProjectTaskConfig, ProjectTasks, ResolvedTask};
 use term_wm_core::wm_config::WmConfig;
 use term_wm_ui_facade::{LayerComponent, OverlayComponent};
 
@@ -45,9 +46,10 @@ struct Cli {
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     cmds: Vec<String>,
 
-    /// Workspace name (default: "default"); maps to the daemon channel <workspace>/main
-    #[arg(short = 'w', long = "workspace", default_value = "default")]
-    workspace: String,
+    /// Workspace name; maps to the daemon channel <workspace>/main. When
+    /// omitted, defaults to the sanitized current-directory name (#284).
+    #[arg(short = 'w', long = "workspace")]
+    workspace: Option<String>,
 
     /// Run without window manager (headless session client mode)
     #[arg(long = "no-wm")]
@@ -82,6 +84,23 @@ struct Cli {
     /// Allow running nested inside an existing term-wm session on the same gateway.
     #[arg(long = "allow-nested")]
     allow_nested: bool,
+
+    /// Override the environment used for project-task visibility AND gateway
+    /// socket scoping (dev/prod/test). Applied process-wide before any
+    /// session or task code runs; beats TERM_WM_ENV and build heuristics.
+    #[arg(long = "env", value_name = "ENV", value_parser = ["dev", "prod", "test"])]
+    env: Option<String>,
+
+    /// List available project tasks for the current directory, then exit.
+    #[arg(long = "list-tasks")]
+    list_tasks: bool,
+
+    /// Run a project task attached to this terminal (stdio inherited), then
+    /// exit. Accepts a task label or the 1-based index shown by
+    /// `--list-tasks` (exact label match wins). Repeatable; tasks run
+    /// sequentially and stop at the first non-zero exit.
+    #[arg(long = "task", value_name = "LABEL", action = clap::ArgAction::Append)]
+    tasks: Vec<String>,
 }
 
 /// Combine repeatable `--run` commands with the single trailing `--` command
@@ -142,6 +161,165 @@ fn runtime_config_for(no_session_persistence_flag: bool) -> term_wm_config::runt
     }
 }
 
+/// Exit-code base for children terminated by a signal (`128 + signal`).
+const TASK_SIGNAL_EXIT_BASE: i32 = 128;
+
+/// Mirrors `term_session::DEFAULT_WORKSPACE`; duplicated as a literal because
+/// the `term-session` crate is only linked when session persistence is
+/// compiled in.
+#[cfg(not(feature = "session-persistence"))]
+const FALLBACK_WORKSPACE: &str = "default";
+
+/// Replacement character for bytes invalid in a workspace (ChannelName)
+/// namespace segment.
+const WORKSPACE_NAME_FILL_CHAR: char = '_';
+
+/// Sanitize a raw name into a `ChannelName`-safe namespace segment: keep
+/// `[A-Za-z0-9_-]`, map everything else to [`WORKSPACE_NAME_FILL_CHAR`], and
+/// trim fill characters from both ends. Returns `None` when nothing usable
+/// remains so callers can apply their own fallback (#284).
+fn sanitize_workspace_name_opt(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                WORKSPACE_NAME_FILL_CHAR
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches(WORKSPACE_NAME_FILL_CHAR);
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// The launch directory's basename, when resolvable.
+fn cwd_basename() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+}
+
+#[cfg(feature = "session-persistence")]
+fn resolve_workspace_arg(arg: &Option<String>) -> String {
+    arg.clone().unwrap_or_else(derive_default_workspace)
+}
+
+/// #284: default the initial workspace to the sanitized launch-directory
+/// basename so each project lands in a self-named workspace instead of a
+/// generic one.
+#[cfg(feature = "session-persistence")]
+fn derive_default_workspace() -> String {
+    sanitize_workspace_name_opt(&cwd_basename().unwrap_or_default())
+        .unwrap_or_else(term_session_default_workspace)
+}
+
+#[cfg(feature = "session-persistence")]
+fn term_session_default_workspace() -> String {
+    term_session::DEFAULT_WORKSPACE.to_string()
+}
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+
+/// Map a child exit status to a process exit code without panicking.
+///
+/// `ExitStatus::code()` returns `None` when the child was killed by a signal
+/// (e.g. Ctrl-C); report that as `128 + signal` on Unix and as generic
+/// failure (1) on other platforms instead of unwrapping.
+#[allow(unused_variables)]
+fn exit_code_of(status: std::process::ExitStatus) -> i32 {
+    match status.code() {
+        Some(code) => code,
+        #[cfg(unix)]
+        None => status.signal().map_or(1, |sig| TASK_SIGNAL_EXIT_BASE + sig),
+        #[cfg(not(unix))]
+        None => 1,
+    }
+}
+
+/// Load `.term-wm/tasks.json` relative to the current directory for CLI use.
+fn load_cli_project_tasks() -> io::Result<ProjectTasks> {
+    let cwd = std::env::current_dir()?;
+    term_wm_core::project_tasks::load_tasks_for_cwd(&cwd).ok_or_else(|| {
+        io::Error::other(format!(
+            "no {} found in this directory or any of its parents",
+            term_wm_core::project_tasks::TERM_WM_TASKS_PATH
+        ))
+    })
+}
+
+/// Resolve a `--task` argument to an index into the loaded task list.
+/// Exact label match wins; otherwise a 1-based numeric index (matching the
+/// numbering printed by `--list-tasks`) is accepted.
+#[cfg_attr(not(test), allow(dead_code))]
+fn resolve_task_spec(tasks: &[ProjectTaskConfig], spec: &str) -> Option<usize> {
+    if let Some(pos) = tasks.iter().position(|t| t.label == spec) {
+        return Some(pos);
+    }
+    spec.parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .filter(|&i| i < tasks.len())
+}
+
+/// Print the numbered task list (`--list-tasks`). The numbers are the same
+/// 1-based indices accepted by `--task`.
+fn list_project_tasks() -> io::Result<()> {
+    let loaded = load_cli_project_tasks()?;
+    if loaded.tasks.is_empty() {
+        println!(
+            "No visible project tasks in {}",
+            term_wm_core::project_tasks::TERM_WM_TASKS_PATH
+        );
+        return Ok(());
+    }
+    for (i, task) in loaded.tasks.iter().enumerate() {
+        let argv = task
+            .argv()
+            .map(|a| a.join(" "))
+            .unwrap_or_else(|| "(invalid command)".to_string());
+        println!("[{}] {} - {}", i + 1, task.label, argv);
+    }
+    Ok(())
+}
+
+/// Spawn a resolved task attached to the current terminal (stdio inherited).
+fn spawn_resolved_task(resolved: &ResolvedTask) -> io::Result<std::process::ExitStatus> {
+    let mut cmd = std::process::Command::new(&resolved.argv[0]);
+    cmd.args(&resolved.argv[1..]).current_dir(&resolved.cwd);
+    for (k, v) in &resolved.env {
+        cmd.env(k, v);
+    }
+    cmd.status()
+}
+
+/// Run each `--task` spec sequentially with stdio inherited; stop at the
+/// first non-zero exit and re-exit with that exact code.
+fn run_cli_tasks(specs: &[String]) -> io::Result<()> {
+    let loaded = load_cli_project_tasks()?;
+    for spec in specs {
+        let idx = resolve_task_spec(&loaded.tasks, spec)
+            .ok_or_else(|| io::Error::other(format!("no project task matching '{spec}'")))?;
+        let task = &loaded.tasks[idx];
+        let resolved = term_wm_core::project_tasks::resolve_task(
+            task,
+            &loaded.root,
+            &term_wm_core::project_tasks::TaskVarContext::default(),
+        )
+        .ok_or_else(|| io::Error::other(format!("task '{}' has no valid command", task.label)))?;
+        println!("Running task '{}': {}", task.label, resolved.argv.join(" "));
+        let status = spawn_resolved_task(&resolved)?;
+        let code = exit_code_of(status);
+        if code != 0 {
+            // Propagate the child's exit status (including signal deaths) as ours.
+            std::process::exit(code);
+        }
+    }
+    Ok(())
+}
+
 /// Build the CLI `Command`. With session persistence compiled in, decorate the
 /// help footer with the resolved persistence gateway so `--help` shows the
 /// exact socket this build targets.
@@ -182,10 +360,37 @@ fn run() -> io::Result<()> {
     // Initialize runtime config before any session-persistence code paths.
     term_wm_config::runtime::init(runtime_config_for(cli.no_session_persistence));
 
+    // Apply the CLI environment override (if any) before ANY consumer of
+    // active_environment() runs — this covers both project-task visibility
+    // and gateway socket scoping via the single-source-of-truth resolver.
+    if let Some(env) = &cli.env {
+        match term_wm_config::env::parse_environment(env) {
+            Some(parsed) => term_wm_config::env::set_override_environment(parsed),
+            None => {
+                return Err(io::Error::other(format!(
+                    "invalid --env value '{env}' (expected dev, prod, or test)"
+                )));
+            }
+        }
+    }
+
     #[cfg(feature = "session-persistence")]
-    let workspace: String = term_session::ChannelName::parse_workspace(&cli.workspace).to_string();
+    let workspace: String =
+        term_session::ChannelName::parse_workspace(&resolve_workspace_arg(&cli.workspace))
+            .to_string();
     #[cfg(not(feature = "session-persistence"))]
-    let workspace: String = cli.workspace.clone();
+    let workspace: String = cli
+        .workspace
+        .clone()
+        .unwrap_or_else(|| FALLBACK_WORKSPACE.to_string());
+
+    // 0a. Project task operations (local; independent of session persistence).
+    if cli.list_tasks {
+        return list_project_tasks();
+    }
+    if !cli.tasks.is_empty() {
+        return run_cli_tasks(&cli.tasks);
+    }
 
     // 0. Stop daemon
     #[cfg(feature = "session-persistence")]
@@ -291,10 +496,18 @@ fn run() -> io::Result<()> {
     // For internal sessions, spawn a Muxio listener that receives structured
     // events from the server and pipes them into the event source via pty_wakeup_tx.
     #[cfg(feature = "session-persistence")]
+    let mut inner_session_stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>> = None;
+    #[cfg(not(feature = "session-persistence"))]
+    let inner_session_stats_tx = ();
+    #[cfg(feature = "session-persistence")]
     if cli.internal_session && term_wm_config::runtime::session_persistence_enabled() {
         let tx = pty_wakeup_tx.clone();
         let channel = term_session::ChannelName::session(&workspace).to_string();
         let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
+        // Queue the WM's live counts flow through; drained by a task inside
+        // the listener below that reports over the subscribed connection.
+        let (stats_tx, mut stats_rx) = tokio::sync::mpsc::channel::<(u32, u32)>(16);
+        inner_session_stats_tx = Some(stats_tx);
         rt.spawn(async move {
             use term_session::protocol::OnAttributedInput;
             use term_session::protocol::RpcMethodPrebuffered;
@@ -434,21 +647,55 @@ fn run() -> io::Result<()> {
                 return;
             }
             tracing::info!("Attributed input listener subscribed");
-            // Async refresh of user cache after subscribe
+
+            // Ordered WM-stats reporting over THIS connection: it is the one
+            // registered as the channel's internal WM, which the gateway
+            // requires before accepting stats. FIFO single consumer, so rapid
+            // mutations can never arrive out of order (#298).
             {
+                use term_session::protocol::ReportWmStats;
+                let client = client.clone();
+                tokio::spawn(async move {
+                    while let Some((windows, tasks_running)) = stats_rx.recv().await {
+                        let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
+                        if let Err(e) =
+                            ReportWmStats::call(client_ref, (windows, tasks_running)).await
+                        {
+                            tracing::debug!("wm stats report failed: {e:?}");
+                        }
+                    }
+                });
+            }
+            // Periodic user-cache re-sync (#306): runs on its OWN task so this
+            // listener task keeps processing RPC notifications uninterrupted.
+            // The first tick fires immediately, preserving the previous
+            // post-subscribe one-shot refresh while healing stale conn_ids
+            // (cold-start races, viewer reconnects) every interval.
+            {
+                // Re-sync cadence for the internal WM's user registry. Shorter
+                // than the palette's 30s IPC poll so registry gaps heal well
+                // before a user would notice stale palette entries.
+                const USER_CACHE_REFRESH_INTERVAL: std::time::Duration =
+                    std::time::Duration::from_secs(15);
                 let tx = tx.clone();
                 let client = client.clone();
                 let channel = channel.clone();
                 tokio::spawn(async move {
                     use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
                     use term_session::protocol::ListUsers;
-                    let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
-                    match ListUsers::call(client_ref, channel).await {
-                        Ok(resp) => {
-                            let _ = tx.try_send(UnifiedEvent::UserCacheRefreshed(resp.users));
-                        }
-                        Err(e) => {
-                            tracing::debug!("ListUsers refresh failed: {e:?}");
+                    let mut interval = tokio::time::interval(USER_CACHE_REFRESH_INTERVAL);
+                    loop {
+                        interval.tick().await;
+                        // Annotated ref mirrors the stats-reporter pattern
+                        // above; deref coercion unwraps the Arc cleanly.
+                        let client_ref: &term_session::rpc_client::RpcIpcClient = &client;
+                        match ListUsers::call(client_ref, channel.clone()).await {
+                            Ok(resp) => {
+                                let _ = tx.try_send(UnifiedEvent::UserCacheRefreshed(resp.users));
+                            }
+                            Err(e) => {
+                                tracing::debug!("ListUsers refresh failed: {e:?}");
+                            }
                         }
                     }
                 });
@@ -473,6 +720,7 @@ fn run() -> io::Result<()> {
         pty_wakeup_tx,
         workspace,
         event_owner,
+        inner_session_stats_tx,
     )?;
 
     let mut output = ConsoleRenderTarget::new()?;
@@ -534,14 +782,25 @@ impl App {
         pty_wakeup_tx: Sender<UnifiedEvent>,
         workspace: String,
         event_owner: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+        #[cfg(feature = "session-persistence")] inner_session_stats_tx: Option<
+            tokio::sync::mpsc::Sender<(u32, u32)>,
+        >,
+        #[cfg(not(feature = "session-persistence"))] _inner_session_stats_tx: (),
     ) -> io::Result<Self> {
+        // #284: the bundled binary opts into dynamic Menu/FAB branding —
+        // workspace name → launch-directory name → app-name. Library
+        // embedders keep their explicit `AppContext::new` name untouched.
         let app_ctx = Arc::new(
-            AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")).with_hostname(
-                &hostname::get()
-                    .ok()
-                    .and_then(|s| s.into_string().ok())
-                    .unwrap_or_else(|| "unknown-host".to_string()),
-            ),
+            AppContext::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+                .with_dynamic_label(sanitize_workspace_name_opt(
+                    &cwd_basename().unwrap_or_default(),
+                ))
+                .with_hostname(
+                    &hostname::get()
+                        .ok()
+                        .and_then(|s| s.into_string().ok())
+                        .unwrap_or_else(|| "unknown-host".to_string()),
+                ),
         );
 
         let wm = build_wm(&app_ctx, config);
@@ -556,6 +815,12 @@ impl App {
             current_workspace: workspace,
             event_owner,
         };
+        // Hand the app the ordered stats queue so publish_wm_stats() reports
+        // over the subscribed internal-WM connection (#298).
+        #[cfg(feature = "session-persistence")]
+        if let Some(stats_tx) = inner_session_stats_tx {
+            app.inner.set_stats_reporter(stats_tx);
+        }
 
         // One window per command (shell + the command as input), then default
         // shells to fill `num_windows`. `commands` is owned and consumed here.
@@ -572,6 +837,10 @@ impl App {
                 tracing::error!("Window spawn error: {}", e);
             }
         }
+        // Announce our initial window/task counts so cross-workspace totals
+        // include this instance even before any user mutation (#298).
+        #[cfg(feature = "session-persistence")]
+        app.inner.publish_wm_stats();
 
         app.open_help_overlay();
         Ok(app)
@@ -729,6 +998,38 @@ impl WindowManagerHost<AppRootComponent, LayerComponent, OverlayComponent> for A
                     .push_notification(msg, std::time::Duration::from_secs(3));
                 true
             }
+            // Palette entry: open the confirmation dialog only. The shutdown
+            // itself is reachable exclusively via the dialog's Confirm branch.
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::OpenStopGatewayConfirm => {
+                self.inner.open_stop_gateway_confirm();
+                true
+            }
+            // Executor action, dispatched ONLY from the stop-gateway dialog's
+            // Confirm branch. Force=true: the user explicitly accepted that
+            // every workspace session will be terminated.
+            #[cfg(feature = "session-persistence")]
+            TermWmAction::StopGatewayDaemon => {
+                const SHUTDOWN_TOAST_SECS: u64 = 3;
+                match term_session::stop_gateway(true) {
+                    Ok(()) => {
+                        self.inner.wm().push_notification(
+                            "Gateway shutdown initiated.",
+                            std::time::Duration::from_secs(SHUTDOWN_TOAST_SECS),
+                        );
+                    }
+                    Err(e) => {
+                        self.inner.wm().push_notification(
+                            format!("Failed to stop gateway daemon: {e}"),
+                            std::time::Duration::from_secs(SHUTDOWN_TOAST_SECS),
+                        );
+                    }
+                }
+                // Do NOT quit locally: in persistence mode this WM runs inside
+                // a daemon-managed PTY; killing the gateway tears down that
+                // PTY and the normal AppExited flow handles our own exit.
+                true
+            }
             _ => false,
         }
     }
@@ -835,6 +1136,117 @@ mod tests {
         assert_eq!(commands, vec!["vim -l", "htop", "git log --oneline"]);
     }
 
+    fn cli_task(label: &str) -> ProjectTaskConfig {
+        ProjectTaskConfig {
+            label: label.into(),
+            command: Some("echo".into()),
+            args: None,
+            cwd: None,
+            env: std::collections::HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        }
+    }
+
+    #[test]
+    fn resolve_task_spec_matches_label_exactly() {
+        let tasks = vec![cli_task("build"), cli_task("test"), cli_task("2")];
+        assert_eq!(resolve_task_spec(&tasks, "test"), Some(1));
+        assert_eq!(resolve_task_spec(&tasks, "missing"), None);
+    }
+
+    #[test]
+    fn resolve_task_spec_numeric_index_is_one_based_and_bounds_checked() {
+        let tasks = vec![cli_task("a"), cli_task("b"), cli_task("c")];
+        assert_eq!(resolve_task_spec(&tasks, "1"), Some(0));
+        assert_eq!(resolve_task_spec(&tasks, "3"), Some(2));
+        assert_eq!(resolve_task_spec(&tasks, "0"), None);
+        assert_eq!(resolve_task_spec(&tasks, "4"), None);
+    }
+
+    #[test]
+    fn resolve_task_spec_exact_label_beats_numeric_fallback() {
+        let tasks = vec![cli_task("a"), cli_task("1")];
+        // A task literally named "1" wins over index 1 ("a").
+        assert_eq!(resolve_task_spec(&tasks, "1"), Some(1));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn exit_code_of_maps_signal_death_to_128_plus_signal() {
+        use std::os::unix::process::ExitStatusExt;
+        let killed = std::process::ExitStatus::from_raw(0x000F); // WIFSIGNALED, SIGTERM (15)
+        assert_eq!(exit_code_of(killed), TASK_SIGNAL_EXIT_BASE + 15);
+        let normal = std::process::ExitStatus::from_raw(0x0100); // exited with code 1
+        assert_eq!(exit_code_of(normal), 1);
+    }
+
+    #[test]
+    fn sanitize_workspace_name_keeps_channel_safe_characters() {
+        assert_eq!(
+            sanitize_workspace_name_opt("my-app_2"),
+            Some("my-app_2".to_string()),
+            "valid characters must pass through"
+        );
+        assert_eq!(
+            sanitize_workspace_name_opt("2TB Storage Vault"),
+            Some("2TB_Storage_Vault".to_string()),
+            "spaces become fill characters"
+        );
+        assert_eq!(
+            sanitize_workspace_name_opt("my.project"),
+            Some("my_project".to_string())
+        );
+        assert_eq!(
+            sanitize_workspace_name_opt("  padded  "),
+            Some("padded".to_string()),
+            "outer whitespace is trimmed before sanitizing"
+        );
+    }
+
+    #[test]
+    fn sanitize_workspace_name_trims_edge_fills_and_rejects_empty_results() {
+        assert_eq!(
+            sanitize_workspace_name_opt("...proj..."),
+            Some("proj".to_string()),
+            "edge fill characters are trimmed"
+        );
+        assert_eq!(sanitize_workspace_name_opt(""), None);
+        assert_eq!(sanitize_workspace_name_opt("   "), None);
+        assert_eq!(
+            sanitize_workspace_name_opt("///"),
+            None,
+            "names that sanitize to nothing yield None so callers can fall back"
+        );
+    }
+
+    /// #284: `-w` absent derives the workspace name from the launch directory.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(cwd)]
+    fn derive_default_workspace_uses_cwd_basename_sanitized() {
+        let dir = tempfile::tempdir().expect("tempdir failed");
+        let project_dir = dir.path().join("My.Project");
+        std::fs::create_dir_all(&project_dir).expect("mkdir");
+
+        let prev = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&project_dir).expect("chdir");
+        let derived = derive_default_workspace();
+        std::env::set_current_dir(prev).expect("restore cwd");
+
+        assert_eq!(derived, "My_Project");
+    }
+
+    /// #284: an explicit `-w` value always wins over cwd derivation.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    fn resolve_workspace_arg_explicit_value_wins() {
+        assert_eq!(
+            resolve_workspace_arg(&Some("custom-ws".to_string())),
+            "custom-ws"
+        );
+    }
+
     #[test]
     fn build_commands_positional_only_is_single_command() {
         let commands = build_commands(vec![], vec!["ls".into(), "-la".into()]);
@@ -933,6 +1345,166 @@ mod tests {
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Dedicated host runtime for shared test gateways. Never dropped: the
+    /// process-lifetime task keeps each socket alive for every test that
+    /// dials it, on any thread, with no locks involved.
+    #[cfg(feature = "session-persistence")]
+    fn test_gateway_runtime() -> &'static tokio::runtime::Runtime {
+        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("test gateway runtime")
+        })
+    }
+
+    /// Ensure a live gateway is reachable at `gw`, spawning one on the
+    /// shared test runtime when necessary. Returns the resolved name.
+    ///
+    /// NOTE: panics here are swallowed by the global debug-log panic hook
+    /// installed by init_system_windows(); diagnostics go through
+    /// eprintln! instead of assert messages.
+    #[cfg(feature = "session-persistence")]
+    fn ensure_gateway(gw: term_session::ChannelName) -> String {
+        use term_session_muxio_service_definitions::probe_ipc_endpoint;
+        if !probe_ipc_endpoint(&gw) {
+            test_gateway_runtime().spawn({
+                let gw = gw.clone();
+                async move {
+                    let _ = term_session::server::run_gateway(gw).await;
+                }
+            });
+            for _ in 0..150 {
+                if probe_ipc_endpoint(&gw) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        if !probe_ipc_endpoint(&gw) {
+            eprintln!("DIAG: gateway {gw} unreachable after spawn attempt (stale socket file?)");
+            panic!("test gateway must be reachable");
+        }
+        gw.to_string()
+    }
+
+    /// Default-endpoint variant for tests that merely need a REACHABLE
+    /// daemon. Under `cargo test` this resolves to the dev namespace
+    /// (`term-wm/dev/<user>/gateway`), which installed daemons never occupy,
+    /// so unit tests cannot collide with real sessions.
+    #[cfg(feature = "session-persistence")]
+    fn ensure_test_gateway() -> String {
+        ensure_gateway(term_session::gateway_channel_name())
+    }
+
+    /// Hardening E2E (#298): drive the REAL stop-gateway flow against a LIVE
+    /// in-process daemon. Open the confirmation through actual dispatch,
+    /// verify the body carries live gateway-derived counts, deliver an Enter
+    /// to the overlay (user pressing Confirm), execute the forced shutdown,
+    /// and prove the daemon socket actually dies.
+    ///
+    /// The runner's Layer-1 branch (Confirm => close + executor) is replicated
+    /// here call-for-call; its routing is separately pinned by
+    /// `dispatch_action_routes_stop_gateway_actions_to_host` in term-wm-core.
+    #[cfg(feature = "session-persistence")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // Follows the suite's env-isolation pattern: hold env_lock() for the
+    // whole flow so TERM_WM_GATEWAY stays pinned to this test's unique
+    // socket (clippy's across-await lint is intentionally allowed; nothing
+    // inside ever waits on another test holding the same mutex).
+    #[allow(clippy::await_holding_lock)]
+    async fn stop_gateway_daemon_e2e_from_app_actions() {
+        let _guard = env_lock();
+        use term_session::protocol::probe_ipc_endpoint;
+        use term_wm_core::actions::ConfirmAction;
+        use term_wm_core::events::KeyEvent;
+        use term_wm_core::events::{KeyCode, KeyKind, KeyModifiers};
+        use term_wm_core::window::window_manager::system_tags;
+
+        static NEXT_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let gw = term_session::ChannelName::parse(&format!("term-wm/testgw-stop-{id}"))
+            .expect("unique gateway");
+        unsafe {
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gw.to_string());
+        }
+
+        // Live in-process daemon on that isolated socket.
+        let server = tokio::spawn({
+            let gw = gw.clone();
+            async move {
+                let _ = term_session::server::run_gateway(gw).await;
+            }
+        });
+        let mut up = false;
+        for _ in 0..100 {
+            if probe_ipc_endpoint(&gw) {
+                up = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(up, "gateway must be reachable before the dialog opens");
+
+        let mut app = test_app();
+
+        // 1. Palette action opens the dialog; body carries gateway-derived counts.
+        assert!(app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm));
+        assert!(app.inner.wm().stop_daemon_confirm_visible());
+        let (title, body) = {
+            let key = app
+                .inner
+                .wm()
+                .get_overlay::<system_tags::StopDaemonConfirm>()
+                .expect("stop-daemon overlay present");
+            match app.inner.wm().overlay_for_key_mut(key) {
+                Some(OverlayComponent::StopDaemonConfirm(c)) => {
+                    (c.dialog_title().to_string(), c.body_text().to_string())
+                }
+                _ => panic!("wrong overlay variant"),
+            }
+        };
+        assert_eq!(title, "Stop Gateway Daemon");
+        assert!(
+            body.contains("Active workspaces:"),
+            "live counts line missing: {body}"
+        );
+
+        // 2. Enter on the overlay resolves to Confirm (default selection).
+        let enter = Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyKind::Press,
+        ));
+        assert_eq!(
+            app.inner.wm().handle_stop_daemon_confirm_event(&enter),
+            Some(ConfirmAction::Confirm)
+        );
+
+        // 3. Runner branch replicated: close, then execute the forced shutdown.
+        app.inner.wm().close_stop_daemon_confirm();
+        assert!(!app.inner.wm().stop_daemon_confirm_visible());
+        assert!(app.handle_custom_action(&TermWmAction::StopGatewayDaemon));
+
+        // 4. The daemon socket must actually die.
+        let mut down = false;
+        for _ in 0..50 {
+            if !probe_ipc_endpoint(&gw) {
+                down = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(down, "gateway socket must be gone after forced shutdown");
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server).await;
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
     }
 
     /// `runtime_config_for` enables persistence when neither the flag nor the
@@ -1056,17 +1628,15 @@ mod tests {
     #[test]
     #[serial(runtime_config)]
     fn handle_custom_action_consumes_workspace_actions() {
+        // Reachable daemon on the dev namespace; no process-env mutation.
+        let _gw_socket = ensure_test_gateway();
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
-        let _guard = env_lock();
         let prev = RuntimeConfig {
             session_persistence: session_persistence_enabled(),
         };
         init(RuntimeConfig {
             session_persistence: true,
         });
-        unsafe {
-            std::env::set_var("TERM_WM_GATEWAY", "term-wm/coverage-test-gw");
-        }
 
         let mut app = test_app();
         assert!(app.handle_custom_action(&TermWmAction::SwitchWorkspace("prod".into())));
@@ -1076,9 +1646,6 @@ mod tests {
         assert!(app.handle_custom_action(&TermWmAction::DetachCurrentClient));
 
         init(prev);
-        unsafe {
-            std::env::remove_var("TERM_WM_GATEWAY");
-        }
     }
 
     /// `RunProjectTask` with a nonexistent task label returns false
@@ -1117,6 +1684,107 @@ mod tests {
         init(prev);
     }
 
+    /// The stop-gateway palette action opens the confirmation overlay and is
+    /// consumed; the executor action is likewise consumed without quitting.
+    /// Neither may ever surface as an unhandled fall-through (#298).
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(runtime_config)]
+    fn handle_custom_action_consumes_stop_gateway_actions() {
+        // Dedicated gateway: the forced shutdown below REALLY kills it,
+        // proving the executor end-to-end without touching the shared
+        // instance other tests dial.
+        static NEXT_STOP_GW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let stop_id = NEXT_STOP_GW.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let gw_socket = ensure_gateway(
+            term_session::ChannelName::parse(&format!(
+                "term-wm/testgw-stop-{}-{stop_id}",
+                std::process::id()
+            ))
+            .expect("dedicated gateway name"),
+        );
+        // Pin dialog reads AND forced shutdown to THIS gateway.
+        let _env_guard = env_lock();
+        unsafe {
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &gw_socket);
+        }
+        let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
+        // stderr into tracing and captures panics into the debug buffer).
+        {
+            use std::io::Write as _;
+            std::panic::set_hook(Box::new(|info| {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/twm-panic.log")
+                {
+                    let _ = writeln!(f, "PANIC: {info}");
+                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
+                }
+            }));
+        }
+
+        let opened = app.handle_custom_action(&TermWmAction::OpenStopGatewayConfirm);
+        if !opened {
+            eprintln!("DIAG: OpenStopGatewayConfirm not consumed");
+        }
+        assert!(
+            opened,
+            "OpenStopGatewayConfirm must be consumed by the host"
+        );
+        let visible = app.inner.wm().stop_daemon_confirm_visible();
+        if !visible {
+            eprintln!("DIAG: stop-daemon overlay not visible");
+        }
+        assert!(
+            visible,
+            "OpenStopGatewayConfirm must render the stop-daemon confirm overlay"
+        );
+
+        // Confirm path FIRST (overlay still open): Enter resolves to Confirm.
+        {
+            use term_wm_core::actions::ConfirmAction;
+            use term_wm_core::events::{KeyCode, KeyEvent, KeyKind, KeyModifiers};
+            let enter = Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+                KeyKind::Press,
+            ));
+            assert_eq!(
+                app.inner.wm().handle_stop_daemon_confirm_event(&enter),
+                Some(ConfirmAction::Confirm),
+                "Enter must resolve to Confirm on the open overlay"
+            );
+        }
+
+        // Cancel path (fresh overlay): closing clears visibility.
+        app.inner.wm().close_stop_daemon_confirm();
+        assert!(!app.inner.wm().stop_daemon_confirm_visible());
+
+        // The executor arm runs for real against the DEDICATED gateway:
+        // forced shutdown, then prove the socket dies.
+        assert!(app.handle_custom_action(&TermWmAction::StopGatewayDaemon));
+
+        use term_session_muxio_service_definitions::probe_ipc_endpoint;
+        let gw = term_session::ChannelName::parse(&gw_socket).expect("parse gw");
+        let mut down = false;
+        for _ in 0..50 {
+            if !probe_ipc_endpoint(&gw) {
+                down = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(
+            down,
+            "dedicated gateway socket must die after forced shutdown"
+        );
+
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
+    }
+
     /// `ToggleWorkspaceFollow` toggles the flag and pushes a notification.
     #[cfg(feature = "session-persistence")]
     #[test]
@@ -1150,19 +1818,31 @@ mod tests {
     #[test]
     #[serial(runtime_config)]
     fn switch_workspace_follow_enabled_uses_all_viewers_scope() {
+        let _gw_socket = ensure_test_gateway();
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
-        let _guard = env_lock();
         let prev = RuntimeConfig {
             session_persistence: session_persistence_enabled(),
         };
         init(RuntimeConfig {
             session_persistence: true,
         });
-        unsafe {
-            std::env::set_var("TERM_WM_GATEWAY", "term-wm/coverage-test-gw-follow");
+
+        let mut app = test_app(); // DIAGNOSTIC: must run AFTER init_system_windows (which redirects
+        // stderr into tracing and captures panics into the debug buffer).
+        {
+            use std::io::Write as _;
+            std::panic::set_hook(Box::new(|info| {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/twm-panic.log")
+                {
+                    let _ = writeln!(f, "PANIC: {info}");
+                    let _ = writeln!(f, "{:?}", std::backtrace::Backtrace::force_capture());
+                }
+            }));
         }
 
-        let mut app = test_app();
         // Enable follow mode, then switch workspace
         app.inner.wm().workspace_follow_enabled = true;
         assert!(
@@ -1171,9 +1851,6 @@ mod tests {
         );
 
         init(prev);
-        unsafe {
-            std::env::remove_var("TERM_WM_GATEWAY");
-        }
     }
 
     #[test]

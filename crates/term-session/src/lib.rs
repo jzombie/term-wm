@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 use muxio_tokio_rpc_ipc_client::RpcCallPrebuffered;
 use term_session_muxio_service_definitions::{
-    KillChannel, KillClient, ListChannels, ListChannelsResponse, ShutdownGateway,
+    KillChannel, KillClient, ListChannels, ListChannelsResponse, ListWmStats, ShutdownGateway,
+    WmStatsEntry,
 };
 
 /// Run a CLI entry point and report any error identically across every
@@ -150,6 +151,79 @@ where
 pub fn list_channels() -> io::Result<ListChannelsResponse> {
     with_gateway(|client| async move { ListChannels::call(&*client, ()).await })?
         .map_err(|e| io::Error::other(format!("list: {e}")))
+}
+
+/// Snapshot every channel's aggregated WM stats. Channels without a
+/// reporting connection are omitted (unknown, not zero). Bounded like
+/// [`list_channels_bounded`]: on timeout the worker thread is abandoned and
+/// `io::ErrorKind::TimedOut` is returned.
+///
+/// Note: stats are WRITTEN by each inner WM over its subscribed internal-WM
+/// connection (see `main.rs`'s attributed-input listener), not through this
+/// ephemeral-connection helper family; a fresh connection cannot prove which
+/// channel it belongs to.
+pub fn list_wm_stats_bounded(timeout: std::time::Duration) -> io::Result<Vec<WmStatsEntry>> {
+    let gateway = term_session_muxio_service_definitions::gateway_channel_name();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+            rt.block_on(async {
+                let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
+                    .await
+                    .map_err(|e| {
+                        io::Error::new(io::ErrorKind::ConnectionRefused, format!("connect: {e}"))
+                    })?;
+                ListWmStats::call(&*client, ())
+                    .await
+                    .map(|resp| resp.stats)
+                    .map_err(|e| io::Error::other(format!("list_wm_stats: {e}")))
+            })
+        })();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "wm stats listing timed out",
+        )),
+    }
+}
+
+/// Like [`list_channels`], but bounds the total wait (connect + round trip).
+///
+/// Used by UI code that must never hang on an unresponsive daemon socket. On
+/// timeout the worker thread is abandoned — it terminates on its own once its
+/// pending socket I/O completes — and `io::ErrorKind::TimedOut` is returned.
+pub fn list_channels_bounded(timeout: std::time::Duration) -> io::Result<ListChannelsResponse> {
+    let gateway = term_session_muxio_service_definitions::gateway_channel_name();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| io::Error::other(format!("runtime: {e}")))?;
+            rt.block_on(async {
+                let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
+                    .await
+                    .map_err(|e| {
+                        io::Error::new(io::ErrorKind::ConnectionRefused, format!("connect: {e}"))
+                    })?;
+                ListChannels::call(&*client, ())
+                    .await
+                    .map_err(|e| io::Error::other(format!("list: {e}")))
+            })
+        })();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "gateway channel listing timed out",
+        )),
+    }
 }
 
 /// Print a human-readable listing of all channels to stdout, including the

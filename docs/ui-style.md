@@ -18,6 +18,7 @@ Examples:
 
 - `New Workspace`
 - `Switch to Workspace: <name>`
+- `Switch to Window: <title>`
 - `Detach Viewer`
 - `Scroll to Top`
 - `Menu Up`
@@ -52,7 +53,10 @@ update the palette entry and the `Display` string together.
 - **viewer** — a connected client of a channel (the local TUI or a `term-session`
   client).
 - **detach** — disconnect a viewer from a session without terminating its
-  processes.
+  processes. Contrast: **Exit UI** ends this workspace's window-manager process
+  (its windows and tasks terminate; other workspaces and the daemon survive);
+  **Stop Gateway Daemon** terminates every workspace session everywhere and
+  then stops the daemon.
 
 ## Environment Variables & Flags
 

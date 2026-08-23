@@ -662,6 +662,98 @@ impl RpcMethodPrebuffered for SubscribeInternalInput {
     }
 }
 
+// ── WmStats (inner WM -> server: live window/task counts) ───────────
+
+/// One channel's aggregated inner-WM live counts. Windows and tasks are
+/// summed across every connected reporter on the channel by the gateway.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct WmStatsEntry {
+    /// Full channel name (e.g. `dev/main`).
+    pub channel: String,
+    pub windows: u32,
+    pub tasks_running: u32,
+}
+
+/// Inner WM reports its live counts (user windows, still-running project
+/// tasks). The server resolves the caller's channel from the connection, so
+/// the payload carries only the numbers.
+pub struct ReportWmStats;
+
+impl RpcMethodPrebuffered for ReportWmStats {
+    const METHOD_ID: u64 = rpc_method_id!("session.report_wm_stats");
+
+    type Input = (u32, u32);
+    type Output = ();
+
+    fn encode_request(input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&ReportWmStatsRequestWire {
+            windows: input.0,
+            tasks_running: input.1,
+        }))
+    }
+
+    fn decode_request(bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        let r = bitcode::decode::<ReportWmStatsRequestWire>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok((r.windows, r.tasks_running))
+    }
+
+    fn encode_response(_output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_response(_bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        Ok(())
+    }
+}
+
+#[derive(Encode, Decode)]
+struct ReportWmStatsRequestWire {
+    pub windows: u32,
+    pub tasks_running: u32,
+}
+
+/// Gateway snapshot of every channel's aggregated WM stats. Channels without
+/// any reporting connection are omitted (unknown, not zero).
+#[derive(Debug, Clone)]
+pub struct ListWmStatsResponse {
+    pub stats: Vec<WmStatsEntry>,
+}
+
+#[derive(Encode, Decode)]
+struct ListWmStatsResponseWire {
+    pub stats: Vec<WmStatsEntry>,
+}
+
+pub struct ListWmStats;
+
+impl RpcMethodPrebuffered for ListWmStats {
+    const METHOD_ID: u64 = rpc_method_id!("session.list_wm_stats");
+
+    type Input = ();
+    type Output = ListWmStatsResponse;
+
+    fn encode_request(_input: Self::Input) -> Result<Vec<u8>, io::Error> {
+        Ok(Vec::new())
+    }
+
+    fn decode_request(_bytes: &[u8]) -> Result<Self::Input, io::Error> {
+        Ok(())
+    }
+
+    fn encode_response(output: Self::Output) -> Result<Vec<u8>, io::Error> {
+        Ok(bitcode::encode(&ListWmStatsResponseWire {
+            stats: output.stats,
+        }))
+    }
+
+    fn decode_response(bytes: &[u8]) -> Result<Self::Output, io::Error> {
+        let r = bitcode::decode::<ListWmStatsResponseWire>(bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(ListWmStatsResponse { stats: r.stats })
+    }
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -734,6 +826,44 @@ mod tests {
             channel: "dev/main".into(),
         });
         assert_eq!(req.channel, "dev/main");
+    }
+
+    #[test]
+    fn report_wm_stats_round_trips() {
+        let req = roundtrip_request::<ReportWmStats>((7u32, 3u32));
+        assert_eq!(req, (7, 3));
+        assert_eq!(ReportWmStats::decode_response(&[]).unwrap(), ());
+    }
+
+    #[test]
+    fn list_wm_stats_round_trips() {
+        let out = ListWmStats::decode_response(
+            &ListWmStats::encode_response(ListWmStatsResponse {
+                stats: vec![
+                    WmStatsEntry {
+                        channel: "dev/main".into(),
+                        windows: 5,
+                        tasks_running: 2,
+                    },
+                    WmStatsEntry {
+                        channel: "prod/main".into(),
+                        windows: 0,
+                        tasks_running: 0,
+                    },
+                ],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out.stats.len(), 2);
+        assert_eq!(out.stats[0].channel, "dev/main");
+        assert_eq!((out.stats[0].windows, out.stats[0].tasks_running), (5, 2));
+        // Empty listing round-trips too.
+        let empty = ListWmStats::decode_response(
+            &ListWmStats::encode_response(ListWmStatsResponse { stats: vec![] }).unwrap(),
+        )
+        .unwrap();
+        assert!(empty.stats.is_empty());
     }
 
     #[test]
