@@ -18,6 +18,7 @@ Examples:
 
 - `New Workspace`
 - `Switch to Workspace: <name>`
+- `Switch to Window: <title>`
 - `Detach Viewer`
 - `Scroll to Top`
 - `Menu Up`

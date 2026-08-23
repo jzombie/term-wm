@@ -472,7 +472,7 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             if !switch_titles.is_empty() {
                 for (key, switch_title) in switch_titles {
                     items.push(MenuDisplayItem::Item(MenuItem {
-                        label: format!("Switch to: {}", switch_title).into(),
+                        label: format!("Switch to Window: {}", switch_title).into(),
                         icon: Some("→"),
                         action: crate::actions::TermWmAction::FocusWindow(key),
                         disabled: key == focused,
@@ -855,7 +855,8 @@ mod tests {
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
-                MenuDisplayItem::Item(MenuItem { label, .. }) if label.starts_with("Switch to: ")
+                MenuDisplayItem::Item(MenuItem { label, .. })
+                    if label.starts_with("Switch to Window: ")
             )
         });
         let idx = switcher_idx.expect("Switch to entry present");
@@ -891,7 +892,8 @@ mod tests {
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,
-                MenuDisplayItem::Item(MenuItem { label, .. }) if label.starts_with("Switch to: ")
+                MenuDisplayItem::Item(MenuItem { label, .. })
+                    if label.starts_with("Switch to Window: ")
             )
         });
         assert!(

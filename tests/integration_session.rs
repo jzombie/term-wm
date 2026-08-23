@@ -2188,7 +2188,7 @@ fn launcher_exits_immediately_on_nesting_fatal() {
         .create_sync()
         .expect("bind dummy gateway");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_term-wm"))
+    let child = Command::new(env!("CARGO_BIN_EXE_term-wm"))
         .env("TERM_WM_GATEWAY", gateway)
         .env("TERM_SESSION_GATEWAY", gateway)
         .args(["--workspace", "test-nesting"])
@@ -2199,21 +2199,20 @@ fn launcher_exits_immediately_on_nesting_fatal() {
         .expect("spawn term-wm");
 
     let start = Instant::now();
-    loop {
-        if start.elapsed() > Duration::from_secs(10) {
-            let _ = child.kill();
-            panic!(
-                "term-wm did not exit within 10s — likely retrying instead of exiting immediately"
-            );
-        }
-        if let Ok(Some(_)) = child.try_wait() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    // Drain the piped stderr on a worker thread so a chatty child can never
+    // block on a full OS pipe buffer while this thread only polls for exit.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let out = child.wait_with_output();
+        let _ = tx.send(out);
+    });
+    let out = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("term-wm did not exit within 10s — likely retrying instead of exiting immediately")
+        .expect("wait_with_output failed");
     let elapsed = start.elapsed();
+    drop(rx);
 
-    let out = child.wait_with_output().expect("wait");
     let stderr = String::from_utf8_lossy(&out.stderr);
 
     assert!(
