@@ -115,36 +115,100 @@ pub fn format_unix_relative_at(ts: u64, now: u64) -> String {
     }
 }
 
+/// Upper bound for ONE gateway IPC exchange (connect + call combined).
+/// Generous for slow CI and cold daemon starts, but finite: an unresponsive
+/// gateway must fail loudly instead of parking the caller forever. On expiry
+/// the worker thread is abandoned (the established in-repo pattern from the
+/// `*_bounded` helpers); its handles die with the process and every test
+/// gateway name is pid/counter-unique, so no cross-test pipe contention
+/// results.
+const GATEWAY_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Connect to the gateway daemon and run `op` with a live client. Spawns an
 /// OS thread so the new Tokio runtime is fully isolated from any runtime
 /// already active on the calling thread (avoids the `block_on`-inside-runtime
-/// panic).
+/// panic). Bounded by a fixed per-exchange deadline; see
+/// [`with_gateway_timeout`] for the deadline semantics.
 pub fn with_gateway<F, Fut, T>(op: F) -> io::Result<T>
 where
     F: FnOnce(Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
+    with_gateway_timeout(GATEWAY_CALL_TIMEOUT, op)
+}
+
+/// Like [`with_gateway`], but every phase (connect, then `op`) is bounded by
+/// TWO stacked defenses:
+///
+/// 1. Cooperative `tokio::time::timeout` around each future (muxio's client
+///    uses interprocess's tokio transport, so connects are cancellable).
+/// 2. A hard OS-level bound: the worker reports through a channel and the
+///    caller waits via `recv_timeout(total_timeout)`, so even a worker stuck
+///    in a non-cooperative kernel call can only delay the caller by
+///    `total_timeout` before it returns `TimedOut`. The abandoned worker's
+///    handles are reclaimed at process exit.
+///
+/// Ops keep their existing output type (typically the inner service Result);
+/// no call-site changes are needed.
+pub fn with_gateway_timeout<F, Fut, T>(timeout: std::time::Duration, op: F) -> io::Result<T>
+where
+    F: FnOnce(Arc<muxio_tokio_rpc_ipc_client::RpcIpcClient>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let total_timeout = timeout.saturating_mul(2);
+    let gateway_display = gateway.to_string();
     std::thread::spawn(move || {
-        let rt =
-            tokio::runtime::Runtime::new().map_err(|e| io::Error::other(format!("runtime: {e}")))?;
-        rt.block_on(async {
-            let client = muxio_tokio_rpc_ipc_client::RpcIpcClient::new(&gateway.to_string())
-                .await
-                .map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::ConnectionRefused,
-                        format!(
-                            "No gateway daemon is running on '{gateway}'. Start one with `term-session --channel <name>` or `term-session --daemon` first.\n  cause: {e}"
-                        ),
-                    )
-                })?;
-            Ok(op(client).await)
-        })
-    })
-    .join()
-    .unwrap_or_else(|_| Err(io::Error::other("gateway thread panicked")))
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        let result = match runtime {
+            Err(e) => Err(io::Error::other(format!("runtime: {e}"))),
+            Ok(rt) => rt.block_on(async {
+                // RpcIpcClient::new already returns Arc<RpcIpcClient>, which
+                // satisfies op's parameter without another wrapper.
+                let client =
+                    tokio::time::timeout(timeout, muxio_tokio_rpc_ipc_client::RpcIpcClient::new(
+                        &gateway.to_string(),
+                    ))
+                    .await
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("gateway connect timed out after {timeout:?}"),
+                        )
+                    })?
+                    .map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::ConnectionRefused,
+                            format!(
+                                "No gateway daemon is running on '{gateway}'. Start one with `term-session --channel <name>` or `term-session --daemon` first.\n  cause: {e}"
+                            ),
+                        )
+                    })?;
+                let out = tokio::time::timeout(timeout, op(client))
+                    .await
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("gateway call timed out after {timeout:?}"),
+                        )
+                    })?;
+                Ok(out)
+            }),
+        };
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(total_timeout) {
+        Ok(result) => result,
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("gateway exchange timed out after {total_timeout:?} on '{gateway_display}'"),
+        )),
+    }
 }
 
 /// List channels from the gateway, including the daemon PID + socket name.
