@@ -1,6 +1,6 @@
 [package]
 name = "term-wm"
-description = "The Spatial Terminal Desktop Environment for Remote Workspaces — floating windows, BSP tiling, persistent sessions, and zero-prefix input passthrough over SSH."
+description = "The Spatial Terminal Desktop Environment for Remote Workspaces: floating windows, BSP tiling, persistent sessions, and zero-prefix input passthrough over SSH."
 keywords = ["terminal", "tui", "window-manager", "ssh", "workspace"]
 categories = [
     "command-line-utilities",

@@ -1,6 +1,8 @@
 # term-wm Development Guide
 
-Developer and library-embedding documentation for `term-wm` — the Spatial Terminal Desktop Environment for Remote Workspaces. End-user documentation lives in the [root README](../README.md).
+Developer and library-embedding documentation for `term-wm`, the Spatial Terminal Desktop Environment for Remote Workspaces. End-user documentation lives in the [root README](../README.md).
+
+> Feature availability: workspaces, the gateway daemon, directory-based workspace naming, cross-workspace counts, and `.term-wm/tasks.json` discovery are compiled-in defaults. They are absent only from custom builds built with `--no-default-features`.
 
 ## Project Origins & Library API Status
 
@@ -26,7 +28,7 @@ However, the developer-facing library API is currently unsolidified and subject 
 
 ### Window Lifecycle
 
-Windows are identified by generational slotmap keys (`WindowKey`): closed keys are never reused. The open path is a single transaction — register the component (`spawn`, which fires its `on_mount` hook), map it, tile or float it, then focus it.
+Windows are identified by generational slotmap keys (`WindowKey`): closed keys are never reused. The open path is a single transaction: register the component (`spawn`, which fires its `on_mount` hook), map it, tile or float it, then focus it.
 
 ### Tiling Core
 
@@ -34,7 +36,7 @@ The layout engine builds a tree (BSP or N-ary) over the workspace. `insert_windo
 
 ### Async Threading Model
 
-The UI event loop runs synchronously on a single thread and never blocks on I/O. All asynchronous work (PTY reading, network IPC, keyboard input) runs on separate threads or Tokio tasks and funnels events into a single `crossbeam-channel`–backed `UnifiedEventSource`.
+The UI event loop runs synchronously on a single thread and never blocks on I/O. All asynchronous work (PTY reading, network IPC, keyboard input) runs on separate threads or Tokio tasks and funnels events into a single `crossbeam-channel`-backed `UnifiedEventSource`.
 
 ```text
 [ Muxio / Network IPC ] ──(Tokio Runtime)──┐
@@ -50,7 +52,7 @@ A dedicated `Reaper` thread reaps zombie children via SIGHUP→SIGKILL escalatio
 
 ### Testability
 
-The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with test doubles (`TestPane`, `TestComponent`), so layout, rendering, and PTY scroll synchronization are verified without a terminal — including property tests for scroll sync.
+The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with test doubles (`TestPane`, `TestComponent`), so layout, rendering, and PTY scroll synchronization are verified without a terminal, including property tests for scroll sync.
 
 ### Code Coverage
 
@@ -67,7 +69,7 @@ Prerequisites (once): `rustup component add llvm-tools-preview` and `cargo insta
 
 ## Declarative Component Trees with `view!`
 
-`term-wm` ships a "dumb" `view!` macro that builds component trees declaratively — it expands to ordinary, fully-monomorphized component constructors, with no runtime tree, reactivity, or reconciliation:
+`term-wm` ships a "dumb" `view!` macro that builds component trees declaratively: it expands to ordinary, fully-monomorphized component constructors, with no runtime tree, reactivity, or reconciliation:
 
 ```rust,no_run
 use term_wm::prelude::*;
@@ -88,7 +90,7 @@ impl MyWindow {
 
 Layout tags (`VStack`, `HStack`, `Grid`, `Center`, `Box`) and stateless leaves (`Label`, `Button`) are constructed declaratively; a `{ expr }` escape hatch injects any `Component` value, owned or `&mut`-borrowed (`{ &mut self.terminal }` for stateful components such as a terminal). All-owned trees (no `&mut`) go straight into `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
 
-`view!` and its tag set are still an evolving draft — treat [`examples/view_macro_prototype.rs`](../examples/view_macro_prototype.rs) as the canonical runnable reference (it wires a live terminal into a `view!` tree), and the System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built the same way.
+`view!` and its tag set are still an evolving draft: treat [`examples/view_macro_prototype.rs`](../examples/view_macro_prototype.rs) as the canonical runnable reference (it wires a live terminal into a `view!` tree), and the System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built the same way.
 
 ## Component Design Standards
 
@@ -96,8 +98,8 @@ Internal component design standards (naming conventions, trait requirements, coo
 
 ## Further Reading
 
-* [UI Style Guide](ui-style.md) — user-facing string rules and canonical action names
-* [Task Runner Spec](tasks.md) — `.term-wm/tasks.json` discovery, gating, and execution semantics
-* [Profiling](profiling.md) — macOS `xctrace` over SSH and Linux `perf` workflows
-* [Benchmarks](bench.md) — terminal render benchmark documentation
-* [Compatibility](compatibility.md) — color degradation ladder, Unicode/font requirements, Linux VT caveats
+* [UI Style Guide](ui-style.md): user-facing string rules and canonical action names
+* [Task Runner Spec](tasks.md): `.term-wm/tasks.json` discovery, gating, and execution semantics
+* [Profiling](profiling.md): macOS `xctrace` over SSH and Linux `perf` workflows
+* [Benchmarks](bench.md): terminal render benchmark documentation
+* [Compatibility](compatibility.md): color degradation ladder, Unicode/font requirements, Linux VT caveats
