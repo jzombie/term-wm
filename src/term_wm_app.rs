@@ -54,6 +54,8 @@ const GATEWAY_STOP_CANCEL_LABEL: &str = "Cancel";
 #[cfg(feature = "session-persistence")]
 const GATEWAY_STOP_CONFIRM_LABEL: &str = "Stop Gateway Daemon";
 #[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_CHANNEL_LABEL: &str = "Channel";
+#[cfg(feature = "session-persistence")]
 const GATEWAY_COUNT_UNAVAILABLE: &str = "unavailable";
 /// Per-workspace live WM totals (windows, running tasks) keyed by workspace
 /// name. Re-exported shape from the palette renderer so app cache and renderer
@@ -1277,12 +1279,12 @@ impl<C: Component<TermWmAction> + 'static>
     }
 
     /// Open the stop-gateway-daemon confirmation dialog (#298).
-    /// The body must state that every workspace session will be terminated
-    /// and show live totals ACROSS ALL WORKSPACES: active workspace sessions,
-    /// total windows, and still-running project tasks. Gateway reads use a
-    /// strict timeout so an unresponsive daemon socket can never hang the UI
-    /// thread; on failure counts render as "unavailable" and the dialog still
-    /// opens.
+    /// The body must state that every workspace session will be terminated,
+    /// name the resolved gateway IPC channel being targeted, and show live
+    /// totals ACROSS ALL WORKSPACES: active workspace sessions, total windows,
+    /// and still-running project tasks. Gateway reads use a strict timeout so
+    /// an unresponsive daemon socket can never hang the UI thread; on failure
+    /// counts render as "unavailable" and the dialog still opens.
     #[cfg(feature = "session-persistence")]
     fn open_stop_gateway_confirm(&mut self) {
         let workspace_label = match term_session::list_channels_bounded(GATEWAY_COUNT_TIMEOUT) {
@@ -1297,8 +1299,12 @@ impl<C: Component<TermWmAction> + 'static>
         // Totals across every workspace; falls back to local-only numbers
         // when the gateway has no stats for us (see the helper).
         let (windows, tasks) = self.total_windows_and_tasks_across_workspaces();
-        let body = format!(
-            "{GATEWAY_STOP_WARNING}\nActive workspaces: {workspace_label} · Total windows: {windows} · Running tasks: {tasks}"
+        let channel = term_session::gateway_channel_name().to_string();
+        let body = stop_gateway_dialog_body(
+            &channel,
+            &workspace_label,
+            &windows.to_string(),
+            &tasks.to_string(),
         );
         let mut confirm = ConfirmOverlayComponent::new();
         confirm.set_labels(
@@ -1309,6 +1315,21 @@ impl<C: Component<TermWmAction> + 'static>
         self.wm
             .open_stop_daemon_confirm_overlay(OverlayComponent::StopDaemonConfirm(confirm));
     }
+}
+
+/// Build the stop-gateway confirmation body (#298): the termination warning,
+/// the resolved gateway IPC channel being targeted, then live totals across
+/// all workspaces. Pure so tests can pin the exact layout.
+#[cfg(feature = "session-persistence")]
+fn stop_gateway_dialog_body(
+    channel: &str,
+    workspace_label: &str,
+    windows: &str,
+    tasks: &str,
+) -> String {
+    format!(
+        "{GATEWAY_STOP_WARNING}\n{GATEWAY_STOP_CHANNEL_LABEL}: {channel}\nActive workspaces: {workspace_label} · Total windows: {windows} · Running tasks: {tasks}"
+    )
 }
 
 #[allow(clippy::unwrap_used)]
@@ -2206,6 +2227,40 @@ mod tests {
             (2u32.saturating_add(local.0), 0u32.saturating_add(local.1)),
             "local numbers fill in for the missing own-workspace entry"
         );
+    }
+
+    /// #298 follow-up: the dialog body must name the resolved gateway IPC
+    /// channel between the warning and the live counts.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial]
+    fn stop_gateway_dialog_body_names_resolved_channel() {
+        const TEST_GATEWAY: &str = "term-wm/channel-dialog-gw";
+        unsafe {
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, TEST_GATEWAY);
+        }
+        let channel = term_session::gateway_channel_name().to_string();
+        let body = stop_gateway_dialog_body(&channel, "2", "5", "1");
+        assert_eq!(channel, TEST_GATEWAY, "env override must resolve wholesale");
+        let expected = format!("{GATEWAY_STOP_CHANNEL_LABEL}: {channel}");
+        assert!(
+            body.contains(&expected),
+            "body must name the channel: {body}"
+        );
+        assert!(
+            body.contains(GATEWAY_STOP_WARNING),
+            "warning line must stay present: {body}"
+        );
+        assert!(
+            body.contains("Active workspaces: 2")
+                && body.contains("Total windows: 5")
+                && body.contains("Running tasks: 1"),
+            "counts line must stay present: {body}"
+        );
+        // Restore the environment so other tests see the default resolution.
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
     }
 
     #[test]
