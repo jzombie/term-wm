@@ -411,7 +411,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             items.push(MenuDisplayItem::Separator);
         }
 
-        let _ = (workspaces, current_workspace, all_users_by_ws, workspace_totals);
+        let _ = (
+            workspaces,
+            current_workspace,
+            all_users_by_ws,
+            workspace_totals,
+        );
 
         // ─────────────────────────────────────────────────────────
         // 3. WINDOW MANAGEMENT
@@ -840,7 +845,13 @@ mod tests {
         wm.focus_window_key(key);
         wm.set_window_title(key, "alpha");
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let switcher_idx = items.iter().position(|entry| {
             matches!(
                 entry,
@@ -870,7 +881,13 @@ mod tests {
         let key = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let has_switch = items.iter().any(|entry| {
             matches!(
                 entry,
@@ -946,7 +963,13 @@ mod tests {
         // "Stop Gateway Daemon" bound to the OPENER action — never the
         // executor (`StopGatewayDaemon`), which is reachable only from the
         // confirmation dialog's Confirm branch (#298).
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let mut stop_entries = items.iter().filter(|entry| {
             matches!(
                 entry,
@@ -1031,7 +1054,13 @@ mod tests {
         totals: &WorkspaceTotals,
     ) -> Vec<crate::components::MenuDisplayItem<TermWmAction>> {
         let wm = make_wm::<TestOverlay>();
-        wm.wm_menu_items(&["dev".into()], "dev", &[], &std::collections::BTreeMap::new(), totals)
+        wm.wm_menu_items(
+            &["dev".into()],
+            "dev",
+            &[],
+            &std::collections::BTreeMap::new(),
+            totals,
+        )
     }
 
     #[test]
@@ -1044,11 +1073,13 @@ mod tests {
 
         let ws_idx = items
             .iter()
-            .position(|entry| matches!(
-                entry,
-                MenuDisplayItem::Item(MenuItem { label, .. })
-                    if label == "Switch to Workspace: dev (current)"
-            ))
+            .position(|entry| {
+                matches!(
+                    entry,
+                    MenuDisplayItem::Item(MenuItem { label, .. })
+                        if label == "Switch to Workspace: dev (current)"
+                )
+            })
             .expect("workspace entry found");
         let next = &items[ws_idx + 1];
         assert!(
@@ -1106,7 +1137,13 @@ mod tests {
         wm.transition_window(key, WindowState::Mapped);
         wm.focus_window_key(key);
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
 
         let headers: Vec<String> = items
             .iter()
@@ -1151,7 +1188,13 @@ mod tests {
             }],
         );
 
-        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws, &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &users_by_ws,
+            &std::collections::BTreeMap::new(),
+        );
 
         let ws_idx = items.iter().position(|entry| matches!(
             entry,
@@ -1217,7 +1260,13 @@ mod tests {
         let mut wm = make_wm::<TestOverlay>();
 
         wm.workspace_follow_enabled = false;
-        let items_off = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items_off = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         assert!(items_off.iter().any(|entry| matches!(
             entry,
             MenuDisplayItem::Item(MenuItem { label, icon: Some("○"), action: TermWmAction::ToggleWorkspaceFollow, .. })
@@ -1225,7 +1274,13 @@ mod tests {
         )));
 
         wm.workspace_follow_enabled = true;
-        let items_on = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items_on = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         assert!(items_on.iter().any(|entry| matches!(
             entry,
             MenuDisplayItem::Item(MenuItem { label, icon: Some("◎"), action: TermWmAction::ToggleWorkspaceFollow, .. })
@@ -1248,7 +1303,13 @@ mod tests {
             environments: Vec::new(),
             platforms: None,
         }];
-        let items = wm.wm_menu_items(&[], "", &tasks, &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &tasks,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         assert!(
             !items.iter().any(|entry| matches!(
                 entry,
@@ -1291,7 +1352,13 @@ mod tests {
                 pid: 0,
             }],
         );
-        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws, &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &users_by_ws,
+            &std::collections::BTreeMap::new(),
+        );
         assert!(
             !items.iter().any(|e| matches!(e, MenuDisplayItem::Item(MenuItem { label, .. }) if label.contains("Workspace") || label.contains("Follow Workspaces"))),
             "workspace UI must be hidden when session-persistence feature is disabled at compile time"
@@ -1325,7 +1392,13 @@ mod tests {
                 pid: 1234,
             }],
         );
-        let items = wm.wm_menu_items(&["dev".to_string()], "dev", &[], &users_by_ws, &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &["dev".to_string()],
+            "dev",
+            &[],
+            &users_by_ws,
+            &std::collections::BTreeMap::new(),
+        );
         let ws_idx = items
             .iter()
             .position(|entry| {

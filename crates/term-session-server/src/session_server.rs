@@ -15,11 +15,11 @@ use term_session_muxio_service_definitions::{
     ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, ListWmStats,
     ListWmStatsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
     OnUserConnected, OnUserDisconnected, OnUserResized, OnWorkspaceEntered, OnWorkspaceRebind,
-    OnWorkspaceRebindRequest, ReportWmStats, RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS,
-    RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope, RebindWorkspace, ResizePty,
-    STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput, SessionInfo,
-    ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput, UserInfo,
-    WmStatsEntry, WriteInput,
+    OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS,
+    RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope, RebindWorkspace, ReportWmStats,
+    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
+    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
+    UserInfo, WmStatsEntry, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -1528,7 +1528,9 @@ pub async fn run_gateway(
                 if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
                     let mut guard = ch.lock().await;
                     debug_assert_eq!(guard.internal_wm_conn_id, Some(conn_id));
-                    guard.wm_stats_by_conn.insert(conn_id, (windows, tasks_running));
+                    guard
+                        .wm_stats_by_conn
+                        .insert(conn_id, (windows, tasks_running));
                     ReportWmStats::encode_response(()).map_err(boxed_io)
                 } else {
                     Err(rpc_err("report_wm_stats: channel vanished"))
@@ -1556,9 +1558,7 @@ pub async fn run_gateway(
                 let mut stats: Vec<WmStatsEntry> = Vec::with_capacity(channels.len());
                 for (name, ch) in channels {
                     let guard = ch.lock().await;
-                    if let Some((windows, tasks_running)) =
-                        sum_wm_stats(&guard.wm_stats_by_conn)
-                    {
+                    if let Some((windows, tasks_running)) = sum_wm_stats(&guard.wm_stats_by_conn) {
                         stats.push(WmStatsEntry {
                             channel: name.to_string(),
                             windows,

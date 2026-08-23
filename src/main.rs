@@ -767,10 +767,10 @@ impl App {
         pty_wakeup_tx: Sender<UnifiedEvent>,
         workspace: String,
         event_owner: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
-        #[cfg(feature = "session-persistence")]
-        inner_session_stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>>,
-        #[cfg(not(feature = "session-persistence"))]
-        inner_session_stats_tx: (),
+        #[cfg(feature = "session-persistence")] inner_session_stats_tx: Option<
+            tokio::sync::mpsc::Sender<(u32, u32)>,
+        >,
+        #[cfg(not(feature = "session-persistence"))] inner_session_stats_tx: (),
     ) -> io::Result<Self> {
         // #284: the bundled binary opts into dynamic Menu/FAB branding —
         // workspace name → launch-directory name → app-name. Library

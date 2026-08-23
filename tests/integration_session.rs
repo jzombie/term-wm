@@ -1971,7 +1971,9 @@ async fn wm_stats_report_then_list_then_evict() {
         .await
         .expect("report wm stats from subscribed wm");
 
-    let resp = ListWmStats::call(&*wm_client, ()).await.expect("list wm stats");
+    let resp = ListWmStats::call(&*wm_client, ())
+        .await
+        .expect("list wm stats");
     let mine = resp
         .stats
         .iter()
@@ -1992,7 +1994,9 @@ async fn wm_stats_report_then_list_then_evict() {
     drop(wm_client);
     let mut gone = false;
     for _ in 0..40 {
-        let resp = ListWmStats::call(&*outsider, ()).await.expect("list after evict");
+        let resp = ListWmStats::call(&*outsider, ())
+            .await
+            .expect("list after evict");
         if !resp.stats.iter().any(|s| s.channel == channel.to_string()) {
             gone = true;
             break;
@@ -2002,7 +2006,10 @@ async fn wm_stats_report_then_list_then_evict() {
     assert!(
         gone,
         "evicted wm's entry must be removed after disconnect, got {:?}",
-        ListWmStats::call(&*outsider, ()).await.expect("final list").stats
+        ListWmStats::call(&*outsider, ())
+            .await
+            .expect("final list")
+            .stats
     );
 
     guard.shutdown().await;

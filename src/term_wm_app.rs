@@ -487,7 +487,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             });
         if !self.cached_wm_totals.contains_key(&self.current_workspace) {
             totals.0 = totals.0.saturating_add(self.wm.user_window_count() as u32);
-            totals.1 = totals.1.saturating_add(self.live_project_task_count() as u32);
+            totals.1 = totals
+                .1
+                .saturating_add(self.live_project_task_count() as u32);
         }
         totals
     }
@@ -2128,9 +2130,7 @@ mod tests {
     }
 
     /// Fetch the exit-confirm overlay's `(cancel, confirm)` labels, if open.
-    fn exit_confirm_labels(
-        app: &mut TermWmApp<NoopComponent>,
-    ) -> Option<(String, String)> {
+    fn exit_confirm_labels(app: &mut TermWmApp<NoopComponent>) -> Option<(String, String)> {
         use crate::window::window_manager::system_tags;
         let key = app.wm().get_overlay::<system_tags::ExitConfirm>()?;
         match app.wm().overlay_for_key_mut(key) {
@@ -2153,8 +2153,14 @@ mod tests {
 
         app.open_exit_confirm();
         let (cancel, confirm) = exit_confirm_labels(&mut app).expect("exit overlay open");
-        assert!(cancel.contains("dev"), "cancel label uses workspace: {cancel}");
-        assert!(confirm.contains("dev"), "confirm label uses workspace: {confirm}");
+        assert!(
+            cancel.contains("dev"),
+            "cancel label uses workspace: {cancel}"
+        );
+        assert!(
+            confirm.contains("dev"),
+            "confirm label uses workspace: {confirm}"
+        );
         assert!(
             !confirm.contains("term-wm"),
             "raw app name must not leak into the dynamic label: {confirm}"
@@ -2197,10 +2203,7 @@ mod tests {
         );
         assert_eq!(
             app.total_windows_and_tasks_across_workspaces(),
-            (
-                2u32.saturating_add(local.0),
-                0u32.saturating_add(local.1)
-            ),
+            (2u32.saturating_add(local.0), 0u32.saturating_add(local.1)),
             "local numbers fill in for the missing own-workspace entry"
         );
     }

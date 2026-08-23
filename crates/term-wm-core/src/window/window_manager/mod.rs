@@ -6773,7 +6773,13 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6851,7 +6857,13 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {
