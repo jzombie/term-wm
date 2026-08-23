@@ -1,4 +1,4 @@
-# Project Tasks — Tasks File Specification
+# Project Tasks: Tasks File Specification
 
 Scope: the `.term-wm/tasks.json` file format, discovery, environment gating, and
 runtime behavior. Code conventions live in [AGENTS.md](../AGENTS.md); UI string
@@ -14,33 +14,64 @@ style lives in [UI-STYLE.md](./UI-STYLE.md).
   return `None` (no tasks). Do NOT keep walking upward.
 - **No file anywhere:** silent `None` (no tasks group in the Command Palette).
 
-## JSONC — Comments
+## JSONC Comments
 
 The file is parsed as **JSONC**: standard JSON plus `//` line comments and
 `/* … */` block comments (stripped before parsing, respecting string
-literals). Use comments to document tasks in-file — for example a header
+literals). Use comments to document tasks in-file: for example a header
 explaining the `command` shell-words form at the top of `tasks.json`.
 Comment-like sequences inside `"strings"` (e.g. `"https://example.com"` or
 `"echo // not a comment"`) are preserved verbatim.
 
 ## Schema
 
-Top-level JSON **array** (JSONC) — no envelope, no version field. Each element
+Top-level JSON **array** (JSONC): no envelope, no version field. Each element
 is a task object:
 
 | Field          | Type       | Default | Notes |
 |----------------|------------|---------|-------|
-| `label`        | `string`   | —       | **Required.** Shown in the Command Palette under "Project Tasks". |
-| `command`      | `string`   | `null`  | Shell-words tokenized into argv. Whitespace-only counts as absent. |
-| `args`         | `string[]` | `null`  | Appended after `command` tokens. If `command` is absent, used wholesale as argv. |
+| `label`        | `string`   | n/a     | **Required.** Shown in the Command Palette under "Project Tasks". |
+| `command`      | `string`   | `null`  | Shell-words tokenized into argv (after substitution). Whitespace-only counts as absent. |
+| `args`         | `string[]` | `null`  | Appended after `command` tokens; each element is substitution-aware too. If `command` is absent, used wholesale as argv. |
 | `cwd`          | `string`   | `null`  | Absolute, or relative to the task root (project root or launch cwd). |
 | `env`          | `object`   | `{}`    | Extra environment variables (`{ "KEY": "VALUE" }`) passed to the child. |
 | `environments` | `string[]` | `[]`    | Gating: `"dev"` / `"prod"` / `"test"` (see below). Empty = visible everywhere. |
+| `platforms`    | `string[]` | none    | Gating: OS names (see Platform Gating below). Absent or empty = visible on every platform. |
+
+### Variable Substitution
+
+Placeholders in task strings are replaced before execution. Registered
+placeholders:
+
+| Placeholder  | Resolves to |
+|--------------|-------------|
+| `{wm.pid}`   | The OS PID of the term-wm process that spawns the task: the window-manager process for palette-launched tasks, the CLI process for `--task` runs. |
+
+Rules:
+
+1. Substitution applies to `command`, every `args` element, `cwd`, and each
+   `env` **value**.
+2. It runs **before** shell-words tokenization of `command`, so a substituted
+   value can never be split into stray tokens, even inside quoted segments.
+3. Unknown `{...}` sequences are preserved verbatim (forward-compatible;
+   literal braces survive).
+4. This is term-wm's own placeholder syntax, not Zed-style `${VAR}` /
+   `${VAR:default}` interpolation (see Out of Scope).
+
+Example (attach a profiler to the window manager itself):
+
+```jsonc
+[
+    { "label": "profile: Time Profiler",
+      "command": "xcrun xctrace record --template 'Time Profiler' --time-limit 10s --output /tmp/term-wm.trace --attach {wm.pid}",
+      "platforms": ["macos"] }
+]
+```
 
 ### argv Rules
 
 1. If `command` is present and non-empty: tokenize the **entire** string via
-   `shell_words::split` (POSIX shell word splitting — quotes and escapes
+   `shell_words::split` (POSIX shell word splitting: quotes and escapes
    respected, no subcommand truncation). On split error or empty token list →
    task is invalid (not shown in palette, not runnable).
 2. Append `args` entries after the command tokens.
@@ -48,7 +79,7 @@ is a task object:
    directly.
 4. If argv is empty → task is invalid.
 
-`command` alone can carry the full invocation — `"command": "cargo run -- --help"`
+`command` alone can carry the full invocation: `"command": "cargo run -- --help"`
 is equivalent to `"command": "cargo", "args": ["run", "--", "--help"]` and is
 the preferred short form. Keep `args` for programmatic composition or when you
 prefer split arrays.
@@ -61,7 +92,7 @@ index `argv[0]` without the non-empty check.
 A task may declare an `environments` list to restrict which runtime environments
 display it.
 
-Environment identity is resolved strictly via `term_wm_config::env::active_environment()` —
+Environment identity is resolved strictly via `term_wm_config::env::active_environment()`
 the **single source of truth** shared with IPC gateway channel scoping. Task visibility and
 gateway channel names can never disagree because both resolve through the exact same function.
 
@@ -103,13 +134,46 @@ When resolving environment identity:
 - Filtering happens at load time (`load_tasks_for_cwd`); the cached task list
   in `WindowManager` is already filtered.
 - If you observe gating that disagrees with your expectations (e.g. dev tasks
-  visible under `cargo run --release`), check `active_environment()` — both IPC
+  visible under `cargo run --release`), check `active_environment()`: both IPC
   and tasks resolve through it, making the two views always consistent by
   construction.
 
+**Filtering rules:**
+- Empty list → visible in all environments (default).
+- Contains an environment string → visible only when `active_environment()` matches.
+  Case-insensitive and whitespace-trimmed; unknown strings never match.
+- Filtering happens at load time (`load_tasks_for_cwd`); the cached task list
+  in `WindowManager` is already filtered.
+- If you observe gating that disagrees with your expectations (e.g. dev tasks
+  visible under `cargo run --release`), check `active_environment()`: both IPC
+  and tasks resolve through it, making the two views always consistent by
+  construction.
+
+## Platform Gating
+
+A task may declare a `platforms` list to restrict which operating systems
+display it. Entries are matched case-insensitively against the current OS
+(`std::env::consts::OS`: `macos`, `linux`, or `windows`), with `darwin`
+accepted as an alias for `macos`.
+
+**Filtering rules:**
+- Absent list (field omitted) or empty list → visible on every platform (default).
+- Contains an OS name (or alias) → visible only when it matches the current OS.
+- Unknown strings simply never match.
+- Like environment gating, filtering happens at load time in
+  `load_tasks_for_cwd`.
+
+```jsonc
+[
+    { "label": "macos: Profile WM",  "command": "xcrun xctrace record --template 'Time Profiler' --attach {wm.pid}", "platforms": ["macos"] },
+    { "label": "linux: perf stat",   "command": "perf stat -d",   "platforms": ["linux"] },
+    { "label": "windows: List",      "command": "cmd", "args": ["/c", "dir"], "platforms": ["windows"] }
+]
+```
+
 ## Run Semantics
 
-- Task argv is the PTY's direct child — no shell paste, no shell wrapping. Commands
+- Task argv is the PTY's direct child: no shell paste, no shell wrapping. Commands
   needing shell operators (`&&`, pipes, redirects) should set `"command": "sh",
   "args": ["-c", "..."]` on Unix.
 - The task runs in a **new window** titled with the task label.
@@ -118,16 +182,17 @@ When resolving environment identity:
 
 ## Canonical Example
 
-Preferred short form — full invocation in `command` (shell-words tokenized, no
+Preferred short form: full invocation in `command` (shell-words tokenized, no
 separate `args` needed):
 
 ```jsonc
-// `command` is shell-words tokenized — args can live inline:
+// `command` is shell-words tokenized: args can live inline:
 [
     { "label": "dev: Run", "command": "cargo run", "environments": ["dev"] },
     { "label": "dev: Help", "command": "cargo run -- --help", "environments": ["dev"] },
     { "label": "ci: Lint", "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings" },
-    { "label": "dev: udeps", "command": "cargo udeps --workspace --all-targets --all-features", "environments": ["dev"] }
+    { "label": "dev: udeps", "command": "cargo udeps --workspace --all-targets --all-features", "environments": ["dev"] },
+    { "label": "macos: Profile WM", "command": "xcrun xctrace record --template 'Time Profiler' --attach {wm.pid}", "platforms": ["macos"] }
 ]
 ```
 

@@ -149,6 +149,18 @@ The full developer tour (the crate responsibility map, window lifecycle, tiling 
 * **Runtime disable:** Pass `--no-session-persistence` (or set `TERM_WM_NO_SESSION_PERSISTENCE`) to disable workspace/session-persistence behavior at runtime, even when the feature is compiled in.
 * **Managing the daemon:** `--list-channels` shows every workspace channel, its session, and its attached clients; `--stop-daemon` shuts the background gateway down (a confirmation dialog in the Command Palette warns that every workspace session will be terminated, with totals; the CLI refuses while sessions are live unless `-f/--force` is given); `--no-wm` runs a headless session client without the window manager.
 
+### Leaving vs Ending vs Stopping
+
+Three palette actions terminate different things. Picking the right one matters:
+
+| Action | What ends | What survives |
+| :--- | :--- | :--- |
+| **Detach Viewer** | Only your viewing connection | Everything: the workspace keeps running headless on the daemon with all windows and tasks alive; other viewers are unaffected; reattach anytime |
+| **Exit UI** (asks first) | This workspace: its window-manager process exits, taking its windows and running tasks with it | Your other workspaces and the gateway daemon |
+| **Stop Gateway Daemon** (asks first, with totals) | Every workspace session for every user, then the daemon itself | Nothing session-related; a fresh daemon auto-spawns on your next launch |
+
+In builds without session persistence there is nothing to detach from or stop: **Exit UI** simply quits the app and its processes.
+
 ### Environment variables
 
 | Variable | Purpose | Default |
