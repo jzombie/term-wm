@@ -232,13 +232,22 @@ mod tests {
     /// stalls until the host answers `\x1b[6n`) — otherwise the mock never
     /// runs and no report is written. Returns the raw report bytes so
     /// losslessness is asserted byte-for-byte.
+    ///
+    /// A successful read is final only when it is non-empty. A zero-byte read
+    /// is an uncommitted write: a writer using truncate-then-write
+    /// (`std::fs::write`) leaves an existing-but-empty file between open and
+    /// write, and accepting it decodes to `""` and fails the round-trip
+    /// assertion spuriously (mirrors the guard in
+    /// `term-session/tests/daemon_tests.rs`). Valid `pwd` reports are always
+    /// an absolute path and `envvar` reports always carry the `NAME=` prefix,
+    /// so real content is never empty.
     fn read_report(session: &mut Session, report: &Path) -> Vec<u8> {
         let mut content: Option<Vec<u8>> = None;
         term_test_support::wait_for(
             Duration::from_secs(REPORT_TIMEOUT_SECS),
             &format!("mock pwd wrote the report at {report:?}"),
             || {
-                if let Ok(bytes) = std::fs::read(report) {
+                if let Some(bytes) = std::fs::read(report).ok().filter(|b| !b.is_empty()) {
                     content = Some(bytes);
                     return Some(());
                 }
