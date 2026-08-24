@@ -4,7 +4,8 @@
 //! It exists so the workspace's test suites stop hand-rolling (and drifting)
 //! the same few patterns:
 //!
-//! - [`wait_for`] / [`wait_for_async`]: deadline-bounded condition polling.
+//! - [`wait_for`] (sync) and [`wait_for_async`] (enable the `tokio`
+//!   feature): deadline-bounded condition polling.
 //!   The repo's testing policy is "no blind sleeps": every wait must observe
 //!   real state, not hope that a fixed delay was long enough.
 //! - [`KillOnDrop`]: RAII cleanup so panicking tests cannot leak spawned
