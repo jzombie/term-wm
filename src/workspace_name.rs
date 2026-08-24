@@ -16,7 +16,7 @@ pub const FALLBACK_WORKSPACE: &str = "default";
 const WORKSPACE_NAME_FILL_CHAR: char = '_';
 
 /// Sanitize a raw name into a `ChannelName`-safe namespace segment: keep
-/// `[A-Za-z0-9_-]`, map everything else to [`WORKSPACE_NAME_FILL_CHAR`], and
+/// `[A-Za-z0-9_-]`, map everything else to `WORKSPACE_NAME_FILL_CHAR`, and
 /// trim fill characters from both ends. Returns `None` when nothing usable
 /// remains so callers can apply their own fallback (#284).
 pub fn sanitize_workspace_name_opt(raw: &str) -> Option<String> {

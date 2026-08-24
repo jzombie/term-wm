@@ -39,7 +39,7 @@ pub struct Cli {
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
     pub cmds: Vec<String>,
 
-    /// Workspace name; maps to the daemon channel <workspace>/main. When
+    /// Workspace name; maps to the daemon channel `<workspace>`/main. When
     /// omitted, defaults to the sanitized current-directory name (#284).
     #[arg(short = 'w', long = "workspace")]
     pub workspace: Option<String>,
