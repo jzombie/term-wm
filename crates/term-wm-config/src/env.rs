@@ -70,6 +70,7 @@ pub const NO_SESSION_PERSISTENCE_ENV_VAR: &str = "TERM_WM_NO_SESSION_PERSISTENCE
 /// Read by [`active_environment()`] to override compile-time defaults.
 pub const ENVIRONMENT_ENV_VAR: &str = "TERM_WM_ENV";
 
+// TODO: Rename to TaskEnvironment
 /// Supported runtime environments. [`active_environment`] normalizes the
 /// `TERM_WM_ENV` value (trimmed, case-insensitive) so invalid states are
 /// unrepresentable.
