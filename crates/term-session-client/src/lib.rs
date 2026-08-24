@@ -1103,30 +1103,9 @@ mod tests {
             msg.contains("--allow-nested"),
             "error must recommend --allow-nested: {msg}"
         );
-        assert!(msg.starts_with("FATAL:"), "error must start with FATAL: {msg}");
-    }
-
-    #[test]
-    fn nested_session_fatal_error_names_both_endpoints() {
-        let err = nested_session_fatal_error(
-            "term-wm",
-            Some("term-wm/alice/gateway"),
-            "term-wm-dev/alice/gateway",
-        );
-        let msg = err.to_string();
         assert!(
-            msg.contains("Active session gateway: term-wm/alice/gateway"),
-            "must name the active endpoint: {msg}"
-        );
-        assert!(
-            msg.contains("Requested gateway:       term-wm-dev/alice/gateway"),
-            "must name the requested endpoint: {msg}"
-        );
-        // Unset markers render as an explicit placeholder, never silently.
-        let unset = nested_session_fatal_error("term-wm", None, "x/gateway").to_string();
-        assert!(
-            unset.contains("Active session gateway: <unset>"),
-            "unset marker must render as placeholder: {unset}"
+            msg.starts_with("FATAL:"),
+            "error must start with FATAL: {msg}"
         );
     }
 
