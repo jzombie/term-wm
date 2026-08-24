@@ -9,11 +9,14 @@ pub use term_wm_core::*;
 pub use term_wm_render::RenderBackend;
 pub use term_wm_ui_components::*;
 pub use term_wm_view::view;
+pub mod cli;
 pub mod components;
+pub mod internal_session;
 pub mod logging;
 pub mod prelude;
 pub mod term_wm_app;
 pub mod unified_event_source;
+pub mod workspace_name;
 pub use term_wm_console::widget_adapter::{StatefulWidgetAdapter, WidgetAdapter};
 
 use ratatui::prelude::Widget;
