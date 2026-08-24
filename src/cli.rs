@@ -407,7 +407,17 @@ mod tests {
     fn build_inner_command_basic() {
         let cli = Cli::parse_from(["term-wm"]);
         let cmd = build_inner_command("exe".to_string(), "dev", &cli, "test/gateway");
-        assert_eq!(cmd, vec!["exe", "--internal-session", "-w", "dev"]);
+        assert_eq!(
+            cmd,
+            vec![
+                "exe",
+                "--internal-session",
+                "-w",
+                "dev",
+                "--gateway",
+                "test/gateway"
+            ]
+        );
     }
 
     #[cfg(any(feature = "session-persistence", test))]
@@ -422,6 +432,8 @@ mod tests {
                 "--internal-session",
                 "-w",
                 "dev",
+                "--gateway",
+                "test/gateway",
                 "-n",
                 "4",
                 "--scrollback",
@@ -442,6 +454,8 @@ mod tests {
                 "--internal-session",
                 "-w",
                 "dev",
+                "--gateway",
+                "test/gateway",
                 "--run",
                 "htop",
                 "--",
