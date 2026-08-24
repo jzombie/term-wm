@@ -2429,19 +2429,18 @@ mod tests {
     /// channel between the warning and the live counts.
     ///
     /// Shares the `process_global_state` serial group: this test mutates
-    /// `TERM_WM_GATEWAY`, the same process-global the bundled binary's
-    /// session-action tests pin, so the groups must not run concurrently.
+    /// the process-local gateway override cell, the same process-global the
+    /// bundled binary's session-action tests pin, so the groups must not run
+    /// concurrently.
     #[cfg(feature = "session-persistence")]
     #[test]
     #[serial(process_global_state)]
     fn stop_gateway_dialog_body_names_resolved_channel() {
         const TEST_GATEWAY: &str = "term-wm/channel-dialog-gw";
-        unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, TEST_GATEWAY);
-        }
+        term_wm_config::env::set_gateway_override(Some(TEST_GATEWAY));
         let channel = term_session::gateway_channel_name().to_string();
         let body = stop_gateway_dialog_body(&channel, "2", "5", "1");
-        assert_eq!(channel, TEST_GATEWAY, "env override must resolve wholesale");
+        assert_eq!(channel, TEST_GATEWAY, "override must resolve wholesale");
         let expected = format!("{GATEWAY_STOP_CHANNEL_LABEL}: {channel}");
         assert!(
             body.contains(&expected),
@@ -2457,10 +2456,8 @@ mod tests {
                 && body.contains("Running tasks: 1"),
             "counts line must stay present: {body}"
         );
-        // Restore the environment so other tests see the default resolution.
-        unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
-        }
+        // Restore so other tests see the default resolution.
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[test]

@@ -64,7 +64,7 @@ update the palette entry and the `Display` string together.
 ## Environment Variables & Flags
 
 - Environment variables are always uppercase `TERM_WM_*` (`TERM_WM_ENV`,
-  `TERM_WM_GATEWAY`, `TERM_SESSION_CHANNEL`, `TERM_WM_NO_SESSION_PERSISTENCE`,
+  `TERM_SESSION_CHANNEL`, `TERM_WM_NO_SESSION_PERSISTENCE`,
   `TERM_WM_TRACE_ESC`).
   - `TERM_WM_ENV` is the single environment override (`dev`/`prod`/`test`) read by
     `term_wm_config::env::active_environment()` for both IPC gateway scoping and task

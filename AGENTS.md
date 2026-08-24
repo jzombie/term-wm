@@ -159,6 +159,13 @@ Committed Toolchain Config
 - Personal overrides belong in `~/.cargo/config.toml` (global) or an
   ancestor-directory `.cargo/config.toml`; Cargo merges the whole hierarchy.
   See `.cargo/config.toml.example` for the template.
+- Gateway env keys are single-source: `SESSION_GATEWAY_ENV_VAR`
+  (`TERM_SESSION_GATEWAY`, the daemon-stamped inception marker) is the ONLY
+  gateway env var in the entire repository. Explicit endpoint selection
+  uses the `--gateway <NAME>` CLI flag (process-local cell, never inherited
+  by session shells). No other gateway env key may exist anywhere; the one
+  previously used for wholesale overrides was deleted outright and must not
+  be reintroduced under any name.
 
 Declarative `view!` Macro
 - `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) is a

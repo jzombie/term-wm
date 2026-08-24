@@ -52,13 +52,11 @@ pub struct Cli {
     #[arg(long = "daemon", hide = true)]
     pub daemon: bool,
 
-    /// Gateway endpoint pinned by the parent launcher when spawning this
-    /// binary as a detached daemon (`<namespace>/<env>/<user>/gateway`).
-    /// Hidden: end users never pass it manually; without it the daemon
-    /// resolves its own gateway via the standard heuristics. When present it
-    /// also seeds `TERM_WM_GATEWAY` so every consumer in this process
-    /// (`--stop-daemon`, `--list-channels`) targets the pinned endpoint.
-    #[arg(long = "gateway", hide = true, value_name = "NAME")]
+    /// Gateway endpoint override (`<namespace>/<user>/gateway`). Process-
+    /// local: pins every gateway consumer in this process (daemon bind,
+    /// `--stop-daemon`, `--list-channels`) and is never inherited by session
+    /// shells. When the daemon auto-spawns, it is pinned to this endpoint.
+    #[arg(long = "gateway", value_name = "NAME")]
     pub gateway: Option<String>,
 
     /// Hidden flag: running inside a daemon-managed persistent PTY channel
@@ -498,10 +496,11 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn help_shows_resolved_gateway() {
-        // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
-        // otherwise change the rendered footer.
+        // Hermetic: a developer's exported TERM_WM_ENV would otherwise
+        // change the rendered footer; the gateway override cell is cleared
+        // so the default namespace renders.
+        term_wm_config::env::set_gateway_override(None);
         unsafe {
-            std::env::remove_var("TERM_WM_GATEWAY");
             std::env::remove_var("TERM_WM_ENV");
         }
         let mut cmd = cli_command();

@@ -11,14 +11,19 @@
 //! static namespace ([`APP_NAME`]); local development isolation is enforced
 //! at the toolchain boundary via `NAMESPACE_ENV_VAR` (`TERM_WM_NAMESPACE`),
 //! injected for cargo-driven executions by the repo's committed
-//! `.cargo/config.toml` while preserving the OS-level user segment. Full-path
-//! overrides remain available through `GATEWAY_CHANNEL_ENV_VAR`
-//! (`TERM_WM_GATEWAY`).
+//! `.cargo/config.toml` while preserving the OS-level user segment.
+//!
+//! Exactly ONE gateway env variable exists: [`SESSION_GATEWAY_ENV_VAR`]
+//! (`TERM_SESSION_GATEWAY`), the inception marker daemons stamp into PTY
+//! children. Explicit endpoint selection is done with the `--gateway <NAME>`
+//! CLI flag (process-local override cell, see [`set_gateway_override`]),
+//! which never leaks into session shells.
 //!
 //! Any new subsystem requiring environment gating must query [`active_environment()`] rather than
 //! inspecting `CARGO_MANIFEST_DIR` or `cfg!(debug_assertions)` directly.
 
 use std::fmt;
+use std::sync::Mutex;
 
 /// Base application family name shared by every term-wm-family binary. The
 /// only place this literal lives; downstream crates reference this const.
@@ -44,20 +49,19 @@ pub const GATEWAY_NAMESPACE: &str = APP_NAME;
 /// empty values fall back to [`GATEWAY_NAMESPACE`]. The repo's committed
 /// `.cargo/config.toml` sets this to `term-wm-dev` so every cargo-driven
 /// execution operates on an isolated dev namespace. For a wholesale override
-/// of the entire endpoint path (including `<user>`), use
-/// [`GATEWAY_CHANNEL_ENV_VAR`] instead.
+/// of the entire endpoint path (including `<user>`), use the `--gateway
+/// <NAME>` CLI flag / [`set_gateway_override`] instead.
 pub const NAMESPACE_ENV_VAR: &str = "TERM_WM_NAMESPACE";
 
-/// Gateway channel override (CI isolation, operators). Read by `term-session`.
-pub const GATEWAY_CHANNEL_ENV_VAR: &str = "TERM_WM_GATEWAY";
 /// Session channel override. Read by `term-session`.
 pub const CHANNEL_ENV_VAR: &str = "TERM_SESSION_CHANNEL";
-/// Set by the term-session daemon on every spawned PTY child; read by the
-/// term-session client to detect nesting inception.
-pub const SESSION_ACTIVE_ENV_VAR: &str = "TERM_SESSION_ACTIVE";
-/// Set by the term-session daemon on every spawned PTY child to the active
-/// gateway socket path (e.g. `"term-wm/prod/user/gateway"`). Read by the
-/// term-session client for socket-aware nesting-inception detection.
+/// The ONE gateway environment variable: the inception marker stamped by
+/// term-session/term-wm daemons onto every spawned PTY child to the active
+/// gateway socket path (e.g. `"term-wm/prod/user/gateway"`). Read by clients
+/// to detect same-gateway nesting inception. NEVER consulted during endpoint
+/// resolution — that role belongs to the `--gateway` CLI flag and the
+/// process-local override cell ([`gateway_override`]), so session shells can
+/// never inherit a sticky "requested" endpoint from an ancestor.
 pub const SESSION_GATEWAY_ENV_VAR: &str = "TERM_SESSION_GATEWAY";
 /// Enables dumping raw PTY→emulator bytes to a file (debugging). Read by
 /// `term-wm-pty-engine`.
@@ -65,6 +69,29 @@ pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
 /// Disables session-persistence behavior at runtime even when compiled in.
 /// Read by the `term-wm` binary.
 pub const NO_SESSION_PERSISTENCE_ENV_VAR: &str = "TERM_WM_NO_SESSION_PERSISTENCE";
+
+/// Process-local explicit gateway override installed by the `--gateway
+/// <NAME>` CLI flag (and by tests). Deliberately NOT an environment
+/// variable: it never propagates to PTY children, so a pinned daemon or
+/// nested launch cannot leak its endpoint into descendants' resolution.
+static GATEWAY_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Install the process-local gateway override. Pass `Some("ns/user/gateway")`
+/// (a full endpoint path) to pin every resolution in this process; pass
+/// `None` to clear. Returns the previous value so callers can restore it
+/// (RAII test guards).
+pub fn set_gateway_override(value: Option<&str>) -> Option<String> {
+    let mut slot = GATEWAY_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner());
+    std::mem::replace(&mut *slot, value.map(|s| s.to_string()))
+}
+
+/// Snapshot of the process-local gateway override, if any.
+pub fn gateway_override() -> Option<String> {
+    GATEWAY_OVERRIDE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
 
 /// Active environment override (`dev`/`prod`/`test`, case-insensitive).
 /// Read by [`active_environment()`] to override compile-time defaults.

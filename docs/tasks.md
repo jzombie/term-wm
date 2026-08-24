@@ -126,7 +126,7 @@ The environment scopes project tasks ONLY. Gateway endpoints never consult it.
 The persistence gateway endpoint is `{namespace}/<user>/gateway` and is
 independent of the runtime environment. Resolution order:
 
-1. **`TERM_WM_GATEWAY`:** wholesale override of the full endpoint path
+1. **`--gateway <NAME>`:** wholesale override of the full endpoint path
    (multi-segment values round-trip byte-exact; the caller owns the whole
    path).
 2. **`TERM_WM_NAMESPACE`:** namespace-root override preserving the OS-level

@@ -11,8 +11,8 @@ use term_session_muxio_service_definitions::{
 use std::process::{Child, Command, Stdio};
 
 /// Resolve the gateway channel name to probe/spawn.
-/// Uses the runtime `TERM_WM_GATEWAY` override if present, else the
-/// environment-scoped user default (`term-wm/<env>/<user>/gateway`).
+/// Uses the process-local gateway override (`--gateway` / tests) if
+/// present, else the namespace-scoped user default.
 pub fn resolve_gateway() -> ChannelName {
     gateway_channel_name()
 }
@@ -350,8 +350,9 @@ pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<Stri
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate `TERM_WM_GATEWAY` / `TERM_WM_ENV` /
-    /// `USER`, which are process-global and unsafe to read/write concurrently.
+    /// Serializes tests that mutate the gateway override cell /
+    /// `TERM_WM_NAMESPACE` / `USER`, which are process-global and unsafe
+    /// to read/write concurrently.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -360,23 +361,16 @@ mod tests {
     #[test]
     fn resolve_gateway_honors_override() {
         let _guard = env_lock();
-        unsafe {
-            std::env::set_var(
-                term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR,
-                "custom/gateway",
-            );
-        }
+        term_wm_config::env::set_gateway_override(Some("custom/gateway"));
         assert_eq!(resolve_gateway().to_string(), "custom/gateway");
-        unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
-        }
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[test]
     fn resolve_gateway_defaults_to_user_scoped_gateway() {
         let _guard = env_lock();
         unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
             std::env::remove_var(term_wm_config::NAMESPACE_ENV_VAR);
             // `current_os_user()` reads $USER on Unix and %USERNAME% on
             // Windows; set both so the assertion is platform-independent.
@@ -404,7 +398,7 @@ mod tests {
         // The toolchain-injected namespace override replaces only the root
         // segment: OS-level user isolation survives on shared dev machines.
         unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
             std::env::set_var(term_wm_config::NAMESPACE_ENV_VAR, "term-wm-dev");
             std::env::set_var("USER", "tester");
             std::env::set_var("USERNAME", "tester");
@@ -424,13 +418,9 @@ mod tests {
         // Full endpoint paths round-trip byte-exact (daemon spawn pinning
         // depends on this); they must not collapse to a shorter name.
         let raw = "term-wm-dev-1a2b3c4d/prod/alice/gateway";
-        unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, raw);
-        }
+        term_wm_config::env::set_gateway_override(Some(raw));
         assert_eq!(resolve_gateway().to_string(), raw);
-        unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
-        }
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[test]
@@ -438,19 +428,12 @@ mod tests {
         let _guard = env_lock();
         // Invalid segments cannot parse as a gateway endpoint; the fallback
         // is the legacy `{namespace}/gateway` name.
-        unsafe {
-            std::env::set_var(
-                term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR,
-                "has space/gateway",
-            );
-        }
+        term_wm_config::env::set_gateway_override(Some("has space/gateway"));
         assert_eq!(
             resolve_gateway().to_string(),
             format!("{}/gateway", term_wm_config::GATEWAY_NAMESPACE)
         );
-        unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
-        }
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[cfg(unix)]

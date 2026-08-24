@@ -1,7 +1,6 @@
 use portable_pty::{CommandBuilder, PtySize};
 use term_session_muxio_service_definitions::ChannelName;
 use term_session_muxio_service_definitions::PathWire;
-use term_session_muxio_service_definitions::gateway_channel_name;
 use term_wm_pty_engine::{Pty, PtyResult, PtyStatus};
 
 pub struct Session {
@@ -34,6 +33,11 @@ fn resolve_cwd(cwd: Option<&PathWire>) -> Option<std::path::PathBuf> {
 }
 
 impl Session {
+    /// Spawn a session PTY.
+    ///
+    /// `bound_gateway` is the socket name THIS daemon actually bound; it is
+    /// stamped verbatim as the inception marker (`TERM_SESSION_GATEWAY`)
+    /// so children can never inherit a drifted or stale endpoint value.
     pub fn spawn(
         id: u64,
         cmd: Option<Vec<String>>,
@@ -41,6 +45,7 @@ impl Session {
         rows: u16,
         channel: Option<&ChannelName>,
         cwd: Option<&PathWire>,
+        bound_gateway: &str,
     ) -> PtyResult<Self> {
         let size = PtySize {
             rows,
@@ -66,14 +71,15 @@ impl Session {
             // Unset so the child never inherits a stale value from the parent process.
             builder.env_remove(term_wm_config::env::CHANNEL_ENV_VAR);
         }
-        // Mark every session child with the active gateway socket name so a
-        // nested `term-session`/`term-wm` attach can detect same-gateway
-        // inception and refuse it (see `run_session`'s nesting guard).
-        let active_gateway = gateway_channel_name().to_string();
-        builder.env(
-            term_wm_config::env::SESSION_GATEWAY_ENV_VAR,
-            &active_gateway,
-        );
+        // Stamp the inception marker with the daemon's actually-bound
+        // socket name so a nested `term-session`/`term-wm` attach can
+        // detect same-gateway inception and refuse it (see `run_session`'s
+        // nesting guard).
+        builder.env(term_wm_config::env::SESSION_GATEWAY_ENV_VAR, bound_gateway);
+        // Give session shells a CLEAN gateway-resolution context: strip the
+        // toolchain namespace policy so descendants resolve endpoints from
+        // their own launch context, never an ancestor's.
+        builder.env_remove(term_wm_config::NAMESPACE_ENV_VAR);
         if let Some(c) = resolved_cwd {
             builder.cwd(c);
         }
@@ -245,7 +251,7 @@ mod tests {
             report.to_string_lossy().into_owned(),
         ];
         let mut session =
-            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, cwd).expect("spawn session");
+            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, cwd, "test/bound/gateway").expect("spawn session");
         let bytes = read_report(&mut session, &report);
         session.pty.kill_child().ok();
         PathWire::from(bytes)
@@ -308,7 +314,7 @@ mod tests {
             report.to_string_lossy().into_owned(),
         ];
         let mut session =
-            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, None).expect("spawn session");
+            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, None, "test/bound/gateway").expect("spawn session");
         let bytes = read_report(&mut session, &report);
         session.pty.kill_child().ok();
         bytes

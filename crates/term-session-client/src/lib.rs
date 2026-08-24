@@ -104,14 +104,26 @@ const MIN_TERM_ROWS: u16 = 2;
 const FALLBACK_TERM_COLS: u16 = 80;
 const FALLBACK_TERM_ROWS: u16 = 24;
 
-/// Create a nesting-inception fatal error branded with the given app name.
-pub fn nested_session_fatal_error(app_name: &str) -> io::Error {
+/// Create a nesting-inception fatal error branded with the given app name,
+/// naming BOTH endpoints so a refusal is instantly diagnosable: the active
+/// session gateway comes from the host daemon's inception marker, the
+/// requested gateway is the socket this client was about to attach to.
+pub fn nested_session_fatal_error(
+    app_name: &str,
+    active_gateway: Option<&str>,
+    target_socket: &str,
+) -> io::Error {
     io::Error::other(format!(
         "FATAL: Attempted to run {app_name} inside an existing session environment on the same gateway.\n\
          Session inception can cause terminal buffer corruption and accidental gateway stops.\n\n\
-         To force nested execution, rerun with:\n  \
-         {app_name} --allow-nested [args...]"
-    ))
+           Active session gateway: {}\n  \
+         Requested gateway:       {target_socket}\n\n\
+         This is genuinely the SAME gateway as your enclosing session.\nOptions:\n  \
+         - Run on a different gateway: set TERM_WM_NAMESPACE=<ns> (namespace root)\n    \
+           or pass --gateway <name> (whole path).\n  \
+         - Force nested execution: rerun with:\n      \
+           {app_name} --allow-nested [args...]"
+    , active_gateway.unwrap_or("<unset>")))
 }
 
 /// Returns `true` if an `io::Error` was caused by session inception detection.
@@ -349,7 +361,11 @@ pub fn run_session(
     let host_gateway =
         std::env::var(term_session_muxio_service_definitions::SESSION_GATEWAY_ENV_VAR).ok();
     if should_block_nesting(host_gateway.as_deref(), socket_path, allow_nested) {
-        return Err(nested_session_fatal_error(app_name));
+        return Err(nested_session_fatal_error(
+            app_name,
+            host_gateway.as_deref(),
+            socket_path,
+        ));
     }
 
     // Windows console hosts default to "QuickEdit" mode: clicking the window
@@ -1079,22 +1095,43 @@ mod tests {
 
     #[test]
     fn nested_session_fatal_error_brands_with_app_name() {
-        let err = nested_session_fatal_error("my-app");
+        let err = nested_session_fatal_error("my-app", Some("host/gateway"), "target/gateway");
         let msg = err.to_string();
         assert!(msg.contains("my-app"), "error must contain app name: {msg}");
         assert!(
             msg.contains("--allow-nested"),
             "error must recommend --allow-nested: {msg}"
         );
+        assert!(msg.starts_with("FATAL:"), "error must start with FATAL: {msg}");
+    }
+
+    #[test]
+    fn nested_session_fatal_error_names_both_endpoints() {
+        let err = nested_session_fatal_error(
+            "term-wm",
+            Some("term-wm/alice/gateway"),
+            "term-wm-dev/alice/gateway",
+        );
+        let msg = err.to_string();
         assert!(
-            msg.starts_with("FATAL:"),
-            "error must start with FATAL: {msg}"
+            msg.contains("Active session gateway: term-wm/alice/gateway"),
+            "must name the active endpoint: {msg}"
+        );
+        assert!(
+            msg.contains("Requested gateway:       term-wm-dev/alice/gateway"),
+            "must name the requested endpoint: {msg}"
+        );
+        // Unset markers render as an explicit placeholder, never silently.
+        let unset = nested_session_fatal_error("term-wm", None, "x/gateway").to_string();
+        assert!(
+            unset.contains("Active session gateway: <unset>"),
+            "unset marker must render as placeholder: {unset}"
         );
     }
 
     #[test]
     fn is_nested_session_fatal_detects_fatal_errors() {
-        let fatal = nested_session_fatal_error("term-wm");
+        let fatal = nested_session_fatal_error("term-wm", Some("h/g"), "t/g");
         assert!(is_nested_session_fatal(&fatal), "must detect fatal error");
 
         let other = io::Error::other("some other error");

@@ -2,8 +2,7 @@ use std::fmt;
 
 use interprocess::local_socket::{GenericNamespaced, prelude::*};
 pub use term_wm_config::env::{
-    GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE, NAMESPACE_ENV_VAR, SESSION_ACTIVE_ENV_VAR,
-    SESSION_GATEWAY_ENV_VAR,
+    GATEWAY_NAMESPACE, NAMESPACE_ENV_VAR, SESSION_GATEWAY_ENV_VAR,
 };
 
 // TODO: Move to config
@@ -157,10 +156,14 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
 /// Resolve the logical gateway channel name.
 ///
 /// Resolution order:
-/// 1. `TERM_WM_GATEWAY` env override wins wholesale at runtime (parsed with
+/// 1. The process-local override installed via
+///    `term_wm_config::env::set_gateway_override` (fed by the `--gateway
+///    <NAME>` CLI flag) wins wholesale (parsed with
 ///    [`ChannelName::parse_gateway`] so multi-segment endpoint paths
 ///    round-trip byte-exact; the caller takes full responsibility for the
-///    entire path, including the user segment).
+///    entire path, including the user segment). Deliberately process-local:
+///    it never reaches PTY children, so a pinned launch cannot leak its
+///    endpoint into descendants' resolution.
 /// 2. Otherwise the endpoint is `<namespace>/<user>/gateway` where:
 ///    - `<namespace>` is `TERM_WM_NAMESPACE` when set to a valid segment
 ///      (alphanumeric/hyphen/underscore, same charset as
@@ -176,8 +179,12 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
 /// every cargo-driven execution while preserving the OS-level `<user>`
 /// segment (multi-tenant safe). Binaries executed directly never see the
 /// injection and bind the shared default namespace.
+///
+/// The inception marker ([`SESSION_GATEWAY_ENV_VAR`]) is deliberately NOT an
+/// input here: daemons stamp the socket they actually bound, so children can
+/// compare their host session's endpoint against any requested target.
 pub fn gateway_channel_name() -> ChannelName {
-    if let Ok(name) = std::env::var(GATEWAY_CHANNEL_ENV_VAR) {
+    if let Some(name) = term_wm_config::env::gateway_override() {
         return ChannelName::parse_gateway(&name).unwrap_or_else(|_| ChannelName {
             namespace: GATEWAY_NAMESPACE.to_string(),
             name: "gateway".to_string(),
@@ -251,8 +258,8 @@ fn current_os_user() -> String {
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate the `TERM_WM_GATEWAY` env var, which is
-    /// process-global and unsafe to read/write concurrently.
+    /// Serializes tests that mutate the process-local gateway override,
+    /// which is process-global state unsafe to read/write concurrently.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -321,16 +328,16 @@ mod tests {
     #[test]
     fn gateway_override_env_wins() {
         let _guard = env_lock();
-        // TERM_WM_GATEWAY must be honoured when present (runtime injection),
+        // The process-local override must be honoured when present (runtime injection),
         // even when TERM_WM_ENV is also set.
         unsafe {
-            std::env::set_var(GATEWAY_CHANNEL_ENV_VAR, "test/iso-gateway");
+            term_wm_config::env::set_gateway_override(Some("test/iso-gateway"));
             std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "prod");
         }
         let gw = gateway_channel_name();
         assert_eq!(gw.to_string(), "test/iso-gateway");
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
             std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
         }
     }
@@ -341,13 +348,9 @@ mod tests {
         // Full endpoint paths (the shape pinned daemon spawns pass) must
         // resolve byte-exact instead of collapsing to a shorter name.
         let raw = "term-wm-dev-1a2b3c4d/test/tester/gateway";
-        unsafe {
-            std::env::set_var(GATEWAY_CHANNEL_ENV_VAR, raw);
-        }
+        term_wm_config::env::set_gateway_override(Some(raw));
         assert_eq!(gateway_channel_name().to_string(), raw);
-        unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
-        }
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[test]
@@ -358,7 +361,7 @@ mod tests {
         // cleared so the assertion holds regardless of ambient toolchain
         // injection (the committed .cargo/config.toml sets a namespace).
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
             std::env::remove_var(NAMESPACE_ENV_VAR);
         }
         // `current_os_user()` reads $USER on Unix and %USERNAME% on Windows;
@@ -390,7 +393,7 @@ mod tests {
         // root: the OS-level <user> segment stays derived at runtime so two
         // developers on one machine can never share a dev socket.
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
             std::env::set_var(NAMESPACE_ENV_VAR, "term-wm-dev");
             std::env::set_var("USER", "tester");
             std::env::set_var("USERNAME", "tester");
@@ -413,7 +416,7 @@ mod tests {
         // beyond swapping the root segment.
         for bogus in ["../evil", "has.dot", "has/slash", "", "   "] {
             unsafe {
-                std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+                term_wm_config::env::set_gateway_override(None);
                 std::env::set_var(NAMESPACE_ENV_VAR, bogus);
             }
             let gw = gateway_channel_name();
@@ -431,7 +434,7 @@ mod tests {
     fn gateway_help_line_mentions_gateway() {
         let _guard = env_lock();
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
             std::env::remove_var(NAMESPACE_ENV_VAR);
         }
         assert!(

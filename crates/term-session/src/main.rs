@@ -42,7 +42,7 @@ struct Cli {
     #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true)]
     cmd: Vec<String>,
 
-    /// Gateway name override [or $TERM_WM_GATEWAY]
+    /// Gateway endpoint override [process-local; not inherited by sessions]
     #[arg(long)]
     gateway: Option<String>,
 
@@ -108,13 +108,11 @@ fn run() -> io::Result<()> {
         Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
     };
 
-    // Gateway name resolution: explicit --gateway wins; else TERM_WM_GATEWAY
-    // (handled by gateway_channel_name()); else the environment-scoped user
-    // default.
+    // Gateway resolution: explicit --gateway wins (installed into the
+    // process-local override cell, which never leaks into session shells);
+    // else the namespace-scoped user default.
     if let Some(ref gw) = cli.gateway {
-        unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gw);
-        }
+        term_wm_config::env::set_gateway_override(Some(gw));
     }
 
     if cli.daemon {
@@ -187,7 +185,8 @@ fn stop(force: bool) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate `TERM_WM_GATEWAY` / `TERM_WM_ENV`, which
+    /// Serializes tests that mutate the gateway override cell /
+    /// `TERM_WM_ENV`, which
     /// are process-global and unsafe to read/write concurrently.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -197,10 +196,11 @@ mod tests {
     #[test]
     fn help_shows_resolved_gateway() {
         let _guard = env_lock();
-        // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
-        // otherwise change the rendered footer.
+        // Hermetic: a developer's exported TERM_WM_ENV would otherwise
+        // change the rendered footer; the gateway override cell is cleared
+        // so the default namespace renders.
+        term_wm_config::env::set_gateway_override(None);
         unsafe {
-            std::env::remove_var("TERM_WM_GATEWAY");
             std::env::remove_var("TERM_WM_ENV");
         }
         let mut cmd = cli_command();

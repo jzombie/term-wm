@@ -51,14 +51,14 @@ fn run() -> io::Result<()> {
         }
     }
 
-    // Mirror term-session: an explicit --gateway pins every gateway consumer
-    // in this process (--stop-daemon, --list-channels) to the named endpoint,
-    // bypassing environment/heuristic resolution. Multi-segment endpoint
-    // paths round-trip losslessly via `ChannelName::parse_gateway`.
+    // An explicit --gateway pins every gateway consumer in this process
+    // (--stop-daemon, --list-channels, daemon bind) to the named endpoint,
+    // bypassing environment/heuristic resolution. The override lives in a
+    // process-local cell (NOT the environment), so it can never leak into
+    // session shells or descendants. Multi-segment endpoint paths round-trip
+    // losslessly via `ChannelName::parse_gateway`.
     if let Some(gateway) = &cli.gateway {
-        unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gateway);
-        }
+        term_wm_config::env::set_gateway_override(Some(gateway));
     }
 
     #[cfg(feature = "session-persistence")]
