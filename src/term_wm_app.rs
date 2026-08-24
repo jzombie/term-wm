@@ -94,6 +94,11 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleWorkspaceFollow,
 ];
 
+/// Boxed hook invoked by `handle_custom_action` for actions `TermWmApp`
+/// itself does not own (e.g. the bundled binary's session/gateway IPC).
+/// Returning `true` marks the action consumed.
+pub type CustomActionHandler<C> = Box<dyn FnMut(&TermWmAction, &mut TermWmApp<C>) -> bool>;
+
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
 /// Generic parameter `C` allows injecting custom root-level components
@@ -107,6 +112,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// | Standalone app with system chrome + default keybindings | `TermWmApp::<C>::new_custom(ctx)`        |
 /// | Standalone app with a custom `WmConfig` (e.g. keybindings) | `TermWmApp::<C>::new_with_config(ctx, config)` |
 /// | Standalone app with custom config AND a custom command-palette allow-list | `TermWmApp::<C>::new_with_actions(ctx, config, actions)` |
+/// | Bundled-binary chrome: panels + FAB, FULL palette action set | `TermWmApp::<C>::new_full_chrome(&ctx, config, tx)` |
 /// | Full control over an already-built `WindowManager`   | `TermWmApp::from_wm(wm, tx)`              |
 ///
 /// `new_custom()` is defined on the generic block and works for any
@@ -238,6 +244,10 @@ where
     /// mutations do not spam the gateway.
     #[cfg(feature = "session-persistence")]
     last_published_stats: Option<(u32, u32)>,
+    /// Optional embedder hook for custom actions, installed via
+    /// [`Self::set_custom_action_handler`]. Invoked after built-in handling
+    /// (`RunProjectTask`) in `handle_custom_action`.
+    custom_action_handler: Option<CustomActionHandler<C>>,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -389,6 +399,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             stats_tx: None,
             #[cfg(feature = "session-persistence")]
             last_published_stats: None,
+            custom_action_handler: None,
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) and the bundled
@@ -398,6 +409,61 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         app.init_system_windows();
         app.refresh_project_tasks();
         app
+    }
+
+    /// Build the app the way the bundled `term-wm` binary runs it: full system
+    /// chrome (top panel, bottom panel, FAB) and NO explicit menu-action
+    /// allow-list, so the full default action set is available. Unlike
+    /// `new_with_actions`, no notification area is installed and the caller
+    /// supplies the live PTY wakeup channel.
+    pub fn new_full_chrome(
+        app_ctx: &Arc<AppContext>,
+        config: WmConfig,
+        pty_wakeup_tx: Sender<UnifiedEvent>,
+    ) -> Self {
+        let hostname = app_ctx.hostname.as_deref();
+        let app_name = app_ctx.app_name.clone();
+        let app_version = app_ctx.app_version.clone();
+
+        use term_wm_sys_ui_components::{
+            WmBottomPanelComponent, WmFabComponent, WmTopPanelComponent,
+        };
+
+        let wm = AppBuilder::<LayerComponent>::new()
+            .config(config)
+            .app_ctx(Arc::clone(app_ctx))
+            .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
+                &app_name,
+            )))
+            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
+                &app_name,
+                &app_version,
+                hostname,
+            )))
+            .fab(LayerComponent::Fab(WmFabComponent::new()))
+            .build()
+            .expect("standalone build");
+
+        Self::from_wm(wm, pty_wakeup_tx)
+    }
+
+    /// One window per command (shell + the command as input), then default
+    /// shells to fill `num_windows`. `commands` is owned and consumed here.
+    pub fn open_initial_windows(&mut self, commands: Vec<String>, num_windows: usize) {
+        let mut used = 0;
+        for cmd in commands {
+            let cb = default_shell_command();
+            let count = self.wm.window_count() + 1;
+            if let Err(e) = self.spawn_terminal_window(cb, Some(cmd), format!("Shell {}", count)) {
+                tracing::error!("Window spawn error: {}", e);
+            }
+            used += 1;
+        }
+        for _ in used..num_windows {
+            if let Err(e) = self.wm_new_terminal() {
+                tracing::error!("Window spawn error: {}", e);
+            }
+        }
     }
 
     /// Refresh the cached workspace channel list and all workspace users from the daemon via short-lived IPC.
@@ -521,6 +587,14 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         self.stats_tx = Some(tx);
     }
 
+    /// Install an embedder hook for actions this app does not natively
+    /// handle (the bundled binary routes session/gateway IPC through it).
+    /// The hook runs after built-in handling (`RunProjectTask`) and its
+    /// return value decides whether the action was consumed.
+    pub fn set_custom_action_handler(&mut self, handler: CustomActionHandler<C>) {
+        self.custom_action_handler = Some(handler);
+    }
+
     /// Publish the current `(windows, live tasks)` snapshot if it differs
     /// from the last successfully enqueued one. `try_send` never blocks the
     /// UI thread; a saturated queue drops the sample and the dedup marker is
@@ -560,6 +634,12 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     #[cfg(feature = "session-persistence")]
     pub fn cached_workspaces(&self) -> &[String] {
         &self.cached_workspaces
+    }
+
+    /// Borrow the current workspace name.
+    #[cfg(feature = "session-persistence")]
+    pub fn current_workspace(&self) -> &str {
+        &self.current_workspace
     }
 
     /// Set the current workspace name.
@@ -760,6 +840,25 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // the running-task count, so republish with the updated snapshot.
         self.publish_wm_stats();
         Ok(key)
+    }
+
+    /// Run a discovered project task in a new window. Returns whether the
+    /// action was handled (task found), regardless of spawn success.
+    ///
+    /// Project tasks must work regardless of the session-persistence toggle;
+    /// `handle_custom_action` matches them before anything else.
+    pub fn run_project_task(&mut self, label: &str) -> bool {
+        let Some(task) = self.project_task(label).cloned() else {
+            tracing::warn!("Project task not found: {label}");
+            return false;
+        };
+        match self.spawn_project_task(&task) {
+            Ok(_key) => true,
+            Err(e) => {
+                tracing::error!("Failed to spawn project task '{label}': {e}");
+                true
+            }
+        }
     }
 
     /// Build a `CommandBuilder` for a project task, resolving cwd and env.
@@ -1193,8 +1292,42 @@ impl<C: Component<TermWmAction> + 'static>
         TermWmApp::close_window(self, key);
     }
 
+    fn handle_custom_action(&mut self, action: &TermWmAction) -> bool {
+        // Project tasks must work regardless of the session-persistence toggle;
+        // match them before any embedder hook runs.
+        if let TermWmAction::RunProjectTask(label) = action {
+            return self.run_project_task(label);
+        }
+        // Temporarily take the hook so the closure can borrow `self` (its
+        // arms may touch WM state, notifications, and workspace caches).
+        let Some(mut handler) = self.custom_action_handler.take() else {
+            return false;
+        };
+        let handled = handler(action, self);
+        self.custom_action_handler = Some(handler);
+        handled
+    }
+
+    fn set_window_selection_enabled(&mut self, enabled: bool) {
+        // Immediate fan-out over every window's component. This is
+        // deliberately NOT `WindowManager::set_window_selection_enabled`
+        // (a deferred flag consumed later); the bundled binary has always
+        // applied selection state synchronously.
+        for key in self.wm.all_window_keys() {
+            if let Some(comp) = self.wm.component_for_key_mut(key) {
+                comp.set_selection_enabled(enabled);
+            }
+        }
+    }
+
     fn open_command_palette(&mut self) {
         use term_wm_core::components::MenuDisplayItem;
+
+        // Refresh workspace/user cache BEFORE building items so entries
+        // reflect live daemon state; no-ops when persistence is disabled
+        // at runtime.
+        #[cfg(feature = "session-persistence")]
+        self.refresh_workspace_cache();
 
         // Refresh project tasks and sync to WM cache BEFORE building items.
         self.refresh_project_tasks();
@@ -1365,6 +1498,24 @@ mod tests {
     use super::*;
     #[cfg(feature = "session-persistence")]
     use serial_test::serial;
+
+    /// The bundled binary's chrome contract, now owned by the library
+    /// constructor: full default palette action set, no restriction.
+    #[test]
+    fn full_chrome_build_gets_full_default_menu_actions() {
+        let (event_source, _event_owner) = UnifiedEventSource::new(true).expect("headless source");
+        let app_ctx = Arc::new(AppContext::new("term-wm", "0.0.0").with_hostname("test-host"));
+        let mut app = TermWmApp::<NoopComponent>::new_full_chrome(
+            &app_ctx,
+            WmConfig::default(),
+            event_source.pty_wakeup_tx(),
+        );
+        assert_eq!(
+            app.wm().supported_menu_actions(),
+            term_wm_core::constants::DEFAULT_SUPPORTED_MENU_ACTIONS,
+            "full-chrome builds must not restrict the command-palette actions to a subset"
+        );
+    }
 
     /// Every construction path must initialize the system windows (debug log,
     /// system panel) and leave them hidden (`Unmapped`).
@@ -1539,9 +1690,13 @@ mod tests {
     /// must return immediately without touching IPC, leaving the cache empty.
     /// The process-global runtime config is restored afterwards so parallel
     /// tests observing `session_persistence_enabled()` are unaffected.
+    ///
+    /// Shares the `process_global_state` serial group: this test writes the
+    /// same global the bundled binary's session-action tests read, and
+    /// distinct serial groups run concurrently.
     #[test]
     #[cfg(feature = "session-persistence")]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn refresh_workspace_cache_is_noop_when_runtime_disabled() {
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = {
@@ -2264,9 +2419,13 @@ mod tests {
 
     /// #298 follow-up: the dialog body must name the resolved gateway IPC
     /// channel between the warning and the live counts.
+    ///
+    /// Shares the `process_global_state` serial group: this test mutates
+    /// `TERM_WM_GATEWAY`, the same process-global the bundled binary's
+    /// session-action tests pin, so the groups must not run concurrently.
     #[cfg(feature = "session-persistence")]
     #[test]
-    #[serial]
+    #[serial(process_global_state)]
     fn stop_gateway_dialog_body_names_resolved_channel() {
         const TEST_GATEWAY: &str = "term-wm/channel-dialog-gw";
         unsafe {
