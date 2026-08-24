@@ -115,7 +115,10 @@ const DAEMON_GATEWAY_ARG: &str = "--gateway";
 /// pin the fresh child re-runs its own resolution heuristics; any drift
 /// between parent and child (CLI-only overrides like `--env`, build
 /// heuristics) would bind a different socket and leave the launcher probing
-/// a dead name until timeout.
+/// a dead name until timeout. Production callers are Unix-only; kept
+/// compiling everywhere so the flag/value agreement with
+/// [`daemon_command_line_suffix`] is unit-tested on every platform.
+#[cfg_attr(windows, allow(dead_code))]
 fn daemon_spawn_args(gateway: &str) -> Vec<String> {
     vec![
         "--daemon".to_string(),
