@@ -184,10 +184,7 @@ fn unix_spawn_detached_server(bin: &std::path::Path, gateway: &str) -> io::Resul
 }
 
 #[cfg(windows)]
-fn windows_spawn_detached_server(
-    bin: &std::path::Path,
-    gateway: &str,
-) -> io::Result<DaemonChild> {
+fn windows_spawn_detached_server(bin: &std::path::Path, gateway: &str) -> io::Result<DaemonChild> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
@@ -442,7 +439,10 @@ mod tests {
         // Invalid segments cannot parse as a gateway endpoint; the fallback
         // is the legacy `{namespace}/gateway` name.
         unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, "has space/gateway");
+            std::env::set_var(
+                term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR,
+                "has space/gateway",
+            );
         }
         assert_eq!(
             resolve_gateway().to_string(),
@@ -481,7 +481,10 @@ mod tests {
         // Windows builds one quoted command line; it must carry the same
         // flag/value pair the unix argv path passes.
         let suffix = daemon_command_line_suffix("term-wm/prod/alice/gateway");
-        assert_eq!(suffix, format!(" --daemon {DAEMON_GATEWAY_ARG} \"term-wm/prod/alice/gateway\""));
+        assert_eq!(
+            suffix,
+            format!(" --daemon {DAEMON_GATEWAY_ARG} \"term-wm/prod/alice/gateway\"")
+        );
         assert!(suffix.contains(DAEMON_GATEWAY_ARG));
     }
 }

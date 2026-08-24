@@ -18,8 +18,8 @@ pub mod runtime;
 
 pub use env::{
     APP_NAME, CHANNEL_ENV_VAR, ENVIRONMENT_ENV_VAR, ESC_TRACE_ENV, Environment,
-    GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE, NAMESPACE_ENV_VAR,
-    NO_SESSION_PERSISTENCE_ENV_VAR, SESSION_ACTIVE_ENV_VAR, SESSION_GATEWAY_ENV_VAR,
-    active_environment, default_environment, parse_environment,
+    GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE, NAMESPACE_ENV_VAR, NO_SESSION_PERSISTENCE_ENV_VAR,
+    SESSION_ACTIVE_ENV_VAR, SESSION_GATEWAY_ENV_VAR, active_environment, default_environment,
+    parse_environment,
 };
 pub use runtime::{RuntimeConfig, init, session_persistence_enabled};

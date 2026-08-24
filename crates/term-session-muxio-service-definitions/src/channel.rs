@@ -207,7 +207,9 @@ fn resolve_gateway_namespace() -> String {
 /// Whether `s` is a valid single channel segment: non-empty and composed
 /// only of ASCII alphanumerics, hyphens, and underscores.
 fn is_valid_segment(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// One-line `--help` footer describing the resolved gateway. Shared by both
@@ -416,8 +418,7 @@ mod tests {
             }
             let gw = gateway_channel_name();
             assert_eq!(
-                gw.namespace,
-                GATEWAY_NAMESPACE,
+                gw.namespace, GATEWAY_NAMESPACE,
                 "bogus={bogus:?} must fall back to the default namespace"
             );
         }
@@ -434,8 +435,7 @@ mod tests {
             std::env::remove_var(NAMESPACE_ENV_VAR);
         }
         assert!(
-            gateway_help_line()
-                .starts_with(&format!("Persistence gateway: {GATEWAY_NAMESPACE}/"))
+            gateway_help_line().starts_with(&format!("Persistence gateway: {GATEWAY_NAMESPACE}/"))
         );
     }
 

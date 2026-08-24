@@ -337,7 +337,8 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // The active environment comes from the single source of truth; the
         // `--env` CLI override is installed before any app construction.
         let bottom_panel = {
-            let mut panel = WmBottomPanelComponent::new(&app_name, &app_version, hostname.as_deref());
+            let mut panel =
+                WmBottomPanelComponent::new(&app_name, &app_version, hostname.as_deref());
             panel.set_environment(&term_wm_config::env::active_environment().to_string());
             panel
         };
@@ -434,8 +435,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         };
 
         let bottom_panel = {
-            let mut panel =
-                WmBottomPanelComponent::new(&app_name, &app_version, hostname);
+            let mut panel = WmBottomPanelComponent::new(&app_name, &app_version, hostname);
             panel.set_environment(&term_wm_config::env::active_environment().to_string());
             panel
         };

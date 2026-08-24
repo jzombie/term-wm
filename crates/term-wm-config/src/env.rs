@@ -196,16 +196,14 @@ mod tests {
     #[test]
     #[serial(env)]
     fn repository_dev_isolation_is_enforced() {
-        let namespace =
-            std::env::var(NAMESPACE_ENV_VAR).expect(DEV_ISOLATION_REGRESSION_MSG);
+        let namespace = std::env::var(NAMESPACE_ENV_VAR).expect(DEV_ISOLATION_REGRESSION_MSG);
         assert_eq!(namespace, "term-wm-dev", "{DEV_ISOLATION_REGRESSION_MSG}");
     }
 
     /// Substrings that indicate personal/local overrides crept into the
     /// committed toolchain-policy config. Matched against non-comment lines
     /// only, so explanatory prose in comments can never trip the wire.
-    const FORBIDDEN_LOCAL_OVERRIDE_MARKERS: [&str; 4] =
-        ["[patch", "[target", "[build", "paths ="];
+    const FORBIDDEN_LOCAL_OVERRIDE_MARKERS: [&str; 4] = ["[patch", "[target", "[build", "paths ="];
 
     /// Guards the committed `.cargo/config.toml` against accidental
     /// personal overrides (`[patch.crates-io]` forks, `[target]` rustflags,
