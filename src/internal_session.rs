@@ -62,10 +62,15 @@ const NEW_WORKSPACE_NAME_PREFIX: &str = "ws-";
 pub fn spawn_attributed_input_listener(
     pty_wakeup_tx: Sender<UnifiedEvent>,
     workspace: &str,
+    host_socket: &str,
 ) -> io::Result<tokio::sync::mpsc::Sender<(u32, u32)>> {
     let tx = pty_wakeup_tx.clone();
     let channel = term_session::ChannelName::session(workspace).to_string();
-    let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
+    // Pin to the HOST gateway exactly: this process runs as a session child
+    // of the daemon that owns `host_socket`, and its environment may have
+    // been scrubbed (namespace policy), so re-resolving here could land on a
+    // different endpoint than the one streaming our PTY. Never auto-spawn.
+    let socket_path = host_socket.to_string();
     // Queue the WM's live counts flow through; drained by a task inside
     // the listener below that reports over the subscribed connection.
     let (stats_tx, mut stats_rx) =
@@ -273,7 +278,7 @@ pub fn run_outer_launcher(cli: &Cli, initial_workspace: String) -> io::Result<()
         let channel = term_session::ChannelName::session(&current_workspace).to_string();
         let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
 
-        let inner_cmd = build_inner_command(current_exe, &current_workspace, cli);
+        let inner_cmd = build_inner_command(current_exe, &current_workspace, cli, &socket_path);
 
         match term_session::client::run_session(
             &socket_path,

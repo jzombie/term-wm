@@ -294,25 +294,38 @@ fn windows_spawn_detached_server(bin: &std::path::Path, gateway: &str) -> io::Re
     }))
 }
 
-/// Wait for the gateway to become reachable, spawning a detached daemon if
-/// none is running.
+/// Attach to the persistence gateway, spawning a daemon if none is running.
 ///
-/// A spawned daemon is pinned to exactly this client's resolved endpoint via
-/// `--gateway <name>`, so parent and child can never disagree on the socket
-/// (CLI-only overrides like `--env` do not survive the spawn, and heuristic
-/// inputs such as `CARGO_MANIFEST_DIR` may differ between the two).
+/// Deterministic three-step contract (no locks, no sidecar files):
+/// 1. Probe/connect to the resolved endpoint; success => use it.
+/// 2. Unreachable: best-effort unlink of any dead socket artifact, spawn
+///    `<current_exe> --daemon --gateway <endpoint>` detached, then poll
+///    connect for up to 3 seconds. If the spawned daemon dies early,
+///    re-probe once in case a racer won the bind, else fail fast.
+/// 3. Server side: a bind collision exits the daemon immediately with
+///    status 1 (muxio binds with `try_overwrite`, so only a LIVE competing
+///    daemon can cause this).
 ///
-/// Returns the gateway channel name string, which the caller passes to the
-/// muxio IPC client. `bin` defaults to the current executable so tests can
-/// point it at `CARGO_BIN_EXE_term-session`.
+/// The spawned daemon is pinned via `--gateway <name>` so parent and child
+/// always agree on the socket. Returns the endpoint string for the muxio
+/// client. `bin` defaults to the current executable so tests can point it
+/// at `CARGO_BIN_EXE_term-session`.
 pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<String> {
     let gateway = resolve_gateway();
     let socket_name = gateway.to_string();
 
+    // Step 1: someone is already serving this endpoint.
     if probe_ipc_endpoint(&gateway) {
         return Ok(socket_name);
     }
 
+    // Step 2a: clear any dead-socket artifact left by a killed daemon.
+    // Best-effort by design: abstract namespaces and platform layout
+    // differences make a miss harmless (the server binds with
+    // try_overwrite regardless).
+    let _ = std::fs::remove_file(std::env::temp_dir().join(socket_name.as_str()));
+
+    // Step 2b: spawn the daemon pinned to exactly this endpoint.
     let bin = bin
         .map(|b| b.to_path_buf())
         .unwrap_or_else(|| std::env::current_exe().expect("current exe path"));

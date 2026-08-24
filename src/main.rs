@@ -153,9 +153,19 @@ fn run() -> io::Result<()> {
     #[cfg(feature = "session-persistence")]
     let inner_session_stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>> =
         if cli.internal_session && term_wm_config::runtime::session_persistence_enabled() {
+            // The host gateway arrives via --gateway from the outer launcher
+            // (already installed into the process-local override cell above);
+            // internal sessions must NEVER re-resolve or auto-spawn, or they
+            // split their input channel onto a foreign daemon.
+            let host_socket = cli.gateway.as_deref().ok_or_else(|| {
+                io::Error::other(
+                    "--internal-session requires --gateway <host socket> (set by the outer launcher)",
+                )
+            })?;
             Some(term_wm::internal_session::spawn_attributed_input_listener(
                 pty_wakeup_tx.clone(),
                 &workspace,
+                host_socket,
             )?)
         } else {
             None

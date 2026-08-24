@@ -132,14 +132,20 @@ pub fn total_windows(count: Option<usize>, commands: &[String]) -> usize {
 }
 
 /// Serializes the outer launcher's CLI state into an inner process command.
-/// Injects the headless `--internal-session` flag and the target workspace.
+/// Injects the headless `--internal-session` flag, the target workspace, and
+/// pins the inner session to the HOST gateway (`--gateway <socket>`) so its
+/// attributed-input listener and every gateway call land on the daemon that
+/// actually owns its PTY (its own environment may have namespace policy
+/// scrubbed by the daemon).
 #[cfg(any(feature = "session-persistence", test))]
-pub fn build_inner_command(exe: String, workspace: &str, cli: &Cli) -> Vec<String> {
+pub fn build_inner_command(exe: String, workspace: &str, cli: &Cli, socket: &str) -> Vec<String> {
     let mut inner_cmd = vec![
         exe,
         "--internal-session".to_string(),
         "-w".to_string(),
         workspace.to_string(),
+        "--gateway".to_string(),
+        socket.to_string(),
     ];
     if let Some(count) = cli.count {
         inner_cmd.push("-n".to_string());
@@ -400,7 +406,7 @@ mod tests {
     #[test]
     fn build_inner_command_basic() {
         let cli = Cli::parse_from(["term-wm"]);
-        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli, "test/gateway");
         assert_eq!(cmd, vec!["exe", "--internal-session", "-w", "dev"]);
     }
 
@@ -408,7 +414,7 @@ mod tests {
     #[test]
     fn build_inner_command_with_count_and_scrollback() {
         let cli = Cli::parse_from(["term-wm", "-n", "4", "--scrollback", "5000"]);
-        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli, "test/gateway");
         assert_eq!(
             cmd,
             vec![
@@ -428,7 +434,7 @@ mod tests {
     #[test]
     fn build_inner_command_with_runs_and_positionals() {
         let cli = Cli::parse_from(["term-wm", "-r", "htop", "--", "vim", "file.txt"]);
-        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli, "test/gateway");
         assert_eq!(
             cmd,
             vec![
