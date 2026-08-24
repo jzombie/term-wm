@@ -9,10 +9,16 @@ use term_session_muxio_service_definitions::{
     Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway,
 };
 use term_session_server::run_gateway;
+use term_test_support::unique_gateway_name;
 
 pub const TEST_COLS: u16 = 80;
 pub const TEST_ROWS: u16 = 24;
 pub const LONG_SLEEP_MS: u64 = 60000;
+/// Generous deadline for "child produced expected output" round-trips.
+/// Polling exits the moment the condition holds, so a large deadline is free
+/// on success and only failure paths pay it; a tight deadline instead turns
+/// CI-runner load spikes into flakes (issue #309).
+pub const LIVENESS_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn test_channel(name: &str) -> ChannelName {
     ChannelName::parse(name).expect("test channel")
@@ -42,6 +48,7 @@ pub fn test_channel(name: &str) -> ChannelName {
 pub struct GatewayGuard {
     client: Arc<RpcIpcClient>,
     socket: String,
+    shut_down: bool,
 }
 
 impl GatewayGuard {
@@ -57,26 +64,53 @@ impl GatewayGuard {
 
     /// Shut down the gateway, killing all child processes and dropping
     /// `ServerState`. Must be called before the test ends.
-    pub async fn shutdown(self) {
+    pub async fn shutdown(mut self) {
         shutdown_gateway(&self.client).await;
+        self.shut_down = true;
+    }
+}
+
+impl Drop for GatewayGuard {
+    fn drop(&mut self) {
+        // Panic-safety diagnostic: `shutdown().await` is the only reliable
+        // teardown (see the block comment above), so reaching this Drop means
+        // the test ended without calling it, typically via an assertion
+        // failure. The leaked in-process gateway task dies with the test
+        // binary, but its mock child processes can linger until then. Print a
+        // loud marker so CI logs pinpoint the offending test instead of the
+        // leak staying invisible.
+        if !self.shut_down {
+            eprintln!(
+                "WARNING: GatewayGuard dropped without shutdown(); gateway '{}' \
+                 may hold mock child processes until the test process exits",
+                self.socket
+            );
+        }
     }
 }
 
 /// Spawn one shared gateway daemon for the current test, using a unique
-/// gateway name so parallel tests never collide. Returns a [`GatewayGuard`]
-/// that MUST be shut down via `.shutdown().await` before the test ends.
+/// gateway name so parallel tests never collide. The name embeds the process
+/// id (via [`unique_gateway_name`]), so concurrent test binaries and leftover
+/// daemons from crashed prior runs cannot claim the same endpoint. Returns a
+/// [`GatewayGuard`] that MUST be shut down via `.shutdown().await` before the
+/// test ends.
 pub async fn spawn_gateway() -> GatewayGuard {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let gateway = ChannelName::parse(&format!("term-wm/testgw-{id}")).expect("unique gateway");
+    let gateway = ChannelName::parse(&unique_gateway_name("testgw")).expect("unique gateway");
     tokio::spawn({
         let gateway = gateway.clone();
         async move { run_gateway(gateway).await }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // No fixed startup delay here: `connect_client_with_retry` polls the
+    // socket on a deadline, which is the actual readiness signal we care
+    // about; sleeping first would only pad every test's runtime.
     let socket = gateway.to_string();
     let client = connect_client_with_retry(&socket).await;
-    GatewayGuard { client, socket }
+    GatewayGuard {
+        client,
+        socket,
+        shut_down: false,
+    }
 }
 
 pub fn get_bench_bin() -> PathBuf {

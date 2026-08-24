@@ -170,6 +170,7 @@ In builds without session persistence there is nothing to detach from or stop: *
 | `TERM_SESSION_CHANNEL` | Session channel override (read by `term-session`). | `default/main` |
 | `TERM_WM_NO_SESSION_PERSISTENCE` | Disables session-persistence behavior at runtime (same as `--no-session-persistence`). | unset (persistence enabled) |
 | `TERM_WM_TRACE_ESC` | Dumps raw PTY→emulator bytes to a file (debugging aid). | off |
+| `TERM_WM_LOG_FILE` | Durable log destination: tracing events append to this file. In `term-wm`, events mirror the in-app Debug Log stream; in `term-session --daemon` (whose stdout/stderr are detached), this is the only way to keep diagnostics. Honors `RUST_LOG`. | unset (Debug Log window / stdout) |
 
 ## The "No-Conflict" Philosophy (`Ctrl+A` Super Key)
 
