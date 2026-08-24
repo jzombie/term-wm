@@ -18,7 +18,7 @@ use term_wm_core::debug_log::set_global_debug_log;
 use term_wm_core::engine::CoreEngine;
 use term_wm_core::events::{Event, KeyEvent};
 use term_wm_core::io::{EventSource, RenderTarget};
-use term_wm_core::project_tasks::{self, ProjectTaskConfig};
+use term_wm_core::project_tasks::{self, ProjectTaskConfig, TaskVarContext};
 use term_wm_core::runner::{WindowManagerHost, run_with_defaults};
 use term_wm_core::window::{ClosePolicy, WindowKey, WindowManager, WindowState};
 use term_wm_core::wm_config::WmConfig;
@@ -34,6 +34,34 @@ const PALETTE_TICK_INTERVAL: Duration = Duration::from_secs(5);
 #[cfg(feature = "session-persistence")]
 const PALETTE_IPC_INTERVAL: Duration = Duration::from_secs(30);
 const USER_REGISTRY_DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// Strict bound on gateway IPC round trips used on UI paths (#298): building
+/// the stop-daemon dialog and refreshing the stats cache. An unresponsive
+/// daemon socket must never hang the UI thread.
+#[cfg(feature = "session-persistence")]
+const GATEWAY_COUNT_TIMEOUT_MS: u64 = 200;
+#[cfg(feature = "session-persistence")]
+const GATEWAY_COUNT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(GATEWAY_COUNT_TIMEOUT_MS);
+/// Dialog strings for the stop-gateway confirmation (#298).
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_TITLE: &str = "Stop Gateway Daemon";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_WARNING: &str =
+    "Stopping the gateway daemon will terminate every workspace session.";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_CANCEL_LABEL: &str = "Cancel";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_CONFIRM_LABEL: &str = "Stop Gateway Daemon";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_STOP_CHANNEL_LABEL: &str = "Channel";
+#[cfg(feature = "session-persistence")]
+const GATEWAY_COUNT_UNAVAILABLE: &str = "unavailable";
+/// Per-workspace live WM totals (windows, running tasks) keyed by workspace
+/// name. Re-exported shape from the palette renderer so app cache and renderer
+/// stay type-identical.
+#[cfg(feature = "session-persistence")]
+type WorkspaceTotals = term_wm_core::window::WorkspaceTotals;
 use term_wm_ui_components::TerminalComponent;
 use term_wm_ui_components::confirm_overlay::ConfirmOverlayComponent;
 use term_wm_ui_components::default_shell_command;
@@ -66,6 +94,11 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::ToggleWorkspaceFollow,
 ];
 
+/// Boxed hook invoked by `handle_custom_action` for actions `TermWmApp`
+/// itself does not own (e.g. the bundled binary's session/gateway IPC).
+/// Returning `true` marks the action consumed.
+pub type CustomActionHandler<C> = Box<dyn FnMut(&TermWmAction, &mut TermWmApp<C>) -> bool>;
+
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
 /// Generic parameter `C` allows injecting custom root-level components
@@ -79,6 +112,7 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// | Standalone app with system chrome + default keybindings | `TermWmApp::<C>::new_custom(ctx)`        |
 /// | Standalone app with a custom `WmConfig` (e.g. keybindings) | `TermWmApp::<C>::new_with_config(ctx, config)` |
 /// | Standalone app with custom config AND a custom command-palette allow-list | `TermWmApp::<C>::new_with_actions(ctx, config, actions)` |
+/// | Bundled-binary chrome: panels + FAB, FULL palette action set | `TermWmApp::<C>::new_full_chrome(&ctx, config, tx)` |
 /// | Full control over an already-built `WindowManager`   | `TermWmApp::from_wm(wm, tx)`              |
 ///
 /// `new_custom()` is defined on the generic block and works for any
@@ -123,25 +157,32 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// }
 /// ```
 /// Patch one user's terminal size across every workspace bucket of an
-/// `all_users_by_ws` map. Returns `true` when at least one entry changed.
+/// `all_users_by_ws` map. Returns `(present, changed)`: whether any entry
+/// with `conn_id` exists at all, and whether at least one entry actually
+/// changed dimensions. The `present` flag lets callers distinguish a cache
+/// miss (needs reconciliation) from a same-size no-op (#306).
 #[cfg(feature = "session-persistence")]
 fn patch_users_by_ws(
     map: &mut std::collections::BTreeMap<String, Vec<term_wm_core::user_registry::UserEntry>>,
     conn_id: usize,
     cols: u16,
     rows: u16,
-) -> bool {
+) -> (bool, bool) {
+    let mut present = false;
     let mut changed = false;
     for users in map.values_mut() {
         for u in users.iter_mut() {
-            if u.conn_id == conn_id && (u.cols != cols || u.rows != rows) {
-                u.cols = cols;
-                u.rows = rows;
-                changed = true;
+            if u.conn_id == conn_id {
+                present = true;
+                if u.cols != cols || u.rows != rows {
+                    u.cols = cols;
+                    u.rows = rows;
+                    changed = true;
+                }
             }
         }
     }
-    changed
+    (present, changed)
 }
 
 pub struct TermWmApp<C = NoopComponent>
@@ -189,6 +230,24 @@ where
     #[cfg(feature = "session-persistence")]
     palette_ipc_ticker: term_wm_core::utils::PeriodicTicker,
     user_registry_debouncer: term_wm_core::utils::Debouncer,
+    /// Per-workspace live WM totals (windows, running tasks) from the gateway.
+    /// Populated alongside the workspace cache; empty means unknown.
+    #[cfg(feature = "session-persistence")]
+    cached_wm_totals: WorkspaceTotals,
+    /// Sender into the ordered stats-reporter task running on the inner
+    /// session's subscribed IPC connection (`main.rs` wires this up). Reports
+    /// MUST use that connection: it is the one registered as the channel's
+    /// internal WM, which the gateway requires before accepting stats.
+    #[cfg(feature = "session-persistence")]
+    stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>>,
+    /// Last snapshot successfully enqueued for reporting; dedup key so idle
+    /// mutations do not spam the gateway.
+    #[cfg(feature = "session-persistence")]
+    last_published_stats: Option<(u32, u32)>,
+    /// Optional embedder hook for custom actions, installed via
+    /// [`Self::set_custom_action_handler`]. Invoked after built-in handling
+    /// (`RunProjectTask`) in `handle_custom_action`.
+    custom_action_handler: Option<CustomActionHandler<C>>,
 }
 
 /// Opaque launch context handed to [`TermWmApp::run_with_setup`].
@@ -275,17 +334,22 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             WmTopPanelComponent,
         };
 
+        // The active environment comes from the single source of truth; the
+        // `--env` CLI override is installed before any app construction.
+        let bottom_panel = {
+            let mut panel =
+                WmBottomPanelComponent::new(&app_name, &app_version, hostname.as_deref());
+            panel.set_environment(&term_wm_config::env::active_environment().to_string());
+            panel
+        };
+
         let wm = AppBuilder::<LayerComponent>::new()
             .config(config)
             .app_ctx(Arc::new(app_ctx))
             .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
                 &app_name,
             )))
-            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
-                &app_name,
-                &app_version,
-                hostname.as_deref(),
-            )))
+            .bottom_panel(LayerComponent::BottomPanel(bottom_panel))
             .fab(LayerComponent::Fab(WmFabComponent::new()))
             .supported_menu_actions(actions)
             .build()
@@ -334,6 +398,13 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                 PALETTE_IPC_INTERVAL,
             ),
             user_registry_debouncer: term_wm_core::utils::Debouncer::new(USER_REGISTRY_DEBOUNCE),
+            #[cfg(feature = "session-persistence")]
+            cached_wm_totals: std::collections::BTreeMap::new(),
+            #[cfg(feature = "session-persistence")]
+            stats_tx: None,
+            #[cfg(feature = "session-persistence")]
+            last_published_stats: None,
+            custom_action_handler: None,
         };
         // Every TermWmApp flows through here — the standalone constructors
         // (new_custom / new_with_config / new_with_actions) and the bundled
@@ -343,6 +414,63 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         app.init_system_windows();
         app.refresh_project_tasks();
         app
+    }
+
+    /// Build the app the way the bundled `term-wm` binary runs it: full system
+    /// chrome (top panel, bottom panel, FAB) and NO explicit menu-action
+    /// allow-list, so the full default action set is available. Unlike
+    /// `new_with_actions`, no notification area is installed and the caller
+    /// supplies the live PTY wakeup channel.
+    pub fn new_full_chrome(
+        app_ctx: &Arc<AppContext>,
+        config: WmConfig,
+        pty_wakeup_tx: Sender<UnifiedEvent>,
+    ) -> Self {
+        let hostname = app_ctx.hostname.as_deref();
+        let app_name = app_ctx.app_name.clone();
+        let app_version = app_ctx.app_version.clone();
+
+        use term_wm_sys_ui_components::{
+            WmBottomPanelComponent, WmFabComponent, WmTopPanelComponent,
+        };
+
+        let bottom_panel = {
+            let mut panel = WmBottomPanelComponent::new(&app_name, &app_version, hostname);
+            panel.set_environment(&term_wm_config::env::active_environment().to_string());
+            panel
+        };
+
+        let wm = AppBuilder::<LayerComponent>::new()
+            .config(config)
+            .app_ctx(Arc::clone(app_ctx))
+            .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
+                &app_name,
+            )))
+            .bottom_panel(LayerComponent::BottomPanel(bottom_panel))
+            .fab(LayerComponent::Fab(WmFabComponent::new()))
+            .build()
+            .expect("standalone build");
+
+        Self::from_wm(wm, pty_wakeup_tx)
+    }
+
+    /// One window per command (shell + the command as input), then default
+    /// shells to fill `num_windows`. `commands` is owned and consumed here.
+    pub fn open_initial_windows(&mut self, commands: Vec<String>, num_windows: usize) {
+        let mut used = 0;
+        for cmd in commands {
+            let cb = default_shell_command();
+            let count = self.wm.window_count() + 1;
+            if let Err(e) = self.spawn_terminal_window(cb, Some(cmd), format!("Shell {}", count)) {
+                tracing::error!("Window spawn error: {}", e);
+            }
+            used += 1;
+        }
+        for _ in used..num_windows {
+            if let Err(e) = self.wm_new_terminal() {
+                tracing::error!("Window spawn error: {}", e);
+            }
+        }
     }
 
     /// Refresh the cached workspace channel list and all workspace users from the daemon via short-lived IPC.
@@ -394,7 +522,120 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                 tracing::debug!("Failed to refresh workspace/user cache: {e}");
             }
         }
+        // Per-workspace WM totals ride the same refresh cadence. A failure or
+        // timeout CLEARS the cache: unknown beats stale.
+        match term_session::list_wm_stats_bounded(GATEWAY_COUNT_TIMEOUT) {
+            Ok(entries) => {
+                let mut totals: WorkspaceTotals = std::collections::BTreeMap::new();
+                for entry in entries {
+                    let ws = term_session::ChannelName::parse_workspace(&entry.channel).to_string();
+                    let slot = totals.entry(ws).or_insert((0, 0));
+                    slot.0 = slot.0.saturating_add(entry.windows);
+                    slot.1 = slot.1.saturating_add(entry.tasks_running);
+                }
+                self.cached_wm_totals = totals;
+            }
+            Err(e) => {
+                if self.cached_wm_totals.is_empty() {
+                    tracing::debug!("WM stats unavailable: {e}");
+                } else {
+                    tracing::debug!("WM stats unavailable, clearing cache: {e}");
+                    self.cached_wm_totals.clear();
+                }
+            }
+        }
     }
+
+    /// Totals across ALL workspaces: windows and still-running project tasks.
+    ///
+    /// The gateway's aggregated per-workspace entries are authoritative (they
+    /// include other connected instances); local numbers are injected ONLY
+    /// when the gateway has no entry for our workspace (first report still in
+    /// flight, offline mode). Always returns `Some` — the fallback path keeps
+    /// the dialog meaningful even without a reachable daemon.
+    #[cfg(feature = "session-persistence")]
+    pub fn total_windows_and_tasks_across_workspaces(&self) -> (u32, u32) {
+        if self.cached_wm_totals.is_empty() {
+            return (
+                self.wm.user_window_count() as u32,
+                self.live_project_task_count() as u32,
+            );
+        }
+        let mut totals = self
+            .cached_wm_totals
+            .values()
+            .fold((0u32, 0u32), |acc, &(w, t)| {
+                (acc.0.saturating_add(w), acc.1.saturating_add(t))
+            });
+        if !self.cached_wm_totals.contains_key(&self.current_workspace) {
+            totals.0 = totals.0.saturating_add(self.wm.user_window_count() as u32);
+            totals.1 = totals
+                .1
+                .saturating_add(self.live_project_task_count() as u32);
+        }
+        totals
+    }
+
+    /// Live (not yet ended) project task count in THIS instance.
+    ///
+    /// `project_task_windows.len()` over-counts: ended task windows stay open
+    /// for inspection until closed.
+    pub fn live_project_task_count(&self) -> usize {
+        self.project_task_windows
+            .keys()
+            .filter(|k| !self.exited_task_windows.contains(k))
+            .count()
+    }
+
+    /// Wire the ordered stats-report queue. Called by the bundled binary's
+    /// inner-session setup after the internal-WM connection is subscribed.
+    #[cfg(feature = "session-persistence")]
+    pub fn set_stats_reporter(&mut self, tx: tokio::sync::mpsc::Sender<(u32, u32)>) {
+        self.stats_tx = Some(tx);
+    }
+
+    /// Install an embedder hook for actions this app does not natively
+    /// handle (the bundled binary routes session/gateway IPC through it).
+    /// The hook runs after built-in handling (`RunProjectTask`) and its
+    /// return value decides whether the action was consumed.
+    pub fn set_custom_action_handler(&mut self, handler: CustomActionHandler<C>) {
+        self.custom_action_handler = Some(handler);
+    }
+
+    /// Publish the current `(windows, live tasks)` snapshot if it differs
+    /// from the last successfully enqueued one. `try_send` never blocks the
+    /// UI thread; a saturated queue drops the sample and the dedup marker is
+    /// NOT advanced, so the next count change retries.
+    #[cfg(feature = "session-persistence")]
+    pub fn publish_wm_stats(&mut self) {
+        let Some(tx) = &self.stats_tx else {
+            return;
+        };
+        let snap = (
+            self.wm.user_window_count() as u32,
+            self.live_project_task_count() as u32,
+        );
+        if self.last_published_stats == Some(snap) {
+            return;
+        }
+        match tx.try_send(snap) {
+            Ok(()) => {
+                // Mark as published only on a successful enqueue; a dropped
+                // sample must be retried by the next count change.
+                self.last_published_stats = Some(snap);
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                tracing::debug!("wm stats queue full; will retry on next change");
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("wm stats reporter gone; dropping stats update");
+            }
+        }
+    }
+
+    /// No-op counterpart so mutation paths can publish unconditionally.
+    #[cfg(not(feature = "session-persistence"))]
+    pub fn publish_wm_stats(&mut self) {}
 
     /// Return the cached workspace channel names.
     #[cfg(feature = "session-persistence")]
@@ -402,10 +643,21 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         &self.cached_workspaces
     }
 
+    /// Borrow the current workspace name.
+    #[cfg(feature = "session-persistence")]
+    pub fn current_workspace(&self) -> &str {
+        &self.current_workspace
+    }
+
     /// Set the current workspace name.
+    ///
+    /// Also refreshes the WM-side mirror immediately so per-frame consumers
+    /// (e.g. dynamic Menu/FAB branding, #284) see the switch without waiting
+    /// for the next palette rebuild.
     #[cfg(feature = "session-persistence")]
     pub fn set_current_workspace(&mut self, name: String) {
         self.current_workspace = name;
+        self.wm.current_workspace = self.current_workspace.clone();
     }
 
     /// Refresh the cached user registry via `ListUsers`.
@@ -481,6 +733,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             }
         }
         self.wm.set_window_title(key, title.into());
+        self.publish_wm_stats();
         Ok(key)
     }
 
@@ -578,6 +831,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         self.project_task_windows.remove(&key);
         self.exited_task_windows.remove(&key);
         self.wm.close_window(key);
+        self.publish_wm_stats();
     }
 
     /// Spawn a project task in a new terminal window.
@@ -589,33 +843,48 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         self.wm()
             .set_window_title_lock(key, task.label.clone(), true);
         self.project_task_windows.insert(key, task.label.clone());
+        // spawn_terminal_window already published; the new task entry changes
+        // the running-task count, so republish with the updated snapshot.
+        self.publish_wm_stats();
         Ok(key)
     }
 
+    /// Run a discovered project task in a new window. Returns whether the
+    /// action was handled (task found), regardless of spawn success.
+    ///
+    /// Project tasks must work regardless of the session-persistence toggle;
+    /// `handle_custom_action` matches them before anything else.
+    pub fn run_project_task(&mut self, label: &str) -> bool {
+        let Some(task) = self.project_task(label).cloned() else {
+            tracing::warn!("Project task not found: {label}");
+            return false;
+        };
+        match self.spawn_project_task(&task) {
+            Ok(_key) => true,
+            Err(e) => {
+                tracing::error!("Failed to spawn project task '{label}': {e}");
+                true
+            }
+        }
+    }
+
     /// Build a `CommandBuilder` for a project task, resolving cwd and env.
+    ///
+    /// Delegates resolution (argv tokenization + `{wm.pid}` substitution +
+    /// cwd/env mapping) to the shared [`project_tasks::resolve_task`] so the
+    /// CLI task runner and the UI spawner stay behaviorally identical.
     fn command_builder_for_task(
         &self,
         task: &ProjectTaskConfig,
     ) -> Option<portable_pty::CommandBuilder> {
-        let argv = task.argv()?;
-        let mut cmd = portable_pty::CommandBuilder::new(&argv[0]);
-        if argv.len() > 1 {
-            cmd.args(&argv[1..]);
-        }
         let base = self.project_root.as_deref().unwrap_or(&self.launch_cwd);
-        let cwd = match task.cwd.as_deref() {
-            Some(c) => {
-                let p = std::path::Path::new(c);
-                if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    base.join(p)
-                }
-            }
-            None => base.to_path_buf(),
-        };
-        cmd.cwd(cwd);
-        for (k, v) in &task.env {
+        let resolved = project_tasks::resolve_task(task, base, &TaskVarContext::default())?;
+        let mut cmd = portable_pty::CommandBuilder::new(&resolved.argv[0]);
+        if resolved.argv.len() > 1 {
+            cmd.args(&resolved.argv[1..]);
+        }
+        cmd.cwd(resolved.cwd);
+        for (k, v) in &resolved.env {
             cmd.env(k, v);
         }
         Some(cmd)
@@ -627,6 +896,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         if self.wm().window_state(key).is_none() {
             self.project_task_windows.remove(&key);
             self.exited_task_windows.remove(&key);
+            self.publish_wm_stats();
             return;
         }
         if !self.project_task_windows.contains_key(&key) {
@@ -681,6 +951,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         }
 
         tracing::info!(?key, %label, "project task window kept open after exit");
+        // The task is no longer running: republish so gateway totals stay
+        // accurate (the window itself remains open).
+        self.publish_wm_stats();
     }
 
     /// Initialize standard system windows (debug log + system panel).
@@ -914,24 +1187,44 @@ impl<C: Component<TermWmAction> + 'static>
     }
 
     fn on_user_resized(&mut self, conn_id: usize, cols: u16, rows: u16) -> bool {
-        // Filter no-op sizes and unknown conn ids — never arm redraws for them.
-        if !self.wm.user_registry.update_size(conn_id, cols, rows) {
-            return false;
-        }
+        // Distinguish "conn not present" from "same-size no-op": dropping a
+        // miss outright permanently silences real-time updates for that
+        // client (#306). A miss must reconcile through the full IPC refresh.
+        let registry_known = self.wm.user_registry.get_by_conn_id(conn_id).is_some();
+        let registry_changed = if registry_known {
+            self.wm.user_registry.update_size(conn_id, cols, rows)
+        } else {
+            false
+        };
         // Patch the palette's data source in BOTH copies so a rebuilt item
         // cache shows the new size without waiting for an IPC round-trip.
         #[cfg(feature = "session-persistence")]
-        let patched_visible = patch_users_by_ws(&mut self.all_users_by_ws, conn_id, cols, rows)
-            && patch_users_by_ws(&mut self.wm.all_users_by_ws, conn_id, cols, rows);
+        let (app_hit, app_changed) =
+            patch_users_by_ws(&mut self.all_users_by_ws, conn_id, cols, rows);
+        #[cfg(feature = "session-persistence")]
+        let (wm_hit, wm_changed) =
+            patch_users_by_ws(&mut self.wm.all_users_by_ws, conn_id, cols, rows);
         #[cfg(not(feature = "session-persistence"))]
-        let patched_visible = true;
-        if !self.wm.command_menu_visible() || !patched_visible {
-            return false;
+        let (app_hit, app_changed) = (true, false);
+        #[cfg(not(feature = "session-persistence"))]
+        let (wm_hit, wm_changed) = (true, false);
+
+        let fully_known = registry_known && app_hit && wm_hit;
+        if fully_known {
+            let any_changed = registry_changed || app_changed || wm_changed;
+            if !any_changed || !self.wm.command_menu_visible() {
+                return false;
+            }
+            // Rebuild the overlay's cached display items now; the runner's
+            // redraw latch paints them on this same iteration.
+            self.wm.refresh_palette_items();
+            return true;
         }
-        // Rebuild the overlay's cached display items now; the runner's
-        // redraw latch paints them on this same iteration.
-        self.wm.refresh_palette_items();
-        true
+        // Cache miss: request reconciliation only while the palette is
+        // visible. Size labels render solely inside the palette overlay, so
+        // a closed palette must not wake the frame pacer; it heals on open
+        // via `open_command_palette` -> `refresh_workspace_cache`.
+        self.wm.command_menu_visible()
     }
 
     fn poll_palette_tick(&mut self) -> bool {
@@ -953,6 +1246,7 @@ impl<C: Component<TermWmAction> + 'static>
                 self.wm.cached_workspaces = self.cached_workspaces.clone();
                 self.wm.current_workspace = self.current_workspace.clone();
                 self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+                self.wm.cached_workspace_totals = self.cached_wm_totals.clone();
             }
             self.wm.refresh_palette_items();
             mutated = true;
@@ -972,6 +1266,7 @@ impl<C: Component<TermWmAction> + 'static>
                 self.wm.cached_workspaces = self.cached_workspaces.clone();
                 self.wm.current_workspace = self.current_workspace.clone();
                 self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+                self.wm.cached_workspace_totals = self.cached_wm_totals.clone();
             }
         }
         if need_tick || need_ipc {
@@ -1004,8 +1299,42 @@ impl<C: Component<TermWmAction> + 'static>
         TermWmApp::close_window(self, key);
     }
 
+    fn handle_custom_action(&mut self, action: &TermWmAction) -> bool {
+        // Project tasks must work regardless of the session-persistence toggle;
+        // match them before any embedder hook runs.
+        if let TermWmAction::RunProjectTask(label) = action {
+            return self.run_project_task(label);
+        }
+        // Temporarily take the hook so the closure can borrow `self` (its
+        // arms may touch WM state, notifications, and workspace caches).
+        let Some(mut handler) = self.custom_action_handler.take() else {
+            return false;
+        };
+        let handled = handler(action, self);
+        self.custom_action_handler = Some(handler);
+        handled
+    }
+
+    fn set_window_selection_enabled(&mut self, enabled: bool) {
+        // Immediate fan-out over every window's component. This is
+        // deliberately NOT `WindowManager::set_window_selection_enabled`
+        // (a deferred flag consumed later); the bundled binary has always
+        // applied selection state synchronously.
+        for key in self.wm.all_window_keys() {
+            if let Some(comp) = self.wm.component_for_key_mut(key) {
+                comp.set_selection_enabled(enabled);
+            }
+        }
+    }
+
     fn open_command_palette(&mut self) {
         use term_wm_core::components::MenuDisplayItem;
+
+        // Refresh workspace/user cache BEFORE building items so entries
+        // reflect live daemon state; no-ops when persistence is disabled
+        // at runtime.
+        #[cfg(feature = "session-persistence")]
+        self.refresh_workspace_cache();
 
         // Refresh project tasks and sync to WM cache BEFORE building items.
         self.refresh_project_tasks();
@@ -1020,6 +1349,7 @@ impl<C: Component<TermWmAction> + 'static>
             self.wm.cached_workspaces = self.cached_workspaces.clone();
             self.wm.current_workspace = self.current_workspace.clone();
             self.wm.all_users_by_ws = self.all_users_by_ws.clone();
+            self.wm.cached_workspace_totals = self.cached_wm_totals.clone();
         }
 
         #[cfg(feature = "session-persistence")]
@@ -1033,12 +1363,14 @@ impl<C: Component<TermWmAction> + 'static>
             &self.current_workspace,
             &self.wm.project_tasks,
             &self.all_users_by_ws,
+            &self.cached_wm_totals,
         );
         #[cfg(not(feature = "session-persistence"))]
         let items = self.wm.wm_menu_items(
             workspaces,
             "",
             &self.wm.project_tasks,
+            &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
         );
         let supported = self.wm.supported_menu_actions();
@@ -1085,7 +1417,8 @@ impl<C: Component<TermWmAction> + 'static>
 
     fn open_help_overlay(&mut self) {
         let kb = self.wm.keybindings().clone();
-        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb);
+        let environment = term_wm_config::env::active_environment().to_string();
+        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb, &environment);
         h.show();
         h.set_selection_enabled(self.wm.clipboard_enabled());
         self.wm.open_help_overlay(OverlayComponent::Help(h));
@@ -1093,7 +1426,14 @@ impl<C: Component<TermWmAction> + 'static>
 
     fn open_exit_confirm(&mut self) {
         let mut confirm = ConfirmOverlayComponent::new();
-        let app_name = self.wm.app_ctx().app_name.clone();
+        // Use the DYNAMIC brand label (#284): workspace name when session
+        // persistence is active, else the launch-directory fallback. Static
+        // (embedder) contexts resolve to their explicit app name unchanged.
+        #[cfg(feature = "session-persistence")]
+        let hint: Option<&str> = Some(self.current_workspace.as_str());
+        #[cfg(not(feature = "session-persistence"))]
+        let hint: Option<&str> = None;
+        let app_name = self.wm.app_ctx().resolve_display_label(hint);
         confirm.set_labels(
             format!("[ Return to {app_name} ]"),
             format!("[ Exit {app_name} ]"),
@@ -1105,6 +1445,59 @@ impl<C: Component<TermWmAction> + 'static>
         self.wm
             .open_exit_confirm_overlay(OverlayComponent::ExitConfirm(confirm));
     }
+
+    /// Open the stop-gateway-daemon confirmation dialog (#298).
+    /// The body must state that every workspace session will be terminated,
+    /// name the resolved gateway IPC channel being targeted, and show live
+    /// totals ACROSS ALL WORKSPACES: active workspace sessions, total windows,
+    /// and still-running project tasks. Gateway reads use a strict timeout so
+    /// an unresponsive daemon socket can never hang the UI thread; on failure
+    /// counts render as "unavailable" and the dialog still opens.
+    #[cfg(feature = "session-persistence")]
+    fn open_stop_gateway_confirm(&mut self) {
+        let workspace_label = match term_session::list_channels_bounded(GATEWAY_COUNT_TIMEOUT) {
+            Ok(resp) => resp
+                .channels
+                .iter()
+                .filter(|ch| ch.session.as_ref().is_some_and(|s| !s.exited))
+                .count()
+                .to_string(),
+            Err(_) => GATEWAY_COUNT_UNAVAILABLE.to_string(),
+        };
+        // Totals across every workspace; falls back to local-only numbers
+        // when the gateway has no stats for us (see the helper).
+        let (windows, tasks) = self.total_windows_and_tasks_across_workspaces();
+        let channel = term_session::gateway_channel_name().to_string();
+        let body = stop_gateway_dialog_body(
+            &channel,
+            &workspace_label,
+            &windows.to_string(),
+            &tasks.to_string(),
+        );
+        let mut confirm = ConfirmOverlayComponent::new();
+        confirm.set_labels(
+            format!("[ {GATEWAY_STOP_CANCEL_LABEL} ]"),
+            format!("[ {GATEWAY_STOP_CONFIRM_LABEL} ]"),
+        );
+        confirm.open(GATEWAY_STOP_TITLE, &body);
+        self.wm
+            .open_stop_daemon_confirm_overlay(OverlayComponent::StopDaemonConfirm(confirm));
+    }
+}
+
+/// Build the stop-gateway confirmation body (#298): the termination warning,
+/// live totals across all workspaces, then the resolved gateway IPC channel
+/// being targeted. Pure so tests can pin the exact layout.
+#[cfg(feature = "session-persistence")]
+fn stop_gateway_dialog_body(
+    channel: &str,
+    workspace_label: &str,
+    windows: &str,
+    tasks: &str,
+) -> String {
+    format!(
+        "{GATEWAY_STOP_WARNING}\nActive workspaces: {workspace_label} · Total windows: {windows} · Running tasks: {tasks}\n{GATEWAY_STOP_CHANNEL_LABEL}: {channel}"
+    )
 }
 
 #[allow(clippy::unwrap_used)]
@@ -1113,6 +1506,24 @@ mod tests {
     use super::*;
     #[cfg(feature = "session-persistence")]
     use serial_test::serial;
+
+    /// The bundled binary's chrome contract, now owned by the library
+    /// constructor: full default palette action set, no restriction.
+    #[test]
+    fn full_chrome_build_gets_full_default_menu_actions() {
+        let (event_source, _event_owner) = UnifiedEventSource::new(true).expect("headless source");
+        let app_ctx = Arc::new(AppContext::new("term-wm", "0.0.0").with_hostname("test-host"));
+        let mut app = TermWmApp::<NoopComponent>::new_full_chrome(
+            &app_ctx,
+            WmConfig::default(),
+            event_source.pty_wakeup_tx(),
+        );
+        assert_eq!(
+            app.wm().supported_menu_actions(),
+            term_wm_core::constants::DEFAULT_SUPPORTED_MENU_ACTIONS,
+            "full-chrome builds must not restrict the command-palette actions to a subset"
+        );
+    }
 
     /// Every construction path must initialize the system windows (debug log,
     /// system panel) and leave them hidden (`Unmapped`).
@@ -1287,9 +1698,13 @@ mod tests {
     /// must return immediately without touching IPC, leaving the cache empty.
     /// The process-global runtime config is restored afterwards so parallel
     /// tests observing `session_persistence_enabled()` are unaffected.
+    ///
+    /// Shares the `process_global_state` serial group: this test writes the
+    /// same global the bundled binary's session-action tests read, and
+    /// distinct serial groups run concurrently.
     #[test]
     #[cfg(feature = "session-persistence")]
-    #[serial(runtime_config)]
+    #[serial(process_global_state)]
     fn refresh_workspace_cache_is_noop_when_runtime_disabled() {
         use term_wm_config::runtime::{RuntimeConfig, init, session_persistence_enabled};
         let prev = {
@@ -1409,14 +1824,16 @@ mod tests {
         );
     }
 
-    /// `on_user_resized` filters unknown conn ids and no-op sizes.
+    /// `on_user_resized` no-ops unchanged sizes, patches known entries in
+    /// place, and requests reconciliation for unknown conn ids only while
+    /// the palette is visible (#306).
     #[test]
-    fn on_user_resized_rejects_unknown_conn_id_and_noop() {
+    fn on_user_resized_noop_and_reconcile_semantics() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         app.wm()
             .user_registry
             .upsert(1, "alice".into(), "host".into(), None, None, 80, 24, 0, 0);
-        // Unknown conn id → false.
+        // Palette closed: unknown conn id → false, no redraw work requested.
         assert!(!app.on_user_resized(99, 120, 40));
         // Same-size no-op → false.
         assert!(!app.on_user_resized(1, 80, 24));
@@ -1427,6 +1844,10 @@ mod tests {
         assert_eq!(app.wm().user_registry.get_by_conn_id(1).unwrap().rows, 40);
         // Palette still closed — subsequent same-size event is a no-op again.
         assert!(!app.on_user_resized(1, 120, 40));
+        // Palette open: unknown conn id requests the debounced reconcile so a
+        // full IPC refresh registers it instead of dropping the event (#306).
+        app.open_command_palette();
+        assert!(app.on_user_resized(99, 200, 50));
     }
 
     /// `palette_tick_deadline` returns None when palette is not visible.
@@ -1651,6 +2072,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -1675,6 +2097,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -1699,6 +2122,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -1719,6 +2143,7 @@ mod tests {
             cwd: Some("subdir".into()),
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let cwd = cmd.get_cwd().expect("cwd must be set");
@@ -1742,6 +2167,7 @@ mod tests {
             cwd: None,
             env,
             environments: Vec::new(),
+            platforms: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         assert_eq!(
@@ -1761,6 +2187,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         assert!(
             app.command_builder_for_task(&task).is_none(),
@@ -1780,6 +2207,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let result = app.spawn_project_task(&task);
         assert!(result.is_err(), "must fail for empty command");
@@ -1800,6 +2228,7 @@ mod tests {
             cwd: None,
             env: Default::default(),
             environments: Vec::new(),
+            platforms: None,
         };
         let result = app.spawn_project_task(&task);
         assert!(result.is_err(), "must fail for malformed command");
@@ -1915,6 +2344,120 @@ mod tests {
             !app.wm().overlay_keys().is_empty(),
             "overlay must be present after open"
         );
+    }
+
+    /// Fetch the exit-confirm overlay's `(cancel, confirm)` labels, if open.
+    fn exit_confirm_labels(app: &mut TermWmApp<NoopComponent>) -> Option<(String, String)> {
+        use crate::window::window_manager::system_tags;
+        let key = app.wm().get_overlay::<system_tags::ExitConfirm>()?;
+        match app.wm().overlay_for_key_mut(key) {
+            Some(OverlayComponent::ExitConfirm(confirm)) => {
+                let (c, x) = confirm.labels();
+                Some((c.to_string(), x.to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    /// #284: the Exit UI dialog must use the DYNAMIC brand label (workspace
+    /// name when persistence is active), not the raw app name.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    fn open_exit_confirm_uses_dynamic_brand_label() {
+        let ctx = AppContext::new("term-wm", "0.1").with_dynamic_label(Some("proj".to_string()));
+        let mut app = TermWmApp::<NoopComponent>::new_custom(ctx);
+        app.set_current_workspace("dev".to_string());
+
+        app.open_exit_confirm();
+        let (cancel, confirm) = exit_confirm_labels(&mut app).expect("exit overlay open");
+        assert!(
+            cancel.contains("dev"),
+            "cancel label uses workspace: {cancel}"
+        );
+        assert!(
+            confirm.contains("dev"),
+            "confirm label uses workspace: {confirm}"
+        );
+        assert!(
+            !confirm.contains("term-wm"),
+            "raw app name must not leak into the dynamic label: {confirm}"
+        );
+    }
+
+    /// Static (embedder) contexts keep their explicit name in the exit dialog.
+    #[test]
+    fn open_exit_confirm_static_context_keeps_app_name() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("myapp", "1.0"));
+        app.open_exit_confirm();
+        let (cancel, confirm) = exit_confirm_labels(&mut app).expect("exit overlay open");
+        assert!(cancel.contains("myapp") && confirm.contains("myapp"));
+    }
+
+    /// #298: totals across workspaces = gateway cache sum, with local numbers
+    /// injected only when our own workspace has no cached entry.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    fn total_windows_and_tasks_across_workspaces_aggregates_and_falls_back() {
+        let ctx = AppContext::new("term-wm", "0.1");
+        let mut app = TermWmApp::<NoopComponent>::new_custom(ctx);
+        app.set_current_workspace("dev".to_string());
+
+        // Gateway has data for us and one other workspace: pure cache sum.
+        app.cached_wm_totals.insert("dev".to_string(), (3, 1));
+        app.cached_wm_totals.insert("prod".to_string(), (2, 0));
+        assert_eq!(
+            app.total_windows_and_tasks_across_workspaces(),
+            (5, 1),
+            "cache is authoritative when our workspace is present"
+        );
+
+        // Our workspace missing from the cache: local numbers are added on
+        // top of the remaining remote entries.
+        app.cached_wm_totals.remove("dev");
+        let local = (
+            app.wm().user_window_count() as u32,
+            app.live_project_task_count() as u32,
+        );
+        assert_eq!(
+            app.total_windows_and_tasks_across_workspaces(),
+            (2u32.saturating_add(local.0), 0u32.saturating_add(local.1)),
+            "local numbers fill in for the missing own-workspace entry"
+        );
+    }
+
+    /// #298 follow-up: the dialog body must name the resolved gateway IPC
+    /// channel between the warning and the live counts.
+    ///
+    /// Shares the `process_global_state` serial group: this test mutates
+    /// the process-local gateway override cell, the same process-global the
+    /// bundled binary's session-action tests pin, so the groups must not run
+    /// concurrently.
+    #[cfg(feature = "session-persistence")]
+    #[test]
+    #[serial(process_global_state)]
+    fn stop_gateway_dialog_body_names_resolved_channel() {
+        const TEST_GATEWAY: &str = "term-wm/channel-dialog-gw";
+        term_wm_config::env::set_gateway_override(Some(TEST_GATEWAY));
+        let channel = term_session::gateway_channel_name().to_string();
+        let body = stop_gateway_dialog_body(&channel, "2", "5", "1");
+        assert_eq!(channel, TEST_GATEWAY, "override must resolve wholesale");
+        let expected = format!("{GATEWAY_STOP_CHANNEL_LABEL}: {channel}");
+        assert!(
+            body.contains(&expected),
+            "body must name the channel: {body}"
+        );
+        assert!(
+            body.contains(GATEWAY_STOP_WARNING),
+            "warning line must stay present: {body}"
+        );
+        assert!(
+            body.contains("Active workspaces: 2")
+                && body.contains("Total windows: 5")
+                && body.contains("Running tasks: 1"),
+            "counts line must stay present: {body}"
+        );
+        // Restore so other tests see the default resolution.
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[test]

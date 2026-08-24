@@ -6,6 +6,8 @@ pub(crate) mod layer_manager;
 mod layout;
 mod overlays;
 
+pub use command_palette::WorkspaceTotals;
+
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -23,6 +25,10 @@ pub mod system_tags {
     pub struct CommandPalette;
     pub struct HelpOverlay;
     pub struct ExitConfirm;
+    /// Confirmation dialog for stopping the gateway daemon (#298). Kept
+    /// separate from [`ExitConfirm`] so the runner can route each dialog's
+    /// Confirm branch differently (quit vs. shutdown).
+    pub struct StopDaemonConfirm;
 }
 
 use crate::Rect;
@@ -437,6 +443,10 @@ pub struct WindowManager<
     pub project_tasks: Vec<crate::project_tasks::ProjectTaskConfig>,
     /// Cached connected users by workspace for palette rebuild on focus change.
     pub all_users_by_ws: std::collections::BTreeMap<String, Vec<crate::user_registry::UserEntry>>,
+    /// Cached per-workspace WM totals (windows, running tasks) for palette
+    /// rebuild on focus change (#298).
+    #[cfg(feature = "session-persistence")]
+    pub cached_workspace_totals: WorkspaceTotals,
     // Chrome metrics managers (pure synchronous pipelines, zero allocation).
     // resize_map/drag_map/split_ids removed — chrome routing now uses
     // ComponentOwner::Chrome(target) directly from HitboxRegistry.
@@ -958,6 +968,8 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             current_workspace: String::new(),
             project_tasks: Vec::new(),
             all_users_by_ws: std::collections::BTreeMap::new(),
+            #[cfg(feature = "session-persistence")]
+            cached_workspace_totals: std::collections::BTreeMap::new(),
         }
     }
 
@@ -1171,9 +1183,19 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
 
     /// Create a [`ComponentContext`] pre-populated with the application
     /// identity from this window manager's [`AppContext`].
+    ///
+    /// The branding label resolves per frame (#284): when dynamic branding is
+    /// active the current workspace (mirrored into `current_workspace`) feeds
+    /// the workspace → directory → app-name priority chain, so local
+    /// switches and daemon-pushed rebinds show up immediately.
     pub fn component_context(&self, focused: bool) -> ComponentContext {
+        #[cfg(feature = "session-persistence")]
+        let workspace_hint: Option<&str> = Some(self.current_workspace.as_str());
+        #[cfg(not(feature = "session-persistence"))]
+        let workspace_hint: Option<&str> = None;
         ComponentContext::new(focused)
             .with_app_context(Arc::clone(&self.app_ctx))
+            .with_workspace_hint(workspace_hint)
             .with_config(Arc::new(self.config.clone()))
     }
 
@@ -2429,6 +2451,23 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         self.windows.len()
     }
 
+    /// Return the number of user-created windows, excluding registered
+    /// system windows.
+    ///
+    /// System windows (Debug Log, System Panel) are auto-created at app
+    /// construction and stay hidden until toggled, so they are infrastructure
+    /// rather than user content. Counts like the stop-gateway dialog's
+    /// "Windows:" line (#298) must reflect what the user actually opened,
+    /// not this background inventory. Minimized (Iconic) windows still count:
+    /// their processes keep running and would be terminated with the session.
+    pub fn user_window_count(&self) -> usize {
+        let system_keys: Vec<WindowKey> = self.system_windows.values().copied().collect();
+        self.windows
+            .keys()
+            .filter(|k| !system_keys.contains(k))
+            .count()
+    }
+
     /// Return keys of all windows in `WindowState::Mapped`.
     pub fn mapped_windows(&self) -> Vec<WindowKey> {
         self.windows
@@ -2471,6 +2510,11 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
     pub fn open_exit_confirm_overlay(&mut self, overlay: O) {
         let key = self.overlays.insert(overlay);
         self.register_overlay::<system_tags::ExitConfirm>(key);
+    }
+
+    pub fn open_stop_daemon_confirm_overlay(&mut self, overlay: O) {
+        let key = self.overlays.insert(overlay);
+        self.register_overlay::<system_tags::StopDaemonConfirm>(key);
     }
 
     pub fn set_scroll_keyboard_enabled(&mut self, enabled: bool) {
@@ -6729,7 +6773,13 @@ mod tests {
         wm.set_window_title(key, "pinned");
         wm.set_closable(key, false);
 
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let close_entry = items.iter().find(|entry| match entry {
             MenuDisplayItem::Item(MenuItem { action, .. }) => {
                 matches!(action, TermWmAction::CloseWindow(k) if *k == key)
@@ -6807,7 +6857,13 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        let items = wm.wm_menu_items(&[], "", &[], &std::collections::BTreeMap::new());
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
         let clipboard_labels: Vec<String> = items
             .iter()
             .filter_map(|entry| match entry {
@@ -8903,12 +8959,66 @@ mod tests {
         )
     }
 
+    /// #284: the per-frame context's branding label must follow the WM's
+    /// current-workspace mirror — two consecutive frames with different
+    /// mirrors resolve different labels (no caching between renders).
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn component_context_app_name_follows_workspace_mirror_per_frame() {
+        let mut wm = WindowManager::<TestComponent>::with_config(
+            WmConfig::default(),
+            Arc::new(
+                AppContext::new("term-wm", "0.0.0").with_dynamic_label(Some("proj".to_string())),
+            ),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+
+        // Frame 1: workspace mirror points at "dev".
+        wm.current_workspace = "dev".to_string();
+        assert_eq!(wm.component_context(true).app_name(), "dev");
+
+        // Frame 2: mirror switched to "qa" → next context resolves fresh.
+        wm.current_workspace = "qa".to_string();
+        assert_eq!(wm.component_context(false).app_name(), "qa");
+
+        // Empty mirror falls back to the directory label.
+        wm.current_workspace = String::new();
+        assert_eq!(wm.component_context(true).app_name(), "proj");
+    }
+
     #[test]
     fn set_window_title_bogus_key_is_noop() {
         let mut wm = make_wm_for_titles();
         let bogus = WindowKey::default();
         wm.set_window_title(bogus, "x");
         assert!(wm.window(bogus).is_none());
+    }
+
+    /// #298: `user_window_count` must exclude registered system windows
+    /// (Debug Log, System Panel are auto-created and hidden at app startup),
+    /// while still counting minimized user windows.
+    #[test]
+    fn user_window_count_excludes_system_windows() {
+        use crate::window::window_manager::system_tags;
+
+        let mut wm = make_wm_for_titles();
+        let a = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let b = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        let sys = wm.create_window(TestComponent::Noop(crate::components::NoopComponent));
+        wm.register_system_window::<system_tags::DebugLog>(sys);
+        // Minimized windows keep their processes alive; they still count.
+        wm.transition_window(b, WindowState::Mapped);
+        wm.transition_window(b, WindowState::Iconic);
+
+        assert_eq!(wm.window_count(), 3, "raw count includes system windows");
+        assert_eq!(
+            wm.user_window_count(),
+            2,
+            "user count excludes the registered system window"
+        );
+        let _ = a;
     }
 
     #[test]

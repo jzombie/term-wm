@@ -23,6 +23,20 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             .contains_key(&TypeId::of::<system_tags::ExitConfirm>())
     }
 
+    pub fn stop_daemon_confirm_visible(&self) -> bool {
+        self.system_overlays
+            .contains_key(&TypeId::of::<system_tags::StopDaemonConfirm>())
+    }
+
+    pub fn close_stop_daemon_confirm(&mut self) {
+        if let Some(key) = self
+            .system_overlays
+            .remove(&TypeId::of::<system_tags::StopDaemonConfirm>())
+        {
+            self.overlays.remove(key);
+        }
+    }
+
     pub fn help_overlay_visible(&self) -> bool {
         self.system_overlays
             .contains_key(&TypeId::of::<system_tags::HelpOverlay>())
@@ -92,6 +106,15 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         }
         self.overlays
             .get_mut(self.get_overlay::<system_tags::ExitConfirm>()?)?
+            .handle_confirm_event(event)
+    }
+
+    pub fn handle_stop_daemon_confirm_event(&mut self, event: &Event) -> Option<ConfirmAction> {
+        if let Event::Mouse(mouse) = event {
+            self.hover = Some((mouse.column, mouse.row));
+        }
+        self.overlays
+            .get_mut(self.get_overlay::<system_tags::StopDaemonConfirm>()?)?
             .handle_confirm_event(event)
     }
 

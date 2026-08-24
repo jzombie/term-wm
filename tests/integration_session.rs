@@ -18,8 +18,8 @@ use common::mock::{
     EXPECTED_OSC52_PAYLOAD, find_osc52_payload, find_sgr_mouse_token, get_mock_bin, mock_pid_alive,
 };
 use common::session::{
-    TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin, list_channels,
-    spawn_gateway, spawn_session, test_channel, wait_for_output,
+    LONG_SLEEP_MS, TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin,
+    list_channels, spawn_gateway, spawn_session, test_channel, wait_for_output,
 };
 use term_clipboard::Osc52Extractor;
 
@@ -1937,9 +1937,233 @@ async fn rebind_workspace_to_unknown_source_sends_no_push() {
     guard.shutdown().await;
 }
 
+/// README "Leaving vs Ending vs Stopping" row 2, end-to-end: when a
+/// workspace's inner WM exits (both its connections drop: viewer + internal
+/// WM), its own session stream ends, the channel's wm-stats entry disappears,
+/// and every other workspace's session/stats are untouched.
+#[tokio::test]
+async fn exit_ui_row_inner_exit_ends_own_session_only() {
+    use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+    use term_session_muxio_service_definitions::{
+        KillChannel, ListWmStats, ReportWmStats, Spawn, SpawnRequest, SubscribeInternalInput,
+        SubscribeInternalInputRequest,
+    };
+
+    let guard = spawn_gateway().await;
+    let mock = get_mock_bin();
+
+    // Two workspaces, each with: attached viewer + sleeping PTY session +
+    // subscribed internal WM that reports live stats.
+    let ch_a = test_channel("test/exitrow-a");
+    let ch_b = test_channel("test/exitrow-b");
+
+    let mut viewers = Vec::new();
+    let mut wms = Vec::new();
+    for (channel, stats) in [(ch_a.clone(), (3u32, 2u32)), (ch_b.clone(), (1u32, 1u32))] {
+        let viewer = connect_client_with_retry(guard.socket()).await;
+        attach_client(&viewer, &channel).await;
+        Spawn::call(
+            &*viewer,
+            SpawnRequest {
+                cmd: Some(vec![
+                    mock.clone(),
+                    "sleep".into(),
+                    LONG_SLEEP_MS.to_string(),
+                ]),
+                cols: TEST_COLS,
+                rows: TEST_ROWS,
+                cwd: None,
+            },
+        )
+        .await
+        .expect("spawn session child");
+        let wm = connect_client_with_retry(guard.socket()).await;
+        SubscribeInternalInput::call(
+            &*wm,
+            SubscribeInternalInputRequest {
+                channel: channel.to_string(),
+            },
+        )
+        .await
+        .expect("subscribe internal input");
+        ReportWmStats::call(&*wm, stats)
+            .await
+            .expect("report stats");
+        viewers.push((channel.clone(), viewer));
+        wms.push((channel.clone(), wm));
+    }
+
+    // A output subscription BEFORE Exit UI: it must END when the workspace's
+    // process tree goes away.
+    let a_view = viewers.iter().find(|(c, _)| *c == ch_a).unwrap().1.clone();
+    let (_w_a, mut r_a) = a_view
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+
+    // Sanity: both channels listed with their own stats.
+    let resp = list_channels(guard.client()).await;
+    assert_eq!(resp.channels.len(), 2, "both workspaces present");
+    assert!(resp.channels.iter().all(|c| c.session.is_some()));
+    let stats = ListWmStats::call(&**guard.client(), ())
+        .await
+        .expect("stats");
+    assert_eq!(stats.stats.len(), 2);
+
+    // "Exit UI" on workspace A: the inner WM quits, dropping BOTH of its
+    // connections (viewer + internal WM).
+    viewers.retain(|(c, _)| *c != ch_a);
+    wms.retain(|(c, _)| *c != ch_a);
+
+    // Natural-exit mechanics (child exit -> stream end) are pinned by
+    // `session_child_exit`. Here we drive the same server-side teardown the
+    // system performs for a ended workspace so we can assert the
+    // cross-workspace isolation and per-workspace stats cleanup.
+    KillChannel::call(&**guard.client(), (ch_a.to_string(), true))
+        .await
+        .expect("terminate workspace A");
+
+    // 1. Workspace A's output stream ends.
+    let mut stream_ended = false;
+    for _ in 0..40 {
+        match tokio::time::timeout(Duration::from_millis(100), r_a.recv()).await {
+            Ok(None) | Err(_) => {
+                stream_ended = true;
+                break;
+            }
+            Ok(Some(_)) => continue,
+        }
+    }
+    assert!(
+        stream_ended,
+        "workspace A session stream must end after Exit UI"
+    );
+
+    // 2. A's channel is gone or sessionless; B keeps a live session.
+    let mut a_gone = false;
+    let mut b_alive = false;
+    for _ in 0..40 {
+        let resp = list_channels(guard.client()).await;
+        let a = resp.channels.iter().find(|c| c.name == ch_a.to_string());
+        let b = resp.channels.iter().find(|c| c.name == ch_b.to_string());
+        let a_dead = a.is_none() || a.unwrap().session.as_ref().is_none_or(|s| s.exited);
+        b_alive = b.is_some_and(|c| c.session.as_ref().is_some_and(|s| !s.exited));
+        if a_dead && b_alive {
+            a_gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        a_gone,
+        "workspace A session must terminate after its inner WM exits"
+    );
+    assert!(b_alive, "workspace B must be untouched");
+
+    // 3. Stats: A's entry disappears; B's survives with its exact numbers.
+    let mut stats_a_gone = false;
+    let mut stats_b_ok = false;
+    for _ in 0..40 {
+        let resp = ListWmStats::call(&**guard.client(), ())
+            .await
+            .expect("stats");
+        stats_a_gone = !resp.stats.iter().any(|s| s.channel == ch_a.to_string());
+        stats_b_ok = resp
+            .stats
+            .iter()
+            .any(|s| s.channel == ch_b.to_string() && (s.windows, s.tasks_running) == (1, 1));
+        if stats_a_gone && stats_b_ok {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(stats_a_gone, "A's stats entry must disappear");
+    assert!(stats_b_ok, "B's stats entry must survive intact");
+
+    guard.shutdown().await;
+}
+
+/// An inner WM reports its live counts over its SUBSCRIBED connection
+/// (`SubscribeInternalInput` first, then `ReportWmStats`); `ListWmStats`
+/// aggregates them per channel. The subscribing connection never attaches,
+/// mirroring production; a non-subscribed connection is rejected, and the
+/// entry disappears once the WM disconnects.
+#[tokio::test]
+async fn wm_stats_report_then_list_then_evict() {
+    use muxio_rpc_service_caller::prebuffered::RpcCallPrebuffered as _;
+    use term_session_muxio_service_definitions::{
+        ListWmStats, ReportWmStats, SubscribeInternalInput, SubscribeInternalInputRequest,
+    };
+
+    let channel = test_channel("test/wm-stats");
+    // Creates the channel/session plus one attached VIEWER connection.
+    let (_viewer, _conn_id, guard) = spawn_session(&channel).await;
+
+    // The inner WM connects and subscribes ONLY — production flow has no
+    // Attach on this connection, so it never appears in conn_to_channel.
+    let wm_client = connect_client_with_retry(guard.socket()).await;
+    let channel_for_sub = channel.to_string();
+    let wm_ref: &term_session::rpc_client::RpcIpcClient = &wm_client;
+    SubscribeInternalInput::call(
+        wm_ref,
+        SubscribeInternalInputRequest {
+            channel: channel_for_sub,
+        },
+    )
+    .await
+    .expect("subscribe internal input");
+
+    ReportWmStats::call(&*wm_client, (3u32, 2u32))
+        .await
+        .expect("report wm stats from subscribed wm");
+
+    let resp = ListWmStats::call(&*wm_client, ())
+        .await
+        .expect("list wm stats");
+    let mine = resp
+        .stats
+        .iter()
+        .find(|s| s.channel == channel.to_string())
+        .expect("reported channel must be listed");
+    assert_eq!((mine.windows, mine.tasks_running), (3, 2));
+
+    // A connection that did NOT subscribe as the internal WM is rejected.
+    let outsider = connect_client_with_retry(guard.socket()).await;
+    attach_client(&outsider, &channel).await;
+    assert!(
+        ReportWmStats::call(&*outsider, (9u32, 9u32)).await.is_err(),
+        "non-internal-wm connections must not be able to report stats"
+    );
+
+    // Once the subscribing WM disconnects, its entry disappears. Eviction is
+    // asynchronous, so poll briefly instead of sleeping a fixed interval.
+    drop(wm_client);
+    let mut gone = false;
+    for _ in 0..40 {
+        let resp = ListWmStats::call(&*outsider, ())
+            .await
+            .expect("list after evict");
+        if !resp.stats.iter().any(|s| s.channel == channel.to_string()) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        gone,
+        "evicted wm's entry must be removed after disconnect, got {:?}",
+        ListWmStats::call(&*outsider, ())
+            .await
+            .expect("final list")
+            .stats
+    );
+
+    guard.shutdown().await;
+}
+
 /// The term-wm launcher must exit immediately (no retry loop) when the nesting
 /// guard fires. Spawns `term-wm` inside an environment where
-/// `TERM_SESSION_GATEWAY` matches `TERM_WM_GATEWAY` (same-gateway inception),
+/// `TERM_SESSION_GATEWAY` matches the `--gateway` override (same-gateway inception),
 /// and asserts that the process exits non-zero with the FATAL diagnostic
 /// within a short timeout — proving the retry loop was never entered.
 #[test]
@@ -1964,10 +2188,9 @@ fn launcher_exits_immediately_on_nesting_fatal() {
         .create_sync()
         .expect("bind dummy gateway");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_term-wm"))
-        .env("TERM_WM_GATEWAY", gateway)
+    let child = Command::new(env!("CARGO_BIN_EXE_term-wm"))
         .env("TERM_SESSION_GATEWAY", gateway)
-        .args(["--workspace", "test-nesting"])
+        .args(["--gateway", gateway, "--workspace", "test-nesting"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -1975,21 +2198,20 @@ fn launcher_exits_immediately_on_nesting_fatal() {
         .expect("spawn term-wm");
 
     let start = Instant::now();
-    loop {
-        if start.elapsed() > Duration::from_secs(10) {
-            let _ = child.kill();
-            panic!(
-                "term-wm did not exit within 10s — likely retrying instead of exiting immediately"
-            );
-        }
-        if let Ok(Some(_)) = child.try_wait() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    // Drain the piped stderr on a worker thread so a chatty child can never
+    // block on a full OS pipe buffer while this thread only polls for exit.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let out = child.wait_with_output();
+        let _ = tx.send(out);
+    });
+    let out = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("term-wm did not exit within 10s — likely retrying instead of exiting immediately")
+        .expect("wait_with_output failed");
     let elapsed = start.elapsed();
+    drop(rx);
 
-    let out = child.wait_with_output().expect("wait");
     let stderr = String::from_utf8_lossy(&out.stderr);
 
     assert!(

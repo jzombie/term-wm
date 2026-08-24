@@ -6,7 +6,7 @@
 //! detachment proof via `--daemon-selfcheck`, daemon resilience to client
 //! disconnects and parent death, and clean teardown via `ShutdownGateway`.
 //!
-//! Each test uses a unique `TERM_WM_GATEWAY` so parallel runs never collide.
+//! Each test pins a unique `--gateway <name>` argv override so parallel runs never collide.
 
 use std::io;
 use std::path::PathBuf;
@@ -52,7 +52,7 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
         None
     };
     let mut cmd = Command::new(bin());
-    cmd.env("TERM_WM_GATEWAY", gateway).arg("--daemon");
+    cmd.arg("--gateway").arg(gateway).arg("--daemon");
     if let Some(ref m) = marker {
         cmd.arg("--daemon-selfcheck").arg(m);
     }
@@ -68,7 +68,8 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
 /// inherits the daemon's startup directory or the client's launch directory.
 fn spawn_daemon_in(gateway: &str, cwd: &std::path::Path) -> Child {
     let mut cmd = Command::new(bin());
-    cmd.env("TERM_WM_GATEWAY", gateway)
+    cmd.arg("--gateway")
+        .arg(gateway)
         .arg("--daemon")
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -199,7 +200,7 @@ async fn daemon_survives_parent_death() {
     // Spawn a client that auto-spawns the daemon, running a LONG-LIVED
     // session so its process survives the parent dying.
     let mut client = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--gateway", &gateway])
         .args(["--channel", channel, "--", &mock, "sleep", "60000"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -333,12 +334,9 @@ async fn daemon_does_not_inherit_parent_handles() {
     use term_session::auto_spawn::connect_or_spawn_server;
 
     let gateway = unique_gateway("no_inherit");
-    // `connect_or_spawn_server` resolves the gateway from `TERM_WM_GATEWAY` in
-    // this process's environment; point it at the unique per-test channel.
-    // `set_var` is `unsafe` under edition 2024.
-    unsafe {
-        std::env::set_var("TERM_WM_GATEWAY", &gateway);
-    }
+    // `connect_or_spawn_server` resolves through the process-local gateway
+    // override cell; point it at the unique per-test channel.
+    term_wm_config::env::set_gateway_override(Some(&gateway));
 
     #[cfg(windows)]
     let (read_end, write_end) = create_inheritable_pipe();
@@ -567,7 +565,7 @@ async fn cli_kill_client_detaches_one_client() {
 
     // Kill one client through the real CLI subcommand.
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--gateway", &gateway])
         .args(["kill-client", channel, &target.to_string()])
         .output()
         .expect("run kill-client");
@@ -597,10 +595,7 @@ async fn cli_kill_client_detaches_one_client() {
 #[test]
 fn bare_term_session_shows_help_and_does_not_connect() {
     let gateway = unique_gateway("bare");
-    let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
-        .output()
-        .expect("run bare term-session");
+    let out = Command::new(bin()).output().expect("run bare term-session");
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -636,7 +631,7 @@ async fn top_level_channel_auto_attaches() {
     // `term-session --channel <ch> -- <mock> sleep 60000` (no subcommand):
     // giving a channel must still auto-attach and auto-spawn the daemon.
     let mut client = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--gateway", &gateway])
         .args(["--channel", channel, "--", &mock, "sleep", "60000"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -678,7 +673,8 @@ async fn dash_dash_disambiguates_command_from_subcommand() {
     // `term-session list` (no `--`) parses `list` as the admin SUBCOMMAND: it
     // connects to a gateway and never auto-spawns one.
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("list")
         .output()
         .expect("run list");
@@ -695,7 +691,7 @@ async fn dash_dash_disambiguates_command_from_subcommand() {
     // `term-session -- list` (after `--`) parses `list` as a COMMAND to run:
     // the implicit attach path auto-spawns a gateway.
     let mut client = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--gateway", &gateway])
         .args(["--", "list"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -721,7 +717,8 @@ async fn unknown_flag_errors_without_spawning_gateway() {
         let gateway = unique_gateway("unknown_flag");
         let gw = ChannelName::parse(&gateway).expect("gateway name");
         let out = Command::new(bin())
-            .env("TERM_WM_GATEWAY", &gateway)
+            .arg("--gateway")
+            .arg(&gateway)
             .arg(flag)
             .output()
             .expect("run with unknown flag");
@@ -777,7 +774,8 @@ async fn cli_list_renders_client_identity() {
     .unwrap();
 
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("list")
         .output()
         .expect("run list");
@@ -830,7 +828,8 @@ async fn cli_stop_requires_force_when_live_sessions() {
 
     // `stop` without --force: refused, non-zero exit, daemon keeps running.
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("stop")
         .output()
         .expect("run stop");
@@ -851,7 +850,7 @@ async fn cli_stop_requires_force_when_live_sessions() {
 
     // `stop --force` succeeds and the daemon process exits on its own.
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--gateway", &gateway])
         .args(["stop", "--force"])
         .output()
         .expect("run stop --force");
@@ -889,7 +888,8 @@ async fn cli_kill_requires_force_when_participants() {
 
     // `kill` without --force: refused, non-zero exit, channel keeps running.
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("kill")
         .arg(channel)
         .output()
@@ -911,7 +911,7 @@ async fn cli_kill_requires_force_when_participants() {
 
     // `kill --force` succeeds.
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--gateway", &gateway])
         .args(["kill", channel, "--force"])
         .output()
         .expect("run kill --force");
@@ -991,7 +991,7 @@ fn connection_error_is_printed_to_stderr() {
     });
 
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
+        .args(["--gateway", &gateway])
         .args(["--channel", "test/silent-exit"])
         .output()
         .expect("run client");
@@ -1033,9 +1033,8 @@ fn attach_inside_nested_env_aborts_without_allow_nested() {
         .expect("bind dummy gateway");
 
     let out = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
         .env("TERM_SESSION_GATEWAY", &gateway)
-        .args(["--channel", "test/nested"])
+        .args(["--gateway", &gateway, "--channel", "test/nested"])
         .output()
         .expect("run client");
 
@@ -1066,9 +1065,10 @@ async fn attach_inside_nested_env_proceeds_with_allow_nested() {
     let rpc = wait_connectable(&gateway).await;
 
     let mut client = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &gateway)
         .env("TERM_SESSION_GATEWAY", &gateway)
         .args([
+            "--gateway",
+            &gateway,
             "--allow-nested",
             "--channel",
             channel,
@@ -1110,7 +1110,7 @@ async fn attach_inside_nested_env_proceeds_with_allow_nested() {
 /// A client inside a prod gateway session targeting a different (dev) gateway
 /// must be allowed to proceed — inception hazards only exist when the inner
 /// process targets the same gateway daemon. `TERM_SESSION_GATEWAY` is set to
-/// the prod gateway while `TERM_WM_GATEWAY` points to the dev gateway.
+/// the prod gateway while `--gateway` points to the dev gateway.
 /// The guard must NOT fire — the client should attempt to connect (and fail
 /// because no daemon is running, but that's an IPC error, not the nesting
 /// FATAL).
@@ -1134,9 +1134,13 @@ fn attach_cross_gateway_proceeds_without_allow_nested() {
         .expect("bind dummy target gateway");
 
     let mut child = Command::new(bin())
-        .env("TERM_WM_GATEWAY", &target_gateway)
         .env("TERM_SESSION_GATEWAY", &host_gateway)
-        .args(["--channel", "test/cross-gateway"])
+        .args([
+            "--gateway",
+            &target_gateway,
+            "--channel",
+            "test/cross-gateway",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -233,6 +233,23 @@ impl ConfirmOverlayComponent {
         self.confirm_label = confirm.into();
     }
 
+    /// The currently configured `(cancel, confirm)` labels (brackets
+    /// included), e.g. for assertions or diagnostics.
+    pub fn labels(&self) -> (&str, &str) {
+        (&self.cancel_label, &self.confirm_label)
+    }
+
+    /// The currently configured body text (set via [`Self::open`]), e.g. for
+    /// assertions on dynamically composed dialog content.
+    pub fn body_text(&self) -> &str {
+        &self.body
+    }
+
+    /// The currently configured dialog title, e.g. for assertions.
+    pub fn dialog_title(&self) -> &str {
+        self.dialog.title()
+    }
+
     pub fn close(&mut self) {
         self.dialog.set_visible(false);
         self.visible = false;

@@ -149,6 +149,10 @@ impl DialogOverlayComponent {
         self.visible = visible;
     }
 
+    pub fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = title.into();
     }

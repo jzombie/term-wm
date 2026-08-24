@@ -45,6 +45,18 @@ UI String Style
 - Full rules, the canonical action-name list, and stable terminology live in
   [docs/UI-STYLE.md](./docs/UI-STYLE.md).
 
+Prose Punctuation (No Em/En Dashes)
+- Do NOT use em dashes (`—`) or en dashes (`–`) as punctuation in prose:
+  documentation, changelog entries, commit messages, PR descriptions, code
+  comments, and user-facing copy. Heavy dash usage reads as machine-generated.
+- Restructure instead with commas, parentheses, colons, semicolons, or separate
+  sentences. Example: "shows live counts: workspaces, windows, and tasks" or
+  "shows live counts (workspaces, windows, tasks)" rather than "shows live
+  counts — workspaces, windows, tasks —".
+- This does not apply to hyphens that are part of content: CLI flags
+  (`--list-tasks`), compound modifiers (`1-based`, `case-insensitive`),
+  kebab-case identifiers, or spelled ranges ("pages 3-5").
+
 Component Trait Requirements
 - Every component must implement the shared `Component` trait (e.g., `resize`, `render`, `handle_event`) and import the trait with `use crate::components::Component;` when needed.
 
@@ -133,6 +145,27 @@ Magic Strings and Numbers
 Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
+
+Committed Toolchain Config
+- `.cargo/config.toml` is version-controlled POLICY, not a personal scratchpad:
+  it injects `TERM_WM_NAMESPACE=term-wm-dev` so every cargo-driven execution
+  resolves the isolated dev gateway (`term-wm-dev/<user>/gateway`) instead of
+  hijacking the installed system daemon (`term-wm/<user>/gateway`).
+- Do NOT add personal `[patch]` / `[target]` / `[build]` blocks (or stray
+  `paths =` keys) to it. Two unit tests in `crates/term-wm-config/src/env.rs`
+  fail on both mistakes: `repository_dev_isolation_is_enforced` (missing or
+  wrong injection) and `cargo_config_remains_pure_of_local_overrides`
+  (forbidden override markers).
+- Personal overrides belong in `~/.cargo/config.toml` (global) or an
+  ancestor-directory `.cargo/config.toml`; Cargo merges the whole hierarchy.
+  See `.cargo/config.toml.example` for the template.
+- Gateway env keys are single-source: `SESSION_GATEWAY_ENV_VAR`
+  (`TERM_SESSION_GATEWAY`, the daemon-stamped inception marker) is the ONLY
+  gateway env var in the entire repository. Explicit endpoint selection
+  uses the `--gateway <NAME>` CLI flag (process-local cell, never inherited
+  by session shells). No other gateway env key may exist anywhere; the one
+  previously used for wholesale overrides was deleted outright and must not
+  be reintroduced under any name.
 
 Declarative `view!` Macro
 - `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) is a

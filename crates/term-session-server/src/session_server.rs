@@ -12,13 +12,14 @@ use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 
 use term_session_muxio_service_definitions::{
     Attach, ChannelInfo, ChannelName, ClientInfo, CloseSession, KillChannel, KillClient,
-    ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, OnAttributedInput,
-    OnAttributedInputRequest, OnPtyResized, OnUserConnected, OnUserDisconnected, OnUserResized,
-    OnWorkspaceEntered, OnWorkspaceRebind, OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS,
-    RPC_ERROR_LIVE_SESSIONS, RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope,
-    RebindWorkspace, ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID,
-    SendAttributedInput, SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse,
-    SubscribeInternalInput, UserInfo, WriteInput,
+    ListChannels, ListChannelsResponse, ListUsers, ListUsersResponse, ListWmStats,
+    ListWmStatsResponse, OnAttributedInput, OnAttributedInputRequest, OnPtyResized,
+    OnUserConnected, OnUserDisconnected, OnUserResized, OnWorkspaceEntered, OnWorkspaceRebind,
+    OnWorkspaceRebindRequest, RPC_ERROR_LIVE_PARTICIPANTS, RPC_ERROR_LIVE_SESSIONS,
+    RPC_ERROR_SHUTTING_DOWN, RPC_ERROR_UNATTACHED, RebindScope, RebindWorkspace, ReportWmStats,
+    ResizePty, STREAM_INPUT_METHOD_ID, SUBSCRIBE_OUTPUT_METHOD_ID, SendAttributedInput,
+    SessionInfo, ShutdownGateway, Spawn, SpawnRequest, SpawnResponse, SubscribeInternalInput,
+    UserInfo, WmStatsEntry, WriteInput,
 };
 use term_wm_pty_engine::PtyStatus;
 
@@ -173,6 +174,11 @@ struct ChannelState {
     /// Whether a detached trailing-edge flush task is already scheduled for
     /// this channel; guards against spawning duplicate flush tasks.
     wm_resize_flush_scheduled: bool,
+    /// Latest live WM counts (windows, running tasks) reported per connected
+    /// reporter. Keyed by `conn_id` so multiple reporters on one channel
+    /// aggregate independently and a single disconnect only drops its own
+    /// contribution (`ListWmStats` sums the values).
+    wm_stats_by_conn: HashMap<usize, (u32, u32)>,
 }
 
 /// Gateway coordination. Two tiers:
@@ -183,6 +189,10 @@ struct ChannelState {
 struct ServerState {
     conns: RwLock<HashMap<usize, ConnEntry>>,
     channels: RwLock<HashMap<ChannelName, Arc<Mutex<ChannelState>>>>,
+    /// The socket name this daemon actually bound; the authoritative source
+    /// for the `TERM_SESSION_GATEWAY` inception marker stamped into PTY
+    /// children (never re-resolved from ambient state).
+    bound_socket: String,
     is_shutting_down: AtomicBool,
     /// Monotonic source of `ChannelState::created_seq` (creation order).
     next_channel_seq: AtomicU64,
@@ -204,6 +214,20 @@ fn rpc_err(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
     Box::new(std::io::Error::other(message.to_string()))
 }
 
+/// Sum one channel's per-conn WM stats; `None` when no reporter exists
+/// (unknown, not zero).
+fn sum_wm_stats(stats: &HashMap<usize, (u32, u32)>) -> Option<(u32, u32)> {
+    if stats.is_empty() {
+        return None;
+    }
+    let mut acc = (0u32, 0u32);
+    for &(w, t) in stats.values() {
+        acc.0 = acc.0.saturating_add(w);
+        acc.1 = acc.1.saturating_add(t);
+    }
+    Some(acc)
+}
+
 /// Lift an `io::Error` into the boxed handler error type.
 fn boxed_io(e: std::io::Error) -> Box<dyn std::error::Error + Send + Sync> {
     Box::new(e)
@@ -215,6 +239,47 @@ fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Insert or update one client's reported geometry, creating the entry from
+/// connection metadata (`seed`) when the connection has no entry yet. A
+/// newly created entry always counts as changed so the caller schedules WM
+/// notifications and PTY recalculation for first-time reporters (#306).
+/// Returns `true` when the stored geometry differs from the reported one;
+/// unchanged reports mutate nothing.
+fn upsert_client_geometry(
+    clients: &mut HashMap<usize, ClientEntry>,
+    conn_id: usize,
+    seed: Option<ClientEntry>,
+    cols: u16,
+    rows: u16,
+) -> bool {
+    match clients.get_mut(&conn_id) {
+        Some(client) => {
+            let changed = (client.cols, client.rows) != (cols, rows);
+            client.cols = cols;
+            client.rows = rows;
+            changed
+        }
+        None => {
+            clients.insert(
+                conn_id,
+                seed.unwrap_or_else(|| ClientEntry {
+                    caller: None,
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                    cols,
+                    rows,
+                }),
+            );
+            true
+        }
+    }
 }
 
 impl ChannelState {
@@ -241,6 +306,7 @@ impl ChannelState {
             internal_wm_conn_id: None,
             pending_wm_resizes: HashMap::new(),
             wm_resize_flush_scheduled: false,
+            wm_stats_by_conn: HashMap::new(),
         }
     }
 
@@ -690,6 +756,34 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
         })
     };
     let Some(channel) = channel else {
+        // Subscribe-only connection (an inner WM that never attached): its
+        // death must still release what it owned. Find the channel whose
+        // internal WM is THIS connection and clear its hooks + stats.
+        let channels = state.channels.read().await;
+        let mut owned: Option<ChannelName> = None;
+        for (name, ch) in channels.iter() {
+            let guard = ch.lock().await;
+            if guard.internal_wm_conn_id == Some(conn_id) {
+                owned = Some(name.clone());
+                break;
+            }
+        }
+        drop(channels);
+        if let Some(name) = owned
+            && let Some(ch) = resolve_channel(state, &name).await
+        {
+            let mut guard = ch.lock().await;
+            guard.wm_stats_by_conn.remove(&conn_id);
+            guard.internal_wm_caller = None;
+            guard.internal_wm_conn_id = None;
+            guard.input_mode = InputMode::RawPty;
+            drop(guard);
+            state
+                .internal_channels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&name.to_string());
+        }
         return;
     };
     let Some(ch) = resolve_channel(state, &channel).await else {
@@ -698,6 +792,9 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
     let mut guard = ch.lock().await;
     guard.clients.remove(&conn_id);
     guard.subscribers.retain(|s| s.conn_id != conn_id);
+    // Drop only THIS connection's WM-stats contribution; other reporters on
+    // the channel keep theirs (ListWmStats sums what remains).
+    guard.wm_stats_by_conn.remove(&conn_id);
     // If the disconnected client was the internal WM, revert to RawPty mode
     let is_internal = guard.internal_wm_conn_id == Some(conn_id);
     if is_internal {
@@ -891,6 +988,7 @@ pub async fn run_gateway(
 ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
     let socket_name = gateway.to_string();
     let state: SharedState = Arc::new(ServerState {
+        bound_socket: socket_name.clone(),
         conns: RwLock::new(HashMap::new()),
         channels: RwLock::new(HashMap::new()),
         is_shutting_down: AtomicBool::new(false),
@@ -1016,35 +1114,22 @@ pub async fn run_gateway(
                     conns.get(&ctx.conn_id).cloned()
                 };
                 let mut guard = ch.lock().await;
-                let entry = guard
-                    .clients
-                    .entry(ctx.conn_id)
-                    .or_insert_with(|| ClientEntry {
-                        caller: conn_meta.as_ref().map(|c| c.handle.clone()),
-                        hostname: conn_meta
-                            .as_ref()
-                            .map(|c| c.hostname.clone())
-                            .unwrap_or_default(),
-                        connected_at_unix: conn_meta
-                            .as_ref()
-                            .map(|c| c.connected_at_unix)
-                            .unwrap_or(0),
-                        pid: conn_meta.as_ref().map(|c| c.pid).unwrap_or(0),
-                        user: conn_meta
-                            .as_ref()
-                            .map(|c| c.user.clone())
-                            .unwrap_or_default(),
-                        version: conn_meta
-                            .as_ref()
-                            .map(|c| c.version.clone())
-                            .unwrap_or_default(),
-                        ssh_ip: conn_meta.as_ref().and_then(|c| c.ssh_ip.clone()),
-                        ssh_port: conn_meta.as_ref().and_then(|c| c.ssh_port),
-                        cols,
-                        rows,
-                    });
-                entry.cols = cols;
-                entry.rows = rows;
+                // Register/update this client's geometry, creating the entry
+                // from connection metadata when absent.
+                let seed = conn_meta.as_ref().map(|meta| ClientEntry {
+                    caller: Some(meta.handle.clone()),
+                    hostname: meta.hostname.clone(),
+                    connected_at_unix: meta.connected_at_unix,
+                    pid: meta.pid,
+                    user: meta.user.clone(),
+                    version: meta.version.clone(),
+                    ssh_ip: meta.ssh_ip.clone(),
+                    ssh_port: meta.ssh_port,
+                    cols,
+                    rows,
+                });
+                let _size_changed =
+                    upsert_client_geometry(&mut guard.clients, ctx.conn_id, seed, cols, rows);
 
                 // Prepare user-connected notification (sole-user suppressed)
                 let pending_user_connected = if guard.clients.len() > 1 {
@@ -1119,6 +1204,7 @@ pub async fn run_gateway(
                     rows,
                     Some(&channel),
                     effective_cwd.as_ref(),
+                    &state.bound_socket,
                 )?;
                 guard.set_session(session);
                 guard.recalculate_pty_size();
@@ -1163,20 +1249,31 @@ pub async fn run_gateway(
                 let Some(channel) = channel else {
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
+                // Fetch the connection's metadata before locking the channel
+                // (never hold two locks). A conn without an entry yet gets one
+                // on demand so late resize reporters are never ignored (#306).
+                let conn_meta = {
+                    let conns = state.conns.read().await;
+                    conns.get(&ctx.conn_id).cloned()
+                };
                 let ch = resolve_channel(state.as_ref(), &channel)
                     .await
                     .ok_or_else(|| rpc_err("channel not found"))?;
                 let mut guard = ch.lock().await;
-                let size_changed = match guard.clients.get(&ctx.conn_id) {
-                    // Skip entirely when the reported geometry is unchanged —
-                    // no state mutation, no WM notification.
-                    Some(client) => (client.cols, client.rows) != (cols, rows),
-                    None => false,
-                };
-                if let Some(client) = guard.clients.get_mut(&ctx.conn_id) {
-                    client.cols = cols;
-                    client.rows = rows;
-                }
+                let seed = conn_meta.map(|meta| ClientEntry {
+                    caller: Some(meta.handle.clone()),
+                    hostname: meta.hostname,
+                    connected_at_unix: meta.connected_at_unix,
+                    pid: meta.pid,
+                    user: meta.user,
+                    version: meta.version,
+                    ssh_ip: meta.ssh_ip,
+                    ssh_port: meta.ssh_port,
+                    cols,
+                    rows,
+                });
+                let size_changed =
+                    upsert_client_geometry(&mut guard.clients, ctx.conn_id, seed, cols, rows);
                 if size_changed {
                     // Coalesce WM notifications: store the latest size and
                     // schedule the trailing-edge flush task once per window.
@@ -1473,6 +1570,81 @@ pub async fn run_gateway(
         })
         .await
         .map_err(|e| format!("register ListUsers: {e:?}"))?;
+
+    // ── ReportWmStats (inner WM -> server) ───────────────────────────
+    // Only the connection that subscribed as this channel's internal WM may
+    // report. Ownership is resolved via `internal_wm_conn_id` (recorded by
+    // SubscribeInternalInput) — NOT `conn_to_channel`, which only tracks
+    // attached viewers and never contains a subscribe-only WM connection.
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ReportWmStats::METHOD_ID, move |payload, ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let (windows, tasks_running) =
+                    ReportWmStats::decode_request(&payload).map_err(boxed_io)?;
+                let conn_id = ctx.conn_id;
+                // Find the channel whose internal WM is THIS connection.
+                let channels = state.channels.read().await;
+                let mut owned: Option<ChannelName> = None;
+                for (name, ch) in channels.iter() {
+                    let guard = ch.lock().await;
+                    if guard.internal_wm_conn_id == Some(conn_id) {
+                        owned = Some(name.clone());
+                        break;
+                    }
+                }
+                drop(channels);
+                let Some(name) = owned else {
+                    return Err(rpc_err(RPC_ERROR_UNATTACHED));
+                };
+                if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
+                    let mut guard = ch.lock().await;
+                    debug_assert_eq!(guard.internal_wm_conn_id, Some(conn_id));
+                    guard
+                        .wm_stats_by_conn
+                        .insert(conn_id, (windows, tasks_running));
+                    ReportWmStats::encode_response(()).map_err(boxed_io)
+                } else {
+                    Err(rpc_err("report_wm_stats: channel vanished"))
+                }
+            }
+        })
+        .await
+        .map_err(|e| format!("register ReportWmStats: {e:?}"))?;
+
+    // ── ListWmStats ──────────────────────────────────────────────────
+    // One entry per channel with at least one reporter; windows/tasks are
+    // summed across all reporting connections on the channel.
+    let st = Arc::clone(&state);
+    endpoint
+        .register_prebuffered(ListWmStats::METHOD_ID, move |_payload, _ctx| {
+            let state = Arc::clone(&st);
+            async move {
+                let channels = {
+                    let chans = state.channels.read().await;
+                    chans
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect::<Vec<_>>()
+                };
+                let mut stats: Vec<WmStatsEntry> = Vec::with_capacity(channels.len());
+                for (name, ch) in channels {
+                    let guard = ch.lock().await;
+                    if let Some((windows, tasks_running)) = sum_wm_stats(&guard.wm_stats_by_conn) {
+                        stats.push(WmStatsEntry {
+                            channel: name.to_string(),
+                            windows,
+                            tasks_running,
+                        });
+                    }
+                }
+                stats.sort_by(|a, b| a.channel.cmp(&b.channel));
+                ListWmStats::encode_response(ListWmStatsResponse { stats }).map_err(boxed_io)
+            }
+        })
+        .await
+        .map_err(|e| format!("register ListWmStats: {e:?}"))?;
 
     // ── KillChannel ──────────────────────────────────────────────────
     let st = Arc::clone(&state);
@@ -1890,6 +2062,7 @@ mod tests {
         let mut conns = HashMap::new();
         conns.insert(1, conn);
         Arc::new(ServerState {
+            bound_socket: String::from("test/bound/gateway"),
             conns: RwLock::new(conns),
             channels: RwLock::new(channels),
             is_shutting_down: AtomicBool::new(false),
@@ -2024,6 +2197,58 @@ mod tests {
         assert!(guard.internal_wm_caller.is_none());
     }
 
+    /// A subscribe-only internal WM (never attached) that disconnects must
+    /// release its own channel's hooks and stats — the unattached early-return
+    /// path previously skipped all cleanup.
+    #[tokio::test]
+    async fn evict_conn_cleans_unattached_internal_wm_channel() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse channel");
+        {
+            let ch = state
+                .channels
+                .read()
+                .await
+                .get(&name)
+                .expect("channel exists")
+                .clone();
+            let mut guard = ch.lock().await;
+            guard.internal_wm_conn_id = Some(42);
+            guard.input_mode = InputMode::AttributedIpc { wm_conn_id: 42 };
+            guard.wm_stats_by_conn.insert(42, (3, 2));
+        }
+        state
+            .internal_channels
+            .lock()
+            .unwrap()
+            .insert("test/coalesce".to_string());
+
+        // No ConnEntry exists for conn 42: it subscribed without attaching.
+        evict_conn(&state, 42).await;
+
+        let ch = state
+            .channels
+            .read()
+            .await
+            .get(&name)
+            .expect("channel exists")
+            .clone();
+        let guard = ch.lock().await;
+        assert!(guard.wm_stats_by_conn.is_empty(), "stats released");
+        assert_eq!(guard.internal_wm_conn_id, None);
+        assert!(guard.internal_wm_caller.is_none());
+        assert_eq!(guard.input_mode, InputMode::RawPty);
+        assert!(
+            !state
+                .internal_channels
+                .lock()
+                .unwrap()
+                .contains("test/coalesce"),
+            "internal_channels must lose the channel"
+        );
+    }
+
     #[test]
     fn channel_state_defaults_to_raw_pty_mode() {
         let (input_tx, _input_rx) = mpsc::channel(128);
@@ -2031,6 +2256,87 @@ mod tests {
         assert_eq!(channel.input_mode, InputMode::RawPty);
         assert_eq!(channel.internal_wm_conn_id, None);
         assert!(channel.internal_wm_caller.is_none());
+        assert!(
+            channel.wm_stats_by_conn.is_empty(),
+            "no WM stats are reported until a connection reports them"
+        );
+    }
+
+    // ── WmStats (per-conn reporting + aggregation) ────────────────────
+
+    #[test]
+    fn sum_wm_stats_sums_across_reporters_and_none_when_absent() {
+        use super::sum_wm_stats;
+        assert!(sum_wm_stats(&HashMap::new()).is_none());
+        let stats = HashMap::from([(1usize, (3u32, 1u32)), (2usize, (4u32, 0u32))]);
+        assert_eq!(sum_wm_stats(&stats), Some((7, 1)));
+    }
+
+    #[tokio::test]
+    async fn evict_conn_drops_only_that_conns_wm_stats() {
+        // Two reporters on the same channel; evicting one must keep the
+        // other's contribution intact.
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let state = state_with_input(input_tx);
+        let name = ChannelName::parse("test/coalesce").expect("parse channel");
+        for conn_id in [7usize, 9usize] {
+            state.conns.write().await.insert(
+                conn_id,
+                ConnEntry {
+                    handle: RpcIpcConnectionContextHandle(Arc::new(RpcIpcConnectionContext {
+                        write_tx: mpsc::unbounded_channel().0,
+                        conn_id,
+                        is_connected: Arc::new(AtomicBool::new(true)),
+                        dispatcher: Arc::new(Mutex::new(RpcDispatcher::new())),
+                    })),
+                    state: ConnState::Attached(name.clone()),
+                    hostname: String::new(),
+                    connected_at_unix: 0,
+                    pid: 0,
+                    user: String::new(),
+                    version: String::new(),
+                    ssh_ip: None,
+                    ssh_port: None,
+                },
+            );
+            state
+                .conn_to_channel
+                .lock()
+                .unwrap()
+                .insert(conn_id, "test/coalesce".to_string());
+        }
+        {
+            let ch = state
+                .channels
+                .read()
+                .await
+                .get(&name)
+                .expect("channel exists")
+                .clone();
+            let mut guard = ch.lock().await;
+            guard.wm_stats_by_conn.insert(7, (2, 1));
+            guard.wm_stats_by_conn.insert(9, (5, 0));
+        }
+
+        evict_conn(&state, 7).await;
+
+        let ch = state
+            .channels
+            .read()
+            .await
+            .get(&name)
+            .expect("channel exists")
+            .clone();
+        let guard = ch.lock().await;
+        assert_eq!(
+            guard.wm_stats_by_conn.get(&9),
+            Some(&(5, 0)),
+            "the surviving reporter's stats must remain"
+        );
+        assert!(
+            !guard.wm_stats_by_conn.contains_key(&7),
+            "only the evicted connection's stats are removed"
+        );
     }
 
     // ── Batch 1: retain_final_output ─────────────────────────────────
@@ -2095,6 +2401,58 @@ mod tests {
         assert_eq!(info.clients.len(), 3);
         let ids: Vec<_> = info.clients.iter().map(|c| c.conn_id).collect();
         assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    // ── upsert_client_geometry (#306) ────────────────────────────────
+
+    #[test]
+    fn upsert_client_geometry_creates_missing_entry_and_reports_changed() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        // Seed metadata must land on the on-demand entry so late resize
+        // reporters show up fully identified in ListChannels/ListUsers.
+        let seed = Some(ClientEntry {
+            caller: None,
+            hostname: "late-host".to_string(),
+            connected_at_unix: 42,
+            pid: 4242,
+            user: "alice".to_string(),
+            version: "1.0.0".to_string(),
+            ssh_ip: None,
+            ssh_port: None,
+            cols: 100,
+            rows: 30,
+        });
+        assert!(
+            upsert_client_geometry(&mut ch.clients, 7, seed, 100, 30),
+            "a newly created entry always counts as changed"
+        );
+        let entry = ch.clients.get(&7).expect("entry created on demand");
+        assert_eq!((entry.cols, entry.rows), (100, 30));
+        assert_eq!(entry.hostname, "late-host");
+        assert_eq!(entry.pid, 4242);
+    }
+
+    #[test]
+    fn upsert_client_geometry_updates_existing_entry_and_reports_changed() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert!(upsert_client_geometry(&mut ch.clients, 3, None, 80, 24));
+        // A different reported size patches in place and reports the change.
+        assert!(upsert_client_geometry(&mut ch.clients, 3, None, 120, 40));
+        let entry = ch.clients.get(&3).expect("entry stays present");
+        assert_eq!((entry.cols, entry.rows), (120, 40));
+    }
+
+    #[test]
+    fn upsert_client_geometry_same_size_reports_unchanged() {
+        let (input_tx, _input_rx) = mpsc::channel(128);
+        let mut ch = ChannelState::new(Vec::new(), input_tx, Arc::new(Notify::new()), 1);
+        assert!(upsert_client_geometry(&mut ch.clients, 5, None, 80, 24));
+        // Re-reporting identical geometry mutates nothing and reports false,
+        // so no WM notification or PTY recalculation is scheduled.
+        assert!(!upsert_client_geometry(&mut ch.clients, 5, None, 80, 24));
+        assert_eq!(ch.clients.len(), 1);
     }
 
     // ── Batch 3: evict_conn ──────────────────────────────────────────

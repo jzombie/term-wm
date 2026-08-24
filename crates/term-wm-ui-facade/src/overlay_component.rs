@@ -8,16 +8,19 @@ pub enum OverlayComponent {
     Help(WmHelpOverlayComponent),
     CommandPalette(WmCommandPaletteComponent),
     ExitConfirm(ConfirmOverlayComponent),
+    StopDaemonConfirm(ConfirmOverlayComponent),
 }
 
 impl_component_delegate!(OverlayComponent {
     Help,
     CommandPalette,
     ExitConfirm,
+    StopDaemonConfirm,
 });
 
 impl_overlay_delegate!(OverlayComponent {
     Help,
     CommandPalette,
     ExitConfirm,
+    StopDaemonConfirm,
 });

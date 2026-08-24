@@ -23,6 +23,8 @@ pub const DEFAULT_SUPPORTED_MENU_ACTIONS: &[TermWmAction] = &[
     TermWmAction::NewWorkspace,
     #[cfg(feature = "session-persistence")]
     TermWmAction::DetachCurrentClient,
+    #[cfg(feature = "session-persistence")]
+    TermWmAction::OpenStopGatewayConfirm,
 ];
 
 /// Minimum number of visible cells a floating window must keep within the

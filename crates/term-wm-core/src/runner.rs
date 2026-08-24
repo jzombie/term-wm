@@ -40,6 +40,10 @@ pub trait WindowManagerHost<
     fn open_exit_confirm(&mut self) {
         self.wm().request_quit();
     }
+    /// Open the stop-gateway-daemon confirmation dialog (#298). Default is a
+    /// no-op; session-persistence apps override to show the dialog.
+    #[cfg(feature = "session-persistence")]
+    fn open_stop_gateway_confirm(&mut self) {}
     fn open_command_palette(&mut self) {}
     /// Called when a panic is detected.
     fn on_panic(&mut self) {}
@@ -215,12 +219,17 @@ fn dispatch_action<
                 }
             }
         }
-        // Workspace actions: delegate to the app's custom action handler
+        // Workspace / gateway actions: delegate to the app's custom action handler
         #[cfg(feature = "session-persistence")]
         action @ (TermWmAction::SwitchWorkspace(_)
         | TermWmAction::NewWorkspace
         | TermWmAction::DetachCurrentClient
-        | TermWmAction::ToggleWorkspaceFollow) => {
+        | TermWmAction::ToggleWorkspaceFollow
+        // Stop-gateway flow (#298): the opener renders the confirm dialog and
+        // the executor is dispatched from its Confirm branch — both must reach
+        // the host's handle_custom_action, not the component fall-through.
+        | TermWmAction::OpenStopGatewayConfirm
+        | TermWmAction::StopGatewayDaemon) => {
             if !app.handle_custom_action(&action) {
                 // Unhandled — forward to component update
                 let ctx = app.wm().component_context_for(true, key);
@@ -490,6 +499,13 @@ where
             // presence events unconditionally (not only in Some(event) branch).
             app.wm().tick_notifications();
             for ws in driver.take_workspace_entered() {
+                // #284: keep the WM workspace mirror fresh so per-frame
+                // dynamic branding follows daemon-pushed entries/rebinds
+                // without waiting for a palette rebuild.
+                #[cfg(feature = "session-persistence")]
+                {
+                    app.wm().current_workspace = ws.clone();
+                }
                 app.wm().push_notification(
                     format!("Workspace {ws}"),
                     std::time::Duration::from_secs(3),
@@ -648,6 +664,29 @@ where
                         match action {
                             ConfirmAction::Confirm => return Ok(ControlFlow::Quit),
                             ConfirmAction::Cancel => app.wm().close_exit_confirm(),
+                        }
+                    }
+                    update_selection_snapshot(app);
+                    return flush_state_changes(app, driver, ControlFlow::Continue, false, None);
+                }
+
+                // Stop-gateway confirmation dialog (#298). Mirrors the exit
+                // confirm branch but Confirm routes to the executor action
+                // (via the app's custom-action handler) instead of quitting.
+                if app.wm().stop_daemon_confirm_visible() {
+                    if let Some(action) = app.wm().handle_stop_daemon_confirm_event(&evt) {
+                        match action {
+                            ConfirmAction::Confirm => {
+                                app.wm().close_stop_daemon_confirm();
+                                #[cfg(feature = "session-persistence")]
+                                {
+                                    let focused = app.wm().focused_window();
+                                    let mut actions = std::collections::VecDeque::new();
+                                    actions.push_back((focused, TermWmAction::StopGatewayDaemon));
+                                    drain_action_queue(app, &mut actions);
+                                }
+                            }
+                            ConfirmAction::Cancel => app.wm().close_stop_daemon_confirm(),
                         }
                     }
                     update_selection_snapshot(app);
@@ -1168,6 +1207,70 @@ mod tests {
         assert!(matches!(layout.root(), crate::layout::LayoutNode::Leaf(_)));
     }
 
+    /// #298: the stop-gateway actions must reach the host's
+    /// `handle_custom_action` through `dispatch_action`. Previously they fell
+    /// into the generic component-update catch-all, so selecting "Stop
+    /// Gateway Daemon" in the Command Palette did nothing.
+    #[test]
+    #[cfg(feature = "session-persistence")]
+    fn dispatch_action_routes_stop_gateway_actions_to_host() {
+        use crate::window::WindowManager;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct RecordingApp {
+            wm: WindowManager<TestComponent>,
+            handled: Rc<RefCell<Vec<&'static str>>>,
+        }
+        impl WindowManagerHost<TestComponent> for RecordingApp {
+            fn wm(&mut self) -> &mut WindowManager<TestComponent> {
+                &mut self.wm
+            }
+            fn handle_custom_action(&mut self, action: &TermWmAction) -> bool {
+                match action {
+                    TermWmAction::OpenStopGatewayConfirm => {
+                        self.handled.borrow_mut().push("open");
+                    }
+                    TermWmAction::StopGatewayDaemon => {
+                        self.handled.borrow_mut().push("stop");
+                    }
+                    _ => return false,
+                }
+                true
+            }
+        }
+
+        let handled = Rc::new(RefCell::new(Vec::new()));
+        let mut app = RecordingApp {
+            wm: WindowManager::<TestComponent>::with_config(
+                crate::wm_config::WmConfig::default(),
+                std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),
+                None,
+                crate::window::LayerManager::new(),
+                std::collections::HashMap::new(),
+            ),
+            handled: Rc::clone(&handled),
+        };
+        let key = app
+            .wm
+            .create_window(TestComponent::Noop(crate::components::NoopComponent));
+        app.wm
+            .transition_window(key, crate::window::WindowState::Mapped);
+
+        // Simulate the palette-dispatch path for both actions.
+        let mut queue = std::collections::VecDeque::new();
+        dispatch_action(
+            &mut app,
+            key,
+            TermWmAction::OpenStopGatewayConfirm,
+            &mut queue,
+        );
+        dispatch_action(&mut app, key, TermWmAction::StopGatewayDaemon, &mut queue);
+
+        assert_eq!(*handled.borrow(), vec!["open", "stop"]);
+        assert!(queue.is_empty(), "actions must be consumed, not requeued");
+    }
+
     #[test]
     fn runner_does_not_quit_when_app_reports_windows_but_wm_has_no_active_regions() {
         use crate::window::WindowManager;
@@ -1180,7 +1283,6 @@ mod tests {
                 &mut self.wm
             }
         }
-
         let mut wm = WindowManager::<TestComponent>::with_config(
             crate::wm_config::WmConfig::default(),
             std::sync::Arc::new(crate::AppContext::new("test", "0.0.0")),

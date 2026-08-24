@@ -17,22 +17,7 @@
 // `env` (object), `environments` (e.g. ["dev"] / ["prod"] / ["test"]).
 [
     {
-        "label": "dev: Run",
-        "command": "cargo run",
-        "environments": ["dev"]
-    },
-    {
-        "label": "dev: Stop daemon",
-        "command": "cargo run -- --stop-daemon --force",
-        "environments": ["dev"]
-    },
-    {
-        "label": "dev: List channels",
-        "command": "cargo run -- --list-channels",
-        "environments": ["dev"]
-    },
-    {
-        "label": "dev: Help",
+        "label": "dev: cargo pkg --help",
         "command": "cargo run -- --help",
         "environments": ["dev"]
     },

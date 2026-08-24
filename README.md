@@ -4,7 +4,9 @@
 <br>
 [![Made with Rust][rust-logo]][rust-src-page] [![crates.io][crates-badge]][crates-page] [![MIT licensed][mit-license-badge]][mit-license-page] [![Apache 2.0 licensed][apache-2.0-license-badge]][apache-2.0-license-page] [![Coverage][coveralls-badge]][coveralls-page] [![CodeQL][codeql-badge]][codeql-page]
 
-**term-wm** is a high-performance terminal window manager and multiplexer featuring asynchronous PTY handling, tree-based tiling, and detachable sessions.
+**term-wm** is *the Spatial Terminal Desktop Environment for Remote Workspaces*: floating, z-ordered windows, automatic zero-prefix input passthrough, and persistent multi-viewer workspaces, running headless inside any standard terminal over plain SSH.
+
+*The Graphical Desktop for SSH.*
 
 <div align="center">
   <img src="https://github.com/jzombie/live-assets/blob/main/term-wm-0.9.28-alpha-linux.png?raw=true" alt="term-wm v0.9.28-alpha on Linux" /><br />
@@ -15,9 +17,38 @@
   <em>pictured: term-wm v0.9.0-alpha on macOS</em>
 </div>
 
-Designed for Linux, macOS, and Windows, `term-wm` brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line. Whether you require mathematically precise tiling for development workflows or overlapping floating windows with mouse support, `term-wm` delivers a native window management experience without requiring a display server.
+
+Designed for Linux, macOS, and Windows, `term-wm` brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line: mathematically precise tiling, overlapping floating windows with mouse support, and complete desktop chrome (panels, command palette, tasks, and overlays) without requiring a display server.
 
 See the [changelog](CHANGELOG.md) for history (starting with v0.9.0-alpha).
+
+---
+
+## Why term-wm?
+
+Traditional terminal multiplexers treat the character grid as a rigid, planar matrix governed by memorized prefix chords. `term-wm` operates one level up: it is a desktop compositor for the ANSI/VT character-cell grid, pairing the deployment simplicity of a headless TUI with the spatial sophistication of a modern graphical desktop, over the same SSH connection you already use.
+
+| Capability | term-wm | tmux / GNU screen | Zellij | WezTerm |
+| :--- | :--- | :--- | :--- | :--- |
+| Runs headless over plain SSH | Yes (no display server) | Yes | Yes | Local GUI app; remote muxing needs extra client/server setup |
+| Window model | Hybrid BSP/N-ary tiling **plus** free-floating layer with z-order drop shadows and depth shading | Rigid 2D panes/windows | Tiling panes with basic grid-bound floating | Native GUI tabs/splits |
+| Input routing | Automatic Direct Input Mode via PTY state tracking (no prefix chords to memorize) | Manual prefix chords (`Ctrl+B`) | Modal keybindings (explicit mode switching) | Standard local GUI keyboard capture |
+| Session persistence | Embedded gateway daemon auto-spawns on first launch; sessions survive disconnects and restarts with zero setup | Persistent but manually managed sessions | Persistent, with built-in layout resurrection | Requires matching client/server daemon configuration |
+| Multi-viewer collaboration | Multiple viewers attach to one workspace channel over SSH; attributed events (per-viewer connection IDs) let a host evict one viewer without killing running PTYs | Shared sockets with permissive permissions or third-party wrappers | Shared sessions/web client needing tunneling and tokens | Not designed for multi-user terminal sharing |
+| Mobile & narrow viewports | Automatic Monocle mode; touch Floating Action Button with content dodging | Fixed grid output | Keyboard-centric hints consume scarce space | Requires a full desktop environment |
+
+## Feature Highlights
+
+* **True Spatial Compositing Over SSH:** Mouse-driven window dragging, edge snapping with ghost preview outlines, and z-ordered drop shadows with depth shading, rendered entirely in the character grid of any standard terminal emulator.
+* **Zero-Setup Session Persistence:** A single self-contained binary embeds both the window manager and a background session gateway. On first launch a detached daemon is auto-spawned, so windows, layouts, workspaces, and running PTY processes survive terminal restarts and network drops.
+* **Your Project Is the Workspace:** Launch `term-wm` from a project folder and it takes that folder's name for the menu, floating action button, and an automatically created matching workspace. Tasks you start keep running on the background gateway daemon after you close the app; return later (even over SSH), pick that workspace from the Command Palette, and everything is where you left it.
+* **Windows & Tasks Across Workspaces:** The Command Palette lists every workspace with live counts of open windows and still-running tasks, so you always know where work is active before you switch. Stopping the gateway warns you first, with totals for every session it would take down.
+* **Autonomous Direct Input Mode:** `PtyStateTracker` continuously monitors the PTY byte stream (built on the forked `term-wm-vt100` parser). The moment a child app requests the alternate screen, mouse tracking, or custom scroll margins, `term-wm` steps aside into zero-delay, unbuffered passthrough; keyboard and mouse are yielded independently, so an app like `nano` keeps native text selection.
+* **Unified Window Topology:** Mathematically precise BSP/N-ary tiling, free-floating stacks, Maximized mode, and mobile-friendly Monocle mode in one layout engine.
+* **Multiplayer SSH With Attribution:** Every input and layout event carries a unique viewer connection ID through the `muxio` RPC pipeline. Attach multiple viewers to the same workspace channel and use **Detach Viewer** to remove one participant without terminating its processes or disturbing the rest.
+* **Context-Aware Task Integration:** `.term-wm/tasks.json` files are discovered automatically and surface as searchable entries in the `nucleo`-powered Command Palette, executing in dedicated PTY windows that stay open with explicit exit markers so build failures are never lost.
+
+*Workspaces, persistent sessions, directory-based workspace naming, cross-workspace counts, and project tasks ship enabled by default (`cargo install term-wm`); custom builds using `--no-default-features` exclude them.*
 
 ---
 
@@ -33,7 +64,7 @@ cd term-wm
 cargo run --release
 ```
 
-This opens a new `default` workspace with two terminal windows by default. On first launch a detached background session daemon is auto-spawned, so workspaces and their sessions persist across terminal restarts and SSH disconnects — inspect or stop it with `--list-channels` / `--stop-daemon`, and pick a different workspace with `-w`. Pass programs as arguments to open them in new windows:
+This opens a new `default` workspace with two terminal windows by default. On first launch a detached background session daemon is auto-spawned, so workspaces and their sessions persist across terminal restarts and SSH disconnects; inspect or stop it with `--list-channels` / `--stop-daemon`, and pick a different workspace with `-w`. Pass programs as arguments to open them in new windows:
 
 ```sh
 cargo run --release -- vim
@@ -45,15 +76,15 @@ cargo run --release -- -n 4 -r "vim -l" -r "htop" -- git log --oneline  # 4 wind
 
 Options (`term-wm -h`):
 
-- `-n, --count <N>` — number of windows to open (default 2; min 1); only takes effect on new sessions
-- `--scrollback <N>` — scrollback buffer size per terminal window (default 2000); only takes effect on new sessions
-- `-r, --run <CMD>` — command to run in a window; repeatable, one window per `--run`. A trailing `-- CMD...` runs one command in a window after the `--run` windows. Remaining windows launch default shells. Only takes effect on new sessions.
-- `-w, --workspace <NAME>` — workspace to open (default `default`); each workspace maps to its own daemon channel `<workspace>/main` with its own PTY session and window-manager instance
-- `--no-wm` — run without the window manager (headless session client mode)
-- `--stop-daemon` — stop the running background session daemon
-- `--list-channels` — list channels and their sessions/clients, then exit
-- `-f, --force` — force `--stop-daemon` even when sessions/participants are active
-- `--no-session-persistence` — disable session-persistence behavior at runtime (workspaces, gateway, daemon modes); only effective when the `session-persistence` feature is compiled in (it is by default)
+- `-n, --count <N>`: number of windows to open (default 2; min 1); only takes effect on new sessions
+- `--scrollback <N>`: scrollback buffer size per terminal window (default 2000); only takes effect on new sessions
+- `-r, --run <CMD>`: command to run in a window; repeatable, one window per `--run`. A trailing `-- CMD...` runs one command in a window after the `--run` windows. Remaining windows launch default shells. Only takes effect on new sessions.
+- `-w, --workspace <NAME>`: workspace to open. When omitted, the launch folder's name becomes the workspace (and the menu/FAB label); each workspace maps to its own daemon channel `<workspace>/main` with its own PTY session and window-manager instance
+- `--no-wm`: run without the window manager (headless session client mode)
+- `--stop-daemon`: stop the running background session daemon
+- `--list-channels`: list channels and their sessions/clients, then exit
+- `-f, --force`: force `--stop-daemon` even when sessions/participants are active
+- `--no-session-persistence`: disable session-persistence behavior at runtime (workspaces, gateway, daemon modes); only effective when the `session-persistence` feature is compiled in (it is by default)
 - `-h, --help`, `-V, --version`
 
 New terminal windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
@@ -70,7 +101,7 @@ New terminal windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windo
 
 `term-wm` automatically enters **Direct Input Mode** (unfiltered, zero-delay key/mouse passthrough) whenever a child app requests the alternate screen buffer, mouse tracking, or custom scroll margins.
 
-Direct Input Mode is **split into two independent dimensions**: *keyboard* (alternate screen / custom margins → raw key passthrough) and *mouse capture* (the app explicitly requested mouse tracking). Keyboard and mouse are granted independently — an app on the alternate screen without mouse tracking (e.g. `pico`/`nano`) keeps native text selection and wheel scrolling.
+Direct Input Mode is **split into two independent dimensions**: *keyboard* (alternate screen / custom margins → raw key passthrough) and *mouse capture* (the app explicitly requested mouse tracking). Keyboard and mouse are granted independently: an app on the alternate screen without mouse tracking (e.g. `pico`/`nano`) keeps native text selection and wheel scrolling.
 
 This mode is application-specific and different windows running different applications can be in different modes at once.
 
@@ -87,9 +118,9 @@ In Direct Input Mode, the following keybindings **are not-effective**, and are c
 
 > **Note on Clipboard Sync:** Clipboard behavior depends on your host OS and terminal emulator. Standard keyboard shortcuts (e.g., `Cmd+C`/`Cmd+V` on macOS, `Ctrl+Shift+C`/`Ctrl+Shift+V` on Linux/Windows) may work depending on your terminal's pass-through rules, but are not guaranteed.
 
-> **Clipboard split-brain:** `term-wm` keeps an *internal* clipboard alongside your OS clipboard. In most setups they stay in sync, but where the OS clipboard is unreachable — e.g. inside a terminal that doesn't support OSC 52, or over SSH — the two can diverge. **Paste** is one unified action: it reads the OS clipboard when available and otherwise falls back to the internal copy, so you never have to pick between them. It is bound to mouse right-click, and if a Direct Input Mode app is consuming right-click, **Paste** is also available from the Command Palette.
+> **Clipboard split-brain:** `term-wm` keeps an *internal* clipboard alongside your OS clipboard. In most setups they stay in sync, but where the OS clipboard is unreachable (e.g. inside a terminal that doesn't support OSC 52, or over SSH), the two can diverge. **Paste** is one unified action: it reads the OS clipboard when available and otherwise falls back to the internal copy, so you never have to pick between them. It is bound to mouse right-click, and if a Direct Input Mode app is consuming right-click, **Paste** is also available from the Command Palette.
 
-> **Clipboard enablement in Direct Input Mode:** While a window is in Direct Input Mode, `term-wm`'s mouse-managed clipboard integration — click-and-drag selection copy and right-click paste — is overridden: mouse events are forwarded to the running application unfiltered, and clipboard handling within that application is the application's responsibility. Application-initiated copy continues to work, as OSC 52 copy sequences emitted by the running application are still intercepted and relayed to the system clipboard.
+> **Clipboard enablement in Direct Input Mode:** While a window is in Direct Input Mode, `term-wm`'s mouse-managed clipboard integration (click-and-drag selection copy and right-click paste) is overridden: mouse events are forwarded to the running application unfiltered, and clipboard handling within that application is the application's responsibility. Application-initiated copy continues to work, as OSC 52 copy sequences emitted by the running application are still intercepted and relayed to the system clipboard.
 
 ## System Requirements & Compatibility
 
@@ -100,91 +131,42 @@ In Direct Input Mode, the following keybindings **are not-effective**, and are c
 * **Linux Virtual Terminals (TTY):** `term-wm` is fully usable in raw Linux VTs (e.g., accessed via `Ctrl+Alt+F1`). While the core window management and multiplexing logic remains 100% functional, visual presentation will look significantly different due to the kernel framebuffer's strict font and color limitations.
 * **Non-Standard OS Installs:** Minimal or headless OS installations must ensure a valid `terminfo` database is present and that the `LANG` environment variable is correctly set to a UTF-8 locale to prevent layout corruption.
 
-See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for full compatibility details.
+See [docs/compatibility.md](./docs/compatibility.md) for full compatibility details.
 
-## Architecture & Core Capabilities
+## Architecture Overview
 
-`term-wm` is engineered with a strict modular architecture, separating core domain logic from presentation across a multi-crate Cargo workspace, with the draw pipeline built on Ratatui. Layout calculation, rendering, and PTY I/O are decoupled so the UI thread never blocks on I/O.
+`term-wm` is engineered with a strict modular architecture across a multi-crate Cargo workspace, separating core domain logic from presentation, with the draw pipeline built on Ratatui. Layout calculation, rendering, and PTY I/O are decoupled so the UI thread never blocks on I/O.
 
-| Crate | Primary Responsibility |
-| :--- | :--- |
-| `term-wm-core` | State engine, generational `WindowKey` slotmaps, command palette, `Reaper` thread |
-| `term-wm-layout-engine` | Generic tree layout algorithm (BSP + N-ary nodes), aspect-ratio rebalancing |
-| `term-wm-pty-engine` | Dedicated PTY reader threads, drain-sync resize, `PtyStateTracker` direct-input detection |
-| `term-wm-console` | Crossterm backend, `DrawPlanRenderer`, screen-space `HitboxRegistry` |
-| `term-wm-render` / `term-wm-events` / `term-wm-crossterm-adapter` | Render backend trait, event types, input translation |
-| `term-wm-ui-components` / `term-wm-sys-ui-components` | Component library + WM system chrome (panels, palette, help) |
-| `term-wm-config` | Std-only leaf crate: `session-persistence` feature gate, process-global runtime config, canonical `TERM_WM_*` env-var constants |
-| `term-clipboard` / `term-sys-io` | Cross-platform clipboard (arboard + OSC 52 backends) and low-level OS FD/handle redirection |
-| `term-session*` (+ `term-size-box`, `term-bench`) | Detachable client/server session protocol (`muxio`), workspaces, sizing, benchmarks |
-
-### Window Lifecycle
-
-Windows are identified by generational slotmap keys (`WindowKey`): closed keys are never reused. The open path is a single transaction — register the component (`spawn`, which fires its `on_mount` hook), map it, tile or float it, then focus it.
-
-### Tiling Core
-
-The layout engine builds a tree (BSP or N-ary) over the workspace. `insert_window_balanced` fills empty *void* nodes first, then splits the largest leaf; the split axis is chosen by whichever dimension fits, falling back to aspect ratio, and leaf areas are rebalanced to equal shares by leaf count.
-
-### Async Threading Model
-
-The UI event loop runs synchronously on a single thread and never blocks on I/O. All asynchronous work (PTY reading, network IPC, keyboard input) runs on separate threads or Tokio tasks and funnels events into a single `crossbeam-channel`–backed `UnifiedEventSource`.
-
-```text
-[ Muxio / Network IPC ] ──(Tokio Runtime)──┐
-                                           ├──> [ UnifiedEventSource ] ──> [ Centralized UI Loop ]
-[ PTYs & Keyboard Input ] ─(OS Threads)────┘    (crossbeam-channel)         (Single-threaded &mut)
-```
-
-A dedicated `Reaper` thread reaps zombie children via SIGHUP→SIGKILL escalation. The centralized loop drains all pending events per frame, so keyboard shortcuts, PTY output, and remote IPC are all processed with zero polling gaps.
-
-### Direct Input Mode
-
-`PtyStateTracker` (`term-wm-pty-engine`) monitors the PTY byte stream for alternate-screen or mouse-tracking requests. When active, `term-wm` enters **Direct Input Mode**, bypassing window manager keybinding/focus evaluation and eliminating ESC sequence buffering to hand raw input to applications like Vim or Less via zero-delay pass-through.
-
-### Draw Pipeline
-
-`CoreEngine` builds a z-ordered `DrawPlan` each frame; `DrawPlanRenderer` paints it, while a screen-space `HitboxRegistry` routes mouse hits to the correct component. A frame pacer targets a smooth 60 FPS, and a power profile tracker scales the frame rate down during idle periods to preserve battery life.
-
-### Testability
-
-The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with test doubles (`TestPane`, `TestComponent`), so layout, rendering, and PTY scroll synchronization are verified without a terminal — including property tests for scroll sync.
-
-### Code Coverage
-
-Line coverage is tracked via [Coveralls](https://coveralls.io/github/jzombie/term-wm?branch=main) using `cargo-llvm-cov` (see the CI `coverage` job in `.github/workflows/rust-tests.yml`). A root [`Makefile`](./Makefile) makes the same measurement reproducible locally:
-
-```sh
-make coverage             # clean + full coverage run (workspace, all features) + summary
-make coverage-baseline    # as above, and tees the summary to coverage-baseline.txt
-make coverage-main        # coverage of the `main` branch via a throwaway git worktree (.build/main-worktree)
-make coverage-clean       # remove the worktree and coverage artifacts
-```
-
-Prerequisites (once): `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov` (or `cargo binstall cargo-llvm-cov`). Coverage output is written to `lcov.info` (git-ignored). The workflow mirrors the CI commands exactly, so a local run reproduces the Coveralls numbers up to platform differences.
-
-### Features
-
-* **Hybrid Layout Engine:** Seamlessly mix Binary Space Partitioning (BSP) and N-ary tree tiling with a free-floating window layer. Floating windows support mouse-driven repositioning, edge-snapping, and Z-index drop shadows. 
-* **Adaptive Viewports:** Quickly switch to **Maximized** mode to fill the workspace with the focused pane, or engage **Monocle** mode to view a single window full-screen—ideal for narrow viewports or mobile SSH sessions.
-* **Self-contained Session Persistence & Workspaces:** `term-wm` embeds both the window manager and a background session daemon (gateway). On first launch a detached gateway is auto-spawned and the UI runs as an inner session-backed process — so windows, layout, and running PTY processes survive terminal-emulator restarts and SSH disconnects. Named **workspaces** (e.g. `default`, `dev`) each map to their own daemon channel (`<workspace>/main`) with an independent PTY session and WM instance; create and switch between them from the Command Palette (**New Workspace**, **Switch to Workspace: `<name>`**), or detach the current viewer without killing its process (**Detach Viewer**). For a standalone, layout-agnostic persistence layer (no window manager), the companion [`term-session`](https://crates.io/crates/term-session) daemon remains available. See [Workspaces & Session Persistence](#workspaces--session-persistence).
+The full developer tour (the crate responsibility map, window lifecycle, tiling core, async threading model, draw pipeline, testability, and code coverage) lives in [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md).
 
 ## Workspaces & Session Persistence
 
 `term-wm` is a self-contained binary that embeds **both** the window manager and a background session daemon (gateway). On first launch a detached gateway is auto-spawned and the TUI runs as an inner session-backed process, giving you persistent sessions without any external daemon setup.
 
-* **Workspaces:** A workspace is a named channel namespace on top of the session daemon. Each workspace (e.g. `default`, `dev`) maps to a daemon channel `<workspace>/main` with its own PTY session and window-manager instance. Start in a workspace with `-w/--workspace <NAME>`.
-* **Switching workspaces:** From the Command Palette, use **New Workspace** to create one, **Switch to Workspace: `<name>`** to switch without restarting the process (the viewer's IPC is rebound to the target channel, and the previously shown workspace keeps running in the background), and **Detach Viewer** to disconnect the current viewer from its session without terminating the PTY process. Workspace entries appear only when session persistence is active.
-* **Environment-scoped gateway:** The gateway endpoint is `term-wm/<env>/<user>/gateway`. `<env>` defaults to `dev` in debug builds and `prod` in release, and can be overridden with `TERM_WM_ENV=dev|prod|test` — so a development build can never attach to or tear down a production daemon's sessions. `TERM_WM_GATEWAY` overrides the endpoint wholesale. Both `term-wm --help` and `term-session --help` print a `Persistence gateway:` footer showing the resolved endpoint.
+* **Workspaces:** A workspace is a named channel namespace on top of the session daemon. Each workspace (e.g. `default`, `dev`) maps to a daemon channel `<workspace>/main` with its own PTY session and window-manager instance. Start in a workspace with `-w/--workspace <NAME>`, or omit it and the launch folder names it for you.
+* **Switching workspaces:** From the Command Palette, use **New Workspace** to create one, **Switch to Workspace: `<name>`** to switch without restarting the process (the viewer's IPC is rebound to the target channel, and the previously shown workspace keeps running in the background), and **Detach Viewer** to disconnect the current viewer from its session without terminating the PTY process. Workspace entries appear only when session persistence is active, and each entry shows live counts of open windows and running tasks.
+* **Persistence gateway:** The daemon endpoint is `term-wm/<user>/gateway`. It deliberately does not depend on the runtime environment: `--env` / `TERM_WM_ENV` scope project-task visibility only, so changing a profile can never fork daemon lifecycles. **Local development isolation** is enforced at the toolchain boundary: the committed `.cargo/config.toml` injects `TERM_WM_NAMESPACE=term-wm-dev`, so every cargo-driven execution (`cargo run`, `cargo test`) uses `term-wm-dev/<user>/gateway` while the OS-level `<user>` segment stays derived at runtime (multi-tenant safe on shared machines). Binaries executed directly bind the shared `term-wm/<user>/gateway`. `--gateway <name>` overrides the endpoint wholesale per invocation (multi-segment paths round-trip byte-exact), and auto-spawned daemons are pinned to the launcher's resolved endpoint via a hidden `--gateway <name>` argument so client and daemon can never disagree. Both `term-wm --help` and `term-session --help` print a `Persistence gateway:` footer showing the resolved endpoint.
 * **Runtime disable:** Pass `--no-session-persistence` (or set `TERM_WM_NO_SESSION_PERSISTENCE`) to disable workspace/session-persistence behavior at runtime, even when the feature is compiled in.
-* **Managing the daemon:** `--list-channels` shows every workspace channel, its session, and its attached clients; `--stop-daemon` shuts the background gateway down (refused while sessions are live unless `-f/--force` is given); `--no-wm` runs a headless session client without the window manager.
+* **Managing the daemon:** `--list-channels` shows every workspace channel, its session, and its attached clients; `--stop-daemon` shuts the background gateway down (a confirmation dialog in the Command Palette warns that every workspace session will be terminated, with totals; the CLI refuses while sessions are live unless `-f/--force` is given); `--no-wm` runs a headless session client without the window manager.
+
+### Leaving vs Ending vs Stopping
+
+Three palette actions terminate different things. Picking the right one matters:
+
+| Action | What ends | What survives |
+| :--- | :--- | :--- |
+| **Detach Viewer** | Only your viewing connection | Everything: the workspace keeps running headless on the daemon with all windows and tasks alive; other viewers are unaffected; reattach anytime |
+| **Exit UI** (asks first) | This workspace: its window-manager process exits, taking its windows and running tasks with it | Your other workspaces and the gateway daemon |
+| **Stop Gateway Daemon** (asks first, with totals) | Every workspace session for every user, then the daemon itself | Nothing session-related; a fresh daemon auto-spawns on your next launch |
+
+In builds without session persistence there is nothing to detach from or stop: **Exit UI** simply quits the app and its processes.
 
 ### Environment variables
 
 | Variable | Purpose | Default |
 | :--- | :--- | :--- |
-| `TERM_WM_ENV` | Runtime environment (`dev`/`prod`/`test`, case-insensitive); scopes the gateway endpoint. | `dev` in debug builds, `prod` in release |
-| `TERM_WM_GATEWAY` | Wholesale override of the gateway endpoint. | `term-wm/<env>/<user>/gateway` |
+| `TERM_WM_ENV` | Runtime environment (`dev`/`prod`/`test`, case-insensitive); scopes project-task visibility only. Gateway endpoints do not depend on it. | `dev` in debug builds, `prod` in release |
+| `TERM_WM_NAMESPACE` | Namespace-root override of the gateway endpoint, preserving the `<user>` segment (`<ns>/<user>/gateway`). Set for cargo-driven executions by the committed `.cargo/config.toml`. | unset (`term-wm`) |
 | `TERM_SESSION_CHANNEL` | Session channel override (read by `term-session`). | `default/main` |
 | `TERM_WM_NO_SESSION_PERSISTENCE` | Disables session-persistence behavior at runtime (same as `--no-session-persistence`). | unset (persistence enabled) |
 | `TERM_WM_TRACE_ESC` | Dumps raw PTY→emulator bytes to a file (debugging aid). | off |
@@ -195,7 +177,7 @@ Traditional terminal multiplexers often collide with the keybindings of the appl
 
 * **The Super Key:** The default modifier is `Ctrl+A` (configurable via `KeyBindings`).
 * **Scrollback Keys:** Outside of Direct Input Mode, the WM also intercepts `PageUp` / `PageDown` / `Home` / `End` (no modifier) for scrollback when a window has scrollback available; arrow keys and other navigation fall through to the child application.
-* **Command Palette:** Press `Ctrl+A` to open the central Command Palette overlay. This fuzzy-searchable menu (powered by `nucleo` with exponential decay scoring for recency) is the primary method for executing actions, opening windows, altering layouts, and managing workspaces (**New Workspace**, **Switch to Workspace: `<name>`**, **Detach Viewer**).
+* **Command Palette:** Press `Ctrl+A` to open the central Command Palette overlay. This fuzzy-searchable menu (powered by `nucleo` with exponential decay scoring for recency) is the primary method for executing actions, opening windows, altering layouts, and managing workspaces (**New Workspace**, **Switch to Workspace: `<name>`**, **Detach Viewer**, **Stop Gateway Daemon**).
 * **Window Navigation:** While the palette is open, press `Tab` or `Shift+Tab` to instantly cycle focus between active windows. Press `Enter` to activate the selected command.
 * **Key Passthrough:** Pressing `Ctrl+A` while the palette is already open immediately sends the `Ctrl+A` keystroke to the focused child application (`SendSuperKeyToFocusedWindow`).
 
@@ -205,14 +187,14 @@ Traditional terminal multiplexers often collide with the keybindings of the appl
 
 The routing decision is a structured `DirectInputMode` snapshot with independent **keyboard** and **mouse** dimensions:
 
-* **Keyboard direct** (alternate screen / custom margins): all keystrokes pass through to the application unfiltered — zero-delay, unbuffered pass-through. Native scrollback navigation is suspended.
+* **Keyboard direct** (alternate screen / custom margins): all keystrokes pass through to the application unfiltered: zero-delay, unbuffered pass-through. Native scrollback navigation is suspended.
 * **Mouse capture** (app requested mouse tracking): mouse events are encoded and forwarded to the application. Native text selection is suspended *only while the app holds the mouse*. An app on the alternate screen that did **not** request mouse tracking (e.g. `pico`/`nano`) keeps native click-and-drag text selection and wheel scrolling.
 
 A brief notification toast appears on transitions and shows the window's combined access, coalescing rapid sub-mode shifts into one message (e.g. `Direct Input Mode (keyboard and mouse) enabled for vim`, `Direct Input Mode (keyboard) enabled for nano`). The `Ctrl+A` Super Key remains active to summon the Command Palette at any time.
 
 ### Overriding App Mouse Capture
 
-To force native text selection inside an app that captured the mouse, hold **Shift** (or **Option** on macOS) while clicking and dragging. This is best-effort: it applies to SGR mouse streams that reach `term-wm` — when running nested inside a host terminal emulator, the host intercepts `Shift+mouse` first and performs its own selection.
+To force native text selection inside an app that captured the mouse, hold **Shift** (or **Option** on macOS) while clicking and dragging. This is best-effort: it applies to SGR mouse streams that reach `term-wm`. When running nested inside a host terminal emulator, the host intercepts `Shift+mouse` first and performs its own selection.
 
 ## Window Snapping with Preview
 
@@ -222,36 +204,11 @@ Floating windows support mouse-driven snapping with a live **ghost preview**. Wh
 * **Auto-snap countdown:** if the pointer leaves the screen area while a snap target is active, the window snaps automatically after a short countdown (default **2 seconds**, configurable via `drag_snap_timeout`). Releasing the button over the target also snaps immediately.
 * **Micro-positioning:** to place a window at a precise position, float it first, move it where you want, then tile it.
 
-## Project Origins & Developer API
+## Using `term-wm` as a Library
 
-`term-wm` initially began as a distinct application before its underlying rendering and window management mechanics were extracted into a general-purpose multiplexer. Because the system is built as a collection of decoupled crates, its core layout engine and UI components can theoretically be embedded into other Ratatui applications. 
+Because the system is built as a collection of decoupled crates, its core layout engine and UI components can be embedded into other Ratatui applications, including declarative component trees via the `view!` macro. Note that the developer-facing library API is currently unsolidified and subject to rapid breaking changes; stabilizing it is a primary focus of future architectural iterations.
 
-However, the developer-facing library API is currently unsolidified and subject to rapid breaking changes. Stabilizing the developer API, refining the component lifecycle, and documenting the embedded layout engine will be the primary focus of future architectural iterations. (For a glimpse into the internal component design standards, see [AGENTS.md](./AGENTS.md)).
-
-## Declarative Component Trees with `view!`
-
-`term-wm` ships a "dumb" `view!` macro that builds component trees declaratively — it expands to ordinary, fully-monomorphized component constructors, with no runtime tree, reactivity, or reconciliation:
-
-```rust,no_run
-use term_wm::prelude::*;
-
-struct MyWindow;
-
-impl MyWindow {
-    fn view(&mut self) -> impl Component<TermWmAction> + '_ {
-        view! {
-            <VStack gap=1>
-                <Label text="System Status" />
-                <Button label="Refresh" action={TermWmAction::Quit} />
-            </VStack>
-        }
-    }
-}
-```
-
-Layout tags (`VStack`, `HStack`, `Grid`, `Center`, `Box`) and stateless leaves (`Label`, `Button`) are constructed declaratively; a `{ expr }` escape hatch injects any `Component` value, owned or `&mut`-borrowed (`{ &mut self.terminal }` for stateful components such as a terminal). All-owned trees (no `&mut`) go straight into `open_window(AppRootComponent::Custom(view!{..}))`; borrowed trees use the `fn view(&mut self) -> impl Component + '_` pattern above.
-
-`view!` and its tag set are still an evolving draft — treat [`examples/view_macro_prototype.rs`](examples/view_macro_prototype.rs) as the canonical runnable reference (it wires a live terminal into a `view!` tree), and the System Panel (`ToggleSystemPanel`) is itself a scrolling `view!` grid built the same way.
+For project origins, the crate responsibility map, embedding guidance, the `view!` macro reference, and component design standards, see [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) and [AGENTS.md](./AGENTS.md).
 
 ## License
 

@@ -1,0 +1,15 @@
+# Committed toolchain policy (version controlled; do not put personal state here).
+#
+# Every cargo-driven execution in this repository (`cargo run`, `cargo test`,
+# `cargo bench`, `cargo install --path`) resolves its persistence gateway in
+# the isolated `term-wm-dev` namespace instead of the shared system default
+# (`term-wm`). The OS-level `<user>` segment of the endpoint stays derived at
+# runtime, so two developers on one machine can never share a dev socket:
+#   cargo-driven:  term-wm-dev/<user>/gateway
+#   direct exec:   term-wm/<user>/gateway
+#
+# Personal overrides (e.g. local `[patch]` entries) belong in
+# `~/.cargo/config.toml` or an ancestor directory's `.cargo/config.toml`;
+# Cargo merges the whole hierarchy. See `.cargo/config.toml.example`.
+[env]
+TERM_WM_NAMESPACE = "term-wm-dev"
