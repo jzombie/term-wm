@@ -24,6 +24,7 @@ pub struct WmBottomPanelComponent {
     app_name: String,
     app_version: String,
     hostname: Option<String>,
+    environment: Option<String>,
     keybinding_hints: Vec<(TermWmAction, Vec<String>)>,
     hint_rects: Vec<(LayoutRect, TermWmAction)>,
     power_profile: PowerProfile,
@@ -37,6 +38,7 @@ impl WmBottomPanelComponent {
             app_name: app_name.to_string(),
             app_version: app_version.to_string(),
             hostname: hostname.map(|h| h.to_string()),
+            environment: None,
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
             power_profile: PowerProfile::PowerSaver,
@@ -54,6 +56,13 @@ impl WmBottomPanelComponent {
 
     pub fn set_hostname(&mut self, hostname: &str) {
         self.hostname = Some(hostname.to_string());
+    }
+
+    /// Show the active runtime environment in the info segment (e.g. `dev`
+    /// / `prod` / `test`). Omitted until set so library embedders are
+    /// unaffected.
+    pub fn set_environment(&mut self, environment: &str) {
+        self.environment = Some(environment.to_string());
     }
 
     pub fn set_keybinding_hints(&mut self, hints: Vec<(TermWmAction, Vec<String>)>) {
@@ -144,9 +153,16 @@ impl WmBottomPanelComponent {
                 .hostname
                 .clone()
                 .unwrap_or_else(|| "unknown-host".to_string());
-            Some(format!(
-                "{pkg_label} \u{00b7} {platform} \u{00b7} {hostname}"
-            ))
+            // Environment segment sits between platform and hostname and is
+            // omitted entirely when unset (library embedders).
+            match &self.environment {
+                Some(env) => Some(format!(
+                    "{pkg_label} \u{00b7} {platform} \u{00b7} {env} \u{00b7} {hostname}"
+                )),
+                None => Some(format!(
+                    "{pkg_label} \u{00b7} {platform} \u{00b7} {hostname}"
+                )),
+            }
         } else {
             None
         };
@@ -608,6 +624,50 @@ mod tests {
             rendered.contains("my-machine"),
             "bottom bar should include hostname"
         );
+    }
+
+    #[test]
+    fn bottom_panel_omits_environment_until_set() {
+        let mut p = WmBottomPanelComponent::new("app", "1.0", Some("host"));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        p.area = area;
+        let ratatui_area = layout_rect_to_clipped_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
+        let rendered = collect_row_symbols(&mut backend, ratatui_area);
+        assert!(
+            !rendered.contains(" dev "),
+            "unset environment must be omitted from the info line: {rendered}"
+        );
+
+        p.set_environment("prod");
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
+        let rendered = collect_row_symbols(&mut backend, ratatui_area);
+        assert!(
+            rendered.contains("\u{00b7} prod \u{00b7}"),
+            "bottom bar should include the environment segment: {rendered}"
+        );
+    }
+
+    /// Collect the rendered symbols of the panel row into one string.
+    fn collect_row_symbols(
+        backend: &mut term_wm_console::RatatuiBackend,
+        area: ratatui::layout::Rect,
+    ) -> String {
+        let mut rendered = String::new();
+        for xx in area.x..area.x.saturating_add(area.width) {
+            let cell = backend.buffer.cell((xx, area.y)).expect("cell present");
+            rendered.push_str(cell.symbol());
+        }
+        rendered
     }
 
     #[test]

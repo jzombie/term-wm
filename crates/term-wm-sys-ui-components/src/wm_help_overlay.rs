@@ -163,7 +163,7 @@ impl Overlay<TermWmAction> for WmHelpOverlayComponent {
 }
 
 impl WmHelpOverlayComponent {
-    pub fn new(app_ctx: &Arc<AppContext>, keybindings: KeyBindings) -> Self {
+    pub fn new(app_ctx: &Arc<AppContext>, keybindings: KeyBindings, environment: &str) -> Self {
         let mut dialog = DialogOverlayComponent::new();
         dialog.set_dim_backdrop(true);
         dialog.set_auto_close_on_outside_click(true);
@@ -187,6 +187,7 @@ impl WmHelpOverlayComponent {
                 .replace("%PACKAGE%", &overlay.app_ctx.app_name)
                 .replace("%VERSION%", &overlay.app_ctx.app_version)
                 .replace("%PLATFORM%", &platform)
+                .replace("%ENVIRONMENT%", environment)
                 .replace("%REPOSITORY%", env!("CARGO_PKG_REPOSITORY"));
 
             let focus_next = kb.combos_for(TermWmAction::FocusNext).join(" / ");
@@ -262,6 +263,7 @@ impl Default for WmHelpOverlayComponent {
         Self::new(
             &Arc::new(AppContext::new("unknown", "0.0.0")),
             KeyBindings::default(),
+            "dev",
         )
     }
 }
@@ -281,6 +283,7 @@ mod tests {
         let h = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new("test", "0.0.0")),
             KeyBindings::default(),
+            "dev",
         );
         let _ = h;
     }
@@ -293,6 +296,7 @@ mod tests {
                 env!("CARGO_PKG_VERSION"),
             )),
             KeyBindings::default(),
+            "dev",
         );
         overlay.show();
         use ratatui::buffer::Buffer;
@@ -363,6 +367,10 @@ mod tests {
             joined.contains(&ver),
             "markdown should include package version"
         );
+        assert!(
+            joined.contains("environment: dev"),
+            "markdown should include the injected environment value"
+        );
     }
 
     #[test]
@@ -370,6 +378,7 @@ mod tests {
         let mut overlay = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new("test", "0.0.0")),
             KeyBindings::default(),
+            "dev",
         );
         assert!(!overlay.visible(), "initially hidden");
 
@@ -385,6 +394,7 @@ mod tests {
         let mut overlay = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new("test", "0.0.0")),
             KeyBindings::default(),
+            "dev",
         );
         overlay.show();
         let ev = Event::Key(KeyEvent {
@@ -402,6 +412,7 @@ mod tests {
         let mut overlay = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new("test", "0.0.0")),
             KeyBindings::default(),
+            "dev",
         );
         overlay.dialog.set_auto_close_on_outside_click(true);
         overlay.show();
@@ -437,6 +448,7 @@ mod tests {
         let overlay = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new("test", "0.0.0")),
             KeyBindings::new(),
+            "dev",
         );
         assert_eq!(
             <WmHelpOverlayComponent as Overlay<TermWmAction>>::render_area(&overlay),
@@ -449,6 +461,7 @@ mod tests {
         let mut overlay = WmHelpOverlayComponent::new(
             &Arc::new(AppContext::new("test", "0.0.0")),
             KeyBindings::new(),
+            "dev",
         );
         overlay.dialog.set_visible(true);
         let area = LayoutRect {

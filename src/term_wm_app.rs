@@ -334,17 +334,21 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             WmTopPanelComponent,
         };
 
+        // The active environment comes from the single source of truth; the
+        // `--env` CLI override is installed before any app construction.
+        let bottom_panel = {
+            let mut panel = WmBottomPanelComponent::new(&app_name, &app_version, hostname.as_deref());
+            panel.set_environment(&term_wm_config::env::active_environment().to_string());
+            panel
+        };
+
         let wm = AppBuilder::<LayerComponent>::new()
             .config(config)
             .app_ctx(Arc::new(app_ctx))
             .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
                 &app_name,
             )))
-            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
-                &app_name,
-                &app_version,
-                hostname.as_deref(),
-            )))
+            .bottom_panel(LayerComponent::BottomPanel(bottom_panel))
             .fab(LayerComponent::Fab(WmFabComponent::new()))
             .supported_menu_actions(actions)
             .build()
@@ -429,17 +433,20 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             WmBottomPanelComponent, WmFabComponent, WmTopPanelComponent,
         };
 
+        let bottom_panel = {
+            let mut panel =
+                WmBottomPanelComponent::new(&app_name, &app_version, hostname);
+            panel.set_environment(&term_wm_config::env::active_environment().to_string());
+            panel
+        };
+
         let wm = AppBuilder::<LayerComponent>::new()
             .config(config)
             .app_ctx(Arc::clone(app_ctx))
             .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
                 &app_name,
             )))
-            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
-                &app_name,
-                &app_version,
-                hostname,
-            )))
+            .bottom_panel(LayerComponent::BottomPanel(bottom_panel))
             .fab(LayerComponent::Fab(WmFabComponent::new()))
             .build()
             .expect("standalone build");
@@ -1410,7 +1417,8 @@ impl<C: Component<TermWmAction> + 'static>
 
     fn open_help_overlay(&mut self) {
         let kb = self.wm.keybindings().clone();
-        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb);
+        let environment = term_wm_config::env::active_environment().to_string();
+        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb, &environment);
         h.show();
         h.set_selection_enabled(self.wm.clipboard_enabled());
         self.wm.open_help_overlay(OverlayComponent::Help(h));
