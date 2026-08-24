@@ -151,12 +151,25 @@ impl Session {
     }
 }
 
+/// Safety net, not a lifecycle path: normal teardown (ShutdownGateway,
+/// CloseSession escalation, exited-session cleanup) kills the child
+/// explicitly BEFORE the session is dropped, so this best-effort kill is a
+/// no-op there. It exists for the abnormal paths: a panicking daemon or a
+/// dropped-without-teardown session would otherwise leak the child holding
+/// its PTY. This mirrors the Windows Job Object `KILL_ON_JOB_CLOSE` net that
+/// already guarantees tree-death when the `Pty` handle dies.
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.pty.kill_child();
+    }
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::{Session, resolve_cwd};
     use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use term_session_muxio_service_definitions::path_wire;
     use term_session_muxio_service_definitions::path_wire::PathWire;
@@ -220,18 +233,21 @@ mod tests {
     /// runs and no report is written. Returns the raw report bytes so
     /// losslessness is asserted byte-for-byte.
     fn read_report(session: &mut Session, report: &Path) -> Vec<u8> {
-        let deadline = Instant::now() + Duration::from_secs(REPORT_TIMEOUT_SECS);
-        loop {
-            if let Ok(content) = std::fs::read(report) {
-                return content;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "mock pwd never wrote the report at {report:?}"
-            );
-            session.read_output();
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let mut content: Option<Vec<u8>> = None;
+        term_test_support::wait_for(
+            Duration::from_secs(REPORT_TIMEOUT_SECS),
+            &format!("mock pwd wrote the report at {report:?}"),
+            || {
+                if let Ok(bytes) = std::fs::read(report) {
+                    content = Some(bytes);
+                    return Some(());
+                }
+                // Pump the PTY so the child's DSR handshake completes.
+                session.read_output();
+                None
+            },
+        );
+        content.expect("report bytes captured")
     }
 
     /// Spawn a session running `mock pwd <report>` with the given wire-encoded

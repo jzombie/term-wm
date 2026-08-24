@@ -66,6 +66,12 @@ pub const SESSION_GATEWAY_ENV_VAR: &str = "TERM_SESSION_GATEWAY";
 /// Enables dumping raw PTY→emulator bytes to a file (debugging). Read by
 /// `term-wm-pty-engine`.
 pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
+/// Durable log destination (issue #270). When set to a writable path, tracing
+/// events tee into that file (append mode): the `term-wm` binary mirrors its
+/// in-app Debug Log stream there, and `term-session --daemon` writes there
+/// instead of stdout (which every detached spawn discards). Honors `RUST_LOG`
+/// wherever a subscriber is initialized. Read by `term-wm` and `term-session`.
+pub const LOG_FILE_ENV_VAR: &str = "TERM_WM_LOG_FILE";
 /// Disables session-persistence behavior at runtime even when compiled in.
 /// Read by the `term-wm` binary.
 pub const NO_SESSION_PERSISTENCE_ENV_VAR: &str = "TERM_WM_NO_SESSION_PERSISTENCE";
@@ -204,6 +210,16 @@ pub fn no_session_persistence() -> bool {
     std::env::var_os(NO_SESSION_PERSISTENCE_ENV_VAR).is_some()
 }
 
+/// The configured durable log path, if [`LOG_FILE_ENV_VAR`] is set to a
+/// non-empty value. Callers open the file in append mode (create-if-missing),
+/// mirroring the `TERM_WM_TRACE_ESC` convention.
+pub fn log_file_path() -> Option<std::path::PathBuf> {
+    match std::env::var_os(LOG_FILE_ENV_VAR) {
+        Some(raw) if !raw.is_empty() => Some(std::path::PathBuf::from(raw)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +254,14 @@ mod tests {
     /// `[build]` settings, stray `paths =` keys). The file is version
     /// controlled POLICY; private state belongs in `~/.cargo/config.toml`
     /// or an ancestor-directory config, which Cargo merges automatically.
+    ///
+    /// Serialized against other env-touching tests in this binary: this test
+    /// reads `CARGO_MANIFEST_DIR`, which `default_environment_detects_cargo_
+    /// manifest_dir` below temporarily rewrites. Without the shared group an
+    /// unsynchronized read could observe the fake value (or its removal) and
+    /// fail nondeterministically.
     #[test]
+    #[serial(env)]
     fn cargo_config_remains_pure_of_local_overrides() {
         // This test lives in crates/term-wm-config: two parents up is the
         // workspace root.
@@ -291,6 +314,53 @@ mod tests {
 
     #[test]
     #[serial(env)]
+    fn log_file_path_none_when_unset_or_empty() {
+        let original = std::env::var_os(LOG_FILE_ENV_VAR);
+        let _restore = log_env_guard(original);
+        unsafe {
+            std::env::remove_var(LOG_FILE_ENV_VAR);
+        }
+        assert!(log_file_path().is_none(), "unset must yield None");
+        unsafe {
+            std::env::set_var(LOG_FILE_ENV_VAR, "");
+        }
+        assert!(
+            log_file_path().is_none(),
+            "empty value must be treated as unset"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn log_file_path_reads_configured_path() {
+        let original = std::env::var_os(LOG_FILE_ENV_VAR);
+        let _restore = log_env_guard(original);
+        unsafe {
+            std::env::set_var(LOG_FILE_ENV_VAR, "/tmp/term-wm-test.log");
+        }
+        assert_eq!(
+            log_file_path().as_deref(),
+            Some(std::path::Path::new("/tmp/term-wm-test.log"))
+        );
+    }
+
+    /// Restore [`LOG_FILE_ENV_VAR`] to its original value on drop (including
+    /// during panic unwinding) so env mutations never leak across tests.
+    fn log_env_guard(
+        original: Option<std::ffi::OsString>,
+    ) -> term_test_support::KillOnDrop<Box<dyn FnOnce()>> {
+        term_test_support::KillOnDrop::new(Box::new(move || match original {
+            Some(value) => unsafe {
+                std::env::set_var(LOG_FILE_ENV_VAR, value);
+            },
+            None => unsafe {
+                std::env::remove_var(LOG_FILE_ENV_VAR);
+            },
+        }))
+    }
+
+    #[test]
+    #[serial(env)]
     fn no_session_persistence_true_when_set() {
         unsafe {
             std::env::set_var(NO_SESSION_PERSISTENCE_ENV_VAR, "1");
@@ -314,12 +384,21 @@ mod tests {
     #[test]
     #[serial(env)]
     fn default_environment_detects_cargo_manifest_dir() {
+        // Save and RESTORE the original value: removing it outright would
+        // persist for every later test in this binary (cargo always sets it,
+        // so its absence is itself corrupted state).
+        let original = std::env::var("CARGO_MANIFEST_DIR").ok();
         unsafe {
             std::env::set_var("CARGO_MANIFEST_DIR", "/fake/path");
         }
         assert_eq!(default_environment(), Environment::Dev);
-        unsafe {
-            std::env::remove_var("CARGO_MANIFEST_DIR");
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("CARGO_MANIFEST_DIR", value);
+            },
+            None => unsafe {
+                std::env::remove_var("CARGO_MANIFEST_DIR");
+            },
         }
         if cfg!(debug_assertions) {
             assert_eq!(default_environment(), Environment::Dev);

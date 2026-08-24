@@ -18,10 +18,12 @@ use common::mock::{
     EXPECTED_OSC52_PAYLOAD, find_osc52_payload, find_sgr_mouse_token, get_mock_bin, mock_pid_alive,
 };
 use common::session::{
-    LONG_SLEEP_MS, TEST_COLS, TEST_ROWS, attach_client, connect_client_with_retry, get_bench_bin,
-    list_channels, spawn_gateway, spawn_session, test_channel, wait_for_output,
+    LIVENESS_TIMEOUT, LONG_SLEEP_MS, TEST_COLS, TEST_ROWS, attach_client,
+    connect_client_with_retry, get_bench_bin, list_channels, spawn_gateway, spawn_session,
+    test_channel, wait_for_output,
 };
 use term_clipboard::Osc52Extractor;
+use term_test_support::wait_for_async;
 
 #[tokio::test]
 async fn session_spawn_returns_id() {
@@ -72,7 +74,7 @@ async fn session_input_output_roundtrip() {
         .unwrap();
     writer.send(b"hello\n".to_vec()).unwrap();
 
-    let output = wait_for_output(&mut reader, b"hello", Duration::from_secs(3)).await;
+    let output = wait_for_output(&mut reader, b"hello", LIVENESS_TIMEOUT).await;
     assert!(
         output.windows(5).any(|w| w == b"hello"),
         "Expected 'hello' in output, got: {:?}",
@@ -209,7 +211,7 @@ async fn session_mouse_bytes_forwarded() {
     writer.send(mouse_bytes.to_vec()).unwrap();
     writer.send(b"\n".to_vec()).unwrap();
 
-    let output = wait_for_output(&mut reader, b"\x1b[<", Duration::from_secs(3)).await;
+    let output = wait_for_output(&mut reader, b"\x1b[<", LIVENESS_TIMEOUT).await;
     let token = find_sgr_mouse_token(&output);
     assert!(
         token.is_some(),
@@ -260,7 +262,7 @@ async fn session_mouse_drag_burst_throughput() {
         writer.send(mouse_event).unwrap();
     }
 
-    let output = wait_for_output(&mut reader, b"32;99;10M", Duration::from_secs(3)).await;
+    let output = wait_for_output(&mut reader, b"32;99;10M", LIVENESS_TIMEOUT).await;
     assert!(
         output.windows(9).any(|w| w == b"32;99;10M"),
         "Expected final mouse event in output stream"
@@ -304,7 +306,7 @@ async fn session_mouse_bytes_forwarded() {
     // blocks until a newline is received.
     writer.send(b"ping\n".to_vec()).unwrap();
 
-    let output = wait_for_output(&mut reader, b"MOUSE_OK:", Duration::from_secs(3)).await;
+    let output = wait_for_output(&mut reader, b"MOUSE_OK:", LIVENESS_TIMEOUT).await;
     assert!(
         output.windows(9).any(|w| w == b"MOUSE_OK:"),
         "PTY input pipeline broken on Windows, got {} bytes: {:?}",
@@ -340,7 +342,7 @@ async fn session_osc52_in_output() {
 
     // Wait for the complete payload (not just the `52;` header) so a payload
     // split across broadcast chunks can never break the wait early.
-    let output = wait_for_output(&mut reader, EXPECTED_OSC52_PAYLOAD, Duration::from_secs(3)).await;
+    let output = wait_for_output(&mut reader, EXPECTED_OSC52_PAYLOAD, LIVENESS_TIMEOUT).await;
     let payload = find_osc52_payload(&output);
     assert_eq!(
         payload,
@@ -381,7 +383,7 @@ async fn session_osc52_via_osc52extractor() {
     let mut extracted = None;
 
     let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(3) {
+    while start.elapsed() < LIVENESS_TIMEOUT {
         match tokio::time::timeout(Duration::from_millis(200), reader.recv()).await {
             Ok(Some(Ok(data))) => {
                 if let Some(text) = extractor.push(&data, &prev_tail) {
@@ -455,7 +457,7 @@ async fn session_osc52_late_subscribe_gets_retained_output() {
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
         .await
         .unwrap();
-    let output = wait_for_output(&mut reader, EXPECTED_OSC52_PAYLOAD, Duration::from_secs(3)).await;
+    let output = wait_for_output(&mut reader, EXPECTED_OSC52_PAYLOAD, LIVENESS_TIMEOUT).await;
     let payload = find_osc52_payload(&output);
     assert_eq!(
         payload,
@@ -582,7 +584,7 @@ async fn session_child_exit() {
 
     let mut got_end = false;
     let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(3) {
+    while start.elapsed() < LIVENESS_TIMEOUT {
         match tokio::time::timeout(Duration::from_millis(500), reader.recv()).await {
             Ok(None) => {
                 got_end = true;
@@ -614,9 +616,9 @@ async fn session_child_exit_before_subscribe() {
     .await
     .unwrap();
 
-    // Give the server time to detect child exit and tear down the session
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
+    // No fixed delay before subscribing: the deadline-bounded read loop below
+    // is the actual readiness signal (the stream must end once the server
+    // notices the child exit), so sleeping here only padded the failure path.
     let (_, mut reader) = client
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
         .await
@@ -624,7 +626,7 @@ async fn session_child_exit_before_subscribe() {
 
     let mut got_end = false;
     let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(3) {
+    while start.elapsed() < LIVENESS_TIMEOUT {
         match tokio::time::timeout(Duration::from_millis(500), reader.recv()).await {
             Ok(None) => {
                 got_end = true;
@@ -669,7 +671,7 @@ async fn session_reconnect() {
         .await
         .unwrap();
     writer1.send(b"one\n".to_vec()).unwrap();
-    let output1 = wait_for_output(&mut reader1, b"one", Duration::from_secs(2)).await;
+    let output1 = wait_for_output(&mut reader1, b"one", LIVENESS_TIMEOUT).await;
     assert!(output1.windows(3).any(|w| w == b"one"));
     drop(client1);
 
@@ -684,7 +686,7 @@ async fn session_reconnect() {
         .await
         .unwrap();
     writer2.send(b"two\n".to_vec()).unwrap();
-    let output2 = wait_for_output(&mut reader2, b"two", Duration::from_secs(2)).await;
+    let output2 = wait_for_output(&mut reader2, b"two", LIVENESS_TIMEOUT).await;
     assert!(output2.windows(3).any(|w| w == b"two"));
     guard.shutdown().await;
 }
@@ -790,11 +792,11 @@ async fn two_channels_run_concurrently_with_isolated_io() {
 
     // Write ONLY to channel A; B's output must stay unpolluted.
     writer_a.send(b"hello-a\n".to_vec()).unwrap();
-    let out_a = wait_for_output(&mut reader_a, b"hello-a", Duration::from_secs(3)).await;
+    let out_a = wait_for_output(&mut reader_a, b"hello-a", LIVENESS_TIMEOUT).await;
     assert!(out_a.windows(7).any(|w| w == b"hello-a"));
 
     writer_b.send(b"hello-b\n".to_vec()).unwrap();
-    let out_b = wait_for_output(&mut reader_b, b"hello-b", Duration::from_secs(3)).await;
+    let out_b = wait_for_output(&mut reader_b, b"hello-b", LIVENESS_TIMEOUT).await;
     assert!(out_b.windows(7).any(|w| w == b"hello-b"));
     assert!(
         !out_b.windows(7).any(|w| w == b"hello-a"),
@@ -887,7 +889,7 @@ async fn spawn_session_with_grandchild(client: &Arc<RpcIpcClient>, mock: &str) -
         .expect("subscribe output");
 
     const MARKER: &[u8] = b"GRANDCHILD_PID:";
-    let output = wait_for_output(&mut reader, MARKER, Duration::from_secs(5)).await;
+    let output = wait_for_output(&mut reader, MARKER, LIVENESS_TIMEOUT).await;
     let idx = output
         .windows(MARKER.len())
         .position(|w| w == MARKER)
@@ -1016,8 +1018,11 @@ async fn kill_channel_kills_only_that_channel() {
     // Channel B must keep working.
     let (writer_b, _) = b.open_channel(STREAM_INPUT_METHOD_ID, 0).await.unwrap();
     writer_b.send(b"still-alive\n".to_vec()).unwrap();
-    let out_b = wait_for_output(&mut reader_b, b"still-alive", Duration::from_secs(3)).await;
-    assert!(out_b.windows(11).any(|w| w == b"still-alive"));
+    let out_b = wait_for_output(&mut reader_b, b"still-alive", LIVENESS_TIMEOUT).await;
+    assert!(
+        out_b.windows(11).any(|w| w == b"still-alive"),
+        "channel B must keep echoing after channel A was killed, got: {out_b:?}"
+    );
 
     // Channel A's session is gone (the channel may be reaped entirely once
     // its session exits and no clients remain — either way no live session).
@@ -1149,10 +1154,18 @@ async fn kill_client_detaches_one_socket_only() {
         .await
         .unwrap();
 
-    // Give the server's subscribe-registration tasks a moment to run before
-    // the kill, so the eviction finds the subscriber (avoids a race where the
-    // spawned subscribe task runs after KillClient evicts the conn).
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Prove c1's subscription is registered BEFORE the kill by round-tripping
+    // data through it. The old fixed 200 ms sleep only hoped the server had
+    // finished registering the subscriber; echoing through the channel makes
+    // that an observed fact (avoids a race where the spawned subscribe task
+    // runs after KillClient evicts the conn).
+    let (writer1, _) = c1.open_channel(STREAM_INPUT_METHOD_ID, 0).await.unwrap();
+    writer1.send(b"c1-alive\n".to_vec()).unwrap();
+    let out1 = wait_for_output(&mut reader1, b"c1-alive", LIVENESS_TIMEOUT).await;
+    assert!(
+        out1.windows(8).any(|w| w == b"c1-alive"),
+        "c1 subscription must be live before KillClient"
+    );
 
     // Use a separate admin connection so the RPC itself is not carried over
     // the connection being evicted.
@@ -1163,7 +1176,7 @@ async fn kill_client_detaches_one_socket_only() {
     // Killed socket's stream ends.
     let mut got_end = false;
     let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(3) {
+    while start.elapsed() < LIVENESS_TIMEOUT {
         match tokio::time::timeout(Duration::from_millis(500), reader1.recv()).await {
             Ok(None) => {
                 got_end = true;
@@ -1182,8 +1195,11 @@ async fn kill_client_detaches_one_socket_only() {
     // The other socket keeps working.
     let (writer2, _) = c2.open_channel(STREAM_INPUT_METHOD_ID, 0).await.unwrap();
     writer2.send(b"c2-alive\n".to_vec()).unwrap();
-    let out2 = wait_for_output(&mut reader2, b"c2-alive", Duration::from_secs(3)).await;
-    assert!(out2.windows(8).any(|w| w == b"c2-alive"));
+    let out2 = wait_for_output(&mut reader2, b"c2-alive", LIVENESS_TIMEOUT).await;
+    assert!(
+        out2.windows(8).any(|w| w == b"c2-alive"),
+        "surviving socket must keep working, got: {out2:?}"
+    );
     guard.shutdown().await;
 }
 
@@ -1341,10 +1357,11 @@ async fn spawn_idempotent_on_live_session() {
 async fn spawn_cmd_ignored_on_live_session() {
     let mock = get_mock_bin();
     let (client, _conn_id, guard) = spawn_session(&test_channel("test/cmd_ignored")).await;
+    // `echo` (not `sleep`) so liveness can be proven by round-tripping data.
     Spawn::call(
         &*client,
         SpawnRequest {
-            cmd: Some(vec![mock.clone(), "sleep".into(), "60000".into()]),
+            cmd: Some(vec![mock.clone(), "echo".into()]),
             cols: TEST_COLS,
             rows: TEST_ROWS,
             cwd: None,
@@ -1355,7 +1372,7 @@ async fn spawn_cmd_ignored_on_live_session() {
 
     // A second client joins the live session with a DIFFERENT cmd (`exit 0`).
     // If honored, the session would terminate immediately; instead it must be
-    // ignored and the original `sleep` process kept running.
+    // ignored and the original process kept running.
     let c2 = connect_client_with_retry(guard.socket()).await;
     attach_client(&c2, &test_channel("test/cmd_ignored")).await;
     let SpawnResponse {
@@ -1374,9 +1391,25 @@ async fn spawn_cmd_ignored_on_live_session() {
     .await
     .unwrap();
 
-    // Give a would-be `exit` time to take effect: the session must still be
-    // live, proving the command was ignored and the original process survived.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Positive control instead of a fixed wait: prove the original process is
+    // still alive by echoing through it. If the differing cmd had been
+    // honored, the session would have ended and nothing would answer.
+    let (_, mut reader) = client
+        .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+    let (writer, _) = client
+        .open_channel(STREAM_INPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
+    writer.send(b"still-alive\n".to_vec()).unwrap();
+    let out = wait_for_output(&mut reader, b"still-alive", LIVENESS_TIMEOUT).await;
+    assert!(
+        out.windows(11).any(|w| w == b"still-alive"),
+        "original session process must survive an ignored cmd; got {} bytes: {:?}",
+        out.len(),
+        String::from_utf8_lossy(&out)
+    );
     let resp = list_channels(&client).await;
     let ch = resp
         .channels
@@ -1580,12 +1613,10 @@ async fn shutdown_gateway_stops_daemon() {
 
     guard.shutdown().await;
 
-    // After the deferred flush grace, the gateway process ends; the tokio
-    // task is aborted, so the session cannot be reached anymore. We simply
-    // assert the ShutdownGateway call returned cleanly (the RPC response was
-    // flushed before the daemon exited).
-    // Give the daemon a moment to actually terminate.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // This gateway runs in-process: the ShutdownGateway RPC kills every
+    // session's child, signals the `run_gateway` task to return, and drops
+    // `ServerState`. Asserting the RPC returned cleanly IS the assertion;
+    // there is no separate daemon process to wait for.
 }
 
 #[tokio::test]
@@ -1754,9 +1785,9 @@ async fn shutdown_refuses_without_force_when_live_sessions() {
         "gateway still serving after refusal"
     );
 
-    // With force: clean shutdown.
+    // With force: clean shutdown. The RPC response is the completion signal;
+    // no fixed teardown delay is needed afterwards.
     ShutdownGateway::call(&*client, true).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
 #[tokio::test]
@@ -1766,7 +1797,6 @@ async fn shutdown_without_force_succeeds_when_no_live_sessions() {
     let client = connect_client_with_retry(guard.socket()).await;
     // No sessions were ever spawned: stop must succeed without --force.
     ShutdownGateway::call(&*client, false).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
 #[tokio::test]
@@ -2040,43 +2070,52 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
     );
 
     // 2. A's channel is gone or sessionless; B keeps a live session.
-    let mut a_gone = false;
-    let mut b_alive = false;
-    for _ in 0..40 {
-        let resp = list_channels(guard.client()).await;
-        let a = resp.channels.iter().find(|c| c.name == ch_a.to_string());
-        let b = resp.channels.iter().find(|c| c.name == ch_b.to_string());
-        let a_dead = a.is_none() || a.unwrap().session.as_ref().is_none_or(|s| s.exited);
-        b_alive = b.is_some_and(|c| c.session.as_ref().is_some_and(|s| !s.exited));
-        if a_dead && b_alive {
-            a_gone = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        a_gone,
-        "workspace A session must terminate after its inner WM exits"
-    );
+    let rpc = Arc::clone(guard.client());
+    let a_name = ch_a.to_string();
+    let b_name = ch_b.to_string();
+    let b_alive = wait_for_async(
+        Duration::from_secs(8),
+        "workspace A session must terminate after its inner WM exits",
+        move || {
+            let rpc = Arc::clone(&rpc);
+            let a_name = a_name.clone();
+            let b_name = b_name.clone();
+            async move {
+                let resp = list_channels(&rpc).await;
+                let a = resp.channels.iter().find(|c| c.name == a_name);
+                let b = resp.channels.iter().find(|c| c.name == b_name);
+                let a_dead = a.is_none_or(|c| c.session.as_ref().is_none_or(|s| s.exited));
+                let b_live = b.is_some_and(|c| c.session.as_ref().is_some_and(|s| !s.exited));
+                (a_dead && b_live).then_some(b_live)
+            }
+        },
+    )
+    .await;
     assert!(b_alive, "workspace B must be untouched");
 
     // 3. Stats: A's entry disappears; B's survives with its exact numbers.
-    let mut stats_a_gone = false;
-    let mut stats_b_ok = false;
-    for _ in 0..40 {
-        let resp = ListWmStats::call(&**guard.client(), ())
-            .await
-            .expect("stats");
-        stats_a_gone = !resp.stats.iter().any(|s| s.channel == ch_a.to_string());
-        stats_b_ok = resp
-            .stats
-            .iter()
-            .any(|s| s.channel == ch_b.to_string() && (s.windows, s.tasks_running) == (1, 1));
-        if stats_a_gone && stats_b_ok {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let rpc = Arc::clone(guard.client());
+    let a_name = ch_a.to_string();
+    let b_name = ch_b.to_string();
+    let (stats_a_gone, stats_b_ok) = wait_for_async(
+        Duration::from_secs(8),
+        "A's stats entry must disappear while B's stays intact",
+        move || {
+            let rpc = Arc::clone(&rpc);
+            let a_name = a_name.clone();
+            let b_name = b_name.clone();
+            async move {
+                let resp = ListWmStats::call(&*rpc, ()).await.expect("stats");
+                let stats_a_gone = !resp.stats.iter().any(|s| s.channel == a_name);
+                let stats_b_ok = resp
+                    .stats
+                    .iter()
+                    .any(|s| s.channel == b_name && (s.windows, s.tasks_running) == (1, 1));
+                (stats_a_gone && stats_b_ok).then_some((stats_a_gone, stats_b_ok))
+            }
+        },
+    )
+    .await;
     assert!(stats_a_gone, "A's stats entry must disappear");
     assert!(stats_b_ok, "B's stats entry must survive intact");
 
@@ -2136,26 +2175,33 @@ async fn wm_stats_report_then_list_then_evict() {
     );
 
     // Once the subscribing WM disconnects, its entry disappears. Eviction is
-    // asynchronous, so poll briefly instead of sleeping a fixed interval.
+    // asynchronous, so poll on a deadline instead of sleeping a fixed interval.
     drop(wm_client);
-    let mut gone = false;
-    for _ in 0..40 {
-        let resp = ListWmStats::call(&*outsider, ())
-            .await
-            .expect("list after evict");
-        if !resp.stats.iter().any(|s| s.channel == channel.to_string()) {
-            gone = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let rpc = Arc::clone(&outsider);
+    let gone_name = channel.to_string();
+    wait_for_async(
+        Duration::from_secs(8),
+        "evicted wm's entry must be removed after disconnect",
+        move || {
+            let rpc = Arc::clone(&rpc);
+            let gone_name = gone_name.clone();
+            async move {
+                let resp = ListWmStats::call(&*rpc, ())
+                    .await
+                    .expect("list after evict");
+                (!resp.stats.iter().any(|s| s.channel == gone_name)).then_some(())
+            }
+        },
+    )
+    .await;
     assert!(
-        gone,
-        "evicted wm's entry must be removed after disconnect, got {:?}",
         ListWmStats::call(&*outsider, ())
             .await
             .expect("final list")
             .stats
+            .iter()
+            .all(|s| s.channel != channel.to_string()),
+        "evicted wm's entry must be removed after disconnect"
     );
 
     guard.shutdown().await;
@@ -2175,11 +2221,14 @@ fn launcher_exits_immediately_on_nesting_fatal() {
     // Use a 2-segment gateway so ChannelName::parse succeeds and both
     // `connect_or_spawn_server` (which resolves via gateway_channel_name())
     // and `TERM_SESSION_GATEWAY` (read literally by the nesting guard) agree.
-    let gateway = "test-nesting/launcher-gw";
+    // The pid-suffixed name keeps concurrent runs and leftovers from crashed
+    // prior runs from claiming the same dummy endpoint.
+    let gateway = term_test_support::unique_gateway_name("test-nesting/launcher-gw");
 
     // Bind a dummy listener so connect_or_spawn_server's probe succeeds
     // and returns immediately (instead of trying to spawn a daemon).
     let name = gateway
+        .clone()
         .to_ns_name::<GenericNamespaced>()
         .expect("gateway ns name");
     let _listener = ListenerOptions::new()
@@ -2189,8 +2238,8 @@ fn launcher_exits_immediately_on_nesting_fatal() {
         .expect("bind dummy gateway");
 
     let child = Command::new(env!("CARGO_BIN_EXE_term-wm"))
-        .env("TERM_SESSION_GATEWAY", gateway)
-        .args(["--gateway", gateway, "--workspace", "test-nesting"])
+        .env("TERM_SESSION_GATEWAY", &gateway)
+        .args(["--gateway", gateway.as_str(), "--workspace", "test-nesting"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
