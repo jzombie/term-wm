@@ -201,6 +201,58 @@ mod tests {
         assert_eq!(namespace, "term-wm-dev", "{DEV_ISOLATION_REGRESSION_MSG}");
     }
 
+    /// Substrings that indicate personal/local overrides crept into the
+    /// committed toolchain-policy config. Matched against non-comment lines
+    /// only, so explanatory prose in comments can never trip the wire.
+    const FORBIDDEN_LOCAL_OVERRIDE_MARKERS: [&str; 4] =
+        ["[patch", "[target", "[build", "paths ="];
+
+    /// Guards the committed `.cargo/config.toml` against accidental
+    /// personal overrides (`[patch.crates-io]` forks, `[target]` rustflags,
+    /// `[build]` settings, stray `paths =` keys). The file is version
+    /// controlled POLICY; private state belongs in `~/.cargo/config.toml`
+    /// or an ancestor-directory config, which Cargo merges automatically.
+    #[test]
+    fn cargo_config_remains_pure_of_local_overrides() {
+        // This test lives in crates/term-wm-config: two parents up is the
+        // workspace root.
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR is set for every cargo-spawned test");
+        let workspace_root = std::path::Path::new(&manifest_dir)
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("crate lives directly under <workspace>/crates");
+
+        let config_path = workspace_root.join(".cargo").join("config.toml");
+        let raw = std::fs::read_to_string(&config_path).unwrap_or_else(|e| {
+            panic!(
+                "CRITICAL REGRESSION: could not read the committed toolchain policy \
+                 at {}: {e}. The file must stay version controlled next to this test.",
+                config_path.display()
+            )
+        });
+
+        // Ignore comment lines so documentation prose (which may mention
+        // `[patch]` & friends) is never mistaken for configuration.
+        let effective = raw
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for marker in FORBIDDEN_LOCAL_OVERRIDE_MARKERS {
+            assert!(
+                !effective.contains(marker),
+                "\nCRITICAL REGRESSION: a local override was added to the committed \
+                 .cargo/config.toml (found forbidden marker {marker:?}).\n\n\
+                 FIX IT:\n\
+                 1. Revert your changes to .cargo/config.toml.\n\
+                 2. Move personal overrides to ~/.cargo/config.toml (global).\n\
+                 3. Or move them to <parent-of-repo>/.cargo/config.toml; Cargo merges the hierarchy.\n"
+            );
+        }
+    }
+
     #[test]
     #[serial(env)]
     fn no_session_persistence_false_when_unset() {
