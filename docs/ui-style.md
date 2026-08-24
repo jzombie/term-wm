@@ -49,7 +49,10 @@ update the palette entry and the `Display` string together.
   `<workspace>/main`, each with its own PTY session and window-manager instance.
 - **channel** — a daemon-hosted session endpoint (`<workspace>/main`).
 - **gateway / gateway daemon** — the background session daemon; endpoint
-  `term-wm/<env>/<user>/gateway`.
+  `{namespace}/<user>/gateway` (default namespace `term-wm`; cargo-driven
+  executions in this repo resolve `term-wm-dev` via the committed
+  `.cargo/config.toml`). Independent of `--env` / `TERM_WM_ENV`, which scope
+  project tasks only.
 - **viewer** — a connected client of a channel (the local TUI or a `term-session`
   client).
 - **detach** — disconnect a viewer from a session without terminating its

@@ -146,6 +146,20 @@ Notes for Automation/Agents
 - Automation editing component files should prefer minimal, surgical changes via `apply_patch`.
 - Where work spans multiple files, agents must create a `manage_todo_list` plan first and provide concise progress updates after batches of changes.
 
+Committed Toolchain Config
+- `.cargo/config.toml` is version-controlled POLICY, not a personal scratchpad:
+  it injects `TERM_WM_NAMESPACE=term-wm-dev` so every cargo-driven execution
+  resolves the isolated dev gateway (`term-wm-dev/<user>/gateway`) instead of
+  hijacking the installed system daemon (`term-wm/<user>/gateway`).
+- Do NOT add personal `[patch]` / `[target]` / `[build]` blocks (or stray
+  `paths =` keys) to it. Two unit tests in `crates/term-wm-config/src/env.rs`
+  fail on both mistakes: `repository_dev_isolation_is_enforced` (missing or
+  wrong injection) and `cargo_config_remains_pure_of_local_overrides`
+  (forbidden override markers).
+- Personal overrides belong in `~/.cargo/config.toml` (global) or an
+  ancestor-directory `.cargo/config.toml`; Cargo merges the whole hierarchy.
+  See `.cargo/config.toml.example` for the template.
+
 Declarative `view!` Macro
 - `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) is a
   declarative shorthand for building component trees. It is "dumb": the expansion
