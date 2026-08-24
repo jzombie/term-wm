@@ -1,4 +1,3 @@
-.cargo/config.toml
 target/
 lcov.info
 .DS_Store

@@ -106,12 +106,9 @@ gateway channel names can never disagree because both resolve through the exact 
 
 When resolving environment identity:
 
-1. **`TERM_WM_GATEWAY` override:** if set, overrides the gateway IPC socket wholesale
-   (does not alter task gating).
-2. **`TERM_WM_ENV` override:** if set to `dev`, `prod`, or `test` (case-insensitive,
-   trimmed), overrides the default environment for **both** IPC gateway scoping and
-   task gating.
-3. **`default_environment()` fallback:**
+1. **`TERM_WM_ENV` override:** if set to `dev`, `prod`, or `test` (case-insensitive,
+   trimmed), overrides the default environment used for **project-task gating**.
+2. **`default_environment()` fallback:**
    - Resolves to `"dev"` if `CARGO_MANIFEST_DIR` is set (any `cargo run` execution,
      including `cargo run --release`) or `cfg!(debug_assertions)` is true.
    - Resolves to `"prod"` for standalone installed release binaries without
@@ -122,10 +119,35 @@ When resolving environment identity:
 > you expect `"prod"` task behavior while launching through Cargo, set
 > `TERM_WM_ENV=prod`.
 
+The environment scopes project tasks ONLY. Gateway endpoints never consult it.
+
+### Gateway / Environment Decoupling
+
+The persistence gateway endpoint is `{namespace}/<user>/gateway` and is
+independent of the runtime environment. Resolution order:
+
+1. **`--gateway <NAME>`:** wholesale override of the full endpoint path
+   (multi-segment values round-trip byte-exact; the caller owns the whole
+   path).
+2. **`TERM_WM_NAMESPACE`:** namespace-root override preserving the OS-level
+   `<user>` segment. Values are validated against the strict segment charset;
+   invalid or empty values fall back to the default.
+3. **Static default:** namespace `term-wm`.
+
+**Local development isolation** is enforced at the toolchain boundary: the
+committed `.cargo/config.toml` injects `TERM_WM_NAMESPACE=term-wm-dev`, so
+every cargo-driven execution (`cargo run`, `cargo test`) uses
+`term-wm-dev/<user>/gateway` while binaries executed directly bind the shared
+`term-wm/<user>/gateway`. The `<user>` segment is always resolved at runtime,
+so two developers on a shared machine can never collide on a dev socket.
+Auto-spawned daemons are pinned to the launcher's resolved endpoint via a
+hidden `--gateway <name>` argument, so a freshly spawned daemon always binds
+exactly the socket its launcher probed.
+
 ### Forcing Environments
 
-- Force production mode under Cargo: `TERM_WM_ENV=prod cargo run --release`
-- Force development mode in an installed binary: `TERM_WM_ENV=dev term-wm`
+- Force production task gating under Cargo: `TERM_WM_ENV=prod cargo run --release`
+- Force development task gating in an installed binary: `TERM_WM_ENV=dev term-wm`
 
 **Filtering rules:**
 - Empty list → visible in all environments (default).

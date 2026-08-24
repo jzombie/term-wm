@@ -52,6 +52,13 @@ pub struct Cli {
     #[arg(long = "daemon", hide = true)]
     pub daemon: bool,
 
+    /// Gateway endpoint override (`<namespace>/<user>/gateway`). Process-
+    /// local: pins every gateway consumer in this process (daemon bind,
+    /// `--stop-daemon`, `--list-channels`) and is never inherited by session
+    /// shells. When the daemon auto-spawns, it is pinned to this endpoint.
+    #[arg(long = "gateway", value_name = "NAME")]
+    pub gateway: Option<String>,
+
     /// Hidden flag: running inside a daemon-managed persistent PTY channel
     #[arg(long = "internal-session", hide = true)]
     pub internal_session: bool,
@@ -78,9 +85,10 @@ pub struct Cli {
     #[arg(long = "allow-nested")]
     pub allow_nested: bool,
 
-    /// Override the environment used for project-task visibility AND gateway
-    /// socket scoping (dev/prod/test). Applied process-wide before any
-    /// session or task code runs; beats TERM_WM_ENV and build heuristics.
+    /// Override the environment used for project-task visibility
+    /// (dev/prod/test). Applied process-wide before any task code runs;
+    /// beats TERM_WM_ENV and build heuristics. Gateway endpoints do not
+    /// depend on the environment.
     #[arg(long = "env", value_name = "ENV", value_parser = ["dev", "prod", "test"])]
     pub env: Option<String>,
 
@@ -124,14 +132,20 @@ pub fn total_windows(count: Option<usize>, commands: &[String]) -> usize {
 }
 
 /// Serializes the outer launcher's CLI state into an inner process command.
-/// Injects the headless `--internal-session` flag and the target workspace.
+/// Injects the headless `--internal-session` flag, the target workspace, and
+/// pins the inner session to the HOST gateway (`--gateway <socket>`) so its
+/// attributed-input listener and every gateway call land on the daemon that
+/// actually owns its PTY (its own environment may have namespace policy
+/// scrubbed by the daemon).
 #[cfg(any(feature = "session-persistence", test))]
-pub fn build_inner_command(exe: String, workspace: &str, cli: &Cli) -> Vec<String> {
+pub fn build_inner_command(exe: String, workspace: &str, cli: &Cli, socket: &str) -> Vec<String> {
     let mut inner_cmd = vec![
         exe,
         "--internal-session".to_string(),
         "-w".to_string(),
         workspace.to_string(),
+        "--gateway".to_string(),
+        socket.to_string(),
     ];
     if let Some(count) = cli.count {
         inner_cmd.push("-n".to_string());
@@ -392,15 +406,7 @@ mod tests {
     #[test]
     fn build_inner_command_basic() {
         let cli = Cli::parse_from(["term-wm"]);
-        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
-        assert_eq!(cmd, vec!["exe", "--internal-session", "-w", "dev"]);
-    }
-
-    #[cfg(any(feature = "session-persistence", test))]
-    #[test]
-    fn build_inner_command_with_count_and_scrollback() {
-        let cli = Cli::parse_from(["term-wm", "-n", "4", "--scrollback", "5000"]);
-        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli, "test/gateway");
         assert_eq!(
             cmd,
             vec![
@@ -408,6 +414,26 @@ mod tests {
                 "--internal-session",
                 "-w",
                 "dev",
+                "--gateway",
+                "test/gateway"
+            ]
+        );
+    }
+
+    #[cfg(any(feature = "session-persistence", test))]
+    #[test]
+    fn build_inner_command_with_count_and_scrollback() {
+        let cli = Cli::parse_from(["term-wm", "-n", "4", "--scrollback", "5000"]);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli, "test/gateway");
+        assert_eq!(
+            cmd,
+            vec![
+                "exe",
+                "--internal-session",
+                "-w",
+                "dev",
+                "--gateway",
+                "test/gateway",
                 "-n",
                 "4",
                 "--scrollback",
@@ -420,7 +446,7 @@ mod tests {
     #[test]
     fn build_inner_command_with_runs_and_positionals() {
         let cli = Cli::parse_from(["term-wm", "-r", "htop", "--", "vim", "file.txt"]);
-        let cmd = build_inner_command("exe".to_string(), "dev", &cli);
+        let cmd = build_inner_command("exe".to_string(), "dev", &cli, "test/gateway");
         assert_eq!(
             cmd,
             vec![
@@ -428,6 +454,8 @@ mod tests {
                 "--internal-session",
                 "-w",
                 "dev",
+                "--gateway",
+                "test/gateway",
                 "--run",
                 "htop",
                 "--",
@@ -488,10 +516,11 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn help_shows_resolved_gateway() {
-        // Hermetic: a developer's exported TERM_WM_GATEWAY / TERM_WM_ENV would
-        // otherwise change the rendered footer.
+        // Hermetic: a developer's exported TERM_WM_ENV would otherwise
+        // change the rendered footer; the gateway override cell is cleared
+        // so the default namespace renders.
+        term_wm_config::env::set_gateway_override(None);
         unsafe {
-            std::env::remove_var("TERM_WM_GATEWAY");
             std::env::remove_var("TERM_WM_ENV");
         }
         let mut cmd = cli_command();

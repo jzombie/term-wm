@@ -1,11 +1,9 @@
 use std::fmt;
 
 use interprocess::local_socket::{GenericNamespaced, prelude::*};
-use term_wm_config::env::active_environment;
-pub use term_wm_config::env::{
-    GATEWAY_CHANNEL_ENV_VAR, GATEWAY_NAMESPACE, SESSION_ACTIVE_ENV_VAR, SESSION_GATEWAY_ENV_VAR,
-};
+pub use term_wm_config::env::{GATEWAY_NAMESPACE, NAMESPACE_ENV_VAR, SESSION_GATEWAY_ENV_VAR};
 
+// TODO: Move to config
 /// Default workspace name (namespace when no `/` is present).
 pub const DEFAULT_WORKSPACE: &str = "default";
 
@@ -78,6 +76,41 @@ impl ChannelName {
             name: name.to_string(),
         })
     }
+
+    /// Parse a gateway channel string losslessly.
+    ///
+    /// Unlike [`Self::parse`] (session channels, strictly `name` or
+    /// `namespace/name`), gateway names carry the full endpoint path, e.g.
+    /// `term-wm-dev-1a2b3c4d/prod/alice/gateway`. The namespace is everything
+    /// before the **last** `/` (possibly multi-segment) and the name is the
+    /// trailing segment. [`Display`](fmt::Display) rejoins both with `/`, so
+    /// a parsed gateway round-trips byte-exact; this is what makes pinned
+    /// `--gateway <name>` daemon spawns bind exactly the socket the client
+    /// probed.
+    pub fn parse_gateway(input: &str) -> Result<Self, String> {
+        let input = input.trim();
+        let Some((ns, name)) = input.rsplit_once('/') else {
+            return Err(format!(
+                "invalid gateway '{input}': expected '<namespace>/<name>'"
+            ));
+        };
+        let is_valid = |s: &str| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        };
+        for segment in ns.split('/').chain(std::iter::once(name)) {
+            if !is_valid(segment) {
+                return Err(format!(
+                    "invalid gateway segment '{segment}' in '{input}': segments must be non-empty alphanumeric, hyphen, or underscore"
+                ));
+            }
+        }
+        Ok(Self {
+            namespace: ns.to_string(),
+            name: name.to_string(),
+        })
+    }
 }
 
 impl fmt::Display for ChannelName {
@@ -120,31 +153,68 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
 
 /// Resolve the logical gateway channel name.
 ///
-/// Deterministic and static by default: `TERM_WM_GATEWAY` env override wins
-/// wholesale at runtime; otherwise the gateway resolves to
-/// `{namespace}/<env>/<user>/gateway` where `{namespace}` is [`GATEWAY_NAMESPACE`],
-/// `<env>` is the active environment returned by [`active_environment()`] (the same
-/// single source of truth used for project task gating), and `<user>` is the current OS user.
-/// Environment-scoping keeps dev builds from ever attaching to (or tearing
-/// down) production gateways while the shared namespace keeps all binaries
-/// interoperating on the same socket family. No build-time entropy is
-/// involved; the compiled artifact is reproducible and an upgraded binary
-/// probes the same endpoint as a running daemon. Test isolation is the test
-/// harness's job — it injects a unique `TERM_WM_GATEWAY` per suite into the
-/// client and daemon subprocesses.
+/// Resolution order:
+/// 1. The process-local override installed via
+///    `term_wm_config::env::set_gateway_override` (fed by the `--gateway
+///    <NAME>` CLI flag) wins wholesale (parsed with
+///    [`ChannelName::parse_gateway`] so multi-segment endpoint paths
+///    round-trip byte-exact; the caller takes full responsibility for the
+///    entire path, including the user segment). Deliberately process-local:
+///    it never reaches PTY children, so a pinned launch cannot leak its
+///    endpoint into descendants' resolution.
+/// 2. Otherwise the endpoint is `<namespace>/<user>/gateway` where:
+///    - `<namespace>` is `TERM_WM_NAMESPACE` when set to a valid segment
+///      (alphanumeric/hyphen/underscore, same charset as
+///      [`ChannelName::parse_gateway`]; invalid or empty values are rejected
+///      and fall back to the default), else [`GATEWAY_NAMESPACE`];
+///    - `<user>` is the current OS user.
+///
+/// The path deliberately contains NO application-profile component: the
+/// environment (`TERM_WM_ENV`, `--env`) scopes project tasks only, so
+/// changing a runtime profile can never fork daemon lifecycles. Local
+/// development isolation is enforced at the toolchain boundary: the repo's
+/// committed `.cargo/config.toml` sets `TERM_WM_NAMESPACE=term-wm-dev` for
+/// every cargo-driven execution while preserving the OS-level `<user>`
+/// segment (multi-tenant safe). Binaries executed directly never see the
+/// injection and bind the shared default namespace.
+///
+/// The inception marker ([`SESSION_GATEWAY_ENV_VAR`]) is deliberately NOT an
+/// input here: daemons stamp the socket they actually bound, so children can
+/// compare their host session's endpoint against any requested target.
 pub fn gateway_channel_name() -> ChannelName {
-    if let Ok(name) = std::env::var(GATEWAY_CHANNEL_ENV_VAR) {
-        return ChannelName::parse(&name).unwrap_or_else(|_| ChannelName {
+    if let Some(name) = term_wm_config::env::gateway_override() {
+        return ChannelName::parse_gateway(&name).unwrap_or_else(|_| ChannelName {
             namespace: GATEWAY_NAMESPACE.to_string(),
             name: "gateway".to_string(),
         });
     }
-    let env = active_environment();
-    let user = current_os_user();
     ChannelName {
-        namespace: GATEWAY_NAMESPACE.to_string(),
-        name: format!("{env}/{user}/gateway"),
+        namespace: resolve_gateway_namespace(),
+        name: format!("{}/gateway", current_os_user()),
     }
+}
+
+/// Resolve the gateway namespace root: `TERM_WM_NAMESPACE` when set to a
+/// valid segment, else [`GATEWAY_NAMESPACE`].
+///
+/// Validation matches the strict segment charset (`parse_gateway`):
+/// alphanumeric, hyphen, underscore. Values containing path characters
+/// (`/`, `.`) or empty after trimming are rejected and fall back to the
+/// static default, so the namespace can never smuggle path traversal into
+/// the endpoint.
+fn resolve_gateway_namespace() -> String {
+    match std::env::var(NAMESPACE_ENV_VAR) {
+        Ok(ns) if is_valid_segment(ns.trim()) => ns.trim().to_string(),
+        _ => GATEWAY_NAMESPACE.to_string(),
+    }
+}
+
+/// Whether `s` is a valid single channel segment: non-empty and composed
+/// only of ASCII alphanumerics, hyphens, and underscores.
+fn is_valid_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// One-line `--help` footer describing the resolved gateway. Shared by both
@@ -186,8 +256,8 @@ fn current_os_user() -> String {
 mod tests {
     use super::*;
 
-    /// Serializes tests that mutate the `TERM_WM_GATEWAY` env var, which is
-    /// process-global and unsafe to read/write concurrently.
+    /// Serializes tests that mutate the process-local gateway override,
+    /// which is process-global state unsafe to read/write concurrently.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -219,6 +289,35 @@ mod tests {
     }
 
     #[test]
+    fn gateway_parse_is_lossless_for_multi_segment_endpoints() {
+        let raw = "term-wm-dev-1a2b3c4d/prod/alice/gateway";
+        let gw = ChannelName::parse_gateway(raw).unwrap();
+        assert_eq!(gw.namespace, "term-wm-dev-1a2b3c4d/prod/alice");
+        assert_eq!(gw.name, "gateway");
+        // Byte-exact round-trip is the property daemon spawn pinning relies on.
+        assert_eq!(gw.to_string(), raw);
+    }
+
+    #[test]
+    fn gateway_parse_accepts_two_segments_like_strict_parse() {
+        let gw = ChannelName::parse_gateway("custom/gateway").unwrap();
+        assert_eq!(gw.namespace, "custom");
+        assert_eq!(gw.name, "gateway");
+    }
+
+    #[test]
+    fn gateway_parse_rejects_invalid_input() {
+        // Bare name without a namespace: gateways are always fully qualified
+        // so a pinned spawn can never silently reinterpret its target.
+        assert!(ChannelName::parse_gateway("gateway").is_err());
+        assert!(ChannelName::parse_gateway("").is_err());
+        assert!(ChannelName::parse_gateway("/bare").is_err());
+        assert!(ChannelName::parse_gateway("ns/gateway/").is_err());
+        assert!(ChannelName::parse_gateway("has space/gateway").is_err());
+        assert!(ChannelName::parse_gateway("a//b").is_err());
+    }
+
+    #[test]
     fn probe_is_false_when_nothing_is_bound() {
         let channel = ChannelName::parse("probe/not_listening").unwrap();
         assert!(!probe_ipc_endpoint(&channel));
@@ -227,74 +326,105 @@ mod tests {
     #[test]
     fn gateway_override_env_wins() {
         let _guard = env_lock();
-        // TERM_WM_GATEWAY must be honoured when present (runtime injection),
+        // The process-local override must be honoured when present (runtime injection),
         // even when TERM_WM_ENV is also set.
         unsafe {
-            std::env::set_var(GATEWAY_CHANNEL_ENV_VAR, "test/iso-gateway");
+            term_wm_config::env::set_gateway_override(Some("test/iso-gateway"));
             std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "prod");
         }
         let gw = gateway_channel_name();
         assert_eq!(gw.to_string(), "test/iso-gateway");
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
             std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
         }
+    }
+
+    #[test]
+    fn gateway_override_env_round_trips_multi_segment_paths() {
+        let _guard = env_lock();
+        // Full endpoint paths (the shape pinned daemon spawns pass) must
+        // resolve byte-exact instead of collapsing to a shorter name.
+        let raw = "term-wm-dev-1a2b3c4d/test/tester/gateway";
+        term_wm_config::env::set_gateway_override(Some(raw));
+        assert_eq!(gateway_channel_name().to_string(), raw);
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[test]
     fn gateway_default_is_deterministic_and_user_scoped() {
         let _guard = env_lock();
-        // No overrides -> must be {namespace}/<env>/<user>/gateway, stable
-        // across calls and never a bare shared literal.
+        // No overrides -> must be {namespace}/<user>/gateway, stable across
+        // calls and never a bare shared literal. Both override variables are
+        // cleared so the assertion holds regardless of ambient toolchain
+        // injection (the committed .cargo/config.toml sets a namespace).
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
-            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
+            std::env::remove_var(NAMESPACE_ENV_VAR);
+        }
+        // `current_os_user()` reads $USER on Unix and %USERNAME% on Windows;
+        // set both so the assertion is platform-independent.
+        unsafe {
+            std::env::set_var("USER", "tester");
+            std::env::set_var("USERNAME", "tester");
         }
         let a = gateway_channel_name();
         let b = gateway_channel_name();
         assert_eq!(a, b);
         assert_eq!(a.namespace, GATEWAY_NAMESPACE);
-        // {env}/{user}/gateway  (3 segments)
+        assert_eq!(a.to_string(), format!("{GATEWAY_NAMESPACE}/tester/gateway"));
+        // <user>/gateway  (2 segments; no environment component by design)
         let parts: Vec<&str> = a.name.split('/').collect();
-        assert_eq!(parts.len(), 3, "got {}", a.name);
-        assert_eq!(
-            parts[0],
-            term_wm_config::env::default_environment().as_str()
-        );
-        assert!(!parts[1].is_empty(), "user segment must be non-empty");
-        assert_eq!(parts[2], "gateway");
-    }
-
-    #[test]
-    fn gateway_default_honors_environment_override() {
-        let _guard = env_lock();
+        assert_eq!(parts.len(), 2, "got {}", a.name);
+        assert_eq!(parts[0], "tester");
+        assert_eq!(parts[1], "gateway");
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
-            std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "test");
-        }
-        let gw = gateway_channel_name();
-        let env_segment = gw.name.split('/').next().unwrap_or("");
-        assert_eq!(env_segment, "test");
-        unsafe {
-            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+            std::env::remove_var("USER");
+            std::env::remove_var("USERNAME");
         }
     }
 
     #[test]
-    fn gateway_default_falls_back_on_invalid_environment() {
+    fn gateway_namespace_override_preserves_user_segment() {
         let _guard = env_lock();
+        // The toolchain-injected namespace override must only replace the
+        // root: the OS-level <user> segment stays derived at runtime so two
+        // developers on one machine can never share a dev socket.
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
-            std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "bogus");
+            term_wm_config::env::set_gateway_override(None);
+            std::env::set_var(NAMESPACE_ENV_VAR, "term-wm-dev");
+            std::env::set_var("USER", "tester");
+            std::env::set_var("USERNAME", "tester");
         }
         let gw = gateway_channel_name();
-        let env_segment = gw.name.split('/').next().unwrap_or("");
-        assert_eq!(
-            env_segment,
-            term_wm_config::env::default_environment().as_str()
-        );
+        assert_eq!(gw.namespace, "term-wm-dev");
+        assert_eq!(gw.to_string(), "term-wm-dev/tester/gateway");
         unsafe {
-            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+            std::env::remove_var(NAMESPACE_ENV_VAR);
+            std::env::remove_var("USER");
+            std::env::remove_var("USERNAME");
+        }
+    }
+
+    #[test]
+    fn gateway_namespace_override_rejects_invalid_segments() {
+        let _guard = env_lock();
+        // Path-traversal or malformed namespaces are rejected and fall back
+        // to the static default: env values can never reshape the path
+        // beyond swapping the root segment.
+        for bogus in ["../evil", "has.dot", "has/slash", "", "   "] {
+            unsafe {
+                term_wm_config::env::set_gateway_override(None);
+                std::env::set_var(NAMESPACE_ENV_VAR, bogus);
+            }
+            let gw = gateway_channel_name();
+            assert_eq!(
+                gw.namespace, GATEWAY_NAMESPACE,
+                "bogus={bogus:?} must fall back to the default namespace"
+            );
+        }
+        unsafe {
+            std::env::remove_var(NAMESPACE_ENV_VAR);
         }
     }
 
@@ -302,8 +432,8 @@ mod tests {
     fn gateway_help_line_mentions_gateway() {
         let _guard = env_lock();
         unsafe {
-            std::env::remove_var(GATEWAY_CHANNEL_ENV_VAR);
-            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
+            term_wm_config::env::set_gateway_override(None);
+            std::env::remove_var(NAMESPACE_ENV_VAR);
         }
         assert!(
             gateway_help_line().starts_with(&format!("Persistence gateway: {GATEWAY_NAMESPACE}/"))

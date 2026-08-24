@@ -334,17 +334,22 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             WmTopPanelComponent,
         };
 
+        // The active environment comes from the single source of truth; the
+        // `--env` CLI override is installed before any app construction.
+        let bottom_panel = {
+            let mut panel =
+                WmBottomPanelComponent::new(&app_name, &app_version, hostname.as_deref());
+            panel.set_environment(&term_wm_config::env::active_environment().to_string());
+            panel
+        };
+
         let wm = AppBuilder::<LayerComponent>::new()
             .config(config)
             .app_ctx(Arc::new(app_ctx))
             .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
                 &app_name,
             )))
-            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
-                &app_name,
-                &app_version,
-                hostname.as_deref(),
-            )))
+            .bottom_panel(LayerComponent::BottomPanel(bottom_panel))
             .fab(LayerComponent::Fab(WmFabComponent::new()))
             .supported_menu_actions(actions)
             .build()
@@ -429,17 +434,19 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             WmBottomPanelComponent, WmFabComponent, WmTopPanelComponent,
         };
 
+        let bottom_panel = {
+            let mut panel = WmBottomPanelComponent::new(&app_name, &app_version, hostname);
+            panel.set_environment(&term_wm_config::env::active_environment().to_string());
+            panel
+        };
+
         let wm = AppBuilder::<LayerComponent>::new()
             .config(config)
             .app_ctx(Arc::clone(app_ctx))
             .top_panel(LayerComponent::TopPanel(WmTopPanelComponent::new(
                 &app_name,
             )))
-            .bottom_panel(LayerComponent::BottomPanel(WmBottomPanelComponent::new(
-                &app_name,
-                &app_version,
-                hostname,
-            )))
+            .bottom_panel(LayerComponent::BottomPanel(bottom_panel))
             .fab(LayerComponent::Fab(WmFabComponent::new()))
             .build()
             .expect("standalone build");
@@ -1410,7 +1417,8 @@ impl<C: Component<TermWmAction> + 'static>
 
     fn open_help_overlay(&mut self) {
         let kb = self.wm.keybindings().clone();
-        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb);
+        let environment = term_wm_config::env::active_environment().to_string();
+        let mut h = WmHelpOverlayComponent::new(self.wm.app_ctx(), kb, &environment);
         h.show();
         h.set_selection_enabled(self.wm.clipboard_enabled());
         self.wm.open_help_overlay(OverlayComponent::Help(h));
@@ -2421,19 +2429,18 @@ mod tests {
     /// channel between the warning and the live counts.
     ///
     /// Shares the `process_global_state` serial group: this test mutates
-    /// `TERM_WM_GATEWAY`, the same process-global the bundled binary's
-    /// session-action tests pin, so the groups must not run concurrently.
+    /// the process-local gateway override cell, the same process-global the
+    /// bundled binary's session-action tests pin, so the groups must not run
+    /// concurrently.
     #[cfg(feature = "session-persistence")]
     #[test]
     #[serial(process_global_state)]
     fn stop_gateway_dialog_body_names_resolved_channel() {
         const TEST_GATEWAY: &str = "term-wm/channel-dialog-gw";
-        unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, TEST_GATEWAY);
-        }
+        term_wm_config::env::set_gateway_override(Some(TEST_GATEWAY));
         let channel = term_session::gateway_channel_name().to_string();
         let body = stop_gateway_dialog_body(&channel, "2", "5", "1");
-        assert_eq!(channel, TEST_GATEWAY, "env override must resolve wholesale");
+        assert_eq!(channel, TEST_GATEWAY, "override must resolve wholesale");
         let expected = format!("{GATEWAY_STOP_CHANNEL_LABEL}: {channel}");
         assert!(
             body.contains(&expected),
@@ -2449,10 +2456,8 @@ mod tests {
                 && body.contains("Running tasks: 1"),
             "counts line must stay present: {body}"
         );
-        // Restore the environment so other tests see the default resolution.
-        unsafe {
-            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
-        }
+        // Restore so other tests see the default resolution.
+        term_wm_config::env::set_gateway_override(None);
     }
 
     #[test]

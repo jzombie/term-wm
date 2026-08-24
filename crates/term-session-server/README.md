@@ -11,7 +11,7 @@ The server half of [term-session](https://crates.io/crates/term-session): a **ga
 
 The gateway (`run_gateway`) supervises every channel in one process:
 
-- resolves the logical gateway name (`term-wm/<user>/gateway`, overridable via `TERM_WM_GATEWAY`) and binds a single IPC endpoint;
+- resolves the logical gateway name (`{namespace}/<user>/gateway`: default namespace `term-wm`, overridable wholesale via the `--gateway <NAME>` flag or namespace-only via `TERM_WM_NAMESPACE`) and binds a single IPC endpoint;
 - on `Attach`, binds a connection to a channel (server-assigned `conn_id` — identity is never client-supplied);
 - on `Spawn`, materializes (or joins) the channel's PTY; a live session is reused idempotently, an exited one respawns with the stored command template;
 - broadcasts each chunk of PTY output to all subscribed clients — this is what lets multiple terminals show the same live session;

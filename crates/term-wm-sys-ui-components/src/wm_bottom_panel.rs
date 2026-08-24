@@ -18,12 +18,84 @@ use term_wm_ui_components::helpers::{
 };
 use unicode_width::UnicodeWidthStr;
 
+/// Columns between the keybinding-hint row and the right-aligned info line.
+const INFO_HINT_GAP: u16 = 2;
+
+/// Segment separator in the info line (` · `): 3 display columns.
+const INFO_SEPARATOR: &str = " \u{00b7} ";
+
+/// Info segments drop lowest-value-first when horizontal space runs out.
+/// Indices refer to the display-order slot array
+/// `[app+version, platform, environment, hostname]`: the static platform
+/// goes first, then the app/version label, then the hostname; the tiny,
+/// high-signal environment segment survives longest. Absent slots are
+/// skipped during the walk.
+const INFO_DROP_ORDER: [usize; 4] = [1, 0, 3, 2];
+
+/// Display columns of one info segment (terminal cells, not bytes).
+fn info_slot_cols(s: &str) -> u16 {
+    UnicodeWidthStr::width(s) as u16
+}
+
+/// Total rendered columns of the surviving slots after `drops` applications
+/// of [`INFO_DROP_ORDER`], including separators between neighbors. Returns
+/// `0` when every slot is dropped or absent, so callers can suppress a
+/// zero-width draw outright.
+fn info_slots_width(slots: &[Option<&str>; 4], drops: usize) -> u16 {
+    let is_dropped = |slot_idx: usize| INFO_DROP_ORDER.iter().take(drops).any(|&i| i == slot_idx);
+    let mut width = 0u16;
+    let mut emitted = 0usize;
+    for (idx, seg) in slots.iter().enumerate() {
+        let Some(text) = seg.filter(|_| !is_dropped(idx)) else {
+            continue;
+        };
+        if emitted > 0 {
+            width = width.saturating_add(info_slot_cols(INFO_SEPARATOR));
+        }
+        width = width.saturating_add(info_slot_cols(text));
+        emitted += 1;
+    }
+    width
+}
+
+/// Widest-first search over degradation tiers: returns the smallest number
+/// of drops (0..=`INFO_DROP_ORDER.len()`) under which the FULL keybinding
+/// hint row still fits alongside the info line, or `None` when nothing
+/// fits or only a zero-width tier remains (complete suppression).
+///
+/// The fit check is additive with saturating arithmetic so narrow or
+/// resizing terminals can never trigger an unsigned-subtraction panic:
+/// `total_full_hints_w + tier_w + gap + indicator <= bounds_w`.
+fn best_info_drops(
+    slots: &[Option<&str>; 4],
+    total_full_hints_w: u16,
+    bounds_w: u16,
+    indicator_reserved: u16,
+) -> Option<usize> {
+    for drops in 0..=INFO_DROP_ORDER.len() {
+        let tier_w = info_slots_width(slots, drops);
+        if tier_w == 0 {
+            return None;
+        }
+        let required_w = total_full_hints_w
+            .saturating_add(tier_w)
+            .saturating_add(INFO_HINT_GAP)
+            .saturating_add(indicator_reserved);
+        if required_w <= bounds_w {
+            return Some(drops);
+        }
+    }
+    None
+}
+
 #[derive(Debug)]
 pub struct WmBottomPanelComponent {
     area: LayoutRect,
-    app_name: String,
-    app_version: String,
+    /// Precomputed `{app_name} {app_version}` label so the render path never
+    /// formats strings per frame.
+    app_label: String,
     hostname: Option<String>,
+    environment: Option<String>,
     keybinding_hints: Vec<(TermWmAction, Vec<String>)>,
     hint_rects: Vec<(LayoutRect, TermWmAction)>,
     power_profile: PowerProfile,
@@ -34,9 +106,9 @@ impl WmBottomPanelComponent {
     pub fn new(app_name: &str, app_version: &str, hostname: Option<&str>) -> Self {
         Self {
             area: LayoutRect::default(),
-            app_name: app_name.to_string(),
-            app_version: app_version.to_string(),
+            app_label: format!("{app_name} {app_version}"),
             hostname: hostname.map(|h| h.to_string()),
+            environment: None,
             keybinding_hints: Vec::new(),
             hint_rects: Vec::new(),
             power_profile: PowerProfile::PowerSaver,
@@ -54,6 +126,13 @@ impl WmBottomPanelComponent {
 
     pub fn set_hostname(&mut self, hostname: &str) {
         self.hostname = Some(hostname.to_string());
+    }
+
+    /// Show the active runtime environment in the info segment (e.g. `dev`
+    /// / `prod` / `test`). Omitted until set so library embedders are
+    /// unaffected.
+    pub fn set_environment(&mut self, environment: &str) {
+        self.environment = Some(environment.to_string());
     }
 
     pub fn set_keybinding_hints(&mut self, hints: Vec<(TermWmAction, Vec<String>)>) {
@@ -137,31 +216,15 @@ impl WmBottomPanelComponent {
         // Reserve rightmost cell for the profile indicator
         let indicator_reserved = 1u16;
 
-        let info_opt = if show_info {
-            let platform = std::env::consts::OS;
-            let pkg_label = format!("{} {}", self.app_name, self.app_version);
-            let hostname = self
-                .hostname
-                .clone()
-                .unwrap_or_else(|| "unknown-host".to_string());
-            Some(format!(
-                "{pkg_label} \u{00b7} {platform} \u{00b7} {hostname}"
-            ))
-        } else {
-            None
-        };
-
-        let info_width = info_opt
-            .as_ref()
-            .map(|s| s.chars().count() as u16)
-            .unwrap_or(0);
-
-        // Level 0 → 1: suppress info section when full hints don't fit
-        let potential_right_margin = if show_info && info_width > 0 {
-            info_width + 2 + indicator_reserved
-        } else {
-            indicator_reserved
-        };
+        // Info segment slots in display order. All borrows; nothing is
+        // formatted or cloned per frame (app_label is precomputed at
+        // construction).
+        let info_slots: [Option<&str>; 4] = [
+            Some(self.app_label.as_str()),
+            Some(std::env::consts::OS),
+            self.environment.as_deref(),
+            Some(self.hostname.as_deref().unwrap_or("unknown-host")),
+        ];
 
         let total_full_hints_w: u16 = self
             .keybinding_hints
@@ -175,19 +238,28 @@ impl WmBottomPanelComponent {
             })
             .sum();
 
-        let actual_info_width = if show_info && info_width > 0 {
-            let available_with_info = bounds.width.saturating_sub(potential_right_margin);
-            if total_full_hints_w > available_with_info {
-                0
-            } else {
-                info_width
-            }
+        // Widest-first degradation: keep the fullest info tier under which
+        // the full hint row still fits; drop segments lowest-value-first
+        // until it does. `None` = suppress the info line entirely so hints
+        // reclaim everything except the indicator cell.
+        let chosen_drops = if show_info {
+            best_info_drops(
+                &info_slots,
+                total_full_hints_w,
+                bounds.width,
+                indicator_reserved,
+            )
         } else {
-            0
+            None
         };
+        let actual_info_width = chosen_drops
+            .map(|drops| info_slots_width(&info_slots, drops))
+            .unwrap_or(0);
 
         let right_margin = if actual_info_width > 0 {
-            actual_info_width + 2 + indicator_reserved
+            actual_info_width
+                .saturating_add(INFO_HINT_GAP)
+                .saturating_add(indicator_reserved)
         } else {
             indicator_reserved
         };
@@ -272,32 +344,40 @@ impl WmBottomPanelComponent {
             }
         }
 
-        if let Some(ref info) = info_opt
-            && actual_info_width > 0
-        {
-            let text = truncate_to_width(
-                info,
-                (bounds.width.saturating_sub(indicator_reserved)) as usize,
-            );
-            let text_width = text.chars().count() as u16;
-            let available = bounds.width.saturating_sub(indicator_reserved);
-            let start_x = if text_width >= available {
-                bounds.x
-            } else {
-                bounds
+        if let Some(drops) = chosen_drops {
+            let total_w = info_slots_width(&info_slots, drops);
+            if total_w > 0 {
+                // Right-align inside bounds minus the reserved indicator
+                // cell; segments and separators are written piecewise (no
+                // joined String). The tier fit guarantees the whole line
+                // fits, so no per-segment truncation is needed.
+                let avail_w = bounds.width.saturating_sub(indicator_reserved);
+                let mut cursor = bounds
                     .x
-                    .saturating_add(bounds.width)
-                    .saturating_sub(indicator_reserved)
-                    .saturating_sub(text_width)
-            };
-            safe_set_string(
-                buffer,
-                bounds,
-                start_x.max(bounds.x),
-                area.y as u16,
-                &text,
-                style,
-            );
+                    .saturating_add(avail_w.saturating_sub(total_w.min(avail_w)));
+                let is_dropped =
+                    |slot_idx: usize| INFO_DROP_ORDER.iter().take(drops).any(|&i| i == slot_idx);
+                let mut emitted = 0usize;
+                for (idx, seg) in info_slots.iter().enumerate() {
+                    let Some(text) = seg.filter(|_| !is_dropped(idx)) else {
+                        continue;
+                    };
+                    if emitted > 0 && cursor < bounds.x.saturating_add(avail_w) {
+                        safe_set_string(
+                            buffer,
+                            bounds,
+                            cursor,
+                            area.y as u16,
+                            INFO_SEPARATOR,
+                            style,
+                        );
+                        cursor = cursor.saturating_add(info_slot_cols(INFO_SEPARATOR));
+                    }
+                    safe_set_string(buffer, bounds, cursor, area.y as u16, text, style);
+                    cursor = cursor.saturating_add(info_slot_cols(text));
+                    emitted += 1;
+                }
+            }
         }
 
         // Draw profile indicator in the reserved rightmost cell
@@ -608,6 +688,174 @@ mod tests {
             rendered.contains("my-machine"),
             "bottom bar should include hostname"
         );
+    }
+
+    #[test]
+    fn info_slots_width_skips_none_environment() {
+        // Full line with env present: "app 1.0 · macos · prod · h"
+        let slots: [Option<&str>; 4] = [Some("app 1.0"), Some("macos"), Some("prod"), Some("h")];
+        assert_eq!(info_slots_width(&slots, 0), 7 + 3 + 5 + 3 + 4 + 3 + 1);
+        // Drop platform (drops=1): "app 1.0 · prod · h" — no phantom
+        // separator where the absent segment used to be.
+        assert_eq!(info_slots_width(&slots, 1), 7 + 3 + 4 + 3 + 1);
+
+        let no_env: [Option<&str>; 4] = [Some("app 1.0"), Some("macos"), None, Some("h")];
+        assert_eq!(info_slots_width(&no_env, 0), 7 + 3 + 5 + 3 + 1);
+        assert_eq!(info_slots_width(&no_env, 1), 7 + 3 + 1);
+    }
+
+    #[test]
+    fn best_info_drops_prefers_full_then_degrades() {
+        let slots: [Option<&str>; 4] = [
+            Some("app 1.0"),
+            Some("macos"),
+            Some("prod"),
+            Some("my-machine"),
+        ];
+        // Generous bounds: nothing dropped.
+        assert_eq!(best_info_drops(&slots, 0, 80, 1), Some(0));
+        // Bounds that only fit after the platform segment is dropped.
+        let full = info_slots_width(&slots, 0);
+        let tier1 = info_slots_width(&slots, 1);
+        let squeezed = full.saturating_add(INFO_HINT_GAP).saturating_add(1) - 1;
+        assert!(squeezed >= tier1.saturating_add(INFO_HINT_GAP).saturating_add(1));
+        let drops = best_info_drops(&slots, 0, squeezed, 1).expect("tier fits");
+        assert!(drops >= 1, "full tier must not fit at {squeezed} cols");
+        // Tiny bounds: complete suppression.
+        assert_eq!(best_info_drops(&slots, 0, 5, 1), None);
+    }
+
+    #[test]
+    fn best_info_drops_never_panics_on_degenerate_bounds() {
+        let slots: [Option<&str>; 4] = [
+            Some("app 1.0"),
+            Some("macos"),
+            Some("prod"),
+            Some("my-machine"),
+        ];
+        for bounds_w in [0u16, 1u16, u16::MAX] {
+            // Non-zero hint totals exercise saturation at arithmetic
+            // extremes; must not panic and must resolve deterministically.
+            let _ = best_info_drops(&slots, u16::MAX, bounds_w, 1);
+            let _ = best_info_drops(&slots, 12, bounds_w, 1);
+        }
+        // Saturation behavior at the extremes is still correct. At
+        // u16::MAX hints + u16::MAX bounds the saturating sum clamps to
+        // bounds exactly, so the tier counts as fitting; real hint totals
+        // are orders of magnitude smaller, so this only proves determinism.
+        assert_eq!(best_info_drops(&slots, u16::MAX, u16::MAX, 1), Some(0));
+        assert_eq!(
+            best_info_drops(&slots, 12, u16::MAX, 1),
+            Some(0),
+            "huge bounds always keep the fullest tier"
+        );
+    }
+
+    #[test]
+    fn bottom_panel_degrades_segments_by_priority() {
+        // Long app label so the full tier cannot fit a 50-col panel but the
+        // platform-less tier can.
+        let mut p = WmBottomPanelComponent::new("terminal-wm-app", "10.10.10", Some("my-machine"));
+        p.set_environment("prod");
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 1,
+        };
+        p.area = area;
+        let ratatui_area = layout_rect_to_clipped_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
+        let rendered = collect_row_symbols(&mut backend, ratatui_area);
+        assert!(rendered.contains("prod"), "env survives: {rendered}");
+        assert!(rendered.contains("my-machine"), "host survives: {rendered}");
+        assert!(
+            !rendered.contains(std::env::consts::OS),
+            "platform must be the first segment dropped: {rendered}"
+        );
+    }
+
+    #[test]
+    fn bottom_panel_drops_all_info_when_pinned() {
+        let mut p = WmBottomPanelComponent::new("terminal-wm-app", "10.10.10", Some("my-machine"));
+        p.set_environment("prod");
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 6,
+            height: 1,
+        };
+        p.area = area;
+        let ratatui_area = layout_rect_to_clipped_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
+        let rendered = collect_row_symbols(&mut backend, ratatui_area);
+        assert!(
+            !rendered.contains("prod") && !rendered.contains("my-machine"),
+            "no info segment may render on a pinned panel: {rendered}"
+        );
+        // Background fill stays intact on every non-indicator cell; the
+        // reserved rightmost cell keeps its power-profile color.
+        for xx in ratatui_area.x..ratatui_area.width.saturating_sub(1) {
+            let cell = backend.buffer.cell((xx, 0)).expect("cell present");
+            assert_eq!(
+                cell.style().bg,
+                Some(color_to_ratatui(NOIR.bottom_panel_bg))
+            );
+        }
+        let ind_x = ratatui_area.width.saturating_sub(1);
+        let cell = backend.buffer.cell((ind_x, 0)).expect("cell present");
+        assert_eq!(
+            cell.style().bg,
+            Some(color_to_ratatui(p.power_profile.indicator_color(&NOIR)))
+        );
+    }
+
+    #[test]
+    fn bottom_panel_omits_environment_until_set() {
+        let mut p = WmBottomPanelComponent::new("app", "1.0", Some("host"));
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        p.area = area;
+        let ratatui_area = layout_rect_to_clipped_rect(area);
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
+        let rendered = collect_row_symbols(&mut backend, ratatui_area);
+        assert!(
+            !rendered.contains(" dev "),
+            "unset environment must be omitted from the info line: {rendered}"
+        );
+
+        p.set_environment("prod");
+        let buf = Buffer::empty(ratatui_area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buf, ratatui_area);
+        p.render_bottom_impl(&mut backend, true, &NOIR);
+        let rendered = collect_row_symbols(&mut backend, ratatui_area);
+        assert!(
+            rendered.contains("\u{00b7} prod \u{00b7}"),
+            "bottom bar should include the environment segment: {rendered}"
+        );
+    }
+
+    /// Collect the rendered symbols of the panel row into one string.
+    fn collect_row_symbols(
+        backend: &mut term_wm_console::RatatuiBackend,
+        area: ratatui::layout::Rect,
+    ) -> String {
+        let mut rendered = String::new();
+        for xx in area.x..area.x.saturating_add(area.width) {
+            let cell = backend.buffer.cell((xx, area.y)).expect("cell present");
+            rendered.push_str(cell.symbol());
+        }
+        rendered
     }
 
     #[test]

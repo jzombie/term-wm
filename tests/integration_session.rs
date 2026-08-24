@@ -2163,7 +2163,7 @@ async fn wm_stats_report_then_list_then_evict() {
 
 /// The term-wm launcher must exit immediately (no retry loop) when the nesting
 /// guard fires. Spawns `term-wm` inside an environment where
-/// `TERM_SESSION_GATEWAY` matches `TERM_WM_GATEWAY` (same-gateway inception),
+/// `TERM_SESSION_GATEWAY` matches the `--gateway` override (same-gateway inception),
 /// and asserts that the process exits non-zero with the FATAL diagnostic
 /// within a short timeout — proving the retry loop was never entered.
 #[test]
@@ -2189,9 +2189,8 @@ fn launcher_exits_immediately_on_nesting_fatal() {
         .expect("bind dummy gateway");
 
     let child = Command::new(env!("CARGO_BIN_EXE_term-wm"))
-        .env("TERM_WM_GATEWAY", gateway)
         .env("TERM_SESSION_GATEWAY", gateway)
-        .args(["--workspace", "test-nesting"])
+        .args(["--gateway", gateway, "--workspace", "test-nesting"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

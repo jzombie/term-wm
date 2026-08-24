@@ -189,6 +189,10 @@ struct ChannelState {
 struct ServerState {
     conns: RwLock<HashMap<usize, ConnEntry>>,
     channels: RwLock<HashMap<ChannelName, Arc<Mutex<ChannelState>>>>,
+    /// The socket name this daemon actually bound; the authoritative source
+    /// for the `TERM_SESSION_GATEWAY` inception marker stamped into PTY
+    /// children (never re-resolved from ambient state).
+    bound_socket: String,
     is_shutting_down: AtomicBool,
     /// Monotonic source of `ChannelState::created_seq` (creation order).
     next_channel_seq: AtomicU64,
@@ -984,6 +988,7 @@ pub async fn run_gateway(
 ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
     let socket_name = gateway.to_string();
     let state: SharedState = Arc::new(ServerState {
+        bound_socket: socket_name.clone(),
         conns: RwLock::new(HashMap::new()),
         channels: RwLock::new(HashMap::new()),
         is_shutting_down: AtomicBool::new(false),
@@ -1199,6 +1204,7 @@ pub async fn run_gateway(
                     rows,
                     Some(&channel),
                     effective_cwd.as_ref(),
+                    &state.bound_socket,
                 )?;
                 guard.set_session(session);
                 guard.recalculate_pty_size();
@@ -2056,6 +2062,7 @@ mod tests {
         let mut conns = HashMap::new();
         conns.insert(1, conn);
         Arc::new(ServerState {
+            bound_socket: String::from("test/bound/gateway"),
             conns: RwLock::new(conns),
             channels: RwLock::new(channels),
             is_shutting_down: AtomicBool::new(false),
