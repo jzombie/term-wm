@@ -1960,9 +1960,11 @@ mod tests {
 
         // Wait for the callback on a deadline instead of assuming a fixed
         // number of poll iterations.
-        wait_for(PTY_EVENT_DEADLINE, "Wakeup callback fired on PTY output", || {
-            woke.load(Ordering::Relaxed).then_some(())
-        });
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "Wakeup callback fired on PTY output",
+            || woke.load(Ordering::Relaxed).then_some(()),
+        );
 
         assert!(
             woke.load(Ordering::Relaxed),
@@ -2046,9 +2048,7 @@ mod tests {
         wait_for(
             PTY_EVENT_DEADLINE,
             "grandchild should be dead after kill_child",
-            || {
-                (!term_session_mock::process_is_alive(grandchild)).then_some(())
-            },
+            || (!term_session_mock::process_is_alive(grandchild)).then_some(()),
         );
     }
 
@@ -2077,9 +2077,11 @@ mod tests {
         }
 
         // Wait for the child to be reaped, on a deadline.
-        wait_for(PTY_EVENT_DEADLINE, "has_exited() true after child death", || {
-            pty.has_exited().then_some(())
-        });
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "has_exited() true after child death",
+            || pty.has_exited().then_some(()),
+        );
 
         assert!(
             exited_fired.load(Ordering::Relaxed),
@@ -2151,9 +2153,11 @@ mod tests {
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
-        wait_for(PTY_EVENT_DEADLINE, "child reaped before callback set", || {
-            pty.has_exited().then_some(())
-        });
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "child reaped before callback set",
+            || pty.has_exited().then_some(()),
+        );
 
         let exited_fired = Arc::new(AtomicBool::new(false));
         let exited_cb = Arc::clone(&exited_fired);

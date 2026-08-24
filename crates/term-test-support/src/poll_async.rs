@@ -44,8 +44,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[tokio::test]
     async fn returns_probe_value_when_immediately_satisfied() {
@@ -74,9 +74,11 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "condition not met within")]
     async fn panics_with_description_after_deadline() {
-        let _: () = wait_for_async(Duration::from_millis(50), "impossible condition", || async {
-            None
-        })
+        let _: () = wait_for_async(
+            Duration::from_millis(50),
+            "impossible condition",
+            || async { None },
+        )
         .await;
     }
 }

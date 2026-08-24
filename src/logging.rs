@@ -30,16 +30,19 @@ where
 static LOG_FILE: OnceLock<Option<Arc<Mutex<std::fs::File>>>> = OnceLock::new();
 
 fn log_file_slot() -> &'static Option<Arc<Mutex<std::fs::File>>> {
-    LOG_FILE.get_or_init(|| {
-        term_wm_config::env::log_file_path().and_then(|path| open_log_file(&path))
-    })
+    LOG_FILE
+        .get_or_init(|| term_wm_config::env::log_file_path().and_then(|path| open_log_file(&path)))
 }
 
 /// Open the log file for appending (create-if-missing), mirroring the
 /// `TERM_WM_TRACE_ESC` convention. Failure to open is non-fatal: logging
 /// falls back to the in-app Debug Log / stderr only.
 fn open_log_file(path: &PathBuf) -> Option<Arc<Mutex<std::fs::File>>> {
-    match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         Ok(file) => Some(Arc::new(Mutex::new(file))),
         Err(e) => {
             // No subscriber exists yet at init time; report on real stderr so

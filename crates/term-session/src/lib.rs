@@ -431,7 +431,10 @@ pub fn stop_gateway(force: bool) -> io::Result<()> {
 /// than keeping the existing subscriber.
 fn init_daemon_tracing() {
     if let Some(path) = term_wm_config::env::log_file_path()
-        && let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        && let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
     {
         let _ = tracing_subscriber::fmt()
             .with_writer(std::sync::Mutex::new(file))

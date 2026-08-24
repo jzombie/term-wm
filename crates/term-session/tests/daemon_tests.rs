@@ -65,7 +65,10 @@ impl DaemonGuard {
 
     /// Wrap a spawned client process that owns no socket of its own.
     fn for_child(child: Child) -> Self {
-        Self { child, gateway: None }
+        Self {
+            child,
+            gateway: None,
+        }
     }
 }
 
@@ -174,15 +177,19 @@ async fn daemon_detaches_and_reports_proof() {
 
     // Wait for the marker (daemon writes it once bound), bounded by deadline
     // rather than assuming any fixed delay.
-    let proof = wait_for_async(Duration::from_secs(8), "daemon never wrote selfcheck marker", || {
-        let marker = marker.clone();
-        async move {
-            std::fs::read_to_string(&marker)
-                .ok()
-                .map(|content| content.trim().to_string())
-                .filter(|content| !content.is_empty())
-        }
-    })
+    let proof = wait_for_async(
+        Duration::from_secs(8),
+        "daemon never wrote selfcheck marker",
+        || {
+            let marker = marker.clone();
+            async move {
+                std::fs::read_to_string(&marker)
+                    .ok()
+                    .map(|content| content.trim().to_string())
+                    .filter(|content| !content.is_empty())
+            }
+        },
+    )
     .await;
 
     // Platform-specific detachment proof.
@@ -249,9 +256,14 @@ async fn daemon_survives_parent_death() {
     // Spawn a client that auto-spawns the daemon, running a LONG-LIVED
     // session so its process survives the parent dying.
     let mut client_cmd = Command::new(bin());
-    client_cmd
-        .args(["--gateway", &gateway])
-        .args(["--channel", channel, "--", &mock, "sleep", "60000"]);
+    client_cmd.args(["--gateway", &gateway]).args([
+        "--channel",
+        channel,
+        "--",
+        &mock,
+        "sleep",
+        "60000",
+    ]);
     // Also captures the auto-spawned daemon: it inherits these env vars.
     term_test_support::apply_test_logging(&mut client_cmd, &format!("dtest-client-{gateway}"));
     let client = DaemonGuard::for_child(
@@ -354,14 +366,19 @@ async fn session_starts_in_client_cwd() {
     // Retry while the file is missing OR empty: `std::fs::write` truncates the
     // target before writing, so a read that races the truncate can observe a
     // zero-length file (which would canonicalize to an empty path and panic).
-    let got: Vec<u8> =
-        wait_for_async(Duration::from_secs(10), "mock pwd never wrote the report", || {
+    let got: Vec<u8> = wait_for_async(
+        Duration::from_secs(10),
+        "mock pwd never wrote the report",
+        || {
             let report = report.clone();
             async move {
-                std::fs::read(&report).ok().filter(|content| !content.is_empty())
+                std::fs::read(&report)
+                    .ok()
+                    .filter(|content| !content.is_empty())
             }
-        })
-        .await;
+        },
+    )
+    .await;
     // The child's `current_dir()` is the OS-canonical path (on macOS `/var`
     // resolves to `/private/var`; on Windows it may be the 8.3 short form and
     // differ from `canonicalize`'s long form + `\\?\` prefix), so canonicalize
@@ -698,8 +715,14 @@ async fn top_level_channel_auto_attaches() {
     // `term-session --channel <ch> -- <mock> sleep 60000` (no subcommand):
     // giving a channel must still auto-attach and auto-spawn the daemon.
     let mut client_cmd = Command::new(bin());
-    client_cmd.args(["--gateway", &gateway])
-        .args(["--channel", channel, "--", &mock, "sleep", "60000"]);
+    client_cmd.args(["--gateway", &gateway]).args([
+        "--channel",
+        channel,
+        "--",
+        &mock,
+        "sleep",
+        "60000",
+    ]);
     term_test_support::apply_test_logging(&mut client_cmd, &format!("dtest-client-{gateway}"));
     let client = DaemonGuard::for_child(
         client_cmd

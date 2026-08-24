@@ -18,7 +18,7 @@ use common::mock::{
     EXPECTED_OSC52_PAYLOAD, find_osc52_payload, find_sgr_mouse_token, get_mock_bin, mock_pid_alive,
 };
 use common::session::{
-    LONG_SLEEP_MS, LIVENESS_TIMEOUT, TEST_COLS, TEST_ROWS, attach_client,
+    LIVENESS_TIMEOUT, LONG_SLEEP_MS, TEST_COLS, TEST_ROWS, attach_client,
     connect_client_with_retry, get_bench_bin, list_channels, spawn_gateway, spawn_session,
     test_channel, wait_for_output,
 };
@@ -1398,7 +1398,10 @@ async fn spawn_cmd_ignored_on_live_session() {
         .open_channel(SUBSCRIBE_OUTPUT_METHOD_ID, 0)
         .await
         .unwrap();
-    let (writer, _) = client.open_channel(STREAM_INPUT_METHOD_ID, 0).await.unwrap();
+    let (writer, _) = client
+        .open_channel(STREAM_INPUT_METHOD_ID, 0)
+        .await
+        .unwrap();
     writer.send(b"still-alive\n".to_vec()).unwrap();
     let out = wait_for_output(&mut reader, b"still-alive", LIVENESS_TIMEOUT).await;
     assert!(
@@ -2081,10 +2084,8 @@ async fn exit_ui_row_inner_exit_ends_own_session_only() {
                 let resp = list_channels(&rpc).await;
                 let a = resp.channels.iter().find(|c| c.name == a_name);
                 let b = resp.channels.iter().find(|c| c.name == b_name);
-                let a_dead =
-                    a.is_none_or(|c| c.session.as_ref().is_none_or(|s| s.exited));
-                let b_live =
-                    b.is_some_and(|c| c.session.as_ref().is_some_and(|s| !s.exited));
+                let a_dead = a.is_none_or(|c| c.session.as_ref().is_none_or(|s| s.exited));
+                let b_live = b.is_some_and(|c| c.session.as_ref().is_some_and(|s| !s.exited));
                 (a_dead && b_live).then_some(b_live)
             }
         },

@@ -36,9 +36,7 @@ fn capture_root() -> &'static PathBuf {
                     .map(|d| d.as_nanos())
                     .unwrap_or(0)
             );
-            std::env::temp_dir()
-                .join(LOG_ROOT_DIR_NAME)
-                .join(unique)
+            std::env::temp_dir().join(LOG_ROOT_DIR_NAME).join(unique)
         }
     })
 }

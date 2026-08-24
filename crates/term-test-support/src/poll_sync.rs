@@ -21,11 +21,7 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 ///
 /// # Panics
 /// Panics if `probe` never returns `Some` within `deadline`.
-pub fn wait_for<T>(
-    deadline: Duration,
-    desc: &str,
-    mut probe: impl FnMut() -> Option<T>,
-) -> T {
+pub fn wait_for<T>(deadline: Duration, desc: &str, mut probe: impl FnMut() -> Option<T>) -> T {
     let start = Instant::now();
     loop {
         if let Some(value) = probe() {
@@ -43,8 +39,8 @@ pub fn wait_for<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn returns_probe_value_when_immediately_satisfied() {

@@ -29,4 +29,4 @@ pub use log_capture::{apply_test_logging, test_log_dir, test_log_file};
 pub use naming::unique_gateway_name;
 #[cfg(feature = "tokio")]
 pub use poll_async::wait_for_async;
-pub use poll_sync::{wait_for, DEFAULT_POLL_INTERVAL};
+pub use poll_sync::{DEFAULT_POLL_INTERVAL, wait_for};

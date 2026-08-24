@@ -155,11 +155,7 @@ impl<T> TaskHandle<T> {
         let id = TaskId(inner.next_id);
         inner.next_id += 1;
         let now = (inner.now.0)();
-        let deadline = if fire_immediate {
-            now
-        } else {
-            now + interval
-        };
+        let deadline = if fire_immediate { now } else { now + interval };
         inner.heap.push(HeapEntry {
             deadline,
             interval: Some(interval),

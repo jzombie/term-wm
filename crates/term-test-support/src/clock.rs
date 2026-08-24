@@ -1,8 +1,8 @@
 //! A thread-safe virtual clock for deterministic timer tests.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// A manually advanced clock, `Send + Sync` and cheaply cloneable.
@@ -64,7 +64,10 @@ impl Default for ManualClock {
 impl fmt::Debug for ManualClock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ManualClock")
-            .field("elapsed", &Duration::from_nanos(self.elapsed_nanos.load(Ordering::Acquire)))
+            .field(
+                "elapsed",
+                &Duration::from_nanos(self.elapsed_nanos.load(Ordering::Acquire)),
+            )
             .finish()
     }
 }

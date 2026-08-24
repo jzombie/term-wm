@@ -19,7 +19,9 @@ pub struct KillOnDrop<F: FnOnce()> {
 impl<F: FnOnce()> KillOnDrop<F> {
     /// Arm the guard with `cleanup`.
     pub fn new(cleanup: F) -> Self {
-        Self { cleanup: Some(cleanup) }
+        Self {
+            cleanup: Some(cleanup),
+        }
     }
 
     /// Consume the guard WITHOUT running the cleanup closure.
@@ -47,8 +49,8 @@ impl<F: FnOnce()> fmt::Debug for KillOnDrop<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn cleanup_runs_on_drop() {

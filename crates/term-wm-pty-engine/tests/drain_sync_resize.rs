@@ -78,9 +78,11 @@ fn drain_sync_applies_resize_after_pipe_drain() {
     // Prompt the reader to drain (the `cat`/`cmd` child echoes "hi" back),
     // then poll until the reader applies the resize at the drain boundary.
     let _ = pty.write_bytes(b"hi\n");
-    wait_for(RESIZE_APPLY_DEADLINE, "reader applied drained resize", || {
-        (pty.size().rows == 30).then_some(())
-    });
+    wait_for(
+        RESIZE_APPLY_DEADLINE,
+        "reader applied drained resize",
+        || (pty.size().rows == 30).then_some(()),
+    );
     assert_eq!(
         pty.size().rows,
         30,
@@ -116,9 +118,11 @@ fn drain_sync_coalesces_rapid_resizes_to_final() {
     };
     pty.resize(final_size).unwrap();
     let _ = pty.write_bytes(b"x\n");
-    wait_for(RESIZE_APPLY_DEADLINE, "final coalesced resize applied", || {
-        (pty.size() == final_size).then_some(())
-    });
+    wait_for(
+        RESIZE_APPLY_DEADLINE,
+        "final coalesced resize applied",
+        || (pty.size() == final_size).then_some(()),
+    );
     assert_eq!(pty.size(), final_size, "only the final size is applied");
 }
 
@@ -135,8 +139,10 @@ fn drain_sync_applies_resize_when_pipe_idle() {
         pixel_height: 0,
     };
     pty.resize(target).unwrap();
-    wait_for(RESIZE_APPLY_DEADLINE, "resize applied while pipe idle", || {
-        (pty.size() == target).then_some(())
-    });
+    wait_for(
+        RESIZE_APPLY_DEADLINE,
+        "resize applied while pipe idle",
+        || (pty.size() == target).then_some(()),
+    );
     assert_eq!(pty.size(), target, "resize applied at the empty-pipe drain");
 }
