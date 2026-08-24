@@ -2,10 +2,31 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TaskId(u64);
+
+/// Injectable "now" source for deadline computations.
+///
+/// Production uses the real monotonic clock (`TaskScheduler::new`). Tests
+/// inject a virtual clock (see `term_test_support::ManualClock`) so timer
+/// behavior is fully deterministic: advancing the injected clock moves every
+/// deadline decision, with no wall-clock waiting anywhere. Note that
+/// advancing virtual time does NOT execute queued tasks; callers still drain
+/// explicitly.
+pub type NowFn = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+/// `NowFn` wrapper with a `Debug` impl so `SchedulerInner` can keep deriving.
+#[derive(Clone)]
+struct ClockFn(NowFn);
+
+impl std::fmt::Debug for ClockFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ClockFn(<now>)")
+    }
+}
 
 #[derive(Debug)]
 struct HeapEntry<T> {
@@ -40,6 +61,7 @@ impl<T> Ord for HeapEntry<T> {
 
 #[derive(Debug)]
 struct SchedulerInner<T> {
+    now: ClockFn,
     heap: BinaryHeap<HeapEntry<T>>,
     cancelled: HashSet<TaskId>,
     next_id: u64,
@@ -69,8 +91,18 @@ pub struct TaskScheduler<T> {
 
 impl<T> TaskScheduler<T> {
     pub fn new() -> Self {
+        Self::new_with_clock(Arc::new(Instant::now))
+    }
+
+    /// Build a scheduler whose notion of "now" comes from `clock`.
+    ///
+    /// Tests use this with a virtual clock (e.g. `ManualClock::as_closure()`)
+    /// to make timer behavior deterministic: `advance()` the clock, then
+    /// drain, and the same deadlines fire exactly on schedule.
+    pub fn new_with_clock(clock: NowFn) -> Self {
         Self {
             inner: Rc::new(RefCell::new(SchedulerInner {
+                now: ClockFn(clock),
                 heap: BinaryHeap::new(),
                 cancelled: HashSet::new(),
                 next_id: 1,
@@ -98,8 +130,9 @@ impl<T> TaskHandle<T> {
         let mut inner = self.inner.borrow_mut();
         let id = TaskId(inner.next_id);
         inner.next_id += 1;
+        let deadline = (inner.now.0)() + after;
         inner.heap.push(HeapEntry {
-            deadline: Instant::now() + after,
+            deadline,
             interval: None,
             payload,
             id,
@@ -121,10 +154,11 @@ impl<T> TaskHandle<T> {
         let mut inner = self.inner.borrow_mut();
         let id = TaskId(inner.next_id);
         inner.next_id += 1;
+        let now = (inner.now.0)();
         let deadline = if fire_immediate {
-            Instant::now()
+            now
         } else {
-            Instant::now() + interval
+            now + interval
         };
         inner.heap.push(HeapEntry {
             deadline,
@@ -170,7 +204,8 @@ impl<T> TaskHandle<T> {
         let mut inner = self.inner.borrow_mut();
         self.purge_cancelled(&mut inner);
         let deadline = inner.heap.peek()?.deadline;
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let now = (inner.now.0)();
+        let remaining = deadline.saturating_duration_since(now);
         Some(remaining)
     }
 
@@ -196,7 +231,7 @@ impl<T> TaskHandle<T> {
         T: Clone,
     {
         let mut inner = self.inner.borrow_mut();
-        let now = Instant::now();
+        let now = (inner.now.0)();
         let mut result = Vec::new();
 
         while let Some(entry) = inner.heap.peek() {
@@ -230,7 +265,7 @@ impl<T> TaskHandle<T> {
     /// not [`Clone`] or when you only care about one-shot tasks.
     pub fn drain_expired_once(&self) -> Vec<(TaskId, T)> {
         let mut inner = self.inner.borrow_mut();
-        let now = Instant::now();
+        let now = (inner.now.0)();
         let mut result = Vec::new();
 
         while let Some(entry) = inner.heap.peek() {
@@ -291,6 +326,19 @@ impl<A> AppTask<A> {
 mod tests {
     use super::*;
 
+    /// A scheduler on a virtual clock plus its shared clock handle.
+    ///
+    /// Mechanics: advancing virtual time only moves the timestamp provider;
+    /// every `advance` is followed by an explicit drain before asserting.
+    fn manual() -> (
+        std::sync::Arc<term_test_support::ManualClock>,
+        TaskHandle<&'static str>,
+    ) {
+        let clock = std::sync::Arc::new(term_test_support::ManualClock::new());
+        let sched = TaskScheduler::<&'static str>::new_with_clock(clock.as_closure());
+        (clock, sched.handle())
+    }
+
     #[test]
     fn empty_scheduler() {
         let sched = TaskScheduler::<&str>::new();
@@ -310,9 +358,9 @@ mod tests {
 
     #[test]
     fn one_shot_after_deadline() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         handle.schedule_once(Duration::from_millis(1), "hello");
-        std::thread::sleep(Duration::from_millis(10));
+        clock.advance(Duration::from_millis(10));
         let expired = handle.drain_expired_once();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].1, "hello");
@@ -320,10 +368,10 @@ mod tests {
 
     #[test]
     fn cancel_prevents_firing() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         let id = handle.schedule_once(Duration::from_millis(1), "cancelled");
         handle.cancel(id);
-        std::thread::sleep(Duration::from_millis(10));
+        clock.advance(Duration::from_millis(10));
         assert!(handle.drain_expired_once().is_empty());
     }
 
@@ -336,10 +384,10 @@ mod tests {
 
     #[test]
     fn multiple_tasks_returned_in_order() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         handle.schedule_once(Duration::from_millis(50), "slow");
         handle.schedule_once(Duration::from_millis(1), "fast");
-        std::thread::sleep(Duration::from_millis(100));
+        clock.advance(Duration::from_millis(100));
         let expired = handle.drain_expired_once();
         assert_eq!(expired.len(), 2);
         assert_eq!(expired[0].1, "fast"); // shorter deadline first
@@ -348,12 +396,13 @@ mod tests {
 
     #[test]
     fn repeating_task_fires_multiple_times() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        // Virtual time makes this exact: deadlines at 10/20/30ms all fall
+        // within a 35ms advance, and the 40ms re-insertion does not.
+        let (clock, handle) = manual();
         handle.schedule_repeating(Duration::from_millis(10), false, "tick");
-        std::thread::sleep(Duration::from_millis(35));
+        clock.advance(Duration::from_millis(35));
         let expired = handle.drain_expired();
-        // Should have fired ~3 times (10ms, 20ms, 30ms)
-        assert!(expired.len() >= 2, "got {} ticks", expired.len());
+        assert_eq!(expired.len(), 3, "exactly the 10/20/30ms ticks fire");
         for (_, payload) in &expired {
             assert_eq!(*payload, "tick");
         }
@@ -361,14 +410,12 @@ mod tests {
 
     #[test]
     fn cancel_repeating_stops_future_fires() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         let id = handle.schedule_repeating(Duration::from_millis(10), false, "tick");
 
-        // Wait for the first interval
-        std::thread::sleep(Duration::from_millis(15));
-
-        // Drain to process the first fire. This triggers the internal re-insertion
-        // for the next repeating interval.
+        // Advance past the first interval and drain to process it. This
+        // triggers the internal re-insertion for the next repeating interval.
+        clock.advance(Duration::from_millis(15));
         let expired_first = handle.drain_expired();
         assert!(
             !expired_first.is_empty(),
@@ -379,8 +426,8 @@ mod tests {
         // NOW cancel the task to stop future fires
         handle.cancel(id);
 
-        // Wait for what would have been the second interval
-        std::thread::sleep(Duration::from_millis(15));
+        // Advance past what would have been the second interval.
+        clock.advance(Duration::from_millis(15));
 
         // Drain again. It should be suppressed completely.
         let expired_second = handle.drain_expired();
@@ -419,11 +466,11 @@ mod tests {
 
     #[test]
     fn handle_clone_shares_state() {
-        let sched = TaskScheduler::<&str>::new();
-        let h1 = sched.handle();
-        let h2 = sched.handle();
+        let (clock, _sched) = manual();
+        let h1 = _sched;
+        let h2 = h1.clone();
         h1.schedule_once(Duration::from_millis(1), "shared");
-        std::thread::sleep(Duration::from_millis(10));
+        clock.advance(Duration::from_millis(10));
         assert_eq!(h2.drain_expired_once().len(), 1);
     }
 
@@ -462,9 +509,9 @@ mod tests {
 
     #[test]
     fn cancel_once_after_deadline_not_yet_drained_suppresses() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         let id = handle.schedule_once(Duration::from_millis(1), "x");
-        std::thread::sleep(Duration::from_millis(10));
+        clock.advance(Duration::from_millis(10));
         // Deadline elapsed but not drained yet — cancel must still suppress.
         handle.cancel(id);
         assert!(handle.drain_expired_once().is_empty());
@@ -473,10 +520,10 @@ mod tests {
 
     #[test]
     fn cancel_repeating_before_first_fire_suppresses_all() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         let id = handle.schedule_repeating(Duration::from_millis(10), false, "tick");
         handle.cancel(id);
-        std::thread::sleep(Duration::from_millis(25));
+        clock.advance(Duration::from_millis(25));
         assert!(
             handle.drain_expired().is_empty(),
             "cancelled repeating task must never fire"
@@ -485,10 +532,10 @@ mod tests {
 
     #[test]
     fn cancel_repeating_fire_immediate_suppresses() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         let id = handle.schedule_repeating(Duration::from_millis(10), true, "tick");
         handle.cancel(id);
-        std::thread::sleep(Duration::from_millis(25));
+        clock.advance(Duration::from_millis(25));
         assert!(
             handle.drain_expired().is_empty(),
             "cancelled fire_immediate task must never fire"
@@ -497,7 +544,7 @@ mod tests {
 
     #[test]
     fn cancel_repeating_fire_immediate_then_stops_after_first() {
-        let handle = TaskScheduler::<&str>::new().handle();
+        let (clock, handle) = manual();
         let id = handle.schedule_repeating(Duration::from_millis(10), true, "tick");
 
         // fire_immediate: fires on the first drain (deadline = now).
@@ -507,7 +554,7 @@ mod tests {
 
         // Cancel after the immediate fire; future re-inserted fires suppressed.
         handle.cancel(id);
-        std::thread::sleep(Duration::from_millis(25));
+        clock.advance(Duration::from_millis(25));
         assert!(
             handle.drain_expired().is_empty(),
             "repeating fire_immediate task must stop after cancel"
@@ -516,9 +563,9 @@ mod tests {
 
     #[test]
     fn cancel_via_shared_handle() {
-        let sched = TaskScheduler::<&str>::new();
-        let h1 = sched.handle();
-        let h2 = sched.handle();
+        let (clock, _sched) = manual();
+        let h1 = _sched;
+        let h2 = h1.clone();
 
         let once_id = h1.schedule_once(Duration::from_millis(1), "once");
         let repeat_id = h2.schedule_repeating(Duration::from_millis(10), true, "repeat");
@@ -527,7 +574,7 @@ mod tests {
         h2.cancel(once_id);
         h1.cancel(repeat_id);
 
-        std::thread::sleep(Duration::from_millis(25));
+        clock.advance(Duration::from_millis(25));
         assert!(
             h1.drain_expired().is_empty(),
             "cancelled tasks must not fire via any handle"

@@ -6,7 +6,10 @@
 // because they exercise only the public `Pty` API and spawn real child
 // processes (`cat` / `cmd.exe`), which is what integration tests are for.
 
+use std::time::Duration;
+
 use portable_pty::{CommandBuilder, PtySize};
+use term_test_support::wait_for;
 use term_wm_pty_engine::{Pty, PtyResult};
 
 /// Wraps a `Pty` and guarantees the child is killed on drop, even when a test
@@ -57,6 +60,8 @@ const TEST_SIZE: PtySize = PtySize {
     pixel_height: 0,
 };
 
+const RESIZE_APPLY_DEADLINE: Duration = Duration::from_secs(5);
+
 /// A resize request is applied by the reader thread once the pipe drains
 /// (not mid-shell-write), updating the shared emulator size.
 #[test]
@@ -70,15 +75,12 @@ fn drain_sync_applies_resize_after_pipe_drain() {
         pixel_height: 0,
     };
     pty.resize(target).expect("request resize");
-    // Prompt the reader to drain (the `cat`/`cmd` child echoes "hi" back).
+    // Prompt the reader to drain (the `cat`/`cmd` child echoes "hi" back),
+    // then poll until the reader applies the resize at the drain boundary.
     let _ = pty.write_bytes(b"hi\n");
-    // Poll (up to 5s) for the reader to apply the resize at the drain.
-    for _ in 0..250 {
-        if pty.size().rows == 30 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    wait_for(RESIZE_APPLY_DEADLINE, "reader applied drained resize", || {
+        (pty.size().rows == 30).then_some(())
+    });
     assert_eq!(
         pty.size().rows,
         30,
@@ -114,12 +116,9 @@ fn drain_sync_coalesces_rapid_resizes_to_final() {
     };
     pty.resize(final_size).unwrap();
     let _ = pty.write_bytes(b"x\n");
-    for _ in 0..250 {
-        if pty.size() == final_size {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    wait_for(RESIZE_APPLY_DEADLINE, "final coalesced resize applied", || {
+        (pty.size() == final_size).then_some(())
+    });
     assert_eq!(pty.size(), final_size, "only the final size is applied");
 }
 
@@ -136,11 +135,8 @@ fn drain_sync_applies_resize_when_pipe_idle() {
         pixel_height: 0,
     };
     pty.resize(target).unwrap();
-    for _ in 0..250 {
-        if pty.size() == target {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    wait_for(RESIZE_APPLY_DEADLINE, "resize applied while pipe idle", || {
+        (pty.size() == target).then_some(())
+    });
     assert_eq!(pty.size(), target, "resize applied at the empty-pipe drain");
 }

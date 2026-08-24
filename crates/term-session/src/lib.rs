@@ -419,11 +419,34 @@ pub fn stop_gateway(force: bool) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("shutdown: {e}")))
 }
 
+/// Initialize the daemon's tracing subscriber.
+///
+/// When `TERM_WM_LOG_FILE` is set, events go to that file (append mode) —
+/// detached daemons have stdout/stderr nulled by design (see
+/// `auto_spawn::unix_spawn_detached_server`), so without a file their
+/// diagnostics are unrecoverable. Otherwise fall back to the default stdout
+/// subscriber. Uses `try_init` and ignores `SetGlobalDefaultError`: a global
+/// dispatcher may already exist when the daemon entry runs inside a host
+/// process (tests, embedded launches), and panicking there would be worse
+/// than keeping the existing subscriber.
+fn init_daemon_tracing() {
+    if let Some(path) = term_wm_config::env::log_file_path()
+        && let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false)
+            .try_init();
+        return;
+    }
+    let _ = tracing_subscriber::fmt().try_init();
+}
+
 /// Run the gateway daemon: rename the process, detach from the controlling
 /// terminal, and serve until `ShutdownGateway`. `selfcheck_marker` is a
 /// test-only path written with the platform's detachment proof once bound.
 pub fn run_daemon(selfcheck_marker: Option<std::path::PathBuf>) -> io::Result<()> {
-    tracing_subscriber::fmt::init();
+    init_daemon_tracing();
 
     // Make the daemon recognizable in process managers: every `term-session`
     // process is the same binary, so rename this one so `ps`/`top`/Task

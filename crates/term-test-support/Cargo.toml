@@ -1,0 +1,22 @@
+[package]
+name = "term-test-support"
+description = "Shared deterministic test utilities for term-wm crates: deadline polling, RAII kill guards, virtual clocks, unique IPC names."
+keywords = ["test", "testing", "utilities", "deterministic"]
+categories = ["development-tools::testing"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Enables `wait_for_async` (tokio-timer-backed polling for async test harnesses).
+tokio = ["dep:tokio"]
+
+[dependencies]
+tokio = { workspace = true, optional = true }
+
+[lints]
+workspace = true

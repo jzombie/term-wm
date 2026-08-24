@@ -19,6 +19,7 @@ use term_session_muxio_service_definitions::{
     Attach, AttachRequest, ChannelName, ListChannels, ShutdownGateway, Spawn, SpawnRequest,
     SpawnResponse, path_wire, probe_ipc_endpoint,
 };
+use term_test_support::{unique_gateway_name, wait_for_async};
 
 /// The compiled `term-session` binary under test.
 fn bin() -> PathBuf {
@@ -32,15 +33,62 @@ fn mock_bin() -> PathBuf {
 }
 
 /// A unique per-test gateway name.
+///
+/// Delegates to the shared helper so names embed both a per-process counter
+/// AND the process id: plain counters restart at 1 in every test binary run,
+/// so a daemon left over from a crashed prior run could otherwise claim the
+/// same name and hijack the test (see `session_starts_in_client_cwd`).
 fn unique_gateway(tag: &str) -> String {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("term-wm/dtest-{tag}-{id}")
+    unique_gateway_name(&format!("dtest-{tag}"))
+}
+
+/// RAII guard for spawned daemon/client processes.
+///
+/// Backstop cleanup so panicking tests cannot leak detached daemons holding
+/// named sockets: on drop (including during unwind) it kills the process,
+/// reaps it, and best-effort unlinks the gateway's socket artifact. Happy-path
+/// teardown (the `ShutdownGateway` RPC) stays explicit; killing an
+/// already-exited child is a harmless no-op, so no defuse step is needed.
+struct DaemonGuard {
+    child: Child,
+    /// Gateway name to clean up after death, if this process owns one.
+    gateway: Option<String>,
+}
+
+impl DaemonGuard {
+    fn spawn(mut cmd: Command, gateway: &str) -> Self {
+        Self {
+            child: cmd.spawn().expect("spawn daemon"),
+            gateway: Some(gateway.to_string()),
+        }
+    }
+
+    /// Wrap a spawned client process that owns no socket of its own.
+    fn for_child(child: Child) -> Self {
+        Self { child, gateway: None }
+    }
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        // Best-effort by design; see struct doc.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(gateway) = &self.gateway {
+            // Mirror production practice (`connect_or_spawn_server` unlinks
+            // the dead socket artifact before spawning). Harmless where no
+            // file exists: muxio binds with try_overwrite, Linux uses the
+            // abstract namespace, Windows named pipes leave no filesystem
+            // artifact; only macOS maps namespace names under /tmp.
+            let _ = std::fs::remove_file(std::env::temp_dir().join(gateway));
+        }
+    }
 }
 
 /// Spawn the real daemon with the given gateway and an optional selfcheck
-/// marker. Returns `(child, marker_path)`.
-fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
+/// marker. Returns `(guard, marker_path)`; the guard kills the daemon and
+/// cleans its socket artifact even if the test panics.
+fn spawn_daemon(gateway: &str, selfcheck: bool) -> (DaemonGuard, Option<PathBuf>) {
     let marker = if selfcheck {
         let path = std::env::temp_dir().join(format!(
             "term-session-selfcheck-{}.txt",
@@ -56,26 +104,29 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (Child, Option<PathBuf>) {
     if let Some(ref m) = marker {
         cmd.arg("--daemon-selfcheck").arg(m);
     }
+    // Capture daemon diagnostics to a per-run file: detached daemons null
+    // their stdio, so without this a failed startup is invisible in CI.
+    term_test_support::apply_test_logging(&mut cmd, &format!("dtest-{gateway}"));
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = cmd.spawn().expect("spawn daemon");
-    (child, marker)
+    (DaemonGuard::spawn(cmd, gateway), marker)
 }
 
 /// Spawn the daemon with an explicit current directory (distinct from the
 /// test harness's cwd), so cwd-propagation tests can detect whether a session
 /// inherits the daemon's startup directory or the client's launch directory.
-fn spawn_daemon_in(gateway: &str, cwd: &std::path::Path) -> Child {
+fn spawn_daemon_in(gateway: &str, cwd: &std::path::Path) -> DaemonGuard {
     let mut cmd = Command::new(bin());
     cmd.arg("--gateway")
         .arg(gateway)
         .arg("--daemon")
-        .current_dir(cwd)
-        .stdin(Stdio::null())
+        .current_dir(cwd);
+    term_test_support::apply_test_logging(&mut cmd, &format!("dtest-{gateway}"));
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    cmd.spawn().expect("spawn daemon")
+    DaemonGuard::spawn(cmd, gateway)
 }
 
 /// Attach a client to a channel and return its server-assigned conn id,
@@ -118,21 +169,21 @@ async fn wait_connectable(gateway: &str) -> Arc<muxio_tokio_rpc_ipc_client::RpcI
 #[tokio::test]
 async fn daemon_detaches_and_reports_proof() {
     let gateway = unique_gateway("detach");
-    let (mut child, marker) = spawn_daemon(&gateway, true);
+    let (_child, marker) = spawn_daemon(&gateway, true);
     let marker = marker.expect("marker requested");
 
-    // Wait for the marker (daemon writes it once bound).
-    let start = Instant::now();
-    let proof = loop {
-        if let Ok(content) = std::fs::read_to_string(&marker) {
-            break content.trim().to_string();
+    // Wait for the marker (daemon writes it once bound), bounded by deadline
+    // rather than assuming any fixed delay.
+    let proof = wait_for_async(Duration::from_secs(8), "daemon never wrote selfcheck marker", || {
+        let marker = marker.clone();
+        async move {
+            std::fs::read_to_string(&marker)
+                .ok()
+                .map(|content| content.trim().to_string())
+                .filter(|content| !content.is_empty())
         }
-        assert!(
-            start.elapsed() < Duration::from_secs(8),
-            "daemon never wrote selfcheck marker"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    })
+    .await;
 
     // Platform-specific detachment proof.
     #[cfg(windows)]
@@ -143,13 +194,12 @@ async fn daemon_detaches_and_reports_proof() {
     // Clean up.
     let client = wait_connectable(&gateway).await;
     ShutdownGateway::call(&*client, true).await.unwrap();
-    let _ = child.wait();
 }
 
 #[tokio::test]
 async fn daemon_survives_all_clients_disconnecting() {
     let gateway = unique_gateway("survive");
-    let (mut child, _marker) = spawn_daemon(&gateway, false);
+    let (_child, _marker) = spawn_daemon(&gateway, false);
 
     let client = wait_connectable(&gateway).await;
     let channel = "test/daemon_survive";
@@ -188,7 +238,6 @@ async fn daemon_survives_all_clients_disconnecting() {
     .unwrap();
 
     ShutdownGateway::call(&*client2, true).await.unwrap();
-    let _ = child.wait();
 }
 
 #[tokio::test]
@@ -199,19 +248,38 @@ async fn daemon_survives_parent_death() {
 
     // Spawn a client that auto-spawns the daemon, running a LONG-LIVED
     // session so its process survives the parent dying.
-    let mut client = Command::new(bin())
+    let mut client_cmd = Command::new(bin());
+    client_cmd
         .args(["--gateway", &gateway])
-        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn auto-attach client");
+        .args(["--channel", channel, "--", &mock, "sleep", "60000"]);
+    // Also captures the auto-spawned daemon: it inherits these env vars.
+    term_test_support::apply_test_logging(&mut client_cmd, &format!("dtest-client-{gateway}"));
+    let client = DaemonGuard::for_child(
+        client_cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn auto-attach client"),
+    );
 
-    // Give it time to auto-spawn the daemon and attach.
-    tokio::time::sleep(Duration::from_millis(2000)).await;
-    let _ = client.kill();
-    let _ = client.wait();
+    // Wait until the daemon is reachable AND hosts a live session on the
+    // channel, instead of assuming a fixed delay was long enough (the old
+    // 2 s blind sleep raced the whole auto-spawn chain under CI load).
+    let rpc = wait_connectable(&gateway).await;
+    wait_for_async(
+        Duration::from_secs(20),
+        "session never appeared on the auto-attached channel before client kill",
+        || async {
+            let resp = ListChannels::call(&*rpc, ()).await.unwrap();
+            resp.channels
+                .iter()
+                .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited))
+                .then_some(())
+        },
+    )
+    .await;
+    drop(client);
 
     // The daemon it spawned must still be reachable and the session alive
     // (the `sleep` process is still running, so the daemon must not have
@@ -236,8 +304,6 @@ async fn daemon_survives_parent_death() {
     assert_eq!(id, 1, "session from the orphaned daemon must persist");
 
     ShutdownGateway::call(&*client, true).await.unwrap();
-    // Give the daemon time to run its teardown and exit.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
 }
 
 #[tokio::test]
@@ -261,7 +327,7 @@ async fn session_starts_in_client_cwd() {
     let report_dir = tempfile::tempdir().expect("report tempdir");
     let report = report_dir.path().join("pwd.txt");
 
-    let mut child = spawn_daemon_in(&gateway, daemon_dir.path());
+    let _child = spawn_daemon_in(&gateway, daemon_dir.path());
     let client = wait_connectable(&gateway).await;
     attach_to(&client, channel, "cwd").await;
 
@@ -288,18 +354,14 @@ async fn session_starts_in_client_cwd() {
     // Retry while the file is missing OR empty: `std::fs::write` truncates the
     // target before writing, so a read that races the truncate can observe a
     // zero-length file (which would canonicalize to an empty path and panic).
-    let start = Instant::now();
-    let got = loop {
-        match std::fs::read(&report) {
-            Ok(content) if !content.is_empty() => break content,
-            _ => {}
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "mock pwd never wrote the report"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let got: Vec<u8> =
+        wait_for_async(Duration::from_secs(10), "mock pwd never wrote the report", || {
+            let report = report.clone();
+            async move {
+                std::fs::read(&report).ok().filter(|content| !content.is_empty())
+            }
+        })
+        .await;
     // The child's `current_dir()` is the OS-canonical path (on macOS `/var`
     // resolves to `/private/var`; on Windows it may be the 8.3 short form and
     // differ from `canonicalize`'s long form + `\\?\` prefix), so canonicalize
@@ -317,7 +379,6 @@ async fn session_starts_in_client_cwd() {
     );
 
     ShutdownGateway::call(&*client, true).await.unwrap();
-    let _ = child.wait();
 }
 
 /// The daemon must never inherit the parent's open handles. Regression guard
@@ -336,6 +397,13 @@ async fn daemon_does_not_inherit_parent_handles() {
     let gateway = unique_gateway("no_inherit");
     // `connect_or_spawn_server` resolves through the process-local gateway
     // override cell; point it at the unique per-test channel.
+    //
+    // The override is process-global state: restore it even if an assertion
+    // panics, so a failure cannot redirect later tests in this binary to this
+    // (now dead) gateway.
+    let _restore_override = term_test_support::KillOnDrop::new(|| {
+        term_wm_config::env::set_gateway_override(None);
+    });
     term_wm_config::env::set_gateway_override(Some(&gateway));
 
     #[cfg(windows)]
@@ -519,7 +587,7 @@ fn close_write_end(write: libc::c_int) {
 async fn cli_kill_client_detaches_one_client() {
     let gateway = unique_gateway("kill_client");
     let channel = "test/kill_client";
-    let (mut child, _marker) = spawn_daemon(&gateway, false);
+    let (_child, _marker) = spawn_daemon(&gateway, false);
 
     // Two attached clients on the same channel.
     let c1 = wait_connectable(&gateway).await;
@@ -589,7 +657,6 @@ async fn cli_kill_client_detaches_one_client() {
     );
 
     ShutdownGateway::call(&*c1, true).await.unwrap();
-    let _ = child.wait();
 }
 
 #[test]
@@ -630,38 +697,37 @@ async fn top_level_channel_auto_attaches() {
     let mock = mock_bin().to_string_lossy().to_string();
     // `term-session --channel <ch> -- <mock> sleep 60000` (no subcommand):
     // giving a channel must still auto-attach and auto-spawn the daemon.
-    let mut client = Command::new(bin())
-        .args(["--gateway", &gateway])
-        .args(["--channel", channel, "--", &mock, "sleep", "60000"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn auto-attach client");
+    let mut client_cmd = Command::new(bin());
+    client_cmd.args(["--gateway", &gateway])
+        .args(["--channel", channel, "--", &mock, "sleep", "60000"]);
+    term_test_support::apply_test_logging(&mut client_cmd, &format!("dtest-client-{gateway}"));
+    let client = DaemonGuard::for_child(
+        client_cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn auto-attach client"),
+    );
 
     // The auto-spawned daemon becomes reachable and hosts a live session.
     let rpc = wait_connectable(&gateway).await;
-    let start = Instant::now();
-    loop {
-        let resp = ListChannels::call(&*rpc, ()).await.unwrap();
-        let live = resp
-            .channels
-            .iter()
-            .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited));
-        if live {
-            break;
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "session never appeared on the auto-attached channel"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_async(
+        Duration::from_secs(20),
+        "session never appeared on the auto-attached channel",
+        || async {
+            let resp = ListChannels::call(&*rpc, ()).await.unwrap();
+            resp.channels
+                .iter()
+                .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited))
+                .then_some(())
+        },
+    )
+    .await;
 
     // Cleanup: kill the client process; the daemon (and its live session)
     // survives, so stop it explicitly with force.
-    let _ = client.kill();
-    let _ = client.wait();
+    drop(client);
     ShutdownGateway::call(&*rpc, true).await.unwrap();
 }
 
@@ -690,21 +756,22 @@ async fn dash_dash_disambiguates_command_from_subcommand() {
 
     // `term-session -- list` (after `--`) parses `list` as a COMMAND to run:
     // the implicit attach path auto-spawns a gateway.
-    let mut client = Command::new(bin())
-        .args(["--gateway", &gateway])
-        .args(["--", "list"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("run -- list");
+    let client = DaemonGuard::for_child(
+        Command::new(bin())
+            .args(["--gateway", &gateway])
+            .args(["--", "list"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("run -- list"),
+    );
 
     // The auto-spawned gateway becomes reachable (the `list` command itself
     // does not exist, so the session spawn fails — but the daemon persists).
     let rpc = wait_connectable(&gateway).await;
     ShutdownGateway::call(&*rpc, true).await.unwrap();
-    let _ = client.kill();
-    let _ = client.wait();
+    drop(client);
 }
 
 #[tokio::test]
@@ -743,7 +810,7 @@ async fn unknown_flag_errors_without_spawning_gateway() {
 async fn cli_list_renders_client_identity() {
     let gateway = unique_gateway("list_identity");
     let channel = "test/list_identity";
-    let (mut daemon, _marker) = spawn_daemon(&gateway, false);
+    let (_daemon, _marker) = spawn_daemon(&gateway, false);
 
     // A client that stays connected, with explicit identity fields.
     let client = wait_connectable(&gateway).await;
@@ -799,14 +866,13 @@ async fn cli_list_renders_client_identity() {
     );
 
     ShutdownGateway::call(&*client, true).await.unwrap();
-    let _ = daemon.wait();
 }
 
 #[tokio::test]
 async fn cli_stop_requires_force_when_live_sessions() {
     let gateway = unique_gateway("stop_force");
     let channel = "test/stop_force";
-    let (mut child, _marker) = spawn_daemon(&gateway, false);
+    let (_child, _marker) = spawn_daemon(&gateway, false);
 
     let client = wait_connectable(&gateway).await;
     attach_to(&client, channel, "cli").await;
@@ -859,14 +925,13 @@ async fn cli_stop_requires_force_when_live_sessions() {
         "stop --force failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let _ = child.wait();
 }
 
 #[tokio::test]
 async fn cli_kill_requires_force_when_participants() {
     let gateway = unique_gateway("kill_force");
     let channel = "test/kill_force";
-    let (mut child, _marker) = spawn_daemon(&gateway, false);
+    let (_child, _marker) = spawn_daemon(&gateway, false);
 
     let client = wait_connectable(&gateway).await;
     attach_to(&client, channel, "cli").await;
@@ -928,7 +993,6 @@ async fn cli_kill_requires_force_when_participants() {
     ShutdownGateway::call(&*stop_client, true)
         .await
         .expect("daemon shutdown");
-    let _ = child.wait();
 }
 /// stderr instead of being silently swallowed by the stderr→tracing redirect
 /// (see `redirect_fd_to_tracing` in `term-session-client`). The gateway is
@@ -1061,50 +1125,45 @@ async fn attach_inside_nested_env_proceeds_with_allow_nested() {
     let gateway = unique_gateway("nested-allow");
     let channel = "test/nested-allow";
     let mock = mock_bin().to_string_lossy().to_string();
-    let (mut daemon, _marker) = spawn_daemon(&gateway, false);
+    let (_daemon, _marker) = spawn_daemon(&gateway, false);
     let rpc = wait_connectable(&gateway).await;
 
-    let mut client = Command::new(bin())
-        .env("TERM_SESSION_GATEWAY", &gateway)
-        .args([
-            "--gateway",
-            &gateway,
-            "--allow-nested",
-            "--channel",
-            channel,
-            "--",
-            &mock,
-            "sleep",
-            "60000",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn nested client with --allow-nested");
+    let client = DaemonGuard::for_child(
+        Command::new(bin())
+            .env("TERM_SESSION_GATEWAY", &gateway)
+            .args([
+                "--gateway",
+                &gateway,
+                "--allow-nested",
+                "--channel",
+                channel,
+                "--",
+                &mock,
+                "sleep",
+                "60000",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn nested client with --allow-nested"),
+    );
 
-    let start = Instant::now();
-    loop {
-        let resp = ListChannels::call(&*rpc, ()).await.unwrap();
-        let live = resp
-            .channels
-            .iter()
-            .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited));
-        if live {
-            break;
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "session never appeared with --allow-nested (guard may have blocked attach)"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_async(
+        Duration::from_secs(20),
+        "session never appeared with --allow-nested (guard may have blocked attach)",
+        || async {
+            let resp = ListChannels::call(&*rpc, ()).await.unwrap();
+            resp.channels
+                .iter()
+                .any(|c| c.name == channel && c.session.as_ref().is_some_and(|s| !s.exited))
+                .then_some(())
+        },
+    )
+    .await;
 
-    let _ = client.kill();
-    let _ = client.wait();
+    drop(client);
     ShutdownGateway::call(&*rpc, true).await.unwrap();
-    let _ = daemon.kill();
-    let _ = daemon.wait();
 }
 
 /// A client inside a prod gateway session targeting a different (dev) gateway
