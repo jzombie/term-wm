@@ -62,10 +62,15 @@ const NEW_WORKSPACE_NAME_PREFIX: &str = "ws-";
 pub fn spawn_attributed_input_listener(
     pty_wakeup_tx: Sender<UnifiedEvent>,
     workspace: &str,
+    host_socket: &str,
 ) -> io::Result<tokio::sync::mpsc::Sender<(u32, u32)>> {
     let tx = pty_wakeup_tx.clone();
     let channel = term_session::ChannelName::session(workspace).to_string();
-    let socket_path = term_session::auto_spawn::connect_or_spawn_server(None)?;
+    // Pin to the HOST gateway exactly: this process runs as a session child
+    // of the daemon that owns `host_socket`, and its environment may have
+    // been scrubbed (namespace policy), so re-resolving here could land on a
+    // different endpoint than the one streaming our PTY. Never auto-spawn.
+    let socket_path = host_socket.to_string();
     // Queue the WM's live counts flow through; drained by a task inside
     // the listener below that reports over the subscribed connection.
     let (stats_tx, mut stats_rx) =
@@ -273,7 +278,7 @@ pub fn run_outer_launcher(cli: &Cli, initial_workspace: String) -> io::Result<()
         let channel = term_session::ChannelName::session(&current_workspace).to_string();
         let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
 
-        let inner_cmd = build_inner_command(current_exe, &current_workspace, cli);
+        let inner_cmd = build_inner_command(current_exe, &current_workspace, cli, &socket_path);
 
         match term_session::client::run_session(
             &socket_path,
@@ -573,44 +578,33 @@ mod tests {
     /// consumed; the executor action is likewise consumed without quitting.
     /// Neither may ever surface as an unhandled fall-through (#298).
     ///
-    /// Hermetic helpers below: `PinnedGatewayEnv` RAII-pins the gateway env
-    /// var and `dead_gateway_channel` mints unique never-spawned channels, so
-    /// connects fail instantly on every platform.
+    /// Hermetic helpers below: `PinnedGatewayEnv` RAII-pins the process-
+    /// local gateway override cell and `dead_gateway_channel` mints unique
+    /// never-spawned channels, so connects fail instantly on every platform.
     struct PinnedGatewayEnv {
-        /// Previous value of the env var (None = unset before pinning),
-        /// restored on drop so overlapping suites keep their expectations.
+        /// Previous value of the override cell (None = unset before
+        /// pinning), restored on drop so overlapping suites keep their
+        /// expectations.
         _previous: Option<String>,
     }
 
     impl PinnedGatewayEnv {
-        /// Pin the gateway env var to `value` for the guard's lifetime.
-        ///
-        /// SAFETY: callers hold `#[serial(process_global_state)]`, so no
-        /// other thread reads or writes the environment while the guard is
-        /// alive.
+        /// Pin the process-local gateway override to `value` for the
+        /// guard's lifetime. Callers hold `#[serial(process_global_state)]`
+        /// so no other thread touches the cell while the guard is alive.
         fn pin(value: String) -> Self {
-            let previous = std::env::var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR).ok();
-            unsafe {
-                std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, &value);
-            }
             Self {
-                _previous: previous,
+                _previous: term_wm_config::env::set_gateway_override(Some(&value)),
             }
         }
     }
 
     impl Drop for PinnedGatewayEnv {
         fn drop(&mut self) {
-            unsafe {
-                match &self._previous {
-                    Some(prev) => {
-                        std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, prev)
-                    }
-                    // Restore the unset state rather than deleting blindly:
-                    // another pinned guard may legitimately own the slot.
-                    None => std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR),
-                }
-            }
+            // Restore the previous state rather than clearing blindly:
+            // another pinned guard may legitimately own the slot.
+            let previous = self._previous.take();
+            term_wm_config::env::set_gateway_override(previous.as_deref());
         }
     }
 
@@ -625,7 +619,7 @@ mod tests {
     #[test]
     #[serial(process_global_state)]
     fn handle_custom_action_consumes_stop_gateway_actions() {
-        // Hermetic (#Windows-CI): TERM_WM_GATEWAY points at a guaranteed-dead
+        // Hermetic (#Windows-CI): the pinned override points at a guaranteed-dead
         // unique channel, so every connect fails instantly on all platforms.
         // The assertions pin what the UNIT layer owns: palette consumption,
         // overlay visibility, Enter-to-Confirm resolution, close behavior,

@@ -36,9 +36,10 @@ fn run() -> io::Result<()> {
     // Initialize runtime config before any session-persistence code paths.
     term_wm_config::runtime::init(runtime_config_for(cli.no_session_persistence));
 
-    // Apply the CLI environment override (if any) before ANY consumer of
-    // active_environment() runs — this covers both project-task visibility
-    // and gateway socket scoping via the single-source-of-truth resolver.
+    // Apply the CLI environment override (if any) before any consumer of
+    // active_environment() runs. This covers project-task visibility only:
+    // gateway socket resolution is deliberately independent of the runtime
+    // environment so profile changes can never fork daemon lifecycles.
     if let Some(env) = &cli.env {
         match term_wm_config::env::parse_environment(env) {
             Some(parsed) => term_wm_config::env::set_override_environment(parsed),
@@ -48,6 +49,16 @@ fn run() -> io::Result<()> {
                 )));
             }
         }
+    }
+
+    // An explicit --gateway pins every gateway consumer in this process
+    // (--stop-daemon, --list-channels, daemon bind) to the named endpoint,
+    // bypassing environment/heuristic resolution. The override lives in a
+    // process-local cell (NOT the environment), so it can never leak into
+    // session shells or descendants. Multi-segment endpoint paths round-trip
+    // losslessly via `ChannelName::parse_gateway`.
+    if let Some(gateway) = &cli.gateway {
+        term_wm_config::env::set_gateway_override(Some(gateway));
     }
 
     #[cfg(feature = "session-persistence")]
@@ -89,7 +100,14 @@ fn run() -> io::Result<()> {
     // 1. Standalone daemon mode
     #[cfg(feature = "session-persistence")]
     if cli.daemon && term_wm_config::runtime::session_persistence_enabled() {
-        let gateway = term_session::auto_spawn::resolve_gateway();
+        // A pinned `--gateway` (passed by the parent launcher's auto-spawn)
+        // bypasses all resolution heuristics and binds byte-exact the socket
+        // the client probed before spawning this daemon.
+        let gateway = match cli.gateway.as_deref() {
+            Some(pinned) => term_session::ChannelName::parse_gateway(pinned)
+                .map_err(|e| io::Error::other(format!("invalid --gateway '{pinned}': {e}")))?,
+            None => term_session::auto_spawn::resolve_gateway(),
+        };
         let rt = tokio::runtime::Runtime::new()?;
         return rt
             .block_on(term_session::server::run_gateway(gateway))
@@ -133,15 +151,27 @@ fn run() -> io::Result<()> {
     // For internal sessions, spawn a Muxio listener that receives structured
     // events from the server and pipes them into the event source via pty_wakeup_tx.
     #[cfg(feature = "session-persistence")]
-    let inner_session_stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>> =
-        if cli.internal_session && term_wm_config::runtime::session_persistence_enabled() {
-            Some(term_wm::internal_session::spawn_attributed_input_listener(
-                pty_wakeup_tx.clone(),
-                &workspace,
-            )?)
-        } else {
-            None
-        };
+    let inner_session_stats_tx: Option<tokio::sync::mpsc::Sender<(u32, u32)>> = if cli
+        .internal_session
+        && term_wm_config::runtime::session_persistence_enabled()
+    {
+        // The host gateway arrives via --gateway from the outer launcher
+        // (already installed into the process-local override cell above);
+        // internal sessions must NEVER re-resolve or auto-spawn, or they
+        // split their input channel onto a foreign daemon.
+        let host_socket = cli.gateway.as_deref().ok_or_else(|| {
+            io::Error::other(
+                "--internal-session requires --gateway <host socket> (set by the outer launcher)",
+            )
+        })?;
+        Some(term_wm::internal_session::spawn_attributed_input_listener(
+            pty_wakeup_tx.clone(),
+            &workspace,
+            host_socket,
+        )?)
+    } else {
+        None
+    };
 
     let config = WmConfig {
         scrollback_lines: cli.scrollback,

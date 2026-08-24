@@ -49,7 +49,10 @@ update the palette entry and the `Display` string together.
   `<workspace>/main`, each with its own PTY session and window-manager instance.
 - **channel** — a daemon-hosted session endpoint (`<workspace>/main`).
 - **gateway / gateway daemon** — the background session daemon; endpoint
-  `term-wm/<env>/<user>/gateway`.
+  `{namespace}/<user>/gateway` (default namespace `term-wm`; cargo-driven
+  executions in this repo resolve `term-wm-dev` via the committed
+  `.cargo/config.toml`). Independent of `--env` / `TERM_WM_ENV`, which scope
+  project tasks only.
 - **viewer** — a connected client of a channel (the local TUI or a `term-session`
   client).
 - **detach** — disconnect a viewer from a session without terminating its
@@ -61,7 +64,7 @@ update the palette entry and the `Display` string together.
 ## Environment Variables & Flags
 
 - Environment variables are always uppercase `TERM_WM_*` (`TERM_WM_ENV`,
-  `TERM_WM_GATEWAY`, `TERM_SESSION_CHANNEL`, `TERM_WM_NO_SESSION_PERSISTENCE`,
+  `TERM_SESSION_CHANNEL`, `TERM_WM_NO_SESSION_PERSISTENCE`,
   `TERM_WM_TRACE_ESC`).
   - `TERM_WM_ENV` is the single environment override (`dev`/`prod`/`test`) read by
     `term_wm_config::env::active_environment()` for both IPC gateway scoping and task
