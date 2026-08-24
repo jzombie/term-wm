@@ -1,7 +1,8 @@
 # %PACKAGE% -- Quick Help
 
 **Package:** `%PACKAGE%` ([https://crates.io/crates/%PACKAGE%](https://crates.io/crates/%PACKAGE%))  
-**Version:** `%VERSION%` (%PLATFORM%)
+**Version:** `%VERSION%` (%PLATFORM%)  
+**Tasks Environment:** `%ENVIRONMENT%`
 
 Submit bug reports to %REPOSITORY%/issues/new
 

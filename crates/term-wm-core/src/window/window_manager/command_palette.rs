@@ -247,6 +247,16 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
             })
         };
 
+        // Non-actionable metadata row (never selectable, always visible).
+        let info_row = |label: String| {
+            MenuDisplayItem::Item(MenuItem {
+                label: label.into(),
+                icon: None,
+                action: crate::actions::TermWmAction::CloseMenu,
+                disabled: true,
+            })
+        };
+
         #[cfg(feature = "session-persistence")]
         let info_item = |label: String| {
             MenuDisplayItem::Item(MenuItem {
@@ -266,6 +276,12 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         // 1. QUICK ACTIONS & TASKS
         // ─────────────────────────────────────────────────────────
         items.push(header("QUICK ACTIONS"));
+        // Active runtime environment (task gating). Deliberately NOT the
+        // gateway namespace: endpoints are independent of the environment.
+        items.push(info_row(format!(
+            "Environment: {}",
+            term_wm_config::env::active_environment()
+        )));
         items.push(mi(
             "Resume",
             Some("▶"),
@@ -832,6 +848,33 @@ mod tests {
         assert!(wm.handle_command_palette_event(&key_esc()).is_none());
         assert_eq!(wm.input_mode(), WmInputMode::CommandPalette);
         assert!(wm.command_palette_visible());
+    }
+
+    #[test]
+    #[serial(wm_menu_items)]
+    fn wm_menu_items_shows_environment_info_row() {
+        use crate::components::{MenuDisplayItem, MenuItem};
+        let wm = make_wm::<TestOverlay>();
+        let items = wm.wm_menu_items(
+            &[],
+            "",
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        );
+        // Hermetic: assert the prefix and the disabled flag, not the value
+        // (the active environment depends on the ambient build).
+        let env_idx = items
+            .iter()
+            .position(|entry| matches!(entry, MenuDisplayItem::Item(MenuItem { label, disabled: true, .. }) if label.starts_with("Environment: ")))
+            .expect("Environment info row present under Quick Actions");
+        // It belongs to the first section: nothing but its header precedes it.
+        assert!(
+            items[..env_idx]
+                .iter()
+                .all(|e| !matches!(e, MenuDisplayItem::Separator)),
+            "Environment row must appear before the first separator"
+        );
     }
 
     #[test]
