@@ -1,4 +1,14 @@
-# Local development overrides (only take effect if copying to config.toml)
+# Template for PERSONAL cargo configuration. Copy the parts you need into
+# one of:
+#   - ~/.cargo/config.toml                     (global, all projects)
+#   - <ancestor-of-repo>/.cargo/config.toml    (machine-local, this project)
+#
+# The committed `.cargo/config.toml` in this repository is toolchain POLICY
+# (it injects TERM_WM_NAMESPACE=term-wm-dev so cargo-driven executions stay
+# off the shared system gateway). Keep personal state out of it.
+
+# Local path patches for muxio/vt100 development (adjust paths for your
+# machine; relative paths resolve against this file's directory).
 [patch.crates-io]
 muxio-core = { path = "../rust-muxio/core" }
 muxio-rpc-service = { path = "../rust-muxio/extensions/muxio-rpc-service" }

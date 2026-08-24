@@ -36,9 +36,10 @@ fn run() -> io::Result<()> {
     // Initialize runtime config before any session-persistence code paths.
     term_wm_config::runtime::init(runtime_config_for(cli.no_session_persistence));
 
-    // Apply the CLI environment override (if any) before ANY consumer of
-    // active_environment() runs — this covers both project-task visibility
-    // and gateway socket scoping via the single-source-of-truth resolver.
+    // Apply the CLI environment override (if any) before any consumer of
+    // active_environment() runs. This covers project-task visibility only:
+    // gateway socket resolution is deliberately independent of the runtime
+    // environment so profile changes can never fork daemon lifecycles.
     if let Some(env) = &cli.env {
         match term_wm_config::env::parse_environment(env) {
             Some(parsed) => term_wm_config::env::set_override_environment(parsed),
@@ -47,6 +48,16 @@ fn run() -> io::Result<()> {
                     "invalid --env value '{env}' (expected dev, prod, or test)"
                 )));
             }
+        }
+    }
+
+    // Mirror term-session: an explicit --gateway pins every gateway consumer
+    // in this process (--stop-daemon, --list-channels) to the named endpoint,
+    // bypassing environment/heuristic resolution. Multi-segment endpoint
+    // paths round-trip losslessly via `ChannelName::parse_gateway`.
+    if let Some(gateway) = &cli.gateway {
+        unsafe {
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, gateway);
         }
     }
 
@@ -89,7 +100,14 @@ fn run() -> io::Result<()> {
     // 1. Standalone daemon mode
     #[cfg(feature = "session-persistence")]
     if cli.daemon && term_wm_config::runtime::session_persistence_enabled() {
-        let gateway = term_session::auto_spawn::resolve_gateway();
+        // A pinned `--gateway` (passed by the parent launcher's auto-spawn)
+        // bypasses all resolution heuristics and binds byte-exact the socket
+        // the client probed before spawning this daemon.
+        let gateway = match cli.gateway.as_deref() {
+            Some(pinned) => term_session::ChannelName::parse_gateway(pinned)
+                .map_err(|e| io::Error::other(format!("invalid --gateway '{pinned}': {e}")))?,
+            None => term_session::auto_spawn::resolve_gateway(),
+        };
         let rt = tokio::runtime::Runtime::new()?;
         return rt
             .block_on(term_session::server::run_gateway(gateway))

@@ -2,19 +2,51 @@
 //!
 //! [`active_environment()`] serves as the **single source of truth** for which environment
 //! the current process behaves as. It is consumed consistently across the entire codebase:
-//! - **IPC / Gateway Scoping:** `gateway_channel_name()` in `term-session-muxio-service-definitions`
-//!   uses it to scope socket endpoints (`term-wm/<env>/<user>/gateway`).
 //! - **Project Task Gating:** `ProjectTaskConfig::visible_in()` in `term-wm-core` uses it to
 //!   filter tasks declared in `.term-wm/tasks.json` by environment.
+//!
+//! Gateway endpoints are deliberately INDEPENDENT of the environment:
+//! changing a runtime profile (`--env`, `TERM_WM_ENV`) can never fork daemon
+//! lifecycles. The default endpoint is `{namespace}/<user>/gateway` with a
+//! static namespace ([`APP_NAME`]); local development isolation is enforced
+//! at the toolchain boundary via `NAMESPACE_ENV_VAR` (`TERM_WM_NAMESPACE`),
+//! injected for cargo-driven executions by the repo's committed
+//! `.cargo/config.toml` while preserving the OS-level user segment. Full-path
+//! overrides remain available through `GATEWAY_CHANNEL_ENV_VAR`
+//! (`TERM_WM_GATEWAY`).
 //!
 //! Any new subsystem requiring environment gating must query [`active_environment()`] rather than
 //! inspecting `CARGO_MANIFEST_DIR` or `cfg!(debug_assertions)` directly.
 
 use std::fmt;
 
-/// Default gateway namespace shared by every term-wm-family binary. The only
-/// place the family literal lives; downstream crates reference this const.
-pub const GATEWAY_NAMESPACE: &str = "term-wm";
+/// Base application family name shared by every term-wm-family binary. The
+/// only place this literal lives; downstream crates reference this const.
+///
+/// Deliberately a named constant rather than `env!("CARGO_PKG_NAME")`: this
+/// is a library crate whose package name (`term-wm-config`) is not the
+/// product identity, and Cargo exposes no compile-time handle on another
+/// member's name. Renaming the family therefore means editing exactly this
+/// one line, which then propagates through gateway socket names and help
+/// footers everywhere.
+pub const APP_NAME: &str = "term-wm";
+
+/// Default gateway namespace shared by every term-wm-family binary. Alias of
+/// [`APP_NAME`] under its historical IPC-focused name; downstream crates
+/// reference this const. Static by design: identical sources always bind the
+/// same default endpoint; local development isolation happens at runtime
+/// (see [`NAMESPACE_ENV_VAR`]), never at compile time.
+pub const GATEWAY_NAMESPACE: &str = APP_NAME;
+
+/// Gateway namespace-root override. Replaces only the leading segment of the
+/// endpoint (`{ns}/<user>/gateway`), preserving OS-level user isolation;
+/// values are validated against the strict segment charset and invalid or
+/// empty values fall back to [`GATEWAY_NAMESPACE`]. The repo's committed
+/// `.cargo/config.toml` sets this to `term-wm-dev` so every cargo-driven
+/// execution operates on an isolated dev namespace. For a wholesale override
+/// of the entire endpoint path (including `<user>`), use
+/// [`GATEWAY_CHANNEL_ENV_VAR`] instead.
+pub const NAMESPACE_ENV_VAR: &str = "TERM_WM_NAMESPACE";
 
 /// Gateway channel override (CI isolation, operators). Read by `term-session`.
 pub const GATEWAY_CHANNEL_ENV_VAR: &str = "TERM_WM_GATEWAY";
@@ -277,5 +309,10 @@ mod tests {
         assert_eq!(Environment::Dev.to_string(), "dev");
         assert_eq!(Environment::Prod.as_str(), "prod");
         assert_eq!(Environment::Test.as_str(), "test");
+    }
+
+    #[test]
+    fn gateway_namespace_aliases_app_name() {
+        assert_eq!(GATEWAY_NAMESPACE, APP_NAME);
     }
 }

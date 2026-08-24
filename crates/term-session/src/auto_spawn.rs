@@ -106,17 +106,47 @@ impl Drop for WindowsDaemonProcess {
     }
 }
 
-fn spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChild> {
+/// argv flag accepted by both `term-wm` and `term-session` daemon modes to
+/// pin the gateway endpoint they bind, bypassing resolution heuristics.
+const DAEMON_GATEWAY_ARG: &str = "--gateway";
+
+/// Daemon-mode arguments appended to every detached spawn: run as a daemon,
+/// pinned to the exact gateway endpoint this client resolved. Without the
+/// pin the fresh child re-runs its own resolution heuristics; any drift
+/// between parent and child (CLI-only overrides like `--env`, build
+/// heuristics) would bind a different socket and leave the launcher probing
+/// a dead name until timeout.
+fn daemon_spawn_args(gateway: &str) -> Vec<String> {
+    vec![
+        "--daemon".to_string(),
+        DAEMON_GATEWAY_ARG.to_string(),
+        gateway.to_string(),
+    ]
+}
+
+/// Quoted command-line rendering of [`daemon_spawn_args`] for the Windows
+/// `CreateProcessW` command line. Gateway names are validated segments
+/// (alphanumeric/hyphen/underscore plus `/` separators), so the defensive
+/// quoting never has to escape embedded quotes. Production callers are
+/// Windows-only; kept compiling everywhere so the flag/value agreement with
+/// [`daemon_spawn_args`] is unit-tested on every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn daemon_command_line_suffix(gateway: &str) -> String {
+    format!(" --daemon {DAEMON_GATEWAY_ARG} \"{gateway}\"")
+}
+
+fn spawn_detached_server(bin: &std::path::Path, gateway: &str) -> io::Result<DaemonChild> {
     #[cfg(unix)]
     {
-        unix_spawn_detached_server(bin)
+        unix_spawn_detached_server(bin, gateway)
     }
     #[cfg(windows)]
     {
-        windows_spawn_detached_server(bin)
+        windows_spawn_detached_server(bin, gateway)
     }
     #[cfg(not(any(unix, windows)))]
     {
+        let _ = gateway;
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "daemon detachment is not supported on this platform",
@@ -125,10 +155,10 @@ fn spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChild> {
 }
 
 #[cfg(unix)]
-fn unix_spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChild> {
+fn unix_spawn_detached_server(bin: &std::path::Path, gateway: &str) -> io::Result<DaemonChild> {
     use std::os::unix::process::CommandExt;
     let mut cmd = Command::new(bin);
-    cmd.arg("--daemon");
+    cmd.args(daemon_spawn_args(gateway));
     // All stdio is detached: a daemon must not rely on the parent reading its
     // pipes. In particular, a piped stderr that is never drained lets the OS
     // pipe buffer fill, blocking the server's stderr writes and deadlocking
@@ -154,7 +184,10 @@ fn unix_spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChild> 
 }
 
 #[cfg(windows)]
-fn windows_spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChild> {
+fn windows_spawn_detached_server(
+    bin: &std::path::Path,
+    gateway: &str,
+) -> io::Result<DaemonChild> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
@@ -221,11 +254,13 @@ fn windows_spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChil
     // safe. lpApplicationName is set, so CreateProcessW uses it verbatim (no
     // PATH search or extension appending). The command line embeds the program
     // WITHOUT its trailing NUL (only the buffer's final terminator below).
-    let mut command_line: Vec<u16> = Vec::with_capacity(program.len() + 16);
+    let mut command_line: Vec<u16> = Vec::with_capacity(program.len() + 32);
     command_line.push(b'"' as u16);
     command_line.extend_from_slice(&program[..program.len() - 1]);
     command_line.push(b'"' as u16);
-    command_line.extend(" --daemon".encode_utf16());
+    // Pin the child to exactly the endpoint this client resolved (mirror of
+    // the unix `--gateway` argument; see `daemon_spawn_args`).
+    command_line.extend(daemon_command_line_suffix(gateway).encode_utf16());
     command_line.push(0);
 
     let mut pi = PROCESS_INFORMATION {
@@ -265,6 +300,11 @@ fn windows_spawn_detached_server(bin: &std::path::Path) -> io::Result<DaemonChil
 /// Wait for the gateway to become reachable, spawning a detached daemon if
 /// none is running.
 ///
+/// A spawned daemon is pinned to exactly this client's resolved endpoint via
+/// `--gateway <name>`, so parent and child can never disagree on the socket
+/// (CLI-only overrides like `--env` do not survive the spawn, and heuristic
+/// inputs such as `CARGO_MANIFEST_DIR` may differ between the two).
+///
 /// Returns the gateway channel name string, which the caller passes to the
 /// muxio IPC client. `bin` defaults to the current executable so tests can
 /// point it at `CARGO_BIN_EXE_term-session`.
@@ -279,7 +319,7 @@ pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<Stri
     let bin = bin
         .map(|b| b.to_path_buf())
         .unwrap_or_else(|| std::env::current_exe().expect("current exe path"));
-    let mut child = spawn_detached_server(&bin)?;
+    let mut child = spawn_detached_server(&bin, &socket_name)?;
     let start = Instant::now();
     let timeout = Duration::from_secs(3);
     let poll_interval = Duration::from_millis(50);
@@ -336,34 +376,78 @@ mod tests {
     }
 
     #[test]
-    fn resolve_gateway_defaults_to_env_scoped_user_gateway() {
+    fn resolve_gateway_defaults_to_user_scoped_gateway() {
         let _guard = env_lock();
         unsafe {
             std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
-            std::env::set_var(term_wm_config::env::ENVIRONMENT_ENV_VAR, "test");
+            std::env::remove_var(term_wm_config::NAMESPACE_ENV_VAR);
             // `current_os_user()` reads $USER on Unix and %USERNAME% on
             // Windows; set both so the assertion is platform-independent.
             std::env::set_var("USER", "tester");
             std::env::set_var("USERNAME", "tester");
         }
         let gw = resolve_gateway();
-        assert_eq!(gw.to_string(), "term-wm/test/tester/gateway");
-        assert_eq!(gw.namespace, "term-wm");
+        // Static default: {namespace}/<user>/gateway. No environment
+        // component by design; both override variables are cleared so the
+        // assertion holds regardless of ambient toolchain injection.
+        assert_eq!(
+            gw.to_string(),
+            format!("{}/tester/gateway", term_wm_config::GATEWAY_NAMESPACE)
+        );
+        assert_eq!(gw.namespace, term_wm_config::GATEWAY_NAMESPACE);
         unsafe {
-            std::env::remove_var(term_wm_config::env::ENVIRONMENT_ENV_VAR);
             std::env::remove_var("USER");
             std::env::remove_var("USERNAME");
         }
     }
 
     #[test]
+    fn resolve_gateway_namespace_override_preserves_user_segment() {
+        let _guard = env_lock();
+        // The toolchain-injected namespace override replaces only the root
+        // segment: OS-level user isolation survives on shared dev machines.
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+            std::env::set_var(term_wm_config::NAMESPACE_ENV_VAR, "term-wm-dev");
+            std::env::set_var("USER", "tester");
+            std::env::set_var("USERNAME", "tester");
+        }
+        let gw = resolve_gateway();
+        assert_eq!(gw.to_string(), "term-wm-dev/tester/gateway");
+        unsafe {
+            std::env::remove_var(term_wm_config::NAMESPACE_ENV_VAR);
+            std::env::remove_var("USER");
+            std::env::remove_var("USERNAME");
+        }
+    }
+
+    #[test]
+    fn resolve_gateway_keeps_multi_segment_overrides_lossless() {
+        let _guard = env_lock();
+        // Full endpoint paths round-trip byte-exact (daemon spawn pinning
+        // depends on this); they must not collapse to a shorter name.
+        let raw = "term-wm-dev-1a2b3c4d/prod/alice/gateway";
+        unsafe {
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, raw);
+        }
+        assert_eq!(resolve_gateway().to_string(), raw);
+        unsafe {
+            std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
+        }
+    }
+
+    #[test]
     fn resolve_gateway_falls_back_when_override_is_malformed() {
         let _guard = env_lock();
-        // Three segments cannot parse as `name` or `namespace/name`.
+        // Invalid segments cannot parse as a gateway endpoint; the fallback
+        // is the legacy `{namespace}/gateway` name.
         unsafe {
-            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, "a/b/c");
+            std::env::set_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR, "has space/gateway");
         }
-        assert_eq!(resolve_gateway().to_string(), "term-wm/gateway");
+        assert_eq!(
+            resolve_gateway().to_string(),
+            format!("{}/gateway", term_wm_config::GATEWAY_NAMESPACE)
+        );
         unsafe {
             std::env::remove_var(term_wm_config::env::GATEWAY_CHANNEL_ENV_VAR);
         }
@@ -379,5 +463,25 @@ mod tests {
             .expect("run sh");
         let rendered = DaemonExitStatus::Unix(status).to_string();
         assert!(rendered.contains("exit status"), "rendered: {rendered}");
+    }
+
+    #[test]
+    fn daemon_spawn_args_pin_the_resolved_gateway() {
+        let args = daemon_spawn_args("term-wm-dev-1a2b3c4d/prod/alice/gateway");
+        assert_eq!(args[0], "--daemon");
+        assert_eq!(args[1], DAEMON_GATEWAY_ARG);
+        assert_eq!(
+            args[2], "term-wm-dev-1a2b3c4d/prod/alice/gateway",
+            "the pinned name must be the full multi-segment endpoint"
+        );
+    }
+
+    #[test]
+    fn daemon_command_line_suffix_agrees_with_spawn_args() {
+        // Windows builds one quoted command line; it must carry the same
+        // flag/value pair the unix argv path passes.
+        let suffix = daemon_command_line_suffix("term-wm/prod/alice/gateway");
+        assert_eq!(suffix, format!(" --daemon {DAEMON_GATEWAY_ARG} \"term-wm/prod/alice/gateway\""));
+        assert!(suffix.contains(DAEMON_GATEWAY_ARG));
     }
 }

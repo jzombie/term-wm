@@ -52,6 +52,15 @@ pub struct Cli {
     #[arg(long = "daemon", hide = true)]
     pub daemon: bool,
 
+    /// Gateway endpoint pinned by the parent launcher when spawning this
+    /// binary as a detached daemon (`<namespace>/<env>/<user>/gateway`).
+    /// Hidden: end users never pass it manually; without it the daemon
+    /// resolves its own gateway via the standard heuristics. When present it
+    /// also seeds `TERM_WM_GATEWAY` so every consumer in this process
+    /// (`--stop-daemon`, `--list-channels`) targets the pinned endpoint.
+    #[arg(long = "gateway", hide = true, value_name = "NAME")]
+    pub gateway: Option<String>,
+
     /// Hidden flag: running inside a daemon-managed persistent PTY channel
     #[arg(long = "internal-session", hide = true)]
     pub internal_session: bool,
@@ -78,9 +87,10 @@ pub struct Cli {
     #[arg(long = "allow-nested")]
     pub allow_nested: bool,
 
-    /// Override the environment used for project-task visibility AND gateway
-    /// socket scoping (dev/prod/test). Applied process-wide before any
-    /// session or task code runs; beats TERM_WM_ENV and build heuristics.
+    /// Override the environment used for project-task visibility
+    /// (dev/prod/test). Applied process-wide before any task code runs;
+    /// beats TERM_WM_ENV and build heuristics. Gateway endpoints do not
+    /// depend on the environment.
     #[arg(long = "env", value_name = "ENV", value_parser = ["dev", "prod", "test"])]
     pub env: Option<String>,
 
