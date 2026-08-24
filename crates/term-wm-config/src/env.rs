@@ -181,6 +181,26 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// Shared failure text for the toolchain-policy tripwire below. The
+    /// literal appears twice (missing-variable and wrong-value assertions),
+    /// so it lives in one named binding.
+    const DEV_ISOLATION_REGRESSION_MSG: &str = "CRITICAL REGRESSION: TERM_WM_NAMESPACE is missing or has the wrong value! The committed `.cargo/config.toml` was deleted, modified, or re-ignored. It injects TERM_WM_NAMESPACE=term-wm-dev so cargo-driven executions resolve term-wm-dev/<user>/gateway instead of hijacking the installed system daemon on term-wm/<user>/gateway.";
+
+    /// Guards the repository toolchain policy: the committed
+    /// `.cargo/config.toml` must inject `TERM_WM_NAMESPACE=term-wm-dev`.
+    /// Cargo applies the `[env]` table to every process it spawns, so this
+    /// test runs green under `cargo test` and fails loudly if the file was
+    /// deleted, gutted, or re-added to `.gitignore`. Only meaningful when
+    /// run through cargo: invoking the test binary directly bypasses
+    /// Cargo's environment injection by design.
+    #[test]
+    #[serial(env)]
+    fn repository_dev_isolation_is_enforced() {
+        let namespace =
+            std::env::var(NAMESPACE_ENV_VAR).expect(DEV_ISOLATION_REGRESSION_MSG);
+        assert_eq!(namespace, "term-wm-dev", "{DEV_ISOLATION_REGRESSION_MSG}");
+    }
+
     #[test]
     #[serial(env)]
     fn no_session_persistence_false_when_unset() {
