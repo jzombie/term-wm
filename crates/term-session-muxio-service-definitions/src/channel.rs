@@ -1,9 +1,7 @@
 use std::fmt;
 
 use interprocess::local_socket::{GenericNamespaced, prelude::*};
-pub use term_wm_config::env::{
-    GATEWAY_NAMESPACE, NAMESPACE_ENV_VAR, SESSION_GATEWAY_ENV_VAR,
-};
+pub use term_wm_config::env::{GATEWAY_NAMESPACE, NAMESPACE_ENV_VAR, SESSION_GATEWAY_ENV_VAR};
 
 // TODO: Move to config
 /// Default workspace name (namespace when no `/` is present).

@@ -250,8 +250,16 @@ mod tests {
             "pwd".to_string(),
             report.to_string_lossy().into_owned(),
         ];
-        let mut session =
-            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, cwd, "test/bound/gateway").expect("spawn session");
+        let mut session = Session::spawn(
+            1,
+            Some(cmd),
+            TEST_COLS,
+            TEST_ROWS,
+            None,
+            cwd,
+            "test/bound/gateway",
+        )
+        .expect("spawn session");
         let bytes = read_report(&mut session, &report);
         session.pty.kill_child().ok();
         PathWire::from(bytes)
@@ -313,8 +321,16 @@ mod tests {
             name.to_string(),
             report.to_string_lossy().into_owned(),
         ];
-        let mut session =
-            Session::spawn(1, Some(cmd), TEST_COLS, TEST_ROWS, None, None, "test/bound/gateway").expect("spawn session");
+        let mut session = Session::spawn(
+            1,
+            Some(cmd),
+            TEST_COLS,
+            TEST_ROWS,
+            None,
+            None,
+            "test/bound/gateway",
+        )
+        .expect("spawn session");
         let bytes = read_report(&mut session, &report);
         session.pty.kill_child().ok();
         bytes

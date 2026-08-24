@@ -595,9 +595,7 @@ async fn cli_kill_client_detaches_one_client() {
 #[test]
 fn bare_term_session_shows_help_and_does_not_connect() {
     let gateway = unique_gateway("bare");
-    let out = Command::new(bin())
-        .output()
-        .expect("run bare term-session");
+    let out = Command::new(bin()).output().expect("run bare term-session");
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -675,7 +673,8 @@ async fn dash_dash_disambiguates_command_from_subcommand() {
     // `term-session list` (no `--`) parses `list` as the admin SUBCOMMAND: it
     // connects to a gateway and never auto-spawns one.
     let out = Command::new(bin())
-        .arg("--gateway").arg(&gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("list")
         .output()
         .expect("run list");
@@ -718,7 +717,8 @@ async fn unknown_flag_errors_without_spawning_gateway() {
         let gateway = unique_gateway("unknown_flag");
         let gw = ChannelName::parse(&gateway).expect("gateway name");
         let out = Command::new(bin())
-            .arg("--gateway").arg(&gateway)
+            .arg("--gateway")
+            .arg(&gateway)
             .arg(flag)
             .output()
             .expect("run with unknown flag");
@@ -774,7 +774,8 @@ async fn cli_list_renders_client_identity() {
     .unwrap();
 
     let out = Command::new(bin())
-        .arg("--gateway").arg(&gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("list")
         .output()
         .expect("run list");
@@ -827,7 +828,8 @@ async fn cli_stop_requires_force_when_live_sessions() {
 
     // `stop` without --force: refused, non-zero exit, daemon keeps running.
     let out = Command::new(bin())
-        .arg("--gateway").arg(&gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("stop")
         .output()
         .expect("run stop");
@@ -886,7 +888,8 @@ async fn cli_kill_requires_force_when_participants() {
 
     // `kill` without --force: refused, non-zero exit, channel keeps running.
     let out = Command::new(bin())
-        .arg("--gateway").arg(&gateway)
+        .arg("--gateway")
+        .arg(&gateway)
         .arg("kill")
         .arg(channel)
         .output()
