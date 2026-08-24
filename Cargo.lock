@@ -3308,6 +3308,7 @@ dependencies = [
  "crossterm",
  "insta",
  "portable-pty",
+ "term-test-support",
  "term-wm-events",
 ]
 

@@ -4,7 +4,7 @@
 //! It exists so the workspace's test suites stop hand-rolling (and drifting)
 //! the same few patterns:
 //!
-//! - [`wait_for`] (sync) and `wait_for_async` (enable the `tokio`
+//! - [`wait_for`] (sync) and [`wait_for_async`] (enable the `tokio`
 //!   feature): deadline-bounded condition polling.
 //!   The repo's testing policy is "no blind sleeps": every wait must observe
 //!   real state, not hope that a fixed delay was long enough.
