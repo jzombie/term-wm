@@ -244,16 +244,14 @@ mod bus_tests {
     #[test]
     fn bus_push_and_tick_expiry() {
         let mut b = NotificationBus::default();
-        // Long TTL: the toast must survive a tick at "now" regardless of how
-        // long the test process is scheduled between push and tick.
-        let id = b.push("hello", Duration::from_secs(60));
+        let id = b.push("hello", Duration::from_millis(10));
         assert_eq!(b.len(), 1);
         // Not yet expired
         b.tick(Instant::now());
         assert_eq!(b.len(), 1);
-        // After the TTL (virtual: tick with an explicit future instant, no
-        // wall-clock waiting)
-        b.tick(Instant::now() + Duration::from_secs(61));
+        // After TTL
+        std::thread::sleep(Duration::from_millis(20));
+        b.tick(Instant::now());
         assert!(b.is_empty(), "toast should have expired");
         // Dismiss after expiry is no-op (already gone)
         assert!(!b.dismiss(id));

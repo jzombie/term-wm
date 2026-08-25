@@ -30,7 +30,6 @@ members = [
     "crates/term-session-server",
     "crates/term-size-box",
     "crates/term-sys-io",
-    "crates/term-test-support",
     "crates/term-wm-config",
     "crates/term-wm-console",
     "crates/term-wm-core",
@@ -108,7 +107,6 @@ term-session-mock = { path = "crates/term-session-mock", version = "0.10.4-alpha
 term-session-muxio-service-definitions = { path = "crates/term-session-muxio-service-definitions", version = "0.10.4-alpha" }
 term-session-server = { path = "crates/term-session-server", version = "0.10.4-alpha" }
 term-sys-io = { path = "crates/term-sys-io", version = "0.10.4-alpha" }
-term-test-support = { path = "crates/term-test-support", version = "0.10.4-alpha" }
 term-wm = { path = ".", version = "0.10.4-alpha" }
 term-wm-config = { path = "crates/term-wm-config", version = "0.10.4-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.10.4-alpha" }
@@ -204,7 +202,6 @@ term-session-client = { workspace = true }
 term-session-mock = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }
-term-test-support = { workspace = true, features = ["tokio"] }
 term-wm-render = { workspace = true }
 term-wm-vt100 = { workspace = true }
 tokio = { workspace = true }

@@ -151,25 +151,12 @@ impl Session {
     }
 }
 
-/// Safety net, not a lifecycle path: normal teardown (ShutdownGateway,
-/// CloseSession escalation, exited-session cleanup) kills the child
-/// explicitly BEFORE the session is dropped, so this best-effort kill is a
-/// no-op there. It exists for the abnormal paths: a panicking daemon or a
-/// dropped-without-teardown session would otherwise leak the child holding
-/// its PTY. This mirrors the Windows Job Object `KILL_ON_JOB_CLOSE` net that
-/// already guarantees tree-death when the `Pty` handle dies.
-impl Drop for Session {
-    fn drop(&mut self) {
-        let _ = self.pty.kill_child();
-    }
-}
-
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::{Session, resolve_cwd};
     use std::path::{Path, PathBuf};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use term_session_muxio_service_definitions::path_wire;
     use term_session_muxio_service_definitions::path_wire::PathWire;
@@ -232,31 +219,19 @@ mod tests {
     /// stalls until the host answers `\x1b[6n`) — otherwise the mock never
     /// runs and no report is written. Returns the raw report bytes so
     /// losslessness is asserted byte-for-byte.
-    ///
-    /// A successful read is final only when it is non-empty. A zero-byte read
-    /// is an uncommitted write: a writer using truncate-then-write
-    /// (`std::fs::write`) leaves an existing-but-empty file between open and
-    /// write, and accepting it decodes to `""` and fails the round-trip
-    /// assertion spuriously (mirrors the guard in
-    /// `term-session/tests/daemon_tests.rs`). Valid `pwd` reports are always
-    /// an absolute path and `envvar` reports always carry the `NAME=` prefix,
-    /// so real content is never empty.
     fn read_report(session: &mut Session, report: &Path) -> Vec<u8> {
-        let mut content: Option<Vec<u8>> = None;
-        term_test_support::wait_for(
-            Duration::from_secs(REPORT_TIMEOUT_SECS),
-            &format!("mock pwd wrote the report at {report:?}"),
-            || {
-                if let Some(bytes) = std::fs::read(report).ok().filter(|b| !b.is_empty()) {
-                    content = Some(bytes);
-                    return Some(());
-                }
-                // Pump the PTY so the child's DSR handshake completes.
-                session.read_output();
-                None
-            },
-        );
-        content.expect("report bytes captured")
+        let deadline = Instant::now() + Duration::from_secs(REPORT_TIMEOUT_SECS);
+        loop {
+            if let Ok(content) = std::fs::read(report) {
+                return content;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "mock pwd never wrote the report at {report:?}"
+            );
+            session.read_output();
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Spawn a session running `mock pwd <report>` with the given wire-encoded

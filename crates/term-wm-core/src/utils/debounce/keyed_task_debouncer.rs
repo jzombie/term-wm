@@ -113,10 +113,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::time::Duration;
-
-    use term_test_support::ManualClock;
 
     type TestDebouncer = KeyedTaskDebouncer<u32, String, Task>;
 
@@ -125,22 +122,17 @@ mod tests {
         Flush(u32),
     }
 
-    /// A debouncer wired to a scheduler on a virtual clock. Advancing the
-    /// clock only moves time; each advance must be followed by an explicit
-    /// `drain_expired_once()` before asserting.
-    fn make(delay: Duration) -> (TestDebouncer, TaskHandle<Task>, Arc<ManualClock>) {
-        let clock = Arc::new(ManualClock::new());
-        let scheduler =
-            crate::task_scheduler::TaskScheduler::<Task>::new_with_clock(clock.as_closure());
+    fn make(delay: Duration) -> (TestDebouncer, TaskHandle<Task>) {
+        let scheduler = crate::task_scheduler::TaskScheduler::<Task>::new();
         let handle = scheduler.handle();
         let mut debouncer = TestDebouncer::new(delay, Task::Flush);
         debouncer.set_handle(handle.clone());
-        (debouncer, handle, clock)
+        (debouncer, handle)
     }
 
     #[test]
     fn submit_arms_timer_on_first_submit() {
-        let (mut debouncer, handle, _clock) = make(Duration::from_millis(200));
+        let (mut debouncer, handle) = make(Duration::from_millis(200));
         debouncer.submit(1, "one".to_string());
         assert!(debouncer.contains_key(1));
         assert!(handle.has_pending());
@@ -149,7 +141,7 @@ mod tests {
 
     #[test]
     fn second_submit_updates_buffer_without_reschedule() {
-        let (mut debouncer, _handle, _clock) = make(Duration::from_millis(200));
+        let (mut debouncer, _handle) = make(Duration::from_millis(200));
         debouncer.submit(1, "first".to_string());
         let first_id = debouncer.pending_task_id(1).unwrap();
         debouncer.submit(1, "second".to_string());
@@ -164,7 +156,7 @@ mod tests {
 
     #[test]
     fn flush_returns_latest_and_clears() {
-        let (mut debouncer, _handle, _clock) = make(Duration::from_millis(200));
+        let (mut debouncer, _handle) = make(Duration::from_millis(200));
         debouncer.submit(1, "old".to_string());
         debouncer.submit(1, "new".to_string());
         assert_eq!(debouncer.flush(1).as_deref(), Some("new"));
@@ -173,18 +165,18 @@ mod tests {
 
     #[test]
     fn flush_returns_none_when_absent() {
-        let (mut debouncer, _handle, _clock) = make(Duration::from_millis(200));
+        let (mut debouncer, _handle) = make(Duration::from_millis(200));
         assert_eq!(debouncer.flush(7), None);
     }
 
     #[test]
     fn cancel_removes_and_cancels_task() {
-        let (mut debouncer, handle, clock) = make(Duration::from_millis(10));
+        let (mut debouncer, handle) = make(Duration::from_millis(10));
         debouncer.submit(1, "x".to_string());
         assert!(handle.has_pending());
         debouncer.cancel(1);
         assert!(debouncer.is_empty());
-        clock.advance(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(30));
         assert!(
             handle.drain_expired_once().is_empty(),
             "cancelled flush must never fire"
@@ -201,18 +193,15 @@ mod tests {
 
     #[test]
     fn cap_no_starvation_fires_single_flush_with_latest() {
-        let (mut debouncer, handle, clock) = make(Duration::from_millis(60));
+        let (mut debouncer, handle) = make(Duration::from_millis(60));
         // A trickling stream of submits, each below the debounce window.
-        // Virtual time makes the trickle deterministic: the deadline stays
-        // anchored to the FIRST submit.
         debouncer.submit(1, "a".to_string());
-        clock.advance(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(30));
         debouncer.submit(1, "b".to_string());
-        clock.advance(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(30));
         debouncer.submit(1, "c".to_string());
-        // After one more window exactly one flush task fires with the latest
-        // payload.
-        clock.advance(Duration::from_millis(60));
+        // Deadline anchored to the FIRST submit: after ~60ms the timer fires.
+        std::thread::sleep(Duration::from_millis(60));
         let expired = handle.drain_expired_once();
         assert_eq!(expired.len(), 1, "must be exactly one flush task");
         assert_eq!(expired[0].1, Task::Flush(1));

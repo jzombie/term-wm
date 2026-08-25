@@ -140,19 +140,12 @@ impl StderrSuppressGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     #[cfg(unix)]
     use std::os::fd::FromRawFd;
     #[cfg(windows)]
     use std::os::windows::io::FromRawHandle;
 
-    /// This test re-points the REAL process stderr at a capture pipe, so it
-    /// must be serialized against every other test that could write to (or
-    /// redirect) stderr concurrently; otherwise concurrent output lands in
-    /// this capture buffer, or worse, this test's dup2 window swallows
-    /// another test's diagnostics.
     #[test]
-    #[serial(stderr)]
     #[cfg(any(unix, windows))]
     fn stderr_suppress_guard_suppresses_and_restores() {
         // ---- platform-specific setup: save + redirect stderr to a pipe ----
@@ -240,12 +233,6 @@ mod tests {
             (read_handle, restore)
         };
 
-        // ---- panic-safe restoration ----
-        // If any assertion below fails while stderr is still redirected, the
-        // guard restores the real stderr during unwinding so later tests in
-        // this binary are not left writing into a dead pipe.
-        let restorer = term_test_support::KillOnDrop::new(restore);
-
         // ---- shared assertions ----
         {
             let _guard = StderrSuppressGuard::new();
@@ -270,10 +257,7 @@ mod tests {
             libc::write(2, c"restored\n".as_ptr().cast(), 9);
         }
 
-        // Restore BEFORE reading the capture pipe: the read below relies on
-        // reaching EOF, which requires every write end (including fd 2) to be
-        // detached from the pipe.
-        drop(restorer);
+        restore();
 
         use std::io::Read;
         #[cfg(unix)]

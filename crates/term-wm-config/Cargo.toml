@@ -18,7 +18,6 @@ session-persistence = []
 
 [dev-dependencies]
 serial_test = { workspace = true }
-term-test-support = { workspace = true }
 
 [lints]
 workspace = true
