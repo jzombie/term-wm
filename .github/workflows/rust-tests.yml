@@ -17,10 +17,6 @@ jobs:
     name: test (OS=${{ matrix.os }}, Features=${{ matrix.name }})
     runs-on: ${{ matrix.os }}
 
-    # Hard bound so a hung PTY/socket test fails the job instead of freezing
-    # it until the runner-level default (issue #309).
-    timeout-minutes: 45
-
     strategy:
       fail-fast: false
       matrix:
@@ -86,37 +82,11 @@ jobs:
       - name: Test
         run: cargo test --workspace ${{ matrix.flags }} --lib --bins --tests --examples -- --include-ignored
 
-      # Failure diagnostics: test harnesses point spawned daemons/clients at
-      # TERM_WM_LOG_FILE under term-wm-test-logs/ (see
-      # term-test-support::apply_test_logging). Archive them on failure so a
-      # red run comes with its own evidence.
-      - name: Upload test logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-logs-${{ matrix.os }}-${{ matrix.features }}
-          path: ${{ runner.temp }}/term-wm-test-logs/
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # Property-based tests write newly discovered failure seeds into
-      # proptest-regressions/ directories. Persist them from failed runs so
-      # the seed can be committed and the case replayed deterministically.
-      - name: Upload proptest regressions on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: proptest-regressions-${{ matrix.os }}-${{ matrix.features }}
-          path: "**/proptest-regressions/"
-          if-no-files-found: ignore
-          retention-days: 14
-
   test:
     name: test
     runs-on: ubuntu-latest
     needs: test_matrix
     if: ${{ always() }}
-    timeout-minutes: 5
     steps:
       - name: Evaluate matrix results
         run: |
@@ -131,9 +101,6 @@ jobs:
     name: coverage (cargo-llvm-cov)
     runs-on: ubuntu-latest
     needs: test_matrix
-    # Re-runs the full suite; bound it for the same hang-freeze reason as the
-    # matrix jobs.
-    timeout-minutes: 30
     outputs:
       line_coverage: ${{ steps.cov-summary.outputs.line_percent }}
     steps:

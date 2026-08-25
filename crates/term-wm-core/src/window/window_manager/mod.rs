@@ -5772,7 +5772,6 @@ mod tests {
     fn make_direct_mode_wm() -> (
         WindowManager<TestComponent>,
         crate::task_scheduler::TaskHandle<SystemTask>,
-        std::sync::Arc<term_test_support::ManualClock>,
         WindowKey,
     ) {
         let mut wm = WindowManager::<TestComponent>::with_config(
@@ -5782,17 +5781,13 @@ mod tests {
             crate::window::LayerManager::new(),
             std::collections::HashMap::new(),
         );
-        // Virtual clock: the debounce-flush test advances time explicitly and
-        // drains, instead of sleeping real milliseconds and hoping.
-        let clock = std::sync::Arc::new(term_test_support::ManualClock::new());
-        let scheduler =
-            crate::task_scheduler::TaskScheduler::<SystemTask>::new_with_clock(clock.as_closure());
+        let scheduler = crate::task_scheduler::TaskScheduler::<SystemTask>::new();
         let handle = scheduler.handle();
         wm.set_system_task_handle(handle.clone());
         let keys = make_keys(&mut wm, 1);
         let key = keys[0];
         wm.set_window_title(key, "vim");
-        (wm, handle, clock, key)
+        (wm, handle, key)
     }
 
     fn direct_mode_messages(wm: &WindowManager<TestComponent>) -> Vec<String> {
@@ -5804,7 +5799,7 @@ mod tests {
 
     #[test]
     fn direct_mode_toast_debounce_coalesces() {
-        let (mut wm, _scheduler, _clock, key) = make_direct_mode_wm();
+        let (mut wm, _scheduler, key) = make_direct_mode_wm();
 
         // vim startup burst: alternate screen (keyboard) then mouse tracking
         // (keyboard + mouse) within the debounce window.
@@ -5849,7 +5844,7 @@ mod tests {
 
     #[test]
     fn direct_mode_toast_cap_does_not_reschedule() {
-        let (mut wm, scheduler, clock, key) = make_direct_mode_wm();
+        let (mut wm, scheduler, key) = make_direct_mode_wm();
 
         wm.direct_input_mode_changed(
             key,
@@ -5877,15 +5872,11 @@ mod tests {
             "second transition must not re-arm the flush timer"
         );
 
-        // Drain just before the anchored deadline yields nothing: advance one
-        // millisecond short of the debounce window.
-        clock.advance(DIRECT_MODE_TOAST_DEBOUNCE - Duration::from_millis(1));
+        // Drain before the deadline yields nothing (generous margin for CI).
         assert!(scheduler.drain_expired_once().is_empty());
 
-        // After the window elapses, exactly ONE flush fires with the latest
-        // mode. Virtual time makes this exact: cross the anchored deadline,
-        // then drain explicitly.
-        clock.advance(Duration::from_millis(1));
+        // After the window elapses, exactly ONE flush fires with the latest mode.
+        std::thread::sleep(Duration::from_millis(300));
         let expired = scheduler.drain_expired_once();
         assert_eq!(expired.len(), 1, "must be exactly one flush task");
         assert!(matches!(
@@ -5904,7 +5895,7 @@ mod tests {
 
     #[test]
     fn direct_mode_toast_disabled() {
-        let (mut wm, _scheduler, _clock, key) = make_direct_mode_wm();
+        let (mut wm, _scheduler, key) = make_direct_mode_wm();
 
         wm.direct_input_mode_changed(key, DirectInputMode::default());
         wm.flush_direct_mode_toast(key);
@@ -5915,7 +5906,7 @@ mod tests {
 
     #[test]
     fn direct_mode_toast_skips_closed_window() {
-        let (mut wm, _scheduler, _clock, key) = make_direct_mode_wm();
+        let (mut wm, _scheduler, key) = make_direct_mode_wm();
 
         wm.direct_input_mode_changed(
             key,

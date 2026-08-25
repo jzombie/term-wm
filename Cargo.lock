@@ -3091,7 +3091,6 @@ dependencies = [
  "term-session-mock",
  "term-session-muxio-service-definitions",
  "term-session-server",
- "term-test-support",
  "term-wm-config",
  "tokio",
  "tracing-subscriber",
@@ -3162,7 +3161,6 @@ dependencies = [
  "tempfile",
  "term-session-mock",
  "term-session-muxio-service-definitions",
- "term-test-support",
  "term-wm-config",
  "term-wm-pty-engine",
  "term-wm-vt100",
@@ -3184,16 +3182,7 @@ name = "term-sys-io"
 version = "0.10.4-alpha"
 dependencies = [
  "libc",
- "serial_test",
- "term-test-support",
  "tracing",
-]
-
-[[package]]
-name = "term-test-support"
-version = "0.10.4-alpha"
-dependencies = [
- "tokio",
 ]
 
 [[package]]
@@ -3224,7 +3213,6 @@ dependencies = [
  "term-session-muxio-service-definitions",
  "term-session-server",
  "term-sys-io",
- "term-test-support",
  "term-wm-config",
  "term-wm-console",
  "term-wm-core",
@@ -3248,7 +3236,6 @@ name = "term-wm-config"
 version = "0.10.4-alpha"
 dependencies = [
  "serial_test",
- "term-test-support",
 ]
 
 [[package]]
@@ -3290,7 +3277,6 @@ dependencies = [
  "strum",
  "tempfile",
  "term-clipboard",
- "term-test-support",
  "term-wm-config",
  "term-wm-events",
  "term-wm-layout-engine",
@@ -3339,7 +3325,6 @@ dependencies = [
  "term-clipboard",
  "term-session-mock",
  "term-sys-io",
- "term-test-support",
  "term-wm-config",
  "term-wm-events",
  "term-wm-vt100",

@@ -100,12 +100,6 @@ fn run() -> io::Result<()> {
     // 1. Standalone daemon mode
     #[cfg(feature = "session-persistence")]
     if cli.daemon && term_wm_config::runtime::session_persistence_enabled() {
-        // Diagnostics: the root binary's daemon mode previously had no
-        // tracing init at all, so `TERM_WM_LOG_FILE` (and any RUST_LOG
-        // filtering) was silently ignored here. Initialize the same
-        // file-aware subscriber the `term-session` daemon uses.
-        term_wm::logging::init_default();
-
         // A pinned `--gateway` (passed by the parent launcher's auto-spawn)
         // bypasses all resolution heuristics and binds byte-exact the socket
         // the client probed before spawning this daemon.

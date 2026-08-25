@@ -31,7 +31,6 @@ windows-sys = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 term-session-mock = { workspace = true }
-term-test-support = { workspace = true, features = ["tokio"] }
 
 [lints]
 workspace = true

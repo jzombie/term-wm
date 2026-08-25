@@ -54,17 +54,6 @@ A dedicated `Reaper` thread reaps zombie children via SIGHUP→SIGKILL escalatio
 
 The component system renders to in-memory buffers (`Buffer` + `UiFrame`) with test doubles (`TestPane`, `TestComponent`), so layout, rendering, and PTY scroll synchronization are verified without a terminal, including property tests for scroll sync.
 
-### Test Determinism Policy
-
-CI flakiness is treated as a product bug. The rules that keep the suite deterministic:
-
-- **No blind sleeps.** Never `sleep(fixed_delay)` and hope an external event landed. Poll a real condition on a deadline with `term_test_support::wait_for` / `wait_for_async`, or synchronize on an explicit signal.
-- **Virtual time for timers.** Tests of deadline-driven logic (`TaskScheduler`, the debouncer, notification TTLs) construct the scheduler via `TaskScheduler::new_with_clock` with a `ManualClock`. Advancing virtual time only moves the timestamp provider: every `advance()` must be followed by an explicit `drain_expired*()` before asserting.
-- **RAII cleanup.** Every spawned process (daemon, client, PTY child) is owned by a drop guard (`DaemonGuard`, `AutoKillPty`, generic `KillOnDrop`) so panicking tests cannot leak processes or sockets.
-- **Unique resource names.** Gateway names come from `unique_gateway_name` (pid + counter), so concurrent runs and leftovers from crashed runs never collide.
-- **Captured diagnostics.** Harnesses call `term_test_support::apply_test_logging` before spawning daemons/clients, which routes their tracing into per-run files under `TERM_WM_TEST_LOG_DIR` (default `<temp>/term-wm-test-logs/`); CI archives that directory when a job fails.
-- **Property seeds are committed.** Shrunk proptest cases land in each crate's `proptest-regressions/`; CI uploads new seeds from failed runs so they can be replayed deterministically.
-
 ### Code Coverage
 
 Line coverage is tracked via [Coveralls](https://coveralls.io/github/jzombie/term-wm?branch=main) using `cargo-llvm-cov` (see the CI `coverage` job in `.github/workflows/rust-tests.yml`). A root [`Makefile`](../Makefile) makes the same measurement reproducible locally:
