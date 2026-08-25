@@ -25,15 +25,11 @@ use term_session_muxio_service_definitions::path_wire;
 ///   included), not just the session leader.
 /// - `check_pid <pid>` — exits 0 if the process is alive, non-zero otherwise.
 ///   Cross-platform liveness probe for tree-kill assertions.
-/// - `pwd <file>` — publishes the process's current working directory to the
-///   given (absolute) file path atomically, then exits. Lets E2E tests verify
-///   session cwd. Fails loudly (exit 1, no report written) if the cwd cannot
-///   be resolved, so tests never mistake an environmental failure for an
-///   empty path round-trip.
-/// - `envvar <NAME> <file>` — publishes `<NAME>=<value>` (the value of the
-///   given environment variable, empty if unset) atomically to the given
-///   (absolute) file path, then exits. Lets E2E tests verify which env vars
-///   reach a session child.
+/// - `pwd <file>` — writes the process's current working directory to the given
+///   (absolute) file path, then exits. Lets E2E tests verify session cwd.
+/// - `envvar <NAME> <file>` — writes `<NAME>=<value>` (the value of the given
+///   environment variable, empty if unset) to the given (absolute) file path,
+///   then exits. Lets E2E tests verify which env vars reach a session child.
 pub const OSC52_TEST_PAYLOAD: &[u8] = b"c;dGVzdA==";
 
 #[cfg(windows)]
@@ -193,32 +189,6 @@ fn disable_stdin_echo() {
             }
         }
     }
-}
-
-/// Separator between the report path and the staging pid in the temp name
-/// built by [`write_report_atomic`] (e.g. `report.txt.tmp.4242`).
-const REPORT_STAGING_SUFFIX: &str = ".tmp.";
-
-/// Publish a report file atomically: write to a pid-unique sibling staging
-/// name, then rename onto the final path. Consumers polling the final path
-/// therefore see either no file or complete content; they can never observe
-/// the truncated intermediate state of an in-progress `std::fs::write` (a
-/// 0-byte read that would decode to an empty path).
-///
-/// The pid component isolates concurrent mock invocations that happen to
-/// share a report directory from each other's staging files. On any failure
-/// (write or rename) the staging artifact is removed before returning, so a
-/// failed publish never leaves `{file}.tmp.{pid}` behind.
-fn write_report_atomic(file: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
-    let mut staged = file.as_os_str().to_os_string();
-    staged.push(REPORT_STAGING_SUFFIX);
-    staged.push(std::process::id().to_string());
-    let staged = std::path::PathBuf::from(staged);
-    let result = std::fs::write(&staged, bytes).and_then(|()| std::fs::rename(&staged, file));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&staged);
-    }
-    result
 }
 
 fn main() {
@@ -386,18 +356,12 @@ fn main() {
                 .expect("pwd requires an absolute output file path");
             // Report the child's actual cwd as raw wire bytes (lossless, see
             // `path_wire`), so the harness can assert a byte-for-byte round-trip
-            // even for non-UTF-8 paths. A resolution failure must fail loudly:
-            // silently publishing an empty report would decode to "" and mask
-            // the real cause behind a confusing empty-path assertion.
-            let cwd = match std::env::current_dir() {
-                Ok(dir) => path_wire::encode_path(&dir),
-                Err(e) => {
-                    eprintln!("pwd: failed to resolve current directory: {e}");
-                    std::process::exit(1);
-                }
-            };
-            if let Err(e) = write_report_atomic(std::path::Path::new(&file), &cwd) {
-                eprintln!("pwd: failed to write {file:?}: {e}");
+            // even for non-UTF-8 paths.
+            let cwd = std::env::current_dir()
+                .map(|p| path_wire::encode_path(&p))
+                .unwrap_or_default();
+            if let Err(e) = std::fs::write(&file, &cwd) {
+                eprintln!("pwd: failed to write {:?}: {e}", file);
                 std::process::exit(1);
             }
         }
@@ -415,8 +379,8 @@ fn main() {
             let mut report = name.as_encoded_bytes().to_vec();
             report.push(b'=');
             report.extend_from_slice(value.as_encoded_bytes());
-            if let Err(e) = write_report_atomic(std::path::Path::new(&file), &report) {
-                eprintln!("envvar: failed to write {file:?}: {e}");
+            if let Err(e) = std::fs::write(&file, &report) {
+                eprintln!("envvar: failed to write {:?}: {e}", file);
                 std::process::exit(1);
             }
         }
