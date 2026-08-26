@@ -1554,6 +1554,51 @@ mod tests {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
+    use std::time::Duration;
+
+    use term_test_support::wait_for;
+
+    /// Deadline for "reader thread noticed an external event" waits. Long
+    /// enough for loaded CI machines; short enough to fail fast on a hang.
+    const PTY_EVENT_DEADLINE: Duration = Duration::from_secs(5);
+
+    /// Wraps a `Pty` and guarantees the child is killed on drop, even when a
+    /// test assertion panics before reaching the manual cleanup lines. On
+    /// Windows this terminates the Job Object tree (`cmd.exe` and any
+    /// descendants); on Unix it kills the child directly. Without it, a leaked
+    /// idle child would hold the ConPTY pipe / pty master open for the rest of
+    /// the test binary's run.
+    struct AutoKillPty(Option<Pty>);
+
+    impl AutoKillPty {
+        fn spawn(cmd: CommandBuilder, size: PtySize, scrollback: usize) -> PtyResult<Self> {
+            let pty = Pty::spawn_with_scrollback(cmd, size, scrollback)?;
+            Ok(Self(Some(pty)))
+        }
+    }
+
+    impl std::ops::Deref for AutoKillPty {
+        type Target = Pty;
+        fn deref(&self) -> &Self::Target {
+            self.0.as_ref().expect("pty present until Drop")
+        }
+    }
+
+    impl std::ops::DerefMut for AutoKillPty {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            self.0.as_mut().expect("pty present until Drop")
+        }
+    }
+
+    impl Drop for AutoKillPty {
+        fn drop(&mut self) {
+            if let Some(mut pty) = self.0.take() {
+                // Harmless if the test already killed/reaped the child via
+                // kill_child or into_parts: this becomes a no-op error.
+                let _ = pty.kill_child();
+            }
+        }
+    }
 
     /// Returns a platform-appropriate dummy executable for PTY plumbing tests.
     /// On Unix, `cat` blocks on stdin and echoes output. On Windows, `cmd.exe`
@@ -1899,7 +1944,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         let woke = Arc::new(AtomicBool::new(false));
         let woke_cb = Arc::clone(&woke);
@@ -1913,18 +1958,13 @@ mod tests {
         // side, which the reader thread processes and fires the callback.
         let _ = pty.write_str("hello\n");
 
-        // Wait for callback with timeout (up to 5s)
-        for _ in 0..250 {
-            if woke.load(Ordering::Relaxed) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-
-        // Clean up
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
+        // Wait for the callback on a deadline instead of assuming a fixed
+        // number of poll iterations.
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "Wakeup callback fired on PTY output",
+            || woke.load(Ordering::Relaxed).then_some(()),
+        );
 
         assert!(
             woke.load(Ordering::Relaxed),
@@ -1953,7 +1993,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         assert!(
             pty.job.is_some(),
@@ -2003,15 +2043,13 @@ mod tests {
         assert!(pty.exited, "pty must be marked exited after kill_child");
 
         // The grandchild must die with the tree — the whole point of the
-        // Job Object containment. Poll briefly since termination is async.
-        let start = std::time::Instant::now();
-        while term_session_mock::process_is_alive(grandchild) {
-            assert!(
-                start.elapsed() < std::time::Duration::from_secs(5),
-                "grandchild {grandchild} should be dead after kill_child"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        // Job Object containment. Poll on a deadline since termination is
+        // asynchronous.
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "grandchild should be dead after kill_child",
+            || (!term_session_mock::process_is_alive(grandchild)).then_some(()),
+        );
     }
 
     #[test]
@@ -2023,7 +2061,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         let exited_fired = Arc::new(AtomicBool::new(false));
         let exited_cb = Arc::clone(&exited_fired);
@@ -2038,13 +2076,12 @@ mod tests {
             let _ = child.kill();
         }
 
-        // Wait for child to be reaped
-        for _ in 0..250 {
-            if pty.has_exited() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        // Wait for the child to be reaped, on a deadline.
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "has_exited() true after child death",
+            || pty.has_exited().then_some(()),
+        );
 
         assert!(
             exited_fired.load(Ordering::Relaxed),
@@ -2061,7 +2098,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         let exit_count = Arc::new(AtomicUsize::new(0));
         let count_cb = Arc::clone(&exit_count);
@@ -2076,21 +2113,22 @@ mod tests {
             let _ = child.kill();
         }
 
-        // Wait for first has_exited to succeed
-        for _ in 0..250 {
-            if pty.has_exited() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        // Wait for the first has_exited() to succeed, on a deadline.
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "first has_exited() true after child death",
+            || pty.has_exited().then_some(()),
+        );
 
         // Record count after has_exited() first returned true
         let count_after_first = exit_count.load(Ordering::Relaxed);
 
-        // Call has_exited() again — must NOT fire the callback
+        // Call has_exited() again — must NOT fire the callback.
+        // The short sleep is a deliberate negative-control window: it gives a
+        // (wrong) re-fire time to happen so the count comparison is meaningful.
         assert!(pty.has_exited(), "second call must also return true");
 
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(100));
         let count_after_second = exit_count.load(Ordering::Relaxed);
         assert_eq!(
             count_after_first, count_after_second,
@@ -2109,18 +2147,17 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Kill and reap the child process, consuming the latch via has_exited().
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
-        for _ in 0..250 {
-            if pty.has_exited() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "child reaped before callback set",
+            || pty.has_exited().then_some(()),
+        );
 
         let exited_fired = Arc::new(AtomicBool::new(false));
         let exited_cb = Arc::clone(&exited_fired);
@@ -2148,19 +2185,19 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Kill the child but do NOT call has_exited() — let the try_wait()
         // path in set_status_callback detect the exit.
         if let Some(child) = pty.child.as_mut() {
             let _ = child.kill();
         }
-        for _ in 0..250 {
-            if let Some(Ok(Some(_))) = pty.child.as_mut().map(|c| c.try_wait()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        wait_for(PTY_EVENT_DEADLINE, "child reaped via try_wait()", || {
+            pty.child
+                .as_mut()
+                .and_then(|c| c.try_wait().ok().flatten())
+                .map(|_| ())
+        });
 
         let exited_fired = Arc::new(AtomicBool::new(false));
         let exited_cb = Arc::clone(&exited_fired);
@@ -2193,7 +2230,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Initially dirty is false — sync clears it.
         pty.screen();
@@ -2223,11 +2260,6 @@ mod tests {
         }
 
         assert!(!pty.dirty.load(Ordering::Acquire), "dirty must be cleared");
-
-        // Clean up: kill child so the reader thread exits.
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     #[test]
@@ -2239,7 +2271,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Publish a new screen via shared parser.
         let mut new_parser = term_wm_vt100::Parser::new(24, 80, 100);
@@ -2260,11 +2292,6 @@ mod tests {
             assert!(cell.is_some(), "expected a cell at (0,0)");
             assert_eq!(cell.unwrap().contents(), "c");
         }
-
-        // Clean up.
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     #[test]
@@ -2281,7 +2308,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Consume any initial dirty.
         pty.screen();
@@ -2354,11 +2381,6 @@ mod tests {
             0,
             "new screen data must reset scrollback to its value"
         );
-
-        // Clean up.
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     #[test]
@@ -2372,7 +2394,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         // Sync.
         pty.screen();
@@ -2414,11 +2436,6 @@ mod tests {
             5,
             "scrollback() must see mutation made via set_scrollback"
         );
-
-        // Clean up.
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     #[test]
@@ -2430,7 +2447,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         assert!(
             pty.reader_is_alive(),
@@ -2459,16 +2476,12 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn_with_scrollback");
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn_with_scrollback");
 
         pty.set_status_callback(Some(Box::new(|_| {})));
 
         // Also test clearing the callback.
         pty.set_status_callback(None);
-
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     // ── wrap_err ────────────────────────────────────────────────────
@@ -2505,16 +2518,12 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+        let pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn");
 
         *pty.foreground_title.lock().unwrap() = Some("vim".to_string());
 
         assert_eq!(pty.take_pending_title(), Some("vim".to_string()));
         assert_eq!(pty.take_pending_title(), Some("vim".to_string()));
-
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     #[test]
@@ -2526,7 +2535,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+        let pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn");
 
         *pty.foreground_title.lock().unwrap() = Some("vim".to_string());
         *pty.pending_title.lock().unwrap() = Some("user@host".to_string());
@@ -2537,10 +2546,6 @@ mod tests {
             None,
             "stale OSC title must be purged"
         );
-
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     #[test]
@@ -2552,7 +2557,7 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+        let pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn");
 
         *pty.foreground_title.lock().unwrap() = None;
         *pty.pending_title.lock().unwrap() = Some("user@host".to_string());
@@ -2563,10 +2568,6 @@ mod tests {
             None,
             "OSC title must be consumed"
         );
-
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     #[test]
@@ -2578,16 +2579,12 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 100).expect("spawn");
+        let pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn");
 
         *pty.foreground_title.lock().unwrap() = None;
         *pty.pending_title.lock().unwrap() = None;
 
         assert_eq!(pty.take_pending_title(), None);
-
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
     }
 
     // ── resize / set_size ──────────────────────────────────────────
@@ -2862,26 +2859,18 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
         };
-        let mut pty = Pty::spawn_with_scrollback(cmd, size, 0).expect("spawn");
+        let mut pty = AutoKillPty::spawn(cmd, size, 0).expect("spawn");
 
         let mut accumulated = Vec::new();
-        let start = std::time::Instant::now();
-        loop {
+        // Poll on a deadline, accumulating PTY output until the child has
+        // printed all three sanitized variables.
+        wait_for(PTY_EVENT_DEADLINE, "child printed sanitized env", || {
             pty.screen();
             accumulated.extend_from_slice(&pty.drain_pending());
-            let out = String::from_utf8_lossy(&accumulated);
-            if out.contains("LC_CTYPE=") {
-                break;
-            }
-            assert!(
-                start.elapsed() < std::time::Duration::from_secs(5),
-                "child never printed sanitized env; got {out}"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        if let Some(child) = pty.child.as_mut() {
-            let _ = child.kill();
-        }
+            String::from_utf8_lossy(&accumulated)
+                .contains("LC_CTYPE=")
+                .then_some(())
+        });
 
         let out = String::from_utf8_lossy(&accumulated);
         assert!(

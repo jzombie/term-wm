@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod auto_spawn;
+pub mod logging;
 
 pub use muxio_tokio_rpc_ipc_client as rpc_client;
 pub use term_session_client as client;
@@ -423,7 +424,9 @@ pub fn stop_gateway(force: bool) -> io::Result<()> {
 /// terminal, and serve until `ShutdownGateway`. `selfcheck_marker` is a
 /// test-only path written with the platform's detachment proof once bound.
 pub fn run_daemon(selfcheck_marker: Option<std::path::PathBuf>) -> io::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Diagnostics: detached daemons null their stdio, so route tracing into
+    // TERM_WM_LOG_FILE when configured (exclusive file sink; see logging).
+    crate::logging::init_daemon_logging();
 
     // Make the daemon recognizable in process managers: every `term-session`
     // process is the same binary, so rename this one so `ps`/`top`/Task

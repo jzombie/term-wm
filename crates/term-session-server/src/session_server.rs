@@ -2002,6 +2002,24 @@ pub async fn run_gateway(
         }
     });
 
+    // ── Endpoint ownership gate ──────────────────────────────
+    // Classify-only: refuse to start when the name answers (a live daemon
+    // owns it); otherwise proceed — serve()'s try_overwrite binding cleans
+    // up stale artifacts natively, so we never touch the filesystem here.
+    match term_session_muxio_service_definitions::probe_endpoint_outcome(&gateway) {
+        Ok(term_session_muxio_service_definitions::ProbeOutcome::Stale) => {}
+        Ok(term_session_muxio_service_definitions::ProbeOutcome::Live) => {
+            return Err(Box::new(std::io::Error::other(format!(
+                "gateway endpoint busy: another live daemon owns '{socket_name}'"
+            ))));
+        }
+        Err(e) => {
+            return Err(Box::new(std::io::Error::other(format!(
+                "gateway endpoint probe failed: {e}"
+            ))));
+        }
+    }
+
     tracing::info!("Gateway listening on channel {gateway}");
 
     // Wait for either the server to finish or a shutdown signal.

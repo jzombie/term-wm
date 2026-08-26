@@ -100,6 +100,12 @@ fn run() -> io::Result<()> {
     // 1. Standalone daemon mode
     #[cfg(feature = "session-persistence")]
     if cli.daemon && term_wm_config::runtime::session_persistence_enabled() {
+        // TODO: Why doesn't the daemon init its own logging?
+        // Diagnostics: detached daemons null their stdio, so without a
+        // subscriber every event and panic message vanishes. Initialize the
+        // exclusive file subscriber (TERM_WM_LOG_FILE) before binding.
+        term_session::logging::init_daemon_logging();
+
         // A pinned `--gateway` (passed by the parent launcher's auto-spawn)
         // bypasses all resolution heuristics and binds byte-exact the socket
         // the client probed before spawning this daemon.

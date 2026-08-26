@@ -55,6 +55,7 @@ pub const NAMESPACE_ENV_VAR: &str = "TERM_WM_NAMESPACE";
 
 /// Session channel override. Read by `term-session`.
 pub const CHANNEL_ENV_VAR: &str = "TERM_SESSION_CHANNEL";
+
 /// The ONE gateway environment variable: the inception marker stamped by
 /// term-session/term-wm daemons onto every spawned PTY child to the active
 /// gateway socket path (e.g. `"term-wm/prod/user/gateway"`). Read by clients
@@ -62,13 +63,23 @@ pub const CHANNEL_ENV_VAR: &str = "TERM_SESSION_CHANNEL";
 /// resolution — that role belongs to the `--gateway` CLI flag and the
 /// process-local override cell ([`gateway_override`]), so session shells can
 /// never inherit a sticky "requested" endpoint from an ancestor.
+// ── Production runtime variables ─────────────────────────────────────
 pub const SESSION_GATEWAY_ENV_VAR: &str = "TERM_SESSION_GATEWAY";
+
 /// Enables dumping raw PTY→emulator bytes to a file (debugging). Read by
 /// `term-wm-pty-engine`.
 pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
+
 /// Disables session-persistence behavior at runtime even when compiled in.
 /// Read by the `term-wm` binary.
 pub const NO_SESSION_PERSISTENCE_ENV_VAR: &str = "TERM_WM_NO_SESSION_PERSISTENCE";
+
+/// Durable log destination (#270). When set to a writable path, tracing
+/// events tee into that file (append mode): the `term-wm` binary mirrors its
+/// in-app Debug Log stream there, and detached daemons write diagnostics
+/// there instead of discarding them. Honors `RUST_LOG` wherever a subscriber
+/// is initialized. Read by `term-wm` and `term-session`.
+pub const LOG_FILE_ENV_VAR: &str = "TERM_WM_LOG_FILE";
 
 /// Process-local explicit gateway override installed by the `--gateway
 /// <NAME>` CLI flag (and by tests). Deliberately NOT an environment
@@ -204,6 +215,16 @@ pub fn no_session_persistence() -> bool {
     std::env::var_os(NO_SESSION_PERSISTENCE_ENV_VAR).is_some()
 }
 
+/// The configured durable log path, if [`LOG_FILE_ENV_VAR`] is set to a
+/// non-empty value. Callers open the file in append mode (create-if-missing),
+/// mirroring the [`ESC_TRACE_ENV`] convention.
+pub fn log_file_path() -> Option<std::path::PathBuf> {
+    match std::env::var_os(LOG_FILE_ENV_VAR) {
+        Some(raw) if !raw.is_empty() => Some(std::path::PathBuf::from(raw)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +247,41 @@ mod tests {
     fn repository_dev_isolation_is_enforced() {
         let namespace = std::env::var(NAMESPACE_ENV_VAR).expect(DEV_ISOLATION_REGRESSION_MSG);
         assert_eq!(namespace, "term-wm-dev", "{DEV_ISOLATION_REGRESSION_MSG}");
+    }
+
+    #[test]
+    #[serial(env)]
+    fn log_file_path_none_when_unset_or_empty() {
+        let _unset = term_test_support::EnvVarGuard::removed(LOG_FILE_ENV_VAR);
+        assert!(log_file_path().is_none(), "unset must yield None");
+        drop(_unset);
+        let _empty = term_test_support::EnvVarGuard::set(LOG_FILE_ENV_VAR, "");
+        assert!(
+            log_file_path().is_none(),
+            "empty value must be treated as unset"
+        );
+    }
+
+    #[test]
+    #[serial(env)]
+    fn log_file_path_reads_configured_path() {
+        let _guard =
+            term_test_support::EnvVarGuard::set(LOG_FILE_ENV_VAR, "/tmp/term-wm-logging-test.log");
+        assert_eq!(
+            log_file_path().as_deref(),
+            Some(std::path::Path::new("/tmp/term-wm-logging-test.log"))
+        );
+    }
+
+    /// Behavioral read-back through the real reader function (review
+    /// directive: prove the guard + reader compose, not just the guard).
+    #[test]
+    #[serial(env)]
+    fn log_file_path_custom_env() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let log_path = temp_dir.path().join("custom.log");
+        let _guard = term_test_support::EnvVarGuard::set(LOG_FILE_ENV_VAR, &log_path);
+        assert_eq!(log_file_path(), Some(log_path));
     }
 
     /// Substrings that indicate personal/local overrides crept into the

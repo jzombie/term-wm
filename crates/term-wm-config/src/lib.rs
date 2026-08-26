@@ -13,6 +13,7 @@
 //! Downstream crates (`term-wm-core`, `term-wm-pty-engine`, `term-session*`,
 //! and the `term-wm` binary) depend downward on this crate without cycles.
 
+pub mod build_identity;
 pub mod env;
 pub mod runtime;
 

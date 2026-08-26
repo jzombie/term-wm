@@ -5,6 +5,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{Layer, layer::Context};
 
 use term_sys_io::redirect_fd_to_tracing;
+use term_wm_config::env::log_file_path;
 use term_wm_core::debug_event_flags::trigger_error_pending;
 
 use term_wm_core::debug_log::{DebugLogWriter, global_debug_log};
@@ -70,7 +71,6 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SubscriberMakeWriter {
         DelegatingWriter::new()
     }
 }
-
 /// Initialize tracing and redirect stderr into it.
 ///
 /// Routes tracing output to the in-app Debug Log window when available
@@ -84,13 +84,29 @@ pub fn init_default() {
         .with_thread_names(false)
         .compact();
 
-    let _ = tracing_subscriber::registry()
+    let registry = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(ErrorNotifyLayer)
         .with(tracing_subscriber::filter::LevelFilter::from_level(
             Level::DEBUG,
-        ))
-        .try_init();
+        ));
+
+    // Tee into the durable destination when configured (#270). Detached
+    // daemons null their stdio, so without this their only writer routes
+    // (Debug Log / stderr) silently drop every event.
+    if let Some(path) = log_file_path()
+        && let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+    {
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false);
+        let _ = registry.with(file_layer).try_init();
+    } else {
+        let _ = registry.try_init();
+    }
 
     // Redirect stderr into tracing so system-framework debug output
     // (NSPasteboard, etc.) goes to the debug log instead of the terminal.

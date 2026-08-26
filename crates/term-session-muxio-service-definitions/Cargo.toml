@@ -18,5 +18,8 @@ muxio-rpc-service = { workspace = true }
 term-wm-config = { workspace = true }
 term-wm-events = { workspace = true }
 
+[build-dependencies]
+term-wm-config = { workspace = true }
+
 [lints]
 workspace = true
