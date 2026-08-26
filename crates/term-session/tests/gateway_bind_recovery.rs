@@ -9,7 +9,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use interprocess::local_socket::prelude::*;
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
 use term_session_muxio_service_definitions::{
     ChannelName, ProbeOutcome, ShutdownGateway, probe_endpoint_outcome,
@@ -62,13 +61,25 @@ fn socket_path(gateway: &str) -> Option<PathBuf> {
 ///
 /// The handle must stay in scope for the whole assertion window; dropping
 /// it closes the kernel socket and would fabricate a false refusal.
-fn bind_never_accepting_owner(gateway: &str) -> interprocess::local_socket::Listener {
-    use interprocess::local_socket::{GenericNamespaced, ListenerOptions};
+async fn spawn_never_accepting_owner(
+    gateway: &str,
+) -> term_test_support::KillOnDrop<Box<dyn FnOnce() + Send>> {
+    use interprocess::local_socket::traits::tokio::Listener as _;
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
     let name = gateway.to_ns_name::<GenericNamespaced>().expect("ns name");
-    ListenerOptions::new()
+    let listener = ListenerOptions::new()
         .name(name)
-        .create_sync()
-        .expect("bind owner")
+        .create_tokio()
+        .expect("bind owner");
+
+    let handle = tokio::spawn(async move {
+        while let Ok(_stream) = listener.accept().await {
+            // Accept and immediately drop each stream: endpoint stays bound
+            // but never serves anything (the "busy owner" state under test).
+        }
+    });
+
+    term_test_support::KillOnDrop::new(Box::new(move || handle.abort()))
 }
 
 /// Poll `probe_endpoint_outcome` until it reports `Live`, 50 ms cadence
@@ -90,7 +101,7 @@ async fn gateway_startup_refuses_to_take_over_live_endpoint() {
     // Declaration order is load-bearing: path_guard is dropped LAST (after
     // the kernel socket closed), _owner FIRST.
     let path_guard = PathGuard::new(socket_path(&gw_str));
-    let _owner = bind_never_accepting_owner(&gw_str);
+    let _owner = spawn_never_accepting_owner(&gw_str).await;
 
     assert!(
         matches!(probe_endpoint_outcome(&gw), Ok(ProbeOutcome::Live)),
