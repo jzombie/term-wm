@@ -1,6 +1,6 @@
 //! Daemon logging initialization for the `term-session` binary.
 //!
-//! Single-sink policy: when [`TERM_WM_LOG_FILE`] resolves to a writable
+//! Single-sink policy: when `TERM_WM_LOG_FILE` resolves to a writable
 //! path, tracing goes exclusively to that file. Detached daemons null their
 //! stdio, so stdout/stderr routing would silently drop every event, and
 //! routing stderr back into tracing amplifies into a feedback loop.
