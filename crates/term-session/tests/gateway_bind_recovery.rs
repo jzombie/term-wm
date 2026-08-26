@@ -6,19 +6,24 @@
 //! socket file and bind a fresh wrong-generation daemon over the name
 //! (split-brain: old daemon alive but unaddressable).
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
+#[cfg(unix)]
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
-use term_session_muxio_service_definitions::{
-    ChannelName, ProbeOutcome, ShutdownGateway, probe_endpoint_outcome,
-};
+#[cfg(unix)]
+use term_session_muxio_service_definitions::ShutdownGateway;
+use term_session_muxio_service_definitions::{ChannelName, ProbeOutcome, probe_endpoint_outcome};
 use term_session_server::run_gateway;
 use term_test_support::unique_gateway_name;
 
 /// RAII cleanup for socket-path artifacts so failed assertions never leave
-/// debris behind for subsequent local runs. `None` on platforms without a
-/// filesystem artifact (Linux abstract namespace).
+/// debris behind for subsequent local runs. Compiled on every target: it
+/// holds nothing where no filesystem node exists (Linux abstract
+/// namespace), and on Windows the Drop-time unlink of a named-pipe path is
+/// a harmless no-op failure against kernel-only state.
 struct PathGuard(Option<PathBuf>);
 
 impl PathGuard {
@@ -26,6 +31,7 @@ impl PathGuard {
         Self(path)
     }
 
+    #[cfg(unix)]
     fn path(&self) -> Option<&Path> {
         self.0.as_deref()
     }
@@ -63,7 +69,7 @@ fn socket_path(gateway: &str) -> Option<PathBuf> {
 /// it closes the kernel socket and would fabricate a false refusal.
 async fn spawn_never_accepting_owner(
     gateway: &str,
-) -> term_test_support::KillOnDrop<Box<dyn FnOnce() + Send>> {
+) -> term_test_support::KillOnDrop<impl FnOnce() + Send> {
     use interprocess::local_socket::traits::tokio::Listener as _;
     use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
     let name = gateway.to_ns_name::<GenericNamespaced>().expect("ns name");
@@ -73,17 +79,23 @@ async fn spawn_never_accepting_owner(
         .expect("bind owner");
 
     let handle = tokio::spawn(async move {
-        while let Ok(_stream) = listener.accept().await {
-            // Accept and immediately drop each stream: endpoint stays bound
-            // but never serves anything (the "busy owner" state under test).
+        // HOLD every accepted stream open (never read, never dropped while
+        // running). On Windows NPFS, eagerly dropping server-side instances
+        // forces competing clients into blocking WaitNamedPipeW stalls;
+        // holding the instances keeps subsequent connects fast-failing with
+        // an immediate pipe-busy instead.
+        let mut held = Vec::new();
+        while let Ok(stream) = listener.accept().await {
+            held.push(stream);
         }
     });
 
-    term_test_support::KillOnDrop::new(Box::new(move || handle.abort()))
+    term_test_support::KillOnDrop::new(move || handle.abort())
 }
 
 /// Poll `probe_endpoint_outcome` until it reports `Live`, 50 ms cadence
 /// bounded to a 5-second budget.
+#[cfg(unix)]
 async fn wait_until_live(gateway: &ChannelName) -> bool {
     for _ in 0..100 {
         if matches!(probe_endpoint_outcome(gateway), Ok(ProbeOutcome::Live)) {

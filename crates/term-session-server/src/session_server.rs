@@ -30,6 +30,11 @@ const SESSION_ID: u64 = 1;
 /// Bounded input channel capacity — memory safety against extreme input bursts.
 const INPUT_CHANNEL_CAPACITY: usize = 128;
 
+/// Upper bound for the startup endpoint-ownership probe. A healthy daemon
+/// answers in microseconds; anything past this is treated as busy/unusable
+/// so a wedged peer can never stall daemon startup indefinitely.
+const OWNERSHIP_PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Grace period to let the transport flush end-of-stream frames after the
 /// session exits, before the gateway process terminates.
 const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
@@ -2006,7 +2011,19 @@ pub async fn run_gateway(
     // Classify-only: refuse to start when the name answers (a live daemon
     // owns it); otherwise proceed — serve()'s try_overwrite binding cleans
     // up stale artifacts natively, so we never touch the filesystem here.
-    match term_session_muxio_service_definitions::probe_endpoint_outcome(&gateway) {
+    // The ownership probe performs a bounded-but-synchronous connect
+    // syscall; run it on the blocking pool so a wedged peer can never pin
+    // an async worker thread (Windows WaitNamedPipeW class of stalls).
+    let gateway_ref = gateway.clone();
+    let probe = tokio::task::spawn_blocking(move || {
+        term_session_muxio_service_definitions::probe_endpoint_outcome(&gateway_ref)
+    });
+    let outcome = match tokio::time::timeout(OWNERSHIP_PROBE_BUDGET, probe).await {
+        Ok(joined) => joined
+            .unwrap_or_else(|e| Err(std::io::Error::other(format!("ownership probe join: {e}")))),
+        Err(_) => Err(std::io::Error::other("ownership probe timed out")),
+    };
+    match outcome {
         Ok(term_session_muxio_service_definitions::ProbeOutcome::Stale) => {}
         Ok(term_session_muxio_service_definitions::ProbeOutcome::Live) => {
             return Err(Box::new(std::io::Error::other(format!(
