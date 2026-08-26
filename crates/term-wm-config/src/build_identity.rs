@@ -11,7 +11,7 @@
 //!     (per-checkout stable)
 //!   - `TERM_WM_BUILD_HASH`:     FNV-1a hex8 of the compile timestamp
 //!     (per-compilation)
-//! - **Runtime** ([`generation_hash`] / accessors): selects between dev and
+//! - **Runtime** ([`default_generation_hash`] / accessors): selects between dev and
 //!   build hashes with a string-prefix check of the canonicalized
 //!   executable path against the baked workspace root. No file contents are
 //!   ever read or hashed at runtime.
