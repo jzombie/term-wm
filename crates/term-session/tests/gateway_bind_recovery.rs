@@ -6,20 +6,24 @@
 //! socket file and bind a fresh wrong-generation daemon over the name
 //! (split-brain: old daemon alive but unaddressable).
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use interprocess::local_socket::prelude::*;
+#[cfg(unix)]
 use muxio_tokio_rpc_ipc_client::{RpcCallPrebuffered, RpcIpcClient};
-use term_session_muxio_service_definitions::{
-    ChannelName, ProbeOutcome, ShutdownGateway, probe_endpoint_outcome,
-};
+#[cfg(unix)]
+use term_session_muxio_service_definitions::ShutdownGateway;
+use term_session_muxio_service_definitions::{ChannelName, ProbeOutcome, probe_endpoint_outcome};
 use term_session_server::run_gateway;
 use term_test_support::unique_gateway_name;
 
 /// RAII cleanup for socket-path artifacts so failed assertions never leave
-/// debris behind for subsequent local runs. `None` on platforms without a
-/// filesystem artifact (Linux abstract namespace).
+/// debris behind for subsequent local runs. Compiled on every target: it
+/// holds nothing where no filesystem node exists (Linux abstract
+/// namespace), and on Windows the Drop-time unlink of a named-pipe path is
+/// a harmless no-op failure against kernel-only state.
 struct PathGuard(Option<PathBuf>);
 
 impl PathGuard {
@@ -27,6 +31,7 @@ impl PathGuard {
         Self(path)
     }
 
+    #[cfg(unix)]
     fn path(&self) -> Option<&Path> {
         self.0.as_deref()
     }
@@ -62,17 +67,35 @@ fn socket_path(gateway: &str) -> Option<PathBuf> {
 ///
 /// The handle must stay in scope for the whole assertion window; dropping
 /// it closes the kernel socket and would fabricate a false refusal.
-fn bind_never_accepting_owner(gateway: &str) -> interprocess::local_socket::Listener {
-    use interprocess::local_socket::{GenericNamespaced, ListenerOptions};
+async fn spawn_never_accepting_owner(
+    gateway: &str,
+) -> term_test_support::KillOnDrop<impl FnOnce() + Send> {
+    use interprocess::local_socket::traits::tokio::Listener as _;
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
     let name = gateway.to_ns_name::<GenericNamespaced>().expect("ns name");
-    ListenerOptions::new()
+    let listener = ListenerOptions::new()
         .name(name)
-        .create_sync()
-        .expect("bind owner")
+        .create_tokio()
+        .expect("bind owner");
+
+    let handle = tokio::spawn(async move {
+        // HOLD every accepted stream open (never read, never dropped while
+        // running). On Windows NPFS, eagerly dropping server-side instances
+        // forces competing clients into blocking WaitNamedPipeW stalls;
+        // holding the instances keeps subsequent connects fast-failing with
+        // an immediate pipe-busy instead.
+        let mut held = Vec::new();
+        while let Ok(stream) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+
+    term_test_support::KillOnDrop::new(move || handle.abort())
 }
 
 /// Poll `probe_endpoint_outcome` until it reports `Live`, 50 ms cadence
 /// bounded to a 5-second budget.
+#[cfg(unix)]
 async fn wait_until_live(gateway: &ChannelName) -> bool {
     for _ in 0..100 {
         if matches!(probe_endpoint_outcome(gateway), Ok(ProbeOutcome::Live)) {
@@ -88,9 +111,10 @@ async fn gateway_startup_refuses_to_take_over_live_endpoint() {
     let gw_str = unique_gateway_name("regr-live");
     let gw = ChannelName::parse(&gw_str).expect("parse");
     // Declaration order is load-bearing: path_guard is dropped LAST (after
-    // the kernel socket closed), _owner FIRST.
-    let path_guard = PathGuard::new(socket_path(&gw_str));
-    let _owner = bind_never_accepting_owner(&gw_str);
+    // the kernel socket closed), _owner FIRST. RAII-only: exclusivity is
+    // asserted behaviorally below, never via filesystem inspection.
+    let _path_guard = PathGuard::new(socket_path(&gw_str));
+    let _owner = spawn_never_accepting_owner(&gw_str).await;
 
     assert!(
         matches!(probe_endpoint_outcome(&gw), Ok(ProbeOutcome::Live)),
@@ -113,16 +137,23 @@ async fn gateway_startup_refuses_to_take_over_live_endpoint() {
         "expected busy-owner refusal, got: {err}"
     );
 
-    // Owner untouched: file (where the platform has one) still present.
-    if let Some(path) = path_guard.path() {
-        assert!(path.exists(), "live socket must not be unlinked");
-    }
+    // Owner untouched: exclusivity is behavioral — it still answers, and
+    // startup refused rather than taking over. Filesystem-artifact checks
+    // would leak transport internals here: UDS leaves socket nodes in the
+    // VFS on POSIX, while Windows named pipes live purely in kernel memory,
+    // so disk-presence assertions audit the OS socket representation rather
+    // than binary behavior.
     assert!(
         matches!(probe_endpoint_outcome(&gw), Ok(ProbeOutcome::Live)),
         "original owner must remain the sole endpoint"
     );
 }
 
+/// Unix-only by construction: orphaned UDS socket files left on disk after
+/// an ungraceful crash are a POSIX quirk — Windows reclaims named-pipe
+/// instances the moment process handles close, so there is no stale
+/// filesystem artifact for the recovery gate to clean up there.
+#[cfg(unix)]
 #[tokio::test]
 async fn gateway_startup_recovers_stale_socket_file() {
     let gw_str = unique_gateway_name("regr-stale");
