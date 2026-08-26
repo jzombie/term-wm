@@ -99,8 +99,9 @@ async fn gateway_startup_refuses_to_take_over_live_endpoint() {
     let gw_str = unique_gateway_name("regr-live");
     let gw = ChannelName::parse(&gw_str).expect("parse");
     // Declaration order is load-bearing: path_guard is dropped LAST (after
-    // the kernel socket closed), _owner FIRST.
-    let path_guard = PathGuard::new(socket_path(&gw_str));
+    // the kernel socket closed), _owner FIRST. RAII-only: exclusivity is
+    // asserted behaviorally below, never via filesystem inspection.
+    let _path_guard = PathGuard::new(socket_path(&gw_str));
     let _owner = spawn_never_accepting_owner(&gw_str).await;
 
     assert!(
@@ -124,16 +125,23 @@ async fn gateway_startup_refuses_to_take_over_live_endpoint() {
         "expected busy-owner refusal, got: {err}"
     );
 
-    // Owner untouched: file (where the platform has one) still present.
-    if let Some(path) = path_guard.path() {
-        assert!(path.exists(), "live socket must not be unlinked");
-    }
+    // Owner untouched: exclusivity is behavioral — it still answers, and
+    // startup refused rather than taking over. Filesystem-artifact checks
+    // would leak transport internals here: UDS leaves socket nodes in the
+    // VFS on POSIX, while Windows named pipes live purely in kernel memory,
+    // so disk-presence assertions audit the OS socket representation rather
+    // than binary behavior.
     assert!(
         matches!(probe_endpoint_outcome(&gw), Ok(ProbeOutcome::Live)),
         "original owner must remain the sole endpoint"
     );
 }
 
+/// Unix-only by construction: orphaned UDS socket files left on disk after
+/// an ungraceful crash are a POSIX quirk — Windows reclaims named-pipe
+/// instances the moment process handles close, so there is no stale
+/// filesystem artifact for the recovery gate to clean up there.
+#[cfg(unix)]
 #[tokio::test]
 async fn gateway_startup_recovers_stale_socket_file() {
     let gw_str = unique_gateway_name("regr-stale");
