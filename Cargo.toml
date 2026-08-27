@@ -76,13 +76,13 @@ json_comments = "0.2.2"
 libc = "0.2.186"
 line-ending = "1.5.1"
 linkify = "0.11.0"
-muxio-core = "0.15.0-alpha"
-muxio-rpc-service = "0.15.0-alpha"
-muxio-rpc-service-caller = "0.15.0-alpha"
-muxio-rpc-service-endpoint = "0.15.0-alpha"
-muxio-tokio-mpsc-adapter = "0.15.0-alpha"
-muxio-tokio-rpc-ipc-client = "0.15.0-alpha"
-muxio-tokio-rpc-ipc-server = "0.15.0-alpha"
+muxio-core = "0.16.0-alpha"
+muxio-rpc-service = "0.16.0-alpha"
+muxio-rpc-service-caller = "0.16.0-alpha"
+muxio-rpc-service-endpoint = "0.16.0-alpha"
+muxio-tokio-mpsc-adapter = "0.16.0-alpha"
+muxio-tokio-rpc-ipc-client = "0.16.0-alpha"
+muxio-tokio-rpc-ipc-server = "0.16.0-alpha"
 nucleo-matcher = { version = "0.3", features = ["unicode-casefold", "unicode-normalization", "unicode-segmentation"] }
 portable-pty = "0.9.0"
 proc-macro-crate = "3.5.0"
@@ -215,13 +215,3 @@ tokio = { workspace = true }
 
 [lints]
 workspace = true
-
-# TODO: Remove
-[patch.crates-io]
-muxio-core = { path = "../rust-muxio/core" }
-muxio-rpc-service = { path = "../rust-muxio/extensions/muxio-rpc-service" }
-muxio-rpc-service-caller = { path = "../rust-muxio/extensions/muxio-rpc-service-caller" }
-muxio-rpc-service-endpoint = { path = "../rust-muxio/extensions/muxio-rpc-service-endpoint" }
-muxio-tokio-rpc-ipc-client = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-client" }
-muxio-tokio-rpc-ipc-server = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-server" }
-muxio-tokio-mpsc-adapter = { path = "../rust-muxio/extensions/muxio-tokio-mpsc-adapter" }

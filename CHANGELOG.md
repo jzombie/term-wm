@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Recurring CI flakes eliminated with deadline-bounded polling and isolated test resources (#309).
 - Cross-generation daemons no longer steal each other's endpoints under load.
 
+### Changed
+
+- Muxio `0.15.0-alpha` → `0.16.0-alpha`.
+
 ## [0.10.4-alpha] - 2026-08-24
 
 ### Added
