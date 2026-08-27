@@ -119,12 +119,22 @@ impl InodeAwareFile {
         }
         #[cfg(windows)]
         {
-            use std::os::windows::fs::MetadataExt;
-            let path_idx = (path_meta.file_index_high(), path_meta.file_index_low());
-            let file_idx = (file_meta.file_index_high(), file_meta.file_index_low());
-            if path_idx != file_idx
-                || path_meta.volume_serial_number() != file_meta.volume_serial_number()
+            // Stable file identity via windows-sys (`GetFileInformationByHandle`),
+            // avoiding the unstable `windows_by_handle` `MetadataExt` methods
+            // (`file_index_high`/`file_index_low`/`volume_serial_number`) which
+            // fail on stable toolchains (E0599/E0658).
+            if let (Ok(path_id), Ok(file_id)) = (
+                win_identity_for_path(&self.path),
+                win_identity_for_file(file),
+            ) {
+                if path_id != file_id {
+                    return true;
+                }
+            } else if path_meta.len() != file_meta.len()
+                || path_meta.modified().ok() != file_meta.modified().ok()
             {
+                // Fallback when handle query fails: any size or mtime drift
+                // indicates the daemon may have rotated the file.
                 return true;
             }
         }
@@ -143,6 +153,38 @@ impl InodeAwareFile {
         }
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn win_identity_for_file(file: &std::fs::File) -> io::Result<(u64, u32)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+    let handle: HANDLE = file.as_raw_handle() as HANDLE;
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: `handle` is a valid file handle from `std::fs::File`; `info`
+    // is an uninitialized buffer that `GetFileInformationByHandle` fully
+    // initializes on success. The OS contract guarantees the call writes the
+    // `BY_HANDLE_FILE_INFORMATION` struct when it returns non-zero.
+    let succeeded = unsafe { GetFileInformationByHandle(handle, info.as_mut_ptr()) };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let info = unsafe { info.assume_init() };
+    let file_index = ((info.nFileIndexHigh as u64) << 32) | u64::from(info.nFileIndexLow);
+    Ok((file_index, info.dwVolumeSerialNumber))
+}
+
+#[cfg(windows)]
+fn win_identity_for_path(path: &std::path::Path) -> io::Result<(u64, u32)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1 | 0x2 | 0x4)
+        .open(path)?;
+    win_identity_for_file(&file)
 }
 
 impl Write for InodeAwareFile {

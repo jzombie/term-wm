@@ -68,6 +68,7 @@ crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
 dirs = "5.0"
+file-rotate = "0.8.0"
 hostname = "0.4.2"
 indoc = "2.0.7"
 insta = "1.48.0"
@@ -103,6 +104,7 @@ strum = { version = "0.28", features = ["derive"] }
 syn = "3.0.3"
 tempfile = "3.24.0"
 term-clipboard = { path = "crates/term-clipboard", version = "0.10.5-alpha" }
+term-logging = { path = "crates/term-logging", version = "0.10.5-alpha" }
 term-session = { path = "crates/term-session", version = "0.10.5-alpha" }
 term-session-client = { path = "crates/term-session-client", version = "0.10.5-alpha" }
 term-session-mock = { path = "crates/term-session-mock", version = "0.10.5-alpha" }
@@ -111,7 +113,6 @@ term-session-server = { path = "crates/term-session-server", version = "0.10.5-a
 term-sys-io = { path = "crates/term-sys-io", version = "0.10.5-alpha" }
 term-test-support = { path = "crates/term-test-support", version = "0.10.5-alpha" }
 term-wm = { path = ".", version = "0.10.5-alpha" }
-term-logging = { path = "crates/term-logging", version = "0.10.5-alpha" }
 term-wm-config = { path = "crates/term-wm-config", version = "0.10.5-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.10.5-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.10.5-alpha", default-features = false }
@@ -130,7 +131,6 @@ thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-file-rotate = "0.8.0"
 unicode-width = "0.2.2"
 vte = "0.15.0"
 webbrowser = "1.2.1"
@@ -168,12 +168,12 @@ clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 hostname = { workspace = true }
 libc = { workspace = true }
-term-logging = { workspace = true, features = ["daemon", "ui"] }
 line-ending = { workspace = true }
 muxio-rpc-service-caller = { workspace = true, optional = true }
 muxio-rpc-service-endpoint = { workspace = true, optional = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
+term-logging = { workspace = true, features = ["daemon", "ui"] }
 term-session = { workspace = true, optional = true }
 term-sys-io = { workspace = true }
 term-wm-config = { workspace = true }

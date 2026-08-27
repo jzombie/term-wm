@@ -305,12 +305,14 @@ mod tests {
     /// controlled POLICY; private state belongs in `~/.cargo/config.toml`
     /// or an ancestor-directory config, which Cargo merges automatically.
     #[test]
+    #[serial(env)]
     fn cargo_config_remains_pure_of_local_overrides() {
         // This test lives in crates/term-wm-config: two parents up is the
-        // workspace root.
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .expect("CARGO_MANIFEST_DIR is set for every cargo-spawned test");
-        let workspace_root = std::path::Path::new(&manifest_dir)
+        // workspace root. Use the compile-time macro to avoid a race with
+        // `default_environment_detects_cargo_manifest_dir` which mutates the
+        // process-wide `CARGO_MANIFEST_DIR` env var.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = std::path::Path::new(manifest_dir)
             .parent()
             .and_then(std::path::Path::parent)
             .expect("crate lives directly under <workspace>/crates");
