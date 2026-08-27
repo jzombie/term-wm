@@ -1,0 +1,28 @@
+[package]
+name = "term-logging"
+description = "Unified logging setup for term-wm and term-session: file rotation, EnvFilter, and panic hooks."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+ui = ["dep:term-wm-core", "dep:term-sys-io"]
+
+[dependencies]
+file-rotate = { workspace = true }
+libc = { workspace = true }
+term-wm-config = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+term-sys-io = { workspace = true, optional = true }
+term-wm-core = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[lints]
+workspace = true

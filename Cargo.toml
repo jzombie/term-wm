@@ -23,6 +23,7 @@ development = ["term-bench"]
 members = [
     "crates/term-bench",
     "crates/term-clipboard",
+    "crates/term-logging",
     "crates/term-session",
     "crates/term-session-client",
     "crates/term-session-mock",
@@ -110,6 +111,7 @@ term-session-server = { path = "crates/term-session-server", version = "0.10.5-a
 term-sys-io = { path = "crates/term-sys-io", version = "0.10.5-alpha" }
 term-test-support = { path = "crates/term-test-support", version = "0.10.5-alpha" }
 term-wm = { path = ".", version = "0.10.5-alpha" }
+term-logging = { path = "crates/term-logging", version = "0.10.5-alpha" }
 term-wm-config = { path = "crates/term-wm-config", version = "0.10.5-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.10.5-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.10.5-alpha", default-features = false }
@@ -128,6 +130,7 @@ thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+file-rotate = "0.8.0"
 unicode-width = "0.2.2"
 vte = "0.15.0"
 webbrowser = "1.2.1"
@@ -165,6 +168,7 @@ clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 hostname = { workspace = true }
 libc = { workspace = true }
+term-logging = { workspace = true, features = ["ui"] }
 line-ending = { workspace = true }
 muxio-rpc-service-caller = { workspace = true, optional = true }
 muxio-rpc-service-endpoint = { workspace = true, optional = true }
@@ -211,3 +215,13 @@ tokio = { workspace = true }
 
 [lints]
 workspace = true
+
+# TODO: Remove
+[patch.crates-io]
+muxio-core = { path = "../rust-muxio/core" }
+muxio-rpc-service = { path = "../rust-muxio/extensions/muxio-rpc-service" }
+muxio-rpc-service-caller = { path = "../rust-muxio/extensions/muxio-rpc-service-caller" }
+muxio-rpc-service-endpoint = { path = "../rust-muxio/extensions/muxio-rpc-service-endpoint" }
+muxio-tokio-rpc-ipc-client = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-client" }
+muxio-tokio-rpc-ipc-server = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-server" }
+muxio-tokio-mpsc-adapter = { path = "../rust-muxio/extensions/muxio-tokio-mpsc-adapter" }

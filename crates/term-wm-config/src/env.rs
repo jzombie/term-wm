@@ -75,10 +75,13 @@ pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
 pub const NO_SESSION_PERSISTENCE_ENV_VAR: &str = "TERM_WM_NO_SESSION_PERSISTENCE";
 
 /// Durable log destination (#270). When set to a writable path, tracing
-/// events tee into that file (append mode): the `term-wm` binary mirrors its
-/// in-app Debug Log stream there, and detached daemons write diagnostics
-/// there instead of discarding them. Honors `RUST_LOG` wherever a subscriber
-/// is initialized. Read by `term-wm` and `term-session`.
+/// events append to that file and rotate at 10 MB, keeping 4 rotated files
+/// plus the active file (5 files, 50 MB total, `0o600` files in `0o700`
+/// directory on POSIX). The `term-wm` binary mirrors its in-app Debug Log
+/// stream there, and detached daemons write diagnostics there instead of
+/// discarding them. Filtered by `RUST_LOG` (default `info,muxio=warn`, see
+/// `term_wm_config::logging::DEFAULT_DAEMON_LOG_FILTER`). Read by `term-wm`
+/// and `term-session`.
 pub const LOG_FILE_ENV_VAR: &str = "TERM_WM_LOG_FILE";
 
 /// Process-local explicit gateway override installed by the `--gateway

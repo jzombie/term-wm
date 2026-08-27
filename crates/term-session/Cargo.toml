@@ -19,20 +19,22 @@ clap = { workspace = true, features = ["derive"] }
 hostname = { workspace = true }
 libc = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
+term-logging = { workspace = true }
 term-session-client = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }
 term-wm-config = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 
 [dev-dependencies]
 interprocess = { workspace = true }
+muxio-core = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 term-session-mock = { workspace = true }
 term-test-support = { workspace = true, features = ["tokio"] }

@@ -15,6 +15,7 @@
 
 pub mod build_identity;
 pub mod env;
+pub mod logging;
 pub mod runtime;
 
 pub use env::{

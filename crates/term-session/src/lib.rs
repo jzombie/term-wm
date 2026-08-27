@@ -426,7 +426,26 @@ pub fn stop_gateway(force: bool) -> io::Result<()> {
 pub fn run_daemon(selfcheck_marker: Option<std::path::PathBuf>) -> io::Result<()> {
     // Diagnostics: detached daemons null their stdio, so route tracing into
     // TERM_WM_LOG_FILE when configured (exclusive file sink; see logging).
+    // Falls back to a secured temp-dir path when the env var is unset
+    // (see `logging::fallback_log_path` for the `0700` and share_mode handling).
     crate::logging::init_daemon_logging();
+
+    // Re-entrancy-safe chained panic hook: emit to unbuffered stderr plus a
+    // fresh append-only handle bypassing the tracing sink mutex, then chain
+    // the previous hook. No `tracing::error!` inside the hook path.
+    {
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            static PANICKING: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !PANICKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let bt = std::backtrace::Backtrace::force_capture();
+                eprintln!("DAEMON PANIC: {info}\n{bt}");
+                crate::logging::append_panic_record(&bt, info);
+            }
+            prev_hook(info);
+        }));
+    }
 
     // Make the daemon recognizable in process managers: every `term-session`
     // process is the same binary, so rename this one so `ps`/`top`/Task

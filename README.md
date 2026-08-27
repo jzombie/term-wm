@@ -186,8 +186,18 @@ In builds without session persistence there is nothing to detach from or stop: *
 | `TERM_SESSION_CHANNEL` | Session channel override (read by `term-session`). | `default/main` |
 | `TERM_WM_NO_SESSION_PERSISTENCE` | Disables session-persistence behavior at runtime (same as `--no-session-persistence`). | unset (persistence enabled) |
 | `TERM_WM_TRACE_ESC` | Dumps raw PTY→emulator bytes to a file (debugging aid). | off |
-| `TERM_WM_LOG_FILE` | Durable log destination: tracing events append to this file. In `term-wm`, events mirror the in-app Debug Log stream; in detached daemons this is the only way to keep diagnostics. Honors `RUST_LOG`. Read once when the daemon process starts: daemons already running without it are unaffected until restarted. | unset (Debug Log window / stdout) |
+| `TERM_WM_LOG_FILE` | Durable log destination: tracing events append to this file and rotate when exceeding 10 MB, keeping 4 rotated files plus the active file (5 files, 50 MB total, `0o600` files in `0o700` directory on POSIX). In `term-wm`, events mirror the in-app Debug Log stream; in detached daemons this is the only way to keep diagnostics. Filtered by `RUST_LOG` (default `info,muxio=warn`). Read once when the daemon process starts: daemons already running without it are unaffected until restarted. | unset (Debug Log window / stdout) |
 | `TERM_WM_TEST_LOG_DIR` | Test-only capture root: harnesses using `term-test-support::apply_test_logging` write spawned daemons'/clients' diagnostics here; CI archives the directory on failure. | unset (`<temp>/term-wm-test-logs/<pid>-<nanos>/`) |
+
+### Logging
+
+By default the daemon does not require any configuration. When `TERM_WM_LOG_FILE` is set, both `term-wm` and the detached `term-session` gateway append structured tracing events there; when unset, the gateway falls back to a per-user path under the system temp directory (`$TMPDIR/term-wm/<user>/gateway-<hash>.log`). In `term-wm` the same stream is also mirrored to the in-app Debug Log window, while a detached daemon writes only to the file (its stdio is null, so stdout/stderr would otherwise be lost).
+
+All output is filtered by `RUST_LOG` via `EnvFilter`. The default is `info,muxio=warn`: general `info` and above is recorded, while high-frequency `muxio` transport traces are `warn`-only, which cuts idle volume by roughly 95%. Set `RUST_LOG=debug` (or `RUST_LOG=term_session=debug`) to see more detail, or `RUST_LOG=trace` to include `muxio` internals. The value is read once when the daemon starts, so daemons already running are unaffected until restarted.
+
+Files are size-bounded and never grow without bound: each log file is capped at 10 MB and rotated by the daemon, keeping 4 rotated files plus the active file (5 files, 50 MB total). Rotation uses a synchronous writer so nothing is lost even when the process exits via `process::exit`, and the active file remains at the configured path (historical files are `<path>.1`, `<path>.2`, …), so the panic hook always appends to the same active file. `term-wm` (including the headless WM hosted inside the daemon's PTY) does not own rotation; it appends through an inode-aware tee that reopens the active file when the daemon rotates it, which avoids writing to stale or unlinked inodes. On POSIX, log files are created `0o600` inside a `0o700` directory; on Windows, files are opened with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` so they can be tailed while being written.
+
+To inspect logs, run `tail -F "$TERM_WM_LOG_FILE"` (or the fallback temp path shown above) or open the Debug Log window in `term-wm`. For tests, `term-test-support::apply_test_logging` sets `TERM_WM_LOG_FILE` and `RUST_LOG=debug` automatically.
 
 ## The "No-Conflict" Philosophy (`Ctrl+A` Super Key)
 
