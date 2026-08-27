@@ -4,17 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
-## [Unreleased]
-
-### Fixed
-
-- **Recurring CI test flakiness eliminated at the roots (#309):** every known flake class got a deterministic fix. Blind fixed sleeps in the daemon/session suites became deadline-bounded polls on real state (`ListChannels` liveness, `try_wait` exit, echo round-trips) via `term-test-support::wait_for`. Timer-driven unit tests (`TaskScheduler`, the keyed debouncer, direct-mode toast debounce, notification TTL expiry) now run on an injected virtual clock (`ManualClock` + `TaskScheduler::new_with_clock`). Panicking tests can no longer leak resources: spawned daemons/clients are wrapped in kill-on-drop guards that also unlink their socket artifacts, and the raw stderr-dup2 test serializes behind `#[serial(stderr)]`. Cross-run interference is gone: gateway names embed pid + counter so concurrent runs and crashed-run leftovers never claim each other's endpoints, env-var mutations restore originals even on panic, and the gateway override cell is restored after use. CI hardening without masking: job-level `timeout-minutes` bounds hung tests instead of freezing runners, failed jobs upload per-run daemon logs and freshly written proptest seeds as artifacts.
-- **Cross-generation gateway endpoint takeover eliminated:** a daemon could lose its IPC endpoint whenever another binary generation's client hit a probe timeout under load: the auto-spawn path deleted the live socket file and bound a fresh, wrong-generation daemon over the name, leaving the original running but permanently unreachable to new connections while existing sessions streamed on. Two changes close this structurally. First, default gateway endpoints now carry a compile-time generation suffix (`gateway-<hash8>`: FNV-1a of the checkout root for in-tree builds, of the compile timestamp for installed or copied binaries), so different binary generations can never target the same endpoint in the first place. Second, daemon startup gained a strict stale-socket recovery gate: an existing socket is removed only when a connect against it returns `ConnectionRefused` or `NotFound` (proof nothing is accepting); any other outcome, including a busy backlog from a CPU-starved but live owner, fails startup loudly instead of stealing. Client-side auto-spawn no longer deletes socket files at all. Explicit `--gateway <name>` overrides remain verbatim escape hatches.
+## [0.10.5-alpha] - TBD
 
 ### Added
 
-- **Shared deterministic test utilities (`term-test-support`, #309):** a dev-only workspace crate consolidating the patterns every suite was hand-rolling: `wait_for`/`wait_for_async` deadline-bounded condition polling, `KillOnDrop` RAII cleanup guards (fire exactly once, including during panic unwinding), a thread-safe `ManualClock` virtual clock for timer tests, `unique_gateway_name` (pid + counter IPC names), and `apply_test_logging`, which points spawned test processes at `TERM_WM_LOG_FILE` under a stable per-run directory (`TERM_WM_TEST_LOG_DIR`, default `<temp>/term-wm-test-logs/`) so CI can archive daemon diagnostics from failed runs.
-- **Durable log destination honored by every daemon (`TERM_WM_LOG_FILE`, #270):** detached daemons now install an exclusive file subscriber for the configured path (append mode, created on demand), so gateway lifecycle and any panicking task leave a traced trail instead of vanishing into nulled stdio. Daemon logging deliberately uses a single sink: without it, stderr-routing writers combined with stderr redirection amplify every event into a feedback loop. Honors `RUST_LOG`; interactive runs keep their existing sinks. The variable is read once when the daemon process starts, so daemons already running without it are unaffected until restarted.
+- Daemon logging now supports size-bounded rotation and filtered output via `RUST_LOG` (10 MB per file, 5 files retained) (#319)
+- Deterministic test helpers for polling, cleanup, virtual clocks, and isolated gateway names (`term-test-support`, #309).
+- Daemons now honor `TERM_WM_LOG_FILE` with a single exclusive sink so detached logs are not lost (#270).
+- Five regression gates that must not be removed and a nightly 7-channel soak (420s, `RUN_NIGHTLY_SOAK=1`) covering the #319 failure modes.
+
+### Fixed
+
+- Workspace queries no longer stall when one window is busy (#319).
+- Short-lived daemon queries no longer fail while long-lived streams stay alive (#319).
+- Daemon task panics are now visible to operators instead of silent (#319).
+- Fallback log directory now resists pre-created wide-open or symlinked paths (#319).
+- Recurring CI flakes eliminated with deadline-bounded polling and isolated test resources (#309).
+- Cross-generation daemons no longer steal each other's endpoints under load.
+
+### Changed
+
+- Muxio `0.15.0-alpha` → `0.16.0-alpha`.
 
 ## [0.10.4-alpha] - 2026-08-24
 

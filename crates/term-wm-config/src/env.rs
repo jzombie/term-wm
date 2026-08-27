@@ -74,11 +74,21 @@ pub const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
 /// Read by the `term-wm` binary.
 pub const NO_SESSION_PERSISTENCE_ENV_VAR: &str = "TERM_WM_NO_SESSION_PERSISTENCE";
 
-/// Durable log destination (#270). When set to a writable path, tracing
-/// events tee into that file (append mode): the `term-wm` binary mirrors its
-/// in-app Debug Log stream there, and detached daemons write diagnostics
-/// there instead of discarding them. Honors `RUST_LOG` wherever a subscriber
-/// is initialized. Read by `term-wm` and `term-session`.
+/// Durable log destination (#270). When set to a writable path, **daemon
+/// and UI append to the same file** via `O_APPEND` (two independent `Mutex`
+/// writers, atomic at the kernel). The daemon owns rotation at 10 MB, keeping
+/// 4 rotated files plus the active file (5 files, 50 MB total, `0o600` files
+/// in `0o700` directory on POSIX, `FILE_SHARE_*` on Windows); the UI never
+/// rotates and follows via `InodeAwareFile` inode-drift detection. `term-wm`
+/// mirrors its in-app Debug Log there, and detached daemons write diagnostics
+/// there instead of discarding them. When unset, the daemon falls back to
+/// `$TMPDIR/term-wm/<user>/gateway-<hash>.log` (per-user, per-generation
+/// isolated), while `term-wm` stays in-memory (Debug Log ring, no file) to
+/// avoid disk clutter. Filtered by `RUST_LOG` (default `info,muxio=warn`, see
+/// `term_wm_config::logging::DEFAULT_DAEMON_LOG_FILTER`). Read by `term-wm`
+/// and `term-session` (read once at daemon start; already-running daemons are
+/// unaffected until restarted). Panic records use `LOG_FILE_PATH` OnceLock and
+/// bypass the tracing dispatcher via a fresh append handle.
 pub const LOG_FILE_ENV_VAR: &str = "TERM_WM_LOG_FILE";
 
 /// Process-local explicit gateway override installed by the `--gateway
@@ -295,12 +305,14 @@ mod tests {
     /// controlled POLICY; private state belongs in `~/.cargo/config.toml`
     /// or an ancestor-directory config, which Cargo merges automatically.
     #[test]
+    #[serial(env)]
     fn cargo_config_remains_pure_of_local_overrides() {
         // This test lives in crates/term-wm-config: two parents up is the
-        // workspace root.
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .expect("CARGO_MANIFEST_DIR is set for every cargo-spawned test");
-        let workspace_root = std::path::Path::new(&manifest_dir)
+        // workspace root. Use the compile-time macro to avoid a race with
+        // `default_environment_detects_cargo_manifest_dir` which mutates the
+        // process-wide `CARGO_MANIFEST_DIR` env var.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = std::path::Path::new(manifest_dir)
             .parent()
             .and_then(std::path::Path::parent)
             .expect("crate lives directly under <workspace>/crates");
