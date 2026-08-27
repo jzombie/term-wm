@@ -167,6 +167,13 @@ Committed Toolchain Config
   previously used for wholesale overrides was deleted outright and must not
   be reintroduced under any name.
 
+Changelog Style
+- Entries must be user-facing: describe what the user sees changed (added, fixed, changed), not how it was implemented.
+- One bullet per user-noticeable change, 1–2 lines max, single declarative sentence with the issue or PR number in parentheses (e.g., `Fixed: short-lived workspace queries no longer stall when one window is busy (#319)`).
+- Group under `Fixed`, `Added`, `Changed` per Keep a Changelog; keep `Unreleased` empty after a release.
+- Never include file paths, line numbers, internal type names (`ChannelMetaSnapshot`, `Weak`, `Arc`), or lock names; put technical detail in the PR description or code comments.
+- Keep bullets short and scannable: what changed for the user, not the refactor steps.
+
 Declarative `view!` Macro
 - `view!` (crate `term-wm-view`, re-exported from the `term-wm` root) is a
   declarative shorthand for building component trees. It is "dumb": the expansion

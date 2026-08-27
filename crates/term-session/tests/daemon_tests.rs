@@ -51,24 +51,18 @@ fn unique_gateway(tag: &str) -> String {
 /// already-exited child is a harmless no-op, so no defuse step is needed.
 struct DaemonGuard {
     child: Child,
-    /// Gateway name to clean up after death, if this process owns one.
-    gateway: Option<String>,
 }
 
 impl DaemonGuard {
-    fn spawn(mut cmd: Command, gateway: &str) -> Self {
+    fn spawn(mut cmd: Command) -> Self {
         Self {
             child: cmd.spawn().expect("spawn daemon"),
-            gateway: Some(gateway.to_string()),
         }
     }
 
     /// Wrap a spawned client process that owns no socket of its own.
     fn for_child(child: Child) -> Self {
-        Self {
-            child,
-            gateway: None,
-        }
+        Self { child }
     }
 }
 
@@ -77,14 +71,10 @@ impl Drop for DaemonGuard {
         // Best-effort by design; see struct doc.
         let _ = self.child.kill();
         let _ = self.child.wait();
-        if let Some(gateway) = &self.gateway {
-            // Mirror production practice (`connect_or_spawn_server` unlinks
-            // the dead socket artifact before spawning). Harmless where no
-            // file exists: muxio binds with try_overwrite, Linux uses the
-            // abstract namespace, Windows named pipes leave no filesystem
-            // artifact; only macOS maps namespace names under /tmp.
-            let _ = std::fs::remove_file(std::env::temp_dir().join(gateway));
-        }
+        // No manual socket-file cleanup: the transport owns placement
+        // and lifecycle. Stale artifacts are harmless (nothing listens
+        // behind them) and muxio's try_overwrite binding reclaims the
+        // name whenever the same endpoint is reused.
     }
 }
 
@@ -113,7 +103,7 @@ fn spawn_daemon(gateway: &str, selfcheck: bool) -> (DaemonGuard, Option<PathBuf>
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    (DaemonGuard::spawn(cmd, gateway), marker)
+    (DaemonGuard::spawn(cmd), marker)
 }
 
 /// Spawn the daemon with an explicit current directory (distinct from the
@@ -129,7 +119,7 @@ fn spawn_daemon_in(gateway: &str, cwd: &std::path::Path) -> DaemonGuard {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    DaemonGuard::spawn(cmd, gateway)
+    DaemonGuard::spawn(cmd)
 }
 
 /// Attach a client to a channel and return its server-assigned conn id,

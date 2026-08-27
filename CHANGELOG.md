@@ -4,18 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
-## [Unreleased]
+## [0.10.5-alpha] - 2026-08-27
 
 ### Added
 
-- **Modular `--util` workflow with `copy git diff` via tasks.json (#312):** the term-wm binary gains a repeatable pattern for headless helper commands: `term-wm --util <UTIL> [args]` runs a built-in utility before any window-manager or session machinery starts and exits. The first utility is `copy`, which pipes a FILE (or stdin) into every clipboard backend (system clipboard, shared in-memory buffer, OSC 52 to the host terminal); it delegates to the exact same ingestion core as the standalone `term-copy` binary, so the two cannot drift apart in behavior. Complementing this, tasks.json gains a `{wm.exe}` placeholder that resolves to the spawning term-wm executable's path (`std::env::current_exe()`), letting project tasks invoke the binary itself; inside shell scripts prefer passing it through a task `env` entry and referencing `$TERM_WM_EXE`-style variables so paths containing spaces or quotes stay safe. The repository's own `.term-wm/tasks.json` ships a "Copy Git Diff" task (platform-gated `sh -c` for Linux/macOS and PowerShell for Windows) demonstrating the full chain: select it from the Command Palette and the working-tree diff lands on your clipboard.
-
-- **Configurable log path (`TERM_WM_LOG_FILE`, #270):** tracing events can now tee to a durable file instead of living only in the in-memory Debug Log ring buffer (lost on exit). In the `term-wm` binary every event that reaches the Debug Log window also appends to the configured file; framework noise redirected at the OS level flows there too. The `term-session` daemon gains a matching subscriber: detached daemons null their stdio by design (an undrained pipe would deadlock startup), so until now their diagnostics were unrecoverable on any failure; with `TERM_WM_LOG_FILE` set they write full tracing output (honoring `RUST_LOG`) to the file instead of discarding it. The root binary's standalone `--daemon` mode, which previously had no subscriber at all, now initializes logging as well. Opening the file is best-effort: failures fall back to existing behavior with a warning.
-- **Shared deterministic test utilities (`term-test-support`, #309):** a new dev-only workspace crate consolidates the patterns every suite was hand-rolling: `wait_for`/`wait_for_async` deadline-bounded condition polling, `KillOnDrop` RAII cleanup guards (fire exactly once, including during panic unwinding), a thread-safe `ManualClock` virtual clock for timer tests, `unique_gateway_name` (pid + counter IPC names), and `apply_test_logging`, which points spawned test processes at `TERM_WM_LOG_FILE` under a stable per-run directory (`TERM_WM_TEST_LOG_DIR`, default `<temp>/term-wm-test-logs/`) so CI can archive daemon diagnostics from failed runs.
+- Daemon logging now supports size-bounded rotation and filtered output via `RUST_LOG` (10 MB per file, 5 files retained) (#319)
+- Deterministic test helpers for polling, cleanup, virtual clocks, and isolated gateway names (`term-test-support`, #309).
+- Daemons now honor `TERM_WM_LOG_FILE` with a single exclusive sink so detached logs are not lost (#270).
+- Five regression gates that must not be removed and a nightly 7-channel soak (420s, `RUN_NIGHTLY_SOAK=1`) covering the #319 failure modes.
 
 ### Fixed
 
-- **Recurring CI test flakiness eliminated at the roots (#309):** no retry layer was added; every known flake class got a deterministic fix. Blind fixed sleeps in the daemon/session suites (a 2 s wait for the whole auto-spawn chain in `daemon_survives_parent_death`, a 1 s teardown hope, a 100 ms gateway-bind pad, and several 200-500 ms race-window pads) became deadline-bounded polls on real state (`ListChannels` liveness, `try_wait` exit, echo round-trips) via `term-test-support::wait_for`. Timer-driven unit tests (`TaskScheduler`, the keyed debouncer, direct-mode toast debounce, notification TTL expiry) now run on an injected virtual clock (`ManualClock` + `TaskScheduler::new_with_clock`), making them exact and milliseconds-fast; a fixed 200 ms "hope the reaper woke up" sleep became an observable `processed_count()` signal. Panicking tests can no longer leak resources: spawned daemons/clients are wrapped in kill-on-drop guards that also unlink their socket artifacts, `Session` gains a best-effort child-kill Drop net (mirroring Windows' Job Object tree-death), and the raw stderr-dup2 test serializes behind `#[serial(stderr)]` with panic-safe fd restoration. Cross-run interference is gone: gateway names embed pid + counter so concurrent runs and leftovers from crashed runs never claim each other's endpoints, env-var mutations restore originals even on panic (fixing a concrete `CARGO_MANIFEST_DIR` race between an unsynchronized reader and a `#[serial(env)]` mutator), and the gateway override cell is restored after use. CI hardening without masking: job-level `timeout-minutes` bounds hung tests instead of freezing runners, failed jobs upload per-run daemon logs and any freshly written proptest seeds as artifacts, and the previously untracked regression file for the layout engine's node proptests is committed up front.
+- Workspace queries no longer stall when one window is busy (#319).
+- Short-lived daemon queries no longer fail while long-lived streams stay alive (#319).
+- Daemon task panics are now visible to operators instead of silent (#319).
+- Fallback log directory now resists pre-created wide-open or symlinked paths (#319).
+- Recurring CI flakes eliminated with deadline-bounded polling and isolated test resources (#309).
+- Cross-generation daemons no longer steal each other's endpoints under load.
+
+### Changed
+
+- Muxio `0.15.0-alpha` → `0.16.0-alpha`.
 
 ## [0.10.4-alpha] - 2026-08-24
 
