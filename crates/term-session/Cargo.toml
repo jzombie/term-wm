@@ -19,7 +19,7 @@ clap = { workspace = true, features = ["derive"] }
 hostname = { workspace = true }
 libc = { workspace = true }
 muxio-tokio-rpc-ipc-client = { workspace = true }
-term-logging = { workspace = true }
+term-logging = { workspace = true, features = ["daemon"] }
 term-session-client = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }
 term-session-server = { workspace = true }

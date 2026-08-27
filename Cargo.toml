@@ -168,7 +168,7 @@ clap = { workspace = true, features = ["derive"] }
 crossbeam-channel = { workspace = true }
 hostname = { workspace = true }
 libc = { workspace = true }
-term-logging = { workspace = true, features = ["ui"] }
+term-logging = { workspace = true, features = ["daemon", "ui"] }
 line-ending = { workspace = true }
 muxio-rpc-service-caller = { workspace = true, optional = true }
 muxio-rpc-service-endpoint = { workspace = true, optional = true }

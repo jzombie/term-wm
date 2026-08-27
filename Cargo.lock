@@ -1704,8 +1704,6 @@ dependencies = [
 [[package]]
 name = "muxio-core"
 version = "0.16.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a4c838f5ef4eba94f674cd20fb561adb175700a0817dcefc251ff7daef1599"
 dependencies = [
  "once_cell",
  "tracing",
@@ -1714,8 +1712,6 @@ dependencies = [
 [[package]]
 name = "muxio-rpc-service"
 version = "0.16.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72c3d4a57576a7089efa69e6db79f2e025cf6778ffcf1c65e0e53ffc9bc952cd"
 dependencies = [
  "bitcode",
  "num_enum",
@@ -1725,8 +1721,6 @@ dependencies = [
 [[package]]
 name = "muxio-rpc-service-caller"
 version = "0.16.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca9fa188242909d85d5b8fd37deadceb7cb749c3075e6745660e2e5f819ddab7"
 dependencies = [
  "async-trait",
  "futures",
@@ -1739,8 +1733,6 @@ dependencies = [
 [[package]]
 name = "muxio-rpc-service-endpoint"
 version = "0.16.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c4167526a92c41b660e3e6eab9b633f8fe67fdcdf6367b50dd5582a634f5d78"
 dependencies = [
  "async-trait",
  "bitcode",
@@ -1755,8 +1747,6 @@ dependencies = [
 [[package]]
 name = "muxio-tokio-mpsc-adapter"
 version = "0.16.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2adf36e7f48767689315f12a3840f49a0a294aa523fb69d47de5a9a2e13bb8b"
 dependencies = [
  "async-trait",
  "muxio-core",
@@ -1770,8 +1760,6 @@ dependencies = [
 [[package]]
 name = "muxio-tokio-rpc-ipc-client"
 version = "0.16.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75772d0325d3e26f4e6f8454f6bdda2599a7b1d67550934c2338eb7e0cc2cb09"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1788,8 +1776,6 @@ dependencies = [
 [[package]]
 name = "muxio-tokio-rpc-ipc-server"
 version = "0.16.0-alpha"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d123f5c653feee65450eb1edce211123bda1b72f5a029c56b1a31767a2f6be2f"
 dependencies = [
  "async-trait",
  "bytes",

@@ -10,10 +10,11 @@ publish.workspace = true
 
 [features]
 default = []
+daemon = ["dep:file-rotate"]
 ui = ["dep:term-wm-core", "dep:term-sys-io"]
 
 [dependencies]
-file-rotate = { workspace = true }
+file-rotate = { workspace = true, optional = true }
 libc = { workspace = true }
 term-wm-config = { workspace = true }
 tracing = { workspace = true }
