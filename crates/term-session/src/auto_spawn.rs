@@ -322,11 +322,11 @@ pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<Stri
         return Ok(socket_name);
     }
 
-    // Step 2a: clear any dead-socket artifact left by a killed daemon.
-    // Best-effort by design: abstract namespaces and platform layout
-    // differences make a miss harmless (the server binds with
-    // try_overwrite regardless).
-    let _ = std::fs::remove_file(std::env::temp_dir().join(socket_name.as_str()));
+    // Step 2: nobody answered the probe. The spawned daemon owns stale-
+    // socket recovery itself: its bind gate only unlinks the path after a
+    // connect() is actively REFUSED (or the file vanished), so a live-but-
+    // slow daemon can never have its endpoint stolen here. Clients must
+    // not touch the socket file at all.
 
     // Step 2b: spawn the daemon pinned to exactly this endpoint.
     let bin = bin
@@ -385,6 +385,28 @@ mod tests {
     #[test]
     fn resolve_gateway_defaults_to_user_scoped_gateway() {
         let _guard = env_lock();
+        // Save originals and restore them even if an assertion panics: these
+        // are process-global variables shared by every other test in this
+        // binary (`TERM_WM_NAMESPACE` is toolchain-injected for dev
+        // isolation; `USER`/`USERNAME` feed `current_os_user()`).
+        let orig_ns = std::env::var(term_wm_config::NAMESPACE_ENV_VAR).ok();
+        let orig_user = std::env::var("USER").ok();
+        let orig_username = std::env::var("USERNAME").ok();
+        let _restore = term_test_support::KillOnDrop::new(move || {
+            macro_rules! restore {
+                ($name:expr, $orig:expr) => {
+                    unsafe {
+                        match $orig {
+                            Some(v) => std::env::set_var($name, v),
+                            None => std::env::remove_var($name),
+                        }
+                    }
+                };
+            }
+            restore!(term_wm_config::NAMESPACE_ENV_VAR, orig_ns);
+            restore!("USER", orig_user);
+            restore!("USERNAME", orig_username);
+        });
         unsafe {
             term_wm_config::env::set_gateway_override(None);
             std::env::remove_var(term_wm_config::NAMESPACE_ENV_VAR);
@@ -394,18 +416,20 @@ mod tests {
             std::env::set_var("USERNAME", "tester");
         }
         let gw = resolve_gateway();
-        // Static default: {namespace}/<user>/gateway. No environment
-        // component by design; both override variables are cleared so the
-        // assertion holds regardless of ambient toolchain injection.
+        // Static default: {namespace}/<user>/gateway-<generation hash>. No
+        // environment component by design; both override variables are
+        // cleared so the assertion holds regardless of ambient toolchain
+        // injection. The suffix is the per-checkout dev hash when tests run
+        // inside the workspace (generation scoping).
         assert_eq!(
             gw.to_string(),
-            format!("{}/tester/gateway", term_wm_config::GATEWAY_NAMESPACE)
+            format!(
+                "{}/tester/gateway{}",
+                term_wm_config::GATEWAY_NAMESPACE,
+                term_wm_config::build_identity::default_generation_suffix()
+            )
         );
         assert_eq!(gw.namespace, term_wm_config::GATEWAY_NAMESPACE);
-        unsafe {
-            std::env::remove_var("USER");
-            std::env::remove_var("USERNAME");
-        }
     }
 
     #[test]
@@ -413,6 +437,25 @@ mod tests {
         let _guard = env_lock();
         // The toolchain-injected namespace override replaces only the root
         // segment: OS-level user isolation survives on shared dev machines.
+        // Originals restored on drop (see the sibling test above).
+        let orig_ns = std::env::var(term_wm_config::NAMESPACE_ENV_VAR).ok();
+        let orig_user = std::env::var("USER").ok();
+        let orig_username = std::env::var("USERNAME").ok();
+        let _restore = term_test_support::KillOnDrop::new(move || {
+            macro_rules! restore {
+                ($name:expr, $orig:expr) => {
+                    unsafe {
+                        match $orig {
+                            Some(v) => std::env::set_var($name, v),
+                            None => std::env::remove_var($name),
+                        }
+                    }
+                };
+            }
+            restore!(term_wm_config::NAMESPACE_ENV_VAR, orig_ns);
+            restore!("USER", orig_user);
+            restore!("USERNAME", orig_username);
+        });
         unsafe {
             term_wm_config::env::set_gateway_override(None);
             std::env::set_var(term_wm_config::NAMESPACE_ENV_VAR, "term-wm-dev");
@@ -420,12 +463,13 @@ mod tests {
             std::env::set_var("USERNAME", "tester");
         }
         let gw = resolve_gateway();
-        assert_eq!(gw.to_string(), "term-wm-dev/tester/gateway");
-        unsafe {
-            std::env::remove_var(term_wm_config::NAMESPACE_ENV_VAR);
-            std::env::remove_var("USER");
-            std::env::remove_var("USERNAME");
-        }
+        assert_eq!(
+            gw.to_string(),
+            format!(
+                "term-wm-dev/tester/gateway{}",
+                term_wm_config::build_identity::default_generation_suffix()
+            )
+        );
     }
 
     #[test]

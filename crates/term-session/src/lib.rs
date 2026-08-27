@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod auto_spawn;
+pub mod logging;
 
 pub use muxio_tokio_rpc_ipc_client as rpc_client;
 pub use term_session_client as client;
@@ -419,11 +420,36 @@ pub fn stop_gateway(force: bool) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("shutdown: {e}")))
 }
 
-/// Run the gateway daemon: rename the process, detach from the controlling
-/// terminal, and serve until `ShutdownGateway`. `selfcheck_marker` is a
-/// test-only path written with the platform's detachment proof once bound.
-pub fn run_daemon(selfcheck_marker: Option<std::path::PathBuf>) -> io::Result<()> {
-    tracing_subscriber::fmt::init();
+/// Bootstrap daemon process-global state synchronously on the main thread
+/// before the Tokio runtime is created. Installs the exclusive file
+/// subscriber (`TERM_WM_LOG_FILE`), panic hook, process name, and session
+/// detachment. Must run before any worker threads exist so `take_hook`/
+/// `set_hook` do not race. `run_gateway` remains pure and does not mutate
+/// global state.
+pub fn bootstrap_daemon() {
+    // Diagnostics: detached daemons null their stdio, so route tracing into
+    // TERM_WM_LOG_FILE when configured (exclusive file sink; see logging).
+    // Falls back to a secured temp-dir path when the env var is unset
+    // (see `term_logging::fallback_log_path` for the `0700` and share_mode handling).
+    crate::logging::init_daemon_logging();
+    crate::logging::install_daemon_panic_hook();
+
+    // Re-entrancy-safe chained panic hook: emit to unbuffered stderr plus a
+    // fresh append-only handle bypassing the tracing sink mutex, then chain
+    // the previous hook. No `tracing::error!` inside the hook path.
+    {
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            static PANICKING: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !PANICKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let bt = std::backtrace::Backtrace::force_capture();
+                eprintln!("DAEMON PANIC: {info}\n{bt}");
+                crate::logging::append_panic_record(&bt, info);
+            }
+            prev_hook(info);
+        }));
+    }
 
     // Make the daemon recognizable in process managers: every `term-session`
     // process is the same binary, so rename this one so `ps`/`top`/Task
@@ -451,6 +477,13 @@ pub fn run_daemon(selfcheck_marker: Option<std::path::PathBuf>) -> io::Result<()
     unsafe {
         let _ = windows_sys::Win32::System::Console::FreeConsole();
     }
+}
+
+/// Run the gateway daemon: rename the process, detach from the controlling
+/// terminal, and serve until `ShutdownGateway`. `selfcheck_marker` is a
+/// test-only path written with the platform's detachment proof once bound.
+pub fn run_daemon(selfcheck_marker: Option<std::path::PathBuf>) -> io::Result<()> {
+    bootstrap_daemon();
 
     let gateway = term_session_muxio_service_definitions::gateway_channel_name();
 

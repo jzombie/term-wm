@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.5-alpha] - 2026-08-27
+
+### Added
+
+- Daemon logging now supports size-bounded rotation and filtered output via `RUST_LOG` (10 MB per file, 5 files retained) (#319)
+- Deterministic test helpers for polling, cleanup, virtual clocks, and isolated gateway names (`term-test-support`, #309).
+- Daemons now honor `TERM_WM_LOG_FILE` with a single exclusive sink so detached logs are not lost (#270).
+- Five regression gates that must not be removed and a nightly 7-channel soak (420s, `RUN_NIGHTLY_SOAK=1`) covering the #319 failure modes.
+
+### Fixed
+
+- Workspace queries no longer stall when one window is busy (#319).
+- Short-lived daemon queries no longer fail while long-lived streams stay alive (#319).
+- Daemon task panics are now visible to operators instead of silent (#319).
+- Fallback log directory now resists pre-created wide-open or symlinked paths (#319).
+- Recurring CI flakes eliminated with deadline-bounded polling and isolated test resources (#309).
+- Cross-generation daemons no longer steal each other's endpoints under load.
+
+### Changed
+
+- Muxio `0.15.0-alpha` → `0.16.0-alpha`.
+
 ## [0.10.4-alpha] - 2026-08-24
 
 ### Added

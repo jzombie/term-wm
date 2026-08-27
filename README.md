@@ -56,6 +56,8 @@ Traditional terminal multiplexers treat the character grid as a rigid, planar ma
 
 ### Quick Start
 
+> **Upgrading from a previous version? Read this first:** launching the new build will not reuse, resume, or even reach any daemon left running by an older one. Those sessions keep running but can no longer be reattached once your views close. Stop the old daemon **before** switching (`term-wm --stop-daemon -f`, or Command Palette -> Stop Gateway Daemon from a still-open window). See [Daemon Mode: What Runs in the Background](#daemon-mode-what-runs-in-the-background) below.
+
 Build and run from source (Rust 1.85+, edition 2024; no extra toolchain needed):
 
 ```sh
@@ -88,6 +90,19 @@ Options (`term-wm -h`):
 - `-h, --help`, `-V, --version`
 
 New terminal windows launch the shell from `$SHELL` (Unix) or `%COMSPEC%` (Windows).
+
+### Daemon Mode: What Runs in the Background
+
+**Daemon mode is the default.** On first launch, `term-wm` auto-spawns a detached background **session gateway daemon**: a second copy of the same binary running invisibly in the background. Your windows are rendered by the foreground process you launched, but every workspace channel, PTY session, and running task actually *lives inside that daemon*. That is what makes sessions survive closed terminals and dropped SSH connections.
+
+What this means day to day:
+
+* Closing the app or your terminal does **not** stop the daemon; workspaces and running tasks keep going until you explicitly stop them.
+* The daemon is an ordinary background process owned by your user account. See it with `ps -ef | grep term-wm`, list its workspaces with `term-wm --list-channels`, or watch it appear on first launch of a fresh build.
+* Stopping is explicit: `term-wm --stop-daemon` (add `-f/--force` while sessions are attached). Stopping terminates every workspace's PTY processes, so save your work first.
+* Each distinct *binary build* owns its own isolated daemon endpoint (see the generation-scoped endpoints note above). After rebuilding or upgrading, a fresh launch spawns a fresh daemon for that build; any older daemon keeps serving its old sessions until you stop it.
+
+> **Trying it out and want everything gone?** `term-wm --stop-daemon -f` tears down the daemon and every session/task it hosts. Nothing else lingers.
 
 ### Keybindings Quick Reference
 
@@ -145,7 +160,8 @@ The full developer tour (the crate responsibility map, window lifecycle, tiling 
 
 * **Workspaces:** A workspace is a named channel namespace on top of the session daemon. Each workspace (e.g. `default`, `dev`) maps to a daemon channel `<workspace>/main` with its own PTY session and window-manager instance. Start in a workspace with `-w/--workspace <NAME>`, or omit it and the launch folder names it for you.
 * **Switching workspaces:** From the Command Palette, use **New Workspace** to create one, **Switch to Workspace: `<name>`** to switch without restarting the process (the viewer's IPC is rebound to the target channel, and the previously shown workspace keeps running in the background), and **Detach Viewer** to disconnect the current viewer from its session without terminating the PTY process. Workspace entries appear only when session persistence is active, and each entry shows live counts of open windows and running tasks.
-* **Persistence gateway:** The daemon endpoint is `term-wm/<user>/gateway`. It deliberately does not depend on the runtime environment: `--env` / `TERM_WM_ENV` scope project-task visibility only, so changing a profile can never fork daemon lifecycles. **Local development isolation** is enforced at the toolchain boundary: the committed `.cargo/config.toml` injects `TERM_WM_NAMESPACE=term-wm-dev`, so every cargo-driven execution (`cargo run`, `cargo test`) uses `term-wm-dev/<user>/gateway` while the OS-level `<user>` segment stays derived at runtime (multi-tenant safe on shared machines). Binaries executed directly bind the shared `term-wm/<user>/gateway`. `--gateway <name>` overrides the endpoint wholesale per invocation (multi-segment paths round-trip byte-exact), and auto-spawned daemons are pinned to the launcher's resolved endpoint via a hidden `--gateway <name>` argument so client and daemon can never disagree. Both `term-wm --help` and `term-session --help` print a `Persistence gateway:` footer showing the resolved endpoint.
+* **Persistence gateway:** The daemon endpoint is `term-wm/<user>/gateway-<hash8>`. It deliberately does not depend on the runtime environment: `--env` / `TERM_WM_ENV` scope project-task visibility only, so changing a profile can never fork daemon lifecycles. The `<hash8>` suffix is a compile-time generation identity (FNV-1a of the checkout root for in-tree builds, of the compile timestamp for installed/copied binaries): every binary generation owns its own endpoint, so mixing an installed daemon with freshly built clients can never cross-wire IPC or steal sockets. **Local development isolation** is enforced at the toolchain boundary: the committed `.cargo/config.toml` injects `TERM_WM_NAMESPACE=term-wm-dev`, so every cargo-driven execution (`cargo run`, `cargo test`) uses `term-wm-dev/<user>/gateway-<hash8>` while the OS-level `<user>` segment stays derived at runtime (multi-tenant safe on shared machines). Binaries executed directly bind their own generation's endpoint. `--gateway <name>` overrides the endpoint wholesale per invocation, verbatim and without a suffix (multi-segment paths round-trip byte-exact), and auto-spawned daemons are pinned to the launcher's resolved endpoint via a hidden `--gateway <name>` argument so client and daemon can never disagree. Daemon startup refuses to take over an endpoint owned by another live process: takeover requires the socket to be actively refused or absent. Both `term-wm --help` and `term-session --help` print a `Persistence gateway:` footer showing the resolved endpoint.
+* **Upgrading between generations:** installing a new build does **not** stop daemons already running from older builds, and newer binaries can never contact them. Existing sessions keep running inside the old daemon, but they become orphaned: once your views detach (terminal closed), they cannot be resumed, and cleanup gets awkward because the new tooling resolves a different endpoint than the one the old daemon owns. If a terminal attached to the old daemon is still open, shut it down cleanly from there: Command Palette -> **Stop Gateway Daemon**. Otherwise the orphaned process must be ended by hand (`ps -ef | grep term-wm`, then `kill <pid>`). Upgrade deliberately: stop first, switch builds second.
 * **Runtime disable:** Pass `--no-session-persistence` (or set `TERM_WM_NO_SESSION_PERSISTENCE`) to disable workspace/session-persistence behavior at runtime, even when the feature is compiled in.
 * **Managing the daemon:** `--list-channels` shows every workspace channel, its session, and its attached clients; `--stop-daemon` shuts the background gateway down (a confirmation dialog in the Command Palette warns that every workspace session will be terminated, with totals; the CLI refuses while sessions are live unless `-f/--force` is given); `--no-wm` runs a headless session client without the window manager.
 
@@ -170,6 +186,18 @@ In builds without session persistence there is nothing to detach from or stop: *
 | `TERM_SESSION_CHANNEL` | Session channel override (read by `term-session`). | `default/main` |
 | `TERM_WM_NO_SESSION_PERSISTENCE` | Disables session-persistence behavior at runtime (same as `--no-session-persistence`). | unset (persistence enabled) |
 | `TERM_WM_TRACE_ESC` | Dumps raw PTY→emulator bytes to a file (debugging aid). | off |
+| `TERM_WM_LOG_FILE` | Durable log destination: tracing events append to this file and rotate when exceeding 10 MB, keeping 4 rotated files plus the active file (5 files, 50 MB total, `0o600` files in `0o700` directory on POSIX). In `term-wm`, events mirror the in-app Debug Log stream; in detached daemons this is the only way to keep diagnostics. Filtered by `RUST_LOG` (default `info,muxio=warn`). Read once when the daemon process starts: daemons already running without it are unaffected until restarted. | unset (Debug Log window / stdout) |
+| `TERM_WM_TEST_LOG_DIR` | Test-only capture root: harnesses using `term-test-support::apply_test_logging` write spawned daemons'/clients' diagnostics here; CI archives the directory on failure. | unset (`<temp>/term-wm-test-logs/<pid>-<nanos>/`) |
+
+### Logging
+
+By default the daemon does not require any configuration. When `TERM_WM_LOG_FILE` is set, both `term-wm` and the detached `term-session` gateway append structured tracing events there; when unset, the gateway falls back to a per-user path under the system temp directory (`$TMPDIR/term-wm/<user>/gateway-<hash>.log`). In `term-wm` the same stream is also mirrored to the in-app Debug Log window, while a detached daemon writes only to the file (its stdio is null, so stdout/stderr would otherwise be lost).
+
+All output is filtered by `RUST_LOG` via `EnvFilter`. The default is `info,muxio=warn`: general `info` and above is recorded, while high-frequency `muxio` transport traces are `warn`-only, which cuts idle volume by roughly 95%. Set `RUST_LOG=debug` (or `RUST_LOG=term_session=debug`) to see more detail, or `RUST_LOG=trace` to include `muxio` internals. The value is read once when the daemon starts, so daemons already running are unaffected until restarted.
+
+Files are size-bounded and never grow without bound: each log file is capped at 10 MB and rotated by the daemon, keeping 4 rotated files plus the active file (5 files, 50 MB total). Rotation uses a synchronous writer so nothing is lost even when the process exits via `process::exit`, and the active file remains at the configured path (historical files are `<path>.1`, `<path>.2`, …), so the panic hook always appends to the same active file. `term-wm` (including the headless WM hosted inside the daemon's PTY) does not own rotation; it appends through an inode-aware tee that reopens the active file when the daemon rotates it, which avoids writing to stale or unlinked inodes. On POSIX, log files are created `0o600` inside a `0o700` directory; on Windows, files are opened with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` so they can be tailed while being written.
+
+To inspect logs, run `tail -F "$TERM_WM_LOG_FILE"` (or the fallback temp path shown above) or open the Debug Log window in `term-wm`. For tests, `term-test-support::apply_test_logging` sets `TERM_WM_LOG_FILE` and `RUST_LOG=debug` automatically.
 
 ## The "No-Conflict" Philosophy (`Ctrl+A` Super Key)
 

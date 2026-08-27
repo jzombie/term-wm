@@ -70,6 +70,11 @@ pub struct Reaper {
     tx: Sender<ZombieChild>,
     _handle: JoinHandle<()>,
     shutdown: Arc<AtomicBool>,
+    /// Number of zombies the reaper thread has picked up from the channel.
+    /// Observability hook (used by tests): lets a caller wait until the
+    /// reaper actually took the work instead of sleeping an arbitrary grace
+    /// period and hoping the thread woke up.
+    processed: Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[cfg(not(feature = "pty"))]
@@ -81,6 +86,8 @@ impl Reaper {
         let (tx, rx) = bounded::<ZombieChild>(REAPER_CHANNEL_CAPACITY);
         let shutdown = Arc::new(AtomicBool::new(false));
         let s = Arc::clone(&shutdown);
+        let processed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let p = Arc::clone(&processed);
         let _handle = thread::Builder::new()
             .name("pty-reaper".into())
             .spawn(move || {
@@ -97,11 +104,19 @@ impl Reaper {
                     } else {
                         REAPER_ACTIVE_TICK
                     };
+                    let mut picked_up = 0usize;
                     if let Ok(z) = rx.recv_timeout(timeout) {
                         zombies.push(z);
+                        picked_up += 1;
                         while let Ok(z) = rx.try_recv() {
                             zombies.push(z);
+                            picked_up += 1;
                         }
+                    }
+                    // Publish how many zombies were taken in so waiters can
+                    // observe readiness without wall-clock guessing.
+                    if picked_up > 0 {
+                        p.fetch_add(picked_up as u64, Ordering::Release);
                     }
 
                     // Tick — same lifecycle logic as the old Reaper::tick()
@@ -154,6 +169,7 @@ impl Reaper {
             tx,
             _handle,
             shutdown,
+            processed,
         }
     }
 
@@ -161,6 +177,12 @@ impl Reaper {
     /// Uses `&self` (not `&mut`) — channel send does not require mutable access.
     pub fn reap(&self, zombie: ZombieChild) {
         let _ = self.tx.send(zombie);
+    }
+
+    /// Number of zombies the reaper thread has taken in so far. See the
+    /// field documentation on [`Reaper`] for why this exists.
+    pub fn processed_count(&self) -> u64 {
+        self.processed.load(Ordering::Acquire)
     }
 }
 
@@ -420,9 +442,9 @@ mod tests {
         drop(r);
     }
 
-    /// When multiple zombies are sent and the reaper is dropped after a short
-    /// delay, the shutdown drain path must kill all children and join all reader
-    /// threads without deadlocking.
+    /// When multiple zombies are sent and the reaper is dropped after they
+    /// have been picked up, the shutdown drain path must kill all children and
+    /// join all reader threads without deadlocking.
     #[test]
     fn reaper_drains_burst_on_shutdown() {
         let r = Reaper::new(Duration::from_millis(50));
@@ -433,9 +455,13 @@ mod tests {
                 state
             })
             .collect();
-        // Give the reaper thread a chance to wake up and start processing
-        // the zombies, then drop to exercise the shutdown drain path.
-        thread::sleep(Duration::from_millis(200));
+        // Wait until the reaper thread has actually taken in the whole burst
+        // (observable via processed_count), then drop to exercise the
+        // shutdown drain path. The old fixed 200ms sleep only hoped the
+        // thread had woken up in time.
+        wait_for(Duration::from_secs(2), || {
+            r.processed_count() >= states.len() as u64
+        });
         drop(r);
         // Verify all children were killed (SIGHUP at minimum)
         for state in &states {
