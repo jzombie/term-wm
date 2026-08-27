@@ -5,6 +5,9 @@ on:
     - cron: '0 2 * * *' # daily 02:00 UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: nightly-soak-${{ github.ref }}
   cancel-in-progress: false
