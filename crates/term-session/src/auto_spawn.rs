@@ -322,11 +322,11 @@ pub fn connect_or_spawn_server(bin: Option<&std::path::Path>) -> io::Result<Stri
         return Ok(socket_name);
     }
 
-    // Step 2a: clear any dead-socket artifact left by a killed daemon.
-    // Best-effort by design: abstract namespaces and platform layout
-    // differences make a miss harmless (the server binds with
-    // try_overwrite regardless).
-    let _ = std::fs::remove_file(std::env::temp_dir().join(socket_name.as_str()));
+    // Step 2: nobody answered the probe. The spawned daemon owns stale-
+    // socket recovery itself: its bind gate only unlinks the path after a
+    // connect() is actively REFUSED (or the file vanished), so a live-but-
+    // slow daemon can never have its endpoint stolen here. Clients must
+    // not touch the socket file at all.
 
     // Step 2b: spawn the daemon pinned to exactly this endpoint.
     let bin = bin
@@ -416,12 +416,18 @@ mod tests {
             std::env::set_var("USERNAME", "tester");
         }
         let gw = resolve_gateway();
-        // Static default: {namespace}/<user>/gateway. No environment
-        // component by design; both override variables are cleared so the
-        // assertion holds regardless of ambient toolchain injection.
+        // Static default: {namespace}/<user>/gateway-<generation hash>. No
+        // environment component by design; both override variables are
+        // cleared so the assertion holds regardless of ambient toolchain
+        // injection. The suffix is the per-checkout dev hash when tests run
+        // inside the workspace (generation scoping).
         assert_eq!(
             gw.to_string(),
-            format!("{}/tester/gateway", term_wm_config::GATEWAY_NAMESPACE)
+            format!(
+                "{}/tester/gateway{}",
+                term_wm_config::GATEWAY_NAMESPACE,
+                term_wm_config::build_identity::default_generation_suffix()
+            )
         );
         assert_eq!(gw.namespace, term_wm_config::GATEWAY_NAMESPACE);
     }
@@ -457,7 +463,13 @@ mod tests {
             std::env::set_var("USERNAME", "tester");
         }
         let gw = resolve_gateway();
-        assert_eq!(gw.to_string(), "term-wm-dev/tester/gateway");
+        assert_eq!(
+            gw.to_string(),
+            format!(
+                "term-wm-dev/tester/gateway{}",
+                term_wm_config::build_identity::default_generation_suffix()
+            )
+        );
     }
 
     #[test]

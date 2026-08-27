@@ -30,6 +30,11 @@ const SESSION_ID: u64 = 1;
 /// Bounded input channel capacity — memory safety against extreme input bursts.
 const INPUT_CHANNEL_CAPACITY: usize = 128;
 
+/// Upper bound for the startup endpoint-ownership probe. A healthy daemon
+/// answers in microseconds; anything past this is treated as busy/unusable
+/// so a wedged peer can never stall daemon startup indefinitely.
+const OWNERSHIP_PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Grace period to let the transport flush end-of-stream frames after the
 /// session exits, before the gateway process terminates.
 const SESSION_EXIT_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
@@ -181,6 +186,20 @@ struct ChannelState {
     wm_stats_by_conn: HashMap<usize, (u32, u32)>,
 }
 
+/// Immutable snapshot of the admin-visible subset of a channel.
+/// Published atomically so `ListChannels`/`ListWmStats`/`ListUsers` run with
+/// zero `ChannelState` locks (they clone `Arc<ChannelMetaSnapshot>` only).
+#[derive(Debug, Clone)]
+struct ChannelMetaSnapshot {
+    created_seq: u64,
+    /// Full `ChannelInfo` for `ListChannels` (session, clients).
+    info: ChannelInfo,
+    /// Per-channel aggregated WM stats for `ListWmStats`.
+    wm_stats: Option<(u32, u32)>,
+    /// Per-channel user list for `ListUsers`.
+    users: Vec<UserInfo>,
+}
+
 /// Gateway coordination. Two tiers:
 /// - `conns` is a read-mostly routing table (RwLock).
 /// - `channels` maps channel names to independently-mutexed channel states.
@@ -189,6 +208,9 @@ struct ChannelState {
 struct ServerState {
     conns: RwLock<HashMap<usize, ConnEntry>>,
     channels: RwLock<HashMap<ChannelName, Arc<Mutex<ChannelState>>>>,
+    /// Lock-free admin snapshot: `ListChannels`/`ListWmStats`/`ListUsers`
+    /// clone this `Arc` in O(1) without touching any `ChannelState` mutex.
+    channel_meta: RwLock<Arc<HashMap<ChannelName, Arc<ChannelMetaSnapshot>>>>,
     /// The socket name this daemon actually bound; the authoritative source
     /// for the `TERM_SESSION_GATEWAY` inception marker stamped into PTY
     /// children (never re-resolved from ambient state).
@@ -469,6 +491,49 @@ impl ChannelState {
     }
 }
 
+/// Build an immutable admin snapshot from a live `ChannelState`.
+fn meta_snapshot_from_state(name: &ChannelName, s: &ChannelState) -> ChannelMetaSnapshot {
+    let info = s.to_info(name);
+    let users = s
+        .clients
+        .iter()
+        .map(|(conn_id, c)| UserInfo {
+            conn_id: *conn_id,
+            user: c.user.clone(),
+            hostname: c.hostname.clone(),
+            ssh_ip: c.ssh_ip.clone(),
+            ssh_port: c.ssh_port,
+            cols: c.cols,
+            rows: c.rows,
+            connected_at_unix: c.connected_at_unix,
+            pid: c.pid,
+        })
+        .collect();
+    let wm_stats = sum_wm_stats(&s.wm_stats_by_conn);
+    ChannelMetaSnapshot {
+        created_seq: s.created_seq,
+        info,
+        wm_stats,
+        users,
+    }
+}
+
+/// Publish one channel's snapshot atomically (clone-on-write the outer map).
+async fn publish_channel_meta(state: &ServerState, name: &ChannelName, snap: ChannelMetaSnapshot) {
+    let mut meta = state.channel_meta.write().await;
+    let mut new_map = (**meta).clone();
+    new_map.insert(name.clone(), Arc::new(snap));
+    *meta = Arc::new(new_map);
+}
+
+/// Remove one channel's snapshot atomically (on reap).
+async fn remove_channel_meta(state: &ServerState, name: &ChannelName) {
+    let mut meta = state.channel_meta.write().await;
+    let mut new_map = (**meta).clone();
+    new_map.remove(name);
+    *meta = Arc::new(new_map);
+}
+
 /// Resolve the channel a connection is bound to, or `None` if unattached.
 async fn bound_channel(state: &ServerState, conn_id: usize) -> Option<ChannelName> {
     let conns = state.conns.read().await;
@@ -572,7 +637,7 @@ async fn get_or_create_channel(
         notify,
         created_seq,
     )));
-    let ch = Arc::clone(&channel);
+    let ch_weak = Arc::downgrade(&channel);
     tokio::spawn(async move {
         let mut input_rx = input_rx;
         while let Some(mut data) = input_rx.recv().await {
@@ -583,7 +648,14 @@ async fn get_or_create_channel(
                 data.append(&mut next);
             }
 
+            // Never hold the upgraded Arc across an await: upgrade briefly to
+            // fetch the writer handle, then drop it before the blocking write.
+            // When the channel is reaped, the strong count drops to zero,
+            // `input_tx` is freed, and the next `recv()` returns `None`.
             let writer = {
+                let Some(ch) = ch_weak.upgrade() else {
+                    break;
+                };
                 let guard = ch.lock().await;
                 guard.session.as_ref().map(|s| s.pty.writer_handle())
             };
@@ -591,8 +663,6 @@ async fn get_or_create_channel(
                 let _ = tokio::task::spawn_blocking(move || writer.write_bytes(&data)).await;
             }
         }
-        // Note: the input task runs for the daemon lifetime; the channel's
-        // `input_rx` is only dropped when the channel's senders all vanish.
     });
 
     // Output polling task: drains PTY output and broadcasts to subscribers;
@@ -616,6 +686,7 @@ async fn get_or_create_channel(
                 if guard.is_reaped {
                     break;
                 }
+                let mut publish_needed = false;
                 if guard.subscribers.is_empty() {
                     if let Some(session) = guard.session.as_mut() {
                         session.sync_screen();
@@ -629,6 +700,7 @@ async fn get_or_create_channel(
                             guard.retain_final_output(&final_out);
                             guard.session = None;
                             guard.kill_pending = false;
+                            publish_needed = true;
                         }
                     }
                 } else {
@@ -669,23 +741,43 @@ async fn get_or_create_channel(
                         guard.session = None;
                         guard.kill_pending = false;
                         guard.notify.notify_one();
+                        publish_needed = true;
                     }
                 }
                 let should_reap = guard.session.is_none() && guard.clients.is_empty();
+                // Suppress ghost publish when reaping: publish only if session
+                // was cleared and the channel is not about to be removed.
+                let snap = if publish_needed && !should_reap {
+                    Some(meta_snapshot_from_state(&name_for_task, &guard))
+                } else {
+                    None
+                };
                 drop(guard);
+                if let Some(snap) = snap {
+                    publish_channel_meta(st.as_ref(), &name_for_task, snap).await;
+                }
 
                 if should_reap {
                     // GC: drop the channel guard before requesting `channels.write`
                     // (strict ordering, no AB-BA), then re-verify under the write lock.
                     let mut channels = st.channels.write().await;
-                    if let Some(arc) = channels.get(&name_for_task) {
+                    let did_remove = if let Some(arc) = channels.get(&name_for_task) {
                         let mut locked = arc.lock().await;
                         if locked.session.is_none() && locked.clients.is_empty() {
                             locked.is_reaped = true;
                             drop(locked);
                             channels.remove(&name_for_task);
-                            tracing::info!(channel = %name_for_task, "Reaped idle channel");
+                            true
+                        } else {
+                            false
                         }
+                    } else {
+                        false
+                    };
+                    drop(channels);
+                    if did_remove {
+                        remove_channel_meta(st.as_ref(), &name_for_task).await;
+                        tracing::info!(channel = %name_for_task, "Reaped idle channel");
                     }
                 }
                 // Note: the daemon deliberately persists until an explicit
@@ -696,8 +788,15 @@ async fn get_or_create_channel(
         });
     }
 
+    let snap = {
+        let guard = channel.lock().await;
+        meta_snapshot_from_state(name, &guard)
+    };
+    let ret = Arc::clone(&channel);
     channels.insert(name.clone(), Arc::clone(&channel));
-    channel
+    drop(channels);
+    publish_channel_meta(state.as_ref(), name, snap).await;
+    ret
 }
 
 /// Drop a connection's input forwarder. Called on disconnect (evict_conn) and
@@ -772,12 +871,15 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
         if let Some(name) = owned
             && let Some(ch) = resolve_channel(state, &name).await
         {
-            let mut guard = ch.lock().await;
-            guard.wm_stats_by_conn.remove(&conn_id);
-            guard.internal_wm_caller = None;
-            guard.internal_wm_conn_id = None;
-            guard.input_mode = InputMode::RawPty;
-            drop(guard);
+            let snap = {
+                let mut guard = ch.lock().await;
+                guard.wm_stats_by_conn.remove(&conn_id);
+                guard.internal_wm_caller = None;
+                guard.internal_wm_conn_id = None;
+                guard.input_mode = InputMode::RawPty;
+                meta_snapshot_from_state(&name, &guard)
+            };
+            publish_channel_meta(state, &name, snap).await;
             state
                 .internal_channels
                 .lock()
@@ -823,11 +925,17 @@ async fn evict_conn(state: &ServerState, conn_id: usize) {
         map.remove(&conn_id);
     }
     // Re-read guard for geometry broadcast (may have been dropped above)
-    let mut guard = ch.lock().await;
-    guard.recalculate_pty_size();
-    let session_size = guard.session.as_ref().map(|s| (s.cols, s.rows));
-    let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
-    drop(guard);
+    let (snap, session_size, targets): (ChannelMetaSnapshot, Option<(u16, u16)>, Vec<ClientEntry>) = {
+        let mut guard = ch.lock().await;
+        guard.recalculate_pty_size();
+        let snap = meta_snapshot_from_state(&channel, &guard);
+        let session_size = guard.session.as_ref().map(|s| (s.cols, s.rows));
+        let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
+        (snap, session_size, targets)
+    };
+    // Publish admin snapshot after client removal and geometry recalculation
+    // (zero-lock readers clone the snapshot without touching ChannelState).
+    publish_channel_meta(state, &channel, snap).await;
     // Broadcast the session's actual (client-driven) geometry to remaining
     // clients. If no session exists there is nothing to broadcast.
     let Some((ncols, nrows)) = session_size else {
@@ -991,6 +1099,7 @@ pub async fn run_gateway(
         bound_socket: socket_name.clone(),
         conns: RwLock::new(HashMap::new()),
         channels: RwLock::new(HashMap::new()),
+        channel_meta: RwLock::new(Arc::new(HashMap::new())),
         is_shutting_down: AtomicBool::new(false),
         next_channel_seq: AtomicU64::new(0),
         input_forwarders: std::sync::Mutex::new(HashMap::new()),
@@ -1160,11 +1269,13 @@ pub async fn run_gateway(
                     guard.recalculate_pty_size();
                     let session = guard.session.as_ref().expect("session checked above");
                     let (ncols, nrows) = (session.cols, session.rows);
+                    let snap = meta_snapshot_from_state(&channel, &guard);
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     let id = session.id;
                     let cols = session.cols;
                     let rows = session.rows;
                     drop(guard);
+                    publish_channel_meta(state.as_ref(), &channel, snap).await;
                     if let Some((caller, info)) = pending_user_connected {
                         tokio::spawn(async move {
                             if let Err(e) = OnUserConnected::call(&caller, info).await {
@@ -1208,11 +1319,13 @@ pub async fn run_gateway(
                 )?;
                 guard.set_session(session);
                 guard.recalculate_pty_size();
+                let snap = meta_snapshot_from_state(&channel, &guard);
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 let session = guard.session.as_ref().expect("session just set");
                 let (sid, scol, srow) = (session.id, session.cols, session.rows);
                 let (ncols, nrows) = (scol, srow);
                 drop(guard);
+                publish_channel_meta(state.as_ref(), &channel, snap).await;
                 if let Some((caller, info)) = pending_user_connected {
                     tokio::spawn(async move {
                         if let Err(e) = OnUserConnected::call(&caller, info).await {
@@ -1284,6 +1397,7 @@ pub async fn run_gateway(
                     }
                 }
                 guard.recalculate_pty_size();
+                let snap = meta_snapshot_from_state(&channel, &guard);
                 let (ncols, nrows) = guard
                     .session
                     .as_ref()
@@ -1291,6 +1405,7 @@ pub async fn run_gateway(
                     .unwrap_or((cols, rows));
                 let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                 drop(guard);
+                publish_channel_meta(state.as_ref(), &channel, snap).await;
                 if let Some(ch) = resolve_channel(state.as_ref(), &channel).await {
                     let g = ch.lock().await;
                     g.notify_clients(&targets, ncols, nrows);
@@ -1318,10 +1433,13 @@ pub async fn run_gateway(
                 let ch = resolve_channel(state.as_ref(), &channel)
                     .await
                     .ok_or_else(|| rpc_err("channel not found"))?;
-                let mut guard = ch.lock().await;
-                guard.request_session_kill(SIGTERM);
-                guard.finalize_subscribers();
-                drop(guard);
+                let snap = {
+                    let mut guard = ch.lock().await;
+                    guard.request_session_kill(SIGTERM);
+                    guard.finalize_subscribers();
+                    meta_snapshot_from_state(&channel, &guard)
+                };
+                publish_channel_meta(state.as_ref(), &channel, snap).await;
                 // Spawn the exited-checked SIGKILL escalation for stragglers.
                 spawn_kill_escalation(&state, &channel).await;
                 CloseSession::encode_response(()).map_err(boxed_io)
@@ -1502,6 +1620,7 @@ pub async fn run_gateway(
         .map_err(|e| format!("register SubscribeOutput: {e:?}"))?;
 
     // ── ListChannels ─────────────────────────────────────────────────
+    // Zero-lock: clones the immutable snapshot Arc, no ChannelState mutex.
     let st = Arc::clone(&state);
     let list_socket = socket_name.clone();
     endpoint
@@ -1509,20 +1628,10 @@ pub async fn run_gateway(
             let state = Arc::clone(&st);
             let socket = list_socket.clone();
             async move {
-                let channels = {
-                    let chans = state.channels.read().await;
-                    chans
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<Vec<_>>()
-                };
-                // Creation order, newest last (monotonic `created_seq`, not
-                // second-resolution wall clock). The seq is read under the same
-                // per-channel lock used to build `ChannelInfo` below.
-                let mut out: Vec<(u64, ChannelInfo)> = Vec::with_capacity(channels.len());
-                for (name, ch) in channels {
-                    let guard = ch.lock().await;
-                    out.push((guard.created_seq, guard.to_info(&name)));
+                let meta = state.channel_meta.read().await.clone();
+                let mut out: Vec<(u64, ChannelInfo)> = Vec::with_capacity(meta.len());
+                for snap in meta.values() {
+                    out.push((snap.created_seq, snap.info.clone()));
                 }
                 out.sort_by_key(|(seq, _)| *seq);
                 let out: Vec<ChannelInfo> = out.into_iter().map(|(_, info)| info).collect();
@@ -1538,6 +1647,7 @@ pub async fn run_gateway(
         .map_err(|e| format!("register ListChannels: {e:?}"))?;
 
     // ── ListUsers ────────────────────────────────────────────────────
+    // Zero-lock: reads the immutable snapshot, no ChannelState mutex.
     let st = Arc::clone(&state);
     endpoint
         .register_prebuffered(ListUsers::METHOD_ID, move |payload, _ctx| {
@@ -1545,25 +1655,11 @@ pub async fn run_gateway(
             async move {
                 let channel_str = ListUsers::decode_request(&payload).map_err(boxed_io)?;
                 let name = ChannelName::parse(&channel_str).map_err(|e| rpc_err(&e))?;
-                let users = if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
-                    let guard = ch.lock().await;
-                    guard
-                        .clients
-                        .iter()
-                        .map(|(conn_id, c)| UserInfo {
-                            conn_id: *conn_id,
-                            user: c.user.clone(),
-                            hostname: c.hostname.clone(),
-                            ssh_ip: c.ssh_ip.clone(),
-                            ssh_port: c.ssh_port,
-                            cols: c.cols,
-                            rows: c.rows,
-                            connected_at_unix: c.connected_at_unix,
-                            pid: c.pid,
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
+                let users = {
+                    let meta = state.channel_meta.read().await;
+                    meta.get(&name)
+                        .map(|snap| snap.users.clone())
+                        .unwrap_or_default()
                 };
                 ListUsers::encode_response(ListUsersResponse { users }).map_err(boxed_io)
             }
@@ -1599,11 +1695,15 @@ pub async fn run_gateway(
                     return Err(rpc_err(RPC_ERROR_UNATTACHED));
                 };
                 if let Some(ch) = resolve_channel(state.as_ref(), &name).await {
-                    let mut guard = ch.lock().await;
-                    debug_assert_eq!(guard.internal_wm_conn_id, Some(conn_id));
-                    guard
-                        .wm_stats_by_conn
-                        .insert(conn_id, (windows, tasks_running));
+                    let snap = {
+                        let mut guard = ch.lock().await;
+                        debug_assert_eq!(guard.internal_wm_conn_id, Some(conn_id));
+                        guard
+                            .wm_stats_by_conn
+                            .insert(conn_id, (windows, tasks_running));
+                        meta_snapshot_from_state(&name, &guard)
+                    };
+                    publish_channel_meta(state.as_ref(), &name, snap).await;
                     ReportWmStats::encode_response(()).map_err(boxed_io)
                 } else {
                     Err(rpc_err("report_wm_stats: channel vanished"))
@@ -1614,24 +1714,16 @@ pub async fn run_gateway(
         .map_err(|e| format!("register ReportWmStats: {e:?}"))?;
 
     // ── ListWmStats ──────────────────────────────────────────────────
-    // One entry per channel with at least one reporter; windows/tasks are
-    // summed across all reporting connections on the channel.
+    // Zero-lock: clones snapshot Arc, no ChannelState mutex.
     let st = Arc::clone(&state);
     endpoint
         .register_prebuffered(ListWmStats::METHOD_ID, move |_payload, _ctx| {
             let state = Arc::clone(&st);
             async move {
-                let channels = {
-                    let chans = state.channels.read().await;
-                    chans
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<Vec<_>>()
-                };
-                let mut stats: Vec<WmStatsEntry> = Vec::with_capacity(channels.len());
-                for (name, ch) in channels {
-                    let guard = ch.lock().await;
-                    if let Some((windows, tasks_running)) = sum_wm_stats(&guard.wm_stats_by_conn) {
+                let meta = state.channel_meta.read().await.clone();
+                let mut stats: Vec<WmStatsEntry> = Vec::with_capacity(meta.len());
+                for (name, snap) in meta.iter() {
+                    if let Some((windows, tasks_running)) = snap.wm_stats {
                         stats.push(WmStatsEntry {
                             channel: name.to_string(),
                             windows,
@@ -1686,7 +1778,9 @@ pub async fn run_gateway(
                         guard.clients.remove(conn_id);
                         guard.subscribers.retain(|s| s.conn_id != *conn_id);
                     }
+                    let snap = meta_snapshot_from_state(&name, &guard);
                     drop(guard);
+                    publish_channel_meta(state.as_ref(), &name, snap).await;
                     spawn_kill_escalation(&state, &name).await;
                 }
                 // 3) Evict the ConnEntry records from the routing table.
@@ -1748,10 +1842,12 @@ pub async fn run_gateway(
                     }
                     guard.clients.remove(&conn_id);
                     guard.recalculate_pty_size();
+                    let snap = meta_snapshot_from_state(&bound, &guard);
                     let session_size = guard.session.as_ref().map(|s| (s.cols, s.rows));
                     let targets: Vec<ClientEntry> = guard.clients.values().cloned().collect();
                     let was_present = guard.clients.contains_key(&conn_id) || true; // we just removed, so notify
                     drop(guard);
+                    publish_channel_meta(state.as_ref(), &bound, snap).await;
                     // Notify remaining internal WM about the disconnect
                     let _ = was_present;
                     notify_user_disconnected(state.as_ref(), &bound, conn_id).await;
@@ -2002,6 +2098,36 @@ pub async fn run_gateway(
         }
     });
 
+    // ── Endpoint ownership gate ──────────────────────────────
+    // Classify-only: refuse to start when the name answers (a live daemon
+    // owns it); otherwise proceed — serve()'s try_overwrite binding cleans
+    // up stale artifacts natively, so we never touch the filesystem here.
+    // The ownership probe performs a bounded-but-synchronous connect
+    // syscall; run it on the blocking pool so a wedged peer can never pin
+    // an async worker thread (Windows WaitNamedPipeW class of stalls).
+    let gateway_ref = gateway.clone();
+    let probe = tokio::task::spawn_blocking(move || {
+        term_session_muxio_service_definitions::probe_endpoint_outcome(&gateway_ref)
+    });
+    let outcome = match tokio::time::timeout(OWNERSHIP_PROBE_BUDGET, probe).await {
+        Ok(joined) => joined
+            .unwrap_or_else(|e| Err(std::io::Error::other(format!("ownership probe join: {e}")))),
+        Err(_) => Err(std::io::Error::other("ownership probe timed out")),
+    };
+    match outcome {
+        Ok(term_session_muxio_service_definitions::ProbeOutcome::Stale) => {}
+        Ok(term_session_muxio_service_definitions::ProbeOutcome::Live) => {
+            return Err(Box::new(std::io::Error::other(format!(
+                "gateway endpoint busy: another live daemon owns '{socket_name}'"
+            ))));
+        }
+        Err(e) => {
+            return Err(Box::new(std::io::Error::other(format!(
+                "gateway endpoint probe failed: {e}"
+            ))));
+        }
+    }
+
     tracing::info!("Gateway listening on channel {gateway}");
 
     // Wait for either the server to finish or a shutdown signal.
@@ -2065,6 +2191,7 @@ mod tests {
             bound_socket: String::from("test/bound/gateway"),
             conns: RwLock::new(conns),
             channels: RwLock::new(channels),
+            channel_meta: RwLock::new(Arc::new(HashMap::new())),
             is_shutting_down: AtomicBool::new(false),
             next_channel_seq: AtomicU64::new(0),
             input_forwarders: std::sync::Mutex::new(HashMap::new()),
@@ -2888,5 +3015,99 @@ mod tests {
         let targets = filter_rebind_targets(&conns, &name, &RebindScope::CallerOnly, None);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].0.conn_id, 7);
+    }
+
+    #[tokio::test]
+    async fn admin_rpc_zero_lock_independence() {
+        use std::time::{Duration, Instant};
+
+        let state = Arc::new(ServerState {
+            bound_socket: "test/zero_lock".to_string(),
+            conns: RwLock::new(HashMap::new()),
+            channels: RwLock::new(HashMap::new()),
+            channel_meta: RwLock::new(Arc::new(HashMap::new())),
+            is_shutting_down: AtomicBool::new(false),
+            next_channel_seq: AtomicU64::new(0),
+            input_forwarders: std::sync::Mutex::new(HashMap::new()),
+            conn_to_channel: std::sync::Mutex::new(HashMap::new()),
+            internal_channels: std::sync::Mutex::new(HashSet::new()),
+        });
+        let name = ChannelName::parse("test/zero_lock").expect("parse");
+        let ch = get_or_create_channel(&state, &name).await;
+        // Ensure snapshot was published
+        {
+            let meta = state.channel_meta.read().await;
+            assert!(
+                meta.contains_key(&name),
+                "snapshot must exist after creation"
+            );
+        }
+        // Hold the ChannelState lock in a background task and signal via oneshot after acquiring
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let ch_clone = Arc::clone(&ch);
+        let hold_handle = tokio::spawn(async move {
+            let _guard = ch_clone.lock().await;
+            let _ = tx.send(());
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+        rx.await.expect("lock acquired signal");
+        // Admin read must not block on ChannelState – it clones the snapshot Arc only
+        let start = Instant::now();
+        let meta = tokio::time::timeout(Duration::from_millis(50), async {
+            state.channel_meta.read().await.clone()
+        })
+        .await
+        .expect("admin snapshot read should not timeout while ChannelState is locked");
+        assert!(meta.contains_key(&name));
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "admin RPC blocked on ChannelState lock"
+        );
+        hold_handle.await.expect("hold task");
+    }
+
+    #[tokio::test]
+    async fn reaped_channel_terminates_input_task() {
+        use std::time::Duration;
+
+        let state = Arc::new(ServerState {
+            bound_socket: "test/reap_input".to_string(),
+            conns: RwLock::new(HashMap::new()),
+            channels: RwLock::new(HashMap::new()),
+            channel_meta: RwLock::new(Arc::new(HashMap::new())),
+            is_shutting_down: AtomicBool::new(false),
+            next_channel_seq: AtomicU64::new(0),
+            input_forwarders: std::sync::Mutex::new(HashMap::new()),
+            conn_to_channel: std::sync::Mutex::new(HashMap::new()),
+            internal_channels: std::sync::Mutex::new(HashSet::new()),
+        });
+        let name = ChannelName::parse("test/reap_input").expect("parse");
+        let ch = get_or_create_channel(&state, &name).await;
+        let weak = Arc::downgrade(&ch);
+        assert!(weak.upgrade().is_some(), "channel should be alive");
+        // Simulate reap: mark is_reaped, notify, remove from maps
+        {
+            let guard = ch.lock().await;
+            guard.notify.notify_one();
+        }
+        {
+            let mut guard = ch.lock().await;
+            guard.is_reaped = true;
+        }
+        {
+            let mut channels = state.channels.write().await;
+            channels.remove(&name);
+        }
+        remove_channel_meta(state.as_ref(), &name).await;
+        // Wake the output polling task so it sees is_reaped and exits
+        // (it holds an Arc, so ChannelState stays alive until it breaks)
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        drop(ch);
+        // Give the input task time to notice input_tx drop and exit
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            weak.upgrade().is_none(),
+            "ChannelState should be freed and input task terminated after reap"
+        );
     }
 }

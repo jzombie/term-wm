@@ -17,6 +17,7 @@
 //!   processes and runs.
 
 pub mod clock;
+pub mod env;
 pub mod guard;
 pub mod log_capture;
 pub mod naming;
@@ -25,6 +26,7 @@ pub mod poll_async;
 pub mod poll_sync;
 
 pub use clock::ManualClock;
+pub use env::EnvVarGuard;
 pub use guard::KillOnDrop;
 pub use log_capture::{apply_test_logging, test_log_dir, test_log_file};
 pub use naming::unique_gateway_name;

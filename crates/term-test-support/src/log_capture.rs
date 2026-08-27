@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 /// Env var overriding the capture root (used by CI to pin an archivable
 /// path). Mirrors `TERM_WM_*` naming; defined locally because this crate has
 /// no dependency on `term-wm-config`.
-const TEST_LOG_DIR_ENV: &str = "TERM_WM_TEST_LOG_DIR";
+const TEST_LOG_DIR_ENV_VAR: &str = "TERM_WM_TEST_LOG_DIR";
 
 /// Stable parent directory name under the OS temp dir. CI archives this
 /// whole directory on failure; each test process creates its own uniquely
@@ -25,7 +25,7 @@ const TEST_LOG_FILTER: &str = "debug";
 
 fn capture_root() -> &'static PathBuf {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
-    ROOT.get_or_init(|| match std::env::var_os(TEST_LOG_DIR_ENV) {
+    ROOT.get_or_init(|| match std::env::var_os(TEST_LOG_DIR_ENV_VAR) {
         Some(dir) => PathBuf::from(dir),
         None => {
             let unique = format!(

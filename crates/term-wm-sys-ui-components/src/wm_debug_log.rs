@@ -24,6 +24,7 @@ pub fn trigger_error() {
     debug_event_flags::trigger_error_pending();
 }
 
+// TODO: Move to centralized logger
 pub fn install_panic_hook() {
     if PANIC_HOOK_INSTALLED.get().is_some() {
         return;
@@ -53,19 +54,23 @@ pub fn install_panic_hook() {
         }
         lines.push("============".to_string());
 
-        // Write to debug log buffer (for in-app viewing).
-        // The buffer lives in term-wm-core and persists across component
-        // destruction/re-creation cycles.
-        if let Some(handle) = global_debug_log() {
+        debug_event_flags::trigger_panic_pending();
+        // IMPORTANT!  Do *not* call take_hook. It blows up the terminal
+        // and prevents the debug log from properly opening.
+        //
+        // Fan into DebugLog exactly once: when a tracing subscriber is
+        // installed (normal UI, via `init_ui_logging`), DelegatingWriter
+        // already mirrors `tracing::error!` into the DebugLog + file, so
+        // a manual `handle.push` would duplicate it. Before the subscriber
+        // exists (early startup, or tests that only set `global_debug_log`),
+        // `tracing::error!` is a no-op, so fall back to a direct push.
+        if tracing::dispatcher::has_been_set() {
+            tracing::error!("{}", lines.join("\n"));
+        } else if let Some(handle) = global_debug_log() {
             for line in &lines {
                 handle.push(line.to_string());
             }
         }
-
-        debug_event_flags::trigger_panic_pending();
-        // IMPORTANT!  Do *not* call take_hook. It blows up the terminal
-        // and prevents the debug log from properly opening
-        tracing::error!("{}", lines.join("\n"));
     }));
 }
 

@@ -478,10 +478,9 @@ mod tests {
         .expect("write");
 
         // Simulate dev environment (CARGO_MANIFEST_DIR present → Dev).
-        unsafe { std::env::set_var("CARGO_MANIFEST_DIR", "/fake/path") };
+        let _manifest = term_test_support::EnvVarGuard::set("CARGO_MANIFEST_DIR", "/fake/path");
         let result = load_tasks_for_cwd(dir.path()).expect("load");
         assert_eq!(result.tasks.len(), 2);
-        unsafe { std::env::remove_var("CARGO_MANIFEST_DIR") };
     }
 
     #[test]
@@ -500,16 +499,13 @@ mod tests {
         )
         .expect("write");
 
-        unsafe {
-            std::env::set_var("TERM_WM_ENV", "prod");
-            std::env::remove_var("CARGO_MANIFEST_DIR");
-        }
+        let _env = term_test_support::EnvVarGuard::set("TERM_WM_ENV", "prod");
+        let _manifest_absent = term_test_support::EnvVarGuard::removed("CARGO_MANIFEST_DIR");
         let result = load_tasks_for_cwd(dir.path()).expect("load");
         assert_eq!(result.tasks.len(), 2);
         assert!(result.tasks.iter().any(|t| t.label == "prod"));
         assert!(result.tasks.iter().any(|t| t.label == "all"));
         assert!(!result.tasks.iter().any(|t| t.label == "dev"));
-        unsafe { std::env::remove_var("TERM_WM_ENV") };
     }
 
     // ── Discovery ───────────────────────────────────────────────────────

@@ -119,6 +119,22 @@ impl fmt::Display for ChannelName {
     }
 }
 
+// ── Build identity / generation scoping ─────────────────────
+//
+// Identity constants and selection logic live in
+// `term_wm_config::build_identity` (single source of truth, publishable);
+// this crate consumes the baked values through its build script and picks
+// the generation hash at runtime via the accessor below.
+
+/// Public read-only accessor: the generation hash applied by THIS process
+/// to default-resolved gateway names (`gateway-<hash8>` suffix).
+///
+/// Deliberately NOT applied to explicit `--gateway <NAME>` overrides: those
+/// are power-user/test escape hatches taken verbatim.
+pub fn default_generation_hash() -> &'static str {
+    term_wm_config::build_identity::default_generation_hash()
+}
+
 // ── IPC endpoint probing ──────────────────────────────────────────────
 
 /// Returns `true` if a session server is reachable on the given channel.
@@ -134,8 +150,35 @@ impl fmt::Display for ChannelName {
 /// freshly spawned daemon still serving a previous connection), so probes
 /// must stay finite or callers can hang forever.
 pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
+    matches!(probe_endpoint_outcome(channel), Ok(ProbeOutcome::Live))
+}
+
+/// Fine-grained probe result used by the daemon's stale-socket recovery gate
+///. Only [`ProbeOutcome::Stale`] authorizes unlinking an endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    /// A live server answered the connect.
+    Live,
+    /// Nothing is accepting: either the connect was refused (stale socket
+    /// file left behind by a crashed daemon) or the socket file has already
+    /// vanished. Safe to remove and re-bind.
+    Stale,
+}
+
+/// Probe the channel and classify the outcome by OS error kind.
+///
+/// - `Ok(_)` connect succeeded -> [`ProbeOutcome::Live`]
+/// - `ConnectionRefused` / `NotFound` -> [`ProbeOutcome::Stale`]
+/// - anything else (busy backlog `WouldBlock`, timeout, platform errors)
+///   is returned verbatim as `Err`: the caller must NOT unlink in this
+///   case, because a live-but-slow owner is indistinguishable from a wedge
+///   here.
+pub fn probe_endpoint_outcome(channel: &ChannelName) -> Result<ProbeOutcome, std::io::Error> {
     let Ok(name) = channel.to_string().to_ns_name::<GenericNamespaced>() else {
-        return false;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid channel name for platform",
+        ));
     };
     match interprocess::local_socket::ConnectOptions::new()
         .name(name)
@@ -144,10 +187,23 @@ pub fn probe_ipc_endpoint(channel: &ChannelName) -> bool {
         ))
         .connect_sync()
     {
-        Ok(_) => true,
-        // Timed out waiting for a free instance; treated as unreachable.
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => false,
-        Err(_) => false,
+        Ok(_) => Ok(ProbeOutcome::Live),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Ok(ProbeOutcome::Stale),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ProbeOutcome::Stale),
+        // BSD/macOS: connecting to a path that holds a NON-socket regular
+        // file (a stale artifact from a crashed daemon) yields ENOTSOCK
+        // rather than ConnectionRefused. A live daemon always presents a
+        // real socket, so ENOTSOCK proves the path is safely vacated.
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "dragonfly"
+        ))]
+        Err(e) if e.raw_os_error() == Some(libc::ENOTSOCK) => Ok(ProbeOutcome::Stale),
+        Err(e) => Err(e),
     }
 }
 
@@ -190,7 +246,11 @@ pub fn gateway_channel_name() -> ChannelName {
     }
     ChannelName {
         namespace: resolve_gateway_namespace(),
-        name: format!("{}/gateway", current_os_user()),
+        name: format!(
+            "{}/gateway{}",
+            current_os_user(),
+            term_wm_config::build_identity::default_generation_suffix()
+        ),
     }
 }
 
@@ -255,6 +315,19 @@ fn current_os_user() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins subcrate build-identity wiring: this crate's
+    /// build.rs must walk to the SAME canonicalized `[workspace]` root as
+    /// every other participating crate, or default endpoints would split
+    /// by crate. Any build.rs that stops early or skips canonicalization
+    /// flips this red.
+    #[test]
+    fn generation_hash_is_identical_across_workspace_crates() {
+        assert_eq!(
+            default_generation_hash(),
+            term_wm_config::build_identity::default_generation_hash()
+        );
+    }
 
     /// Serializes tests that mutate the process-local gateway override,
     /// which is process-global state unsafe to read/write concurrently.
@@ -372,12 +445,24 @@ mod tests {
         let b = gateway_channel_name();
         assert_eq!(a, b);
         assert_eq!(a.namespace, GATEWAY_NAMESPACE);
-        assert_eq!(a.to_string(), format!("{GATEWAY_NAMESPACE}/tester/gateway"));
-        // <user>/gateway  (2 segments; no environment component by design)
+        // Default names carry the baked generation suffix: each binary
+        // generation owns its own endpoint.
+        assert_eq!(
+            a.to_string(),
+            format!(
+                "{GATEWAY_NAMESPACE}/tester/gateway{}",
+                term_wm_config::build_identity::default_generation_suffix()
+            )
+        );
+        // <user>/gateway-<hash8>  (2 segments; no environment component by design)
         let parts: Vec<&str> = a.name.split('/').collect();
         assert_eq!(parts.len(), 2, "got {}", a.name);
         assert_eq!(parts[0], "tester");
-        assert_eq!(parts[1], "gateway");
+        assert!(
+            parts[1].starts_with("gateway-"),
+            "expected generation-suffixed gateway, got {}",
+            a.name
+        );
         unsafe {
             std::env::remove_var("USER");
             std::env::remove_var("USERNAME");
@@ -398,7 +483,13 @@ mod tests {
         }
         let gw = gateway_channel_name();
         assert_eq!(gw.namespace, "term-wm-dev");
-        assert_eq!(gw.to_string(), "term-wm-dev/tester/gateway");
+        assert_eq!(
+            gw.to_string(),
+            format!(
+                "term-wm-dev/tester/gateway{}",
+                term_wm_config::build_identity::default_generation_suffix()
+            )
+        );
         unsafe {
             std::env::remove_var(NAMESPACE_ENV_VAR);
             std::env::remove_var("USER");

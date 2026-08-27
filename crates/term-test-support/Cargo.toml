@@ -18,5 +18,8 @@ tokio = ["dep:tokio"]
 [dependencies]
 tokio = { workspace = true, optional = true }
 
+[dev-dependencies]
+serial_test = { workspace = true }
+
 [lints]
 workspace = true
