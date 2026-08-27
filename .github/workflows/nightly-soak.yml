@@ -29,7 +29,8 @@ jobs:
 
       - name: Capture rustc commit hash
         id: rustc
-        run: echo "hash=$(rustc -Vv | sed -n 's/^commit-hash: //p')" >> $GITHUB_OUTPUT
+        run: |
+          echo "hash=$(rustc -Vv | sed -n 's/^commit-hash: //p')" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Calculate lockfile hash
