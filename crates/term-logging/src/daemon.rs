@@ -8,7 +8,7 @@ use crate::shared::{
     can_open_append, daemon_filter, ensure_secure_parent, fallback_log_path, open_log_file,
 };
 
-/// The destination [`init_daemon_logging`] / [`init_ui_logging`] will install.
+/// The destination `init_daemon_logging` / `init_ui_logging` will install.
 #[derive(Debug)]
 pub enum DaemonSink {
     /// Append-mode file at the configured `TERM_WM_LOG_FILE` path
