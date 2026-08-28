@@ -12,7 +12,7 @@
 #   docker run -it term-wm --run bash --run htop
 
 # --- Build stage ---
-FROM rust:1.97-alpine3.24 AS build
+FROM rust:1.98-alpine3.24 AS build
 WORKDIR /src/term-wm/
 
 # Copy the manifests + lockfile and the sources needed to resolve them.
