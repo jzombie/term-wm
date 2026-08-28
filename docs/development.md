@@ -111,6 +111,7 @@ Internal component design standards (naming conventions, trait requirements, coo
 
 * [UI Style Guide](ui-style.md): user-facing string rules and canonical action names
 * [Task Runner Spec](tasks.md): `.term-wm/tasks.json` discovery, gating, and execution semantics
+* [Environment Variables](env-vars.md): `TERM_WM_*` and `TERM_SESSION_*` reference table
 * [Profiling](profiling.md): macOS `xctrace` over SSH and Linux `perf` workflows
 * [Benchmarks](bench.md): terminal render benchmark documentation
 * [Compatibility](compatibility.md): color degradation ladder, Unicode/font requirements, Linux VT caveats
