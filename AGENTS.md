@@ -90,6 +90,23 @@ cargo test
 
 If failures appear unrelated to your change, stop and ask for guidance.
 
+Documentation Maintenance
+- When changing user-facing behavior (CLI flags, environment variables, default features,
+  session persistence mechanics, workspace actions), check whether `README.md` and the
+  relevant `docs/*.md` files need updating. Do not let documentation drift from
+  implementation.
+- Documentation files are: `README.md`, `docs/development.md`, `docs/compatibility.md`,
+  `docs/tasks.md`, `docs/env-vars.md`, `docs/ui-style.md`, `docs/profiling.md`,
+  `docs/bench.md`, and per-crate `README.md` files under `crates/`.
+- If a behavior change affects multiple docs, update them all in the same changeset.
+  A partial update is worse than no update: it creates confident-looking lies.
+- When adding a new environment variable, CLI flag, or feature gate, add it to the
+  corresponding table in the relevant doc and to `docs/env-vars.md` if it is a
+  `TERM_WM_*` or `TERM_SESSION_*` variable.
+- Do not duplicate information across docs unless the duplication is intentional
+  (e.g., the upgrade warning in `README.md` is intentionally repeated because users
+  will not read `docs/development.md` before upgrading).
+
 Pane Trait for Testability
 - `TerminalComponent` stores `Box<dyn Pane>` (defined in `crates/term-wm-pty-engine/src/pane.rs`).
 - Always use the `Pane` trait (not `Pty` directly) as the field type so that tests can inject `TestPane`.
