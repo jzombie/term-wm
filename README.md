@@ -12,7 +12,7 @@
 **The Spatial Terminal Desktop Environment for Remote Workspaces.**  
 *The Graphical Desktop for SSH.*
 
-`term-wm` brings floating windows, zero-prefix input passthrough, persistent multi-viewer workspaces, and desktop chrome (panels, command palette, tasks, and overlays) directly to your command line over SSH without requiring a display server.
+`term-wm` brings floating windows, zero-prefix input passthrough, persistent multi-viewer workspaces, and complete desktop chrome directly to your command line over plain SSH without requiring a display server.
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/jzombie/live-assets/main/term-wm-screenshot.png" alt="term-wm running on Linux">
@@ -28,6 +28,8 @@
 
 ### Quick Start
 
+> **Upgrading from a previous version? Read this first:** Launching a new build will not reuse, resume, or attach to a daemon left running by an older build. Those older sessions keep running in the background but can no longer be reattached once your view closes. Stop the old daemon **before** switching (`term-wm --stop-daemon -f`, or Command Palette -> **Stop Gateway Daemon**).
+
 Build and run from source (Rust 1.85+, edition 2024):
 
 ```sh
@@ -36,38 +38,51 @@ cd term-wm
 cargo run --release
 ```
 
+First launch automatically spawns a detached background session gateway daemon. Workspaces and running PTY processes persist across terminal restarts and SSH disconnects.
+
 Pass programs as arguments to open them in new windows:
 
 ```sh
 cargo run --release -- vim
 cargo run --release -- -n 4              # open 4 windows
 cargo run --release -- -n 3 -- ls -la    # 3 windows; first runs `ls -la`
+cargo run --release -- -w dev            # open or attach to the "dev" workspace
 ```
 
 Options (`term-wm -h`):
 
-- `-n, --count <N>`: number of windows to open (default 2; min 1)
-- `--embedded`: bare/embedded mode with no system chrome, panels, or floating windows
-- `-h, --help`, `-V, --version`
+* `-n, --count <N>`: number of windows to open (default 2; min 1)
+* `-w, --workspace <NAME>`: workspace channel to open (defaults to launch folder name)
+* `--stop-daemon`: stop the running background session gateway daemon
+* `-f, --force`: force `--stop-daemon` even while active sessions are attached
+* `--list-channels`: list active workspace channels and attached clients, then exit
+* `--embedded`: bare/embedded mode with no system chrome, panels, or floating windows
+* `-h, --help`, `-V, --version`
 
 New windows launch the shell configured in `$SHELL` (Unix) or `%COMSPEC%` (Windows).
 
-### Detachable Sessions with `term-session`
+### Daemon Mode & Session Persistence
 
-`term-wm` is a pure layout/rendering engine. Persistent, detachable sessions are provided by the companion `term-session` daemon so workspaces survive terminal restarts and SSH disconnects:
+`term-wm` embeds both the window manager and a background session gateway into a single binary:
 
-```sh
-cargo run --release --bin term-session -- term-wm                        # attach to default channel, spawning server
-cargo run --release --bin term-session -- --channel work -- vim          # attach to or spawn "work" channel
-cargo run --release --bin term-session -- --server --channel work -- vim # start dedicated server daemon
-```
+* **Automatic Gateway:** On launch, `term-wm` auto-spawns a detached background process owned by your user account. Every workspace channel (`<workspace>/main`), PTY session, and running task lives inside that background daemon.
+* **Disconnect Resiliency:** Closing your terminal or dropping an SSH connection leaves the background daemon running. Re-running `term-wm` reattaches to your existing workspace immediately.
+* **Generation Scoping:** Each distinct binary build owns an isolated gateway endpoint (`gateway-<hash8>`). Upgrading binaries requires stopping the old daemon first (`term-wm --stop-daemon -f`).
 
-Multiple terminals can attach to the same channel to share a live session.
+### Workspace Actions Matrix
 
-### Keybindings Quick Reference
+| Action | What Ends | What Survives |
+| --- | --- | --- |
+| **Detach Viewer** | Only your current terminal connection | Entire workspace, background PTY tasks, and other attached viewers |
+| **Exit UI** | Focused workspace process, windows, and tasks | Other workspaces and the background gateway daemon |
+| **Stop Gateway Daemon** | All workspace sessions and the daemon itself | Nothing (fresh daemon spawns on next launch) |
+
+---
+
+## Keybindings Quick Reference
 
 | Action | Key |
-|---|---|
+| --- | --- |
 | Open Command Palette (Super Key) | `Ctrl+A` |
 | Send `Ctrl+A` to focused application | `Ctrl+A` while palette is open |
 | Cycle focus between windows | `Tab` / `Shift+Tab` (palette open) |
@@ -81,43 +96,45 @@ Multiple terminals can attach to the same channel to share a live session.
 ## Why term-wm?
 
 | Feature | term-wm | tmux / screen | Zellij | WezTerm |
-|---|---|---|---|---|
-| Execution Target | Headless SSH | Headless SSH | Headless SSH | Local GUI |
-| Layout Compositor | Hybrid BSP + floating z-order | Fixed grid | Fixed grid | Fixed tab grid |
-| Input Routing | Automatic Direct Input | Prefix chords | Modal shortcuts | Native GUI |
-| Session Persistence | Built-in gateway daemon | Core daemon | Built-in daemon | Optional |
-| Multi-Viewer | Attributed muxio IPC | Shared view | Shared view | Local split |
+| --- | --- | --- | --- | --- |
+| **Execution Target** | Headless SSH | Headless SSH | Headless SSH | Local GUI |
+| **Layout Compositor** | Hybrid BSP + floating z-order | Fixed grid | Fixed grid | Fixed tab grid |
+| **Input Routing** | Automatic Direct Input | Prefix chords | Modal shortcuts | Native GUI |
+| **Session Persistence** | Embedded gateway daemon | Core daemon | Built-in daemon | Optional |
+| **Multi-Viewer** | Attributed muxio IPC | Shared view | Shared view | Local split |
+
+---
 
 ## Feature Highlights
 
-- **Spatial Compositing over SSH:** Mix Binary Space Partitioning (BSP) tiling with overlapping floating windows, drop shadows, and title-bar dragging.
+* **True Spatial Compositing Over SSH:** Mix BSP tiling with free-floating windows, title-bar dragging, edge snapping with ghost previews, and z-ordered drop shadows.
+* **Zero-Setup Session Persistence:** Single self-contained binary auto-spawns its background gateway. Windows, layouts, and PTY tasks survive network drops with zero external setup.
+* **Directory-Based Workspaces:** Launching `term-wm` from a project directory automatically names the workspace after that folder and exposes local `.term-wm/tasks.json` entries in the Command Palette.
+* **Fleet Overview:** The Command Palette displays live counts of open windows and active background tasks across every workspace before you switch.
+* **Autonomous Direct Input Mode:** `PtyStateTracker` continuously monitors PTY byte streams. The moment a child app requests alternate screen buffers, mouse tracking, or scroll margins, `term-wm` steps aside into zero-latency passthrough.
 
-- **Zero-Setup Persistence:** Sessions and background PTY processes run on an auto-spawning gateway daemon that survives client disconnects.
+---
 
-- **Autonomous Input Routing:** Direct Mode detects when child applications (such as vim or emacs) request alternate screen buffers, mouse tracking, or custom scroll margins, and steps aside into zero-latency passthrough automatically.
-
-- **Directory-Based Workspaces:** Launching from a project folder automatically names the workspace after that directory and attaches local `.term-wm/tasks.json` definitions to the Command Palette.
-
-- **Fleet Overview:** The Command Palette displays live window and running task counts across every active workspace before you switch.
-
-### Window Snapping with Preview
+## Window Snapping with Preview
 
 Floating windows support mouse-driven snapping with a live ghost preview. Dragging a window by its title bar over a snap target displays a dashed outline with a shaded fill and a label describing the action.
 
-- **Snap targets:** Screen edges (snap to edge), screen corners (snap to corner), and top edge (maximize).
-- **Auto-snap countdown:** If the mouse pointer exits the screen boundary while hovering a snap target, the window snaps automatically after 2 seconds. Releasing the mouse button over a target snaps immediately.
-- **Micro-positioning:** To position a window at custom coordinates, set it to floating mode first, drag it to the target location, and then re-enable tiling.
+* **Snap targets:** Screen edges (`snap to edge`), screen corners (`snap to corner`), and top edge (`maximize`).
+* **Auto-snap countdown:** If the mouse pointer exits the screen boundary while hovering a snap target, the window snaps automatically after 2 seconds. Releasing the mouse button over a target snaps immediately.
+* **Micro-positioning:** To position a window at custom coordinates, set it to floating mode first, drag it to the target location, and then re-enable tiling.
 
 ---
 
 ## System Requirements & Compatibility
 
-- **Colors:** Truecolor (24-bit) output recommended. Palette gracefully degrades in 256-color or 16-color environments.
-- **Unicode & Fonts:** Requires a UTF-8 environment (`LANG` set to UTF-8) and a font supporting Unicode box-drawing characters.
-- **Linux Virtual Terminals (TTY):** Fully functional in raw Linux VTs (`Ctrl+Alt+F1`). Expect visual degradation on TTY framebuffers due to kernel font/color limits.
-- **Non-Standard OS Installs:** Minimal or headless installations require a valid `terminfo` database matching the `TERM` variable.
+* **Colors:** Truecolor (24-bit) output recommended. Palette gracefully degrades in 256-color or 16-color environments.
+* **Unicode & Fonts:** Requires a UTF-8 environment (`LANG` set to UTF-8) and a font supporting Unicode box-drawing characters.
+* **Linux Virtual Terminals (TTY):** Fully functional in raw Linux VTs (`Ctrl+Alt+F1`). Expect visual degradation on TTY framebuffers due to kernel font/color limits.
+* **Non-Standard OS Installs:** Minimal or headless installations require a valid `terminfo` database matching the `TERM` variable.
 
 See [docs/compatibility.md](./docs/compatibility.md) for complete details.
+
+---
 
 ## Developer API & Project Origins
 
@@ -125,6 +142,8 @@ See [docs/compatibility.md](./docs/compatibility.md) for complete details.
 
 See [docs/development.md](./docs/development.md) for architectural diagrams, crate boundaries, and component guidelines.
 
+---
+
 ## License
 
-Dual-licensed under MIT or Apache 2.0. See [LICENSE-APACHE](./LICENSE-APACHE) and [LICENSE-MIT](./LICENSE-MIT) for details.
+Dual-licensed under [MIT](./LICENSE-MIT) or [Apache 2.0](./LICENSE-APACHE).
