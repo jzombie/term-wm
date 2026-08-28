@@ -17,6 +17,7 @@
   <em>pictured: term-wm v0.9.0-alpha on macOS</em>
 </div>
 
+<!-- MEDIA-SWAP: replace static PNGs with launch demo GIFs (shot-list: .opencode/plans/launch/launch-checklist.md) -->
 
 Designed for Linux, macOS, and Windows, `term-wm` brings the spatial organization of a traditional graphical desktop environment (like GNOME or KDE) directly to the command line: mathematically precise tiling, overlapping floating windows with mouse support, and complete desktop chrome (panels, command palette, tasks, and overlays) without requiring a display server.
 
