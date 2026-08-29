@@ -224,18 +224,13 @@ pub fn load_cli_project_tasks() -> io::Result<ProjectTasks> {
     let cwd = std::env::current_dir()?;
     match term_wm_core::project_tasks::load_tasks_for_cwd(&cwd) {
         term_wm_core::project_tasks::LoadTasksResult::Found(pt) => Ok(pt),
-        term_wm_core::project_tasks::LoadTasksResult::ParseError { path, message } => {
-            Err(io::Error::other(format!(
-                "failed to parse {}: {message}",
-                path.display()
-            )))
-        }
-        term_wm_core::project_tasks::LoadTasksResult::NotFound => Err(io::Error::other(
-            format!(
-                "no {} found in this directory or any of its parents",
-                term_wm_core::project_tasks::TERM_WM_TASKS_PATH
-            ),
-        )),
+        term_wm_core::project_tasks::LoadTasksResult::ParseError { path, message } => Err(
+            io::Error::other(format!("failed to parse {}: {message}", path.display())),
+        ),
+        term_wm_core::project_tasks::LoadTasksResult::NotFound => Err(io::Error::other(format!(
+            "no {} found in this directory or any of its parents",
+            term_wm_core::project_tasks::TERM_WM_TASKS_PATH
+        ))),
     }
 }
 

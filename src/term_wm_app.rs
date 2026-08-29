@@ -811,11 +811,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             project_tasks::LoadTasksResult::ParseError { path, message } => {
                 self.project_root = None;
                 self.project_tasks.clear();
-                let body = format!(
-                    "Failed to parse {}: {message}",
-                    path.display()
-                );
-                self.wm.push_notification(&body, std::time::Duration::from_secs(5));
+                let body = format!("Failed to parse {}: {message}", path.display());
+                self.wm
+                    .push_notification(&body, std::time::Duration::from_secs(5));
             }
             project_tasks::LoadTasksResult::NotFound => {
                 self.project_root = None;
