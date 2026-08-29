@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Reverted drain-synchronized PTY resize to synchronous VT100 grid reflow + OS resize, fixing UI disappearance on Windows OS when resizing the viewport (#325). The deferred resize architecture caused the main thread to clone a transitional/empty screen buffer before the reader thread applied the VT100 reflow, resulting in permanently blank terminal windows.
+
 ## [0.10.5-alpha] - 2026-08-27
 
 ### Added
