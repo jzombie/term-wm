@@ -46,6 +46,7 @@ placeholders:
 | Placeholder  | Resolves to |
 |--------------|-------------|
 | `{wm.pid}`   | The OS PID of the term-wm process that spawns the task: the window-manager process for palette-launched tasks, the CLI process for `--task` runs. |
+| `{wm.exe}`   | The full path of that same process's executable (`std::env::current_exe()`), so tasks can invoke the term-wm binary itself (e.g. piping into `{wm.exe} --util copy`). |
 
 Rules:
 
@@ -57,6 +58,10 @@ Rules:
    literal braces survive).
 4. This is term-wm's own placeholder syntax, not Zed-style `${VAR}` /
    `${VAR:default}` interpolation (see Out of Scope).
+5. Quoting guidance for `{wm.exe}`: inside shell scripts, prefer passing it
+   through an `env` entry and referencing `$VAR` (`$env:VAR` in PowerShell).
+   Inline use inside quoted shell text breaks when the resolved path contains
+   quote characters; env-var expansion is immune to spaces and quotes alike.
 
 Example (attach a profiler to the window manager itself):
 
@@ -65,6 +70,24 @@ Example (attach a profiler to the window manager itself):
     { "label": "profile: Time Profiler",
       "command": "xcrun xctrace record --template 'Time Profiler' --time-limit 10s --output /tmp/term-wm.trace --attach {wm.pid}",
       "platforms": ["macos"] }
+]
+```
+
+Example (pipe `git diff` into the built-in copy utility via `{wm.exe}`,
+platform-gated because tasks run as direct argv children with no shell):
+
+```jsonc
+[
+    { "label": "dev: Copy Git Diff",
+      "command": "sh",
+      "args": ["-c", "git diff | \"$TERM_WM_EXE\" --util copy"],
+      "env": { "TERM_WM_EXE": "{wm.exe}" },
+      "platforms": ["linux", "macos"] },
+    { "label": "dev: Copy Git Diff",
+      "command": "powershell",
+      "args": ["-NoProfile", "-Command", "git diff | & $env:TERM_WM_EXE --util copy"],
+      "env": { "TERM_WM_EXE": "{wm.exe}" },
+      "platforms": ["windows"] }
 ]
 ```
 

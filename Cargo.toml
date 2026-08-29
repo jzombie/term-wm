@@ -173,6 +173,7 @@ muxio-rpc-service-caller = { workspace = true, optional = true }
 muxio-rpc-service-endpoint = { workspace = true, optional = true }
 portable-pty = { workspace = true }
 ratatui = { workspace = true }
+term-clipboard = { workspace = true }
 term-logging = { workspace = true, features = ["daemon", "ui"] }
 term-session = { workspace = true, optional = true }
 term-sys-io = { workspace = true }
@@ -203,7 +204,6 @@ muxio-tokio-rpc-ipc-client = { workspace = true }
 proptest = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-term-clipboard = { workspace = true }
 term-session-client = { workspace = true }
 term-session-mock = { workspace = true }
 term-session-muxio-service-definitions = { workspace = true }

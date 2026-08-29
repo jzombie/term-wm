@@ -14,7 +14,11 @@
 //   { "label": "dev: Run", "command": "cargo", "args": ["run"] }
 //
 // Other optional fields: `cwd` (string, absolute or relative to project root),
-// `env` (object), `environments` (e.g. ["dev"] / ["prod"] / ["test"]).
+// `env` (object), `environments` (e.g. ["dev"] / ["prod"] / ["test"]),
+// `platforms` (e.g. ["linux", "macos"], with "darwin" as an alias for "macos").
+// Placeholders: `{wm.pid}` (spawning process PID) and `{wm.exe}` (term-wm
+// executable path). Inside shell scripts prefer the env-var indirection shown
+// below (`env` entry + `$VAR`) so paths containing spaces or quotes stay safe.
 [
     {
         "label": "dev: cargo pkg --help",
@@ -40,5 +44,21 @@
         "label": "dev: cargo test all features",
         "command": "cargo test --workspace --all-features",
         "environments": ["dev"]
+    },
+    {
+        "label": "dev: Copy Git Diff",
+        "command": "sh",
+        "args": ["-c", "git diff | \"$TERM_WM_EXE\" --util copy"],
+        "env": { "TERM_WM_EXE": "{wm.exe}" },
+        "environments": ["dev"],
+        "platforms": ["linux", "macos"]
+    },
+    {
+        "label": "dev: Copy Git Diff",
+        "command": "powershell",
+        "args": ["-NoProfile", "-Command", "git diff | & $env:TERM_WM_EXE --util copy"],
+        "env": { "TERM_WM_EXE": "{wm.exe}" },
+        "environments": ["dev"],
+        "platforms": ["windows"]
     }
 ]

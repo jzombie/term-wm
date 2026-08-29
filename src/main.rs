@@ -10,6 +10,7 @@ use term_wm::io::RenderTarget;
 use term_wm::runner::WindowManagerHost;
 use term_wm::term_wm_app::TermWmApp;
 use term_wm::unified_event_source::UnifiedEventSource;
+use term_wm::util::run_util;
 use term_wm_console::console_render_target::ConsoleRenderTarget;
 use term_wm_core::wm_config::WmConfig;
 
@@ -75,7 +76,14 @@ fn run() -> io::Result<()> {
         .clone()
         .unwrap_or_else(|| term_wm::workspace_name::FALLBACK_WORKSPACE.to_string());
 
-    // 0a. Project task operations (local; independent of session persistence).
+    // 0a. Built-in utility operations (headless; independent of sessions).
+    // Runs before any window-manager or gateway machinery so `--util` works
+    // in every feature configuration and from within scripts/tasks.
+    if let Some(util) = cli.util {
+        std::process::exit(run_util(util, &cli.cmds));
+    }
+
+    // 0a-1. Project task operations (local; independent of session persistence).
     if cli.list_tasks {
         return list_project_tasks();
     }
