@@ -152,7 +152,7 @@ checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -295,7 +295,7 @@ checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -422,7 +422,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -659,7 +659,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -670,7 +670,7 @@ checksum = "68f5792fa0d41cd2325ce0ffa64f0a340eaebd4971a3a0c5e1ffd2cc488a355e"
 dependencies = [
  "darling_core",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -754,7 +754,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -1387,7 +1387,7 @@ dependencies = [
  "indoc",
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2330,7 +2330,7 @@ checksum = "af971f0c4f5eb79d0fe381e9b5a1e315ae8a3df58fa512666471e19b9e1f824d"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
  "version_check",
  "yansi",
 ]
@@ -2673,7 +2673,7 @@ dependencies = [
  "proc-macro2",
  "proc-macro2-diagnostics2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
  "syn_derive",
  "thiserror 2.0.20",
 ]
@@ -2772,7 +2772,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2821,7 +2821,7 @@ checksum = "a22144e767da4ddd8416dbf383700542ffd8a5dc493dfecedfe1fe3ad03c98ae"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -3069,9 +3069,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3116,7 +3116,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3126,7 +3126,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3139,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "term-logging"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "file-rotate",
  "libc",
@@ -3153,7 +3153,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3206,7 +3206,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3227,7 +3227,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3250,7 +3250,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "libc",
  "serial_test",
@@ -3268,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "term-test-support"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "serial_test",
  "tokio",
@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3324,7 +3324,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-config"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "serial_test",
  "tempfile",
@@ -3333,7 +3333,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3352,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3383,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3393,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "bitcode",
  "term-wm-layout-engine",
@@ -3401,14 +3401,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3431,11 +3431,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3452,7 +3452,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -3479,7 +3479,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3489,13 +3489,13 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.10.5-alpha"
+version = "0.10.6-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
  "rstml",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -3633,7 +3633,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -3766,7 +3766,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
