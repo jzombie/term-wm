@@ -36,7 +36,7 @@ pub struct Cli {
 
     /// One command for a window (the whole argv after `--`); it follows any
     /// `--run` windows. Remaining `--count` windows are default shells. Only takes effect on new sessions.
-    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true)]
     pub cmds: Vec<String>,
 
     /// Workspace name; maps to the daemon channel `<workspace>`/main. When
@@ -541,5 +541,32 @@ mod tests {
 
         let cli = Cli::try_parse_from(["term-wm", "--workspace", "test"]).unwrap();
         assert!(!cli.allow_nested, "default must be false");
+    }
+
+    #[test]
+    fn cli_rejects_unknown_flag_before_positional() {
+        let result = Cli::try_parse_from(["term-wm", "--unknown-flag", "vim"]);
+        assert!(
+            result.is_err(),
+            "unknown flag before positional must be rejected"
+        );
+    }
+
+    #[test]
+    fn cli_captures_flags_after_positional_as_shell_args() {
+        let cli = Cli::try_parse_from(["term-wm", "vim", "--clean", "-l"]).unwrap();
+        assert_eq!(cli.cmds, vec!["vim", "--clean", "-l"]);
+    }
+
+    #[test]
+    fn cli_captures_short_flags_after_positional() {
+        let cli = Cli::try_parse_from(["term-wm", "ls", "-la"]).unwrap();
+        assert_eq!(cli.cmds, vec!["ls", "-la"]);
+    }
+
+    #[test]
+    fn cli_double_dash_before_positional_captures_all() {
+        let cli = Cli::try_parse_from(["term-wm", "--", "vim", "--unknown"]).unwrap();
+        assert_eq!(cli.cmds, vec!["vim", "--unknown"]);
     }
 }
