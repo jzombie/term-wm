@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Process completion messages now distinguish signal-killed processes: signal deaths display `[Process aborted: <signal name>]` and Ctrl-C exits (exit code 130) display `[Process aborted: Interrupted]` instead of `[Process completed]` (#337).
+
 ## [0.10.6-alpha] - 2026-08-28
 
 ### Fixed
