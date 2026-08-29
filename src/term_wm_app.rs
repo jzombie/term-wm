@@ -804,11 +804,20 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     /// Syncs both `TermWmApp` and `WindowManager::project_tasks` in one call.
     pub fn refresh_project_tasks(&mut self) {
         match project_tasks::load_tasks_for_cwd(&self.launch_cwd) {
-            Some(pt) => {
+            project_tasks::LoadTasksResult::Found(pt) => {
                 self.project_root = Some(pt.root);
                 self.project_tasks = pt.tasks;
             }
-            None => {
+            project_tasks::LoadTasksResult::ParseError { path, message } => {
+                self.project_root = None;
+                self.project_tasks.clear();
+                let body = format!(
+                    "Failed to parse {}: {message}",
+                    path.display()
+                );
+                self.wm.push_notification(&body, std::time::Duration::from_secs(5));
+            }
+            project_tasks::LoadTasksResult::NotFound => {
                 self.project_root = None;
                 self.project_tasks.clear();
             }

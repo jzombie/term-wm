@@ -103,6 +103,17 @@ pub struct ProjectTasks {
     pub tasks: Vec<ProjectTaskConfig>,
 }
 
+/// Outcome of [`load_tasks_for_cwd`]: success, not found, or parse error.
+#[derive(Debug)]
+pub enum LoadTasksResult {
+    /// Tasks loaded successfully (possibly zero after environment gating).
+    Found(ProjectTasks),
+    /// No `.term-wm/tasks.json` found in `cwd` or any ancestor.
+    NotFound,
+    /// A tasks file was found but could not be parsed.
+    ParseError { path: PathBuf, message: String },
+}
+
 impl ProjectTaskConfig {
     /// Build the argument vector from both `command` and `args` sources.
     ///
@@ -191,10 +202,13 @@ fn normalize_platform(raw: &str) -> String {
     }
 }
 
-/// Walk `cwd` and ancestors looking for a tasks file. Returns `Some(ProjectTasks)`
-/// if found and parsed (possibly with zero tasks after environment gating),
-/// `None` if not found or malformed.
-pub fn load_tasks_for_cwd(cwd: &Path) -> Option<ProjectTasks> {
+/// Walk `cwd` and ancestors looking for a tasks file.
+///
+/// Returns [`LoadTasksResult::Found`] if found and parsed (possibly with zero
+/// tasks after environment gating), [`LoadTasksResult::NotFound`] if no file
+/// exists in the ancestor chain, or [`LoadTasksResult::ParseError`] when a
+/// file exists but is malformed.
+pub fn load_tasks_for_cwd(cwd: &Path) -> LoadTasksResult {
     #[cfg(feature = "project-tasks")]
     {
         let active = active_environment();
@@ -202,31 +216,42 @@ pub fn load_tasks_for_cwd(cwd: &Path) -> Option<ProjectTasks> {
         while let Some(dir) = current {
             let path = dir.join(TERM_WM_TASKS_PATH);
             if path.is_file() {
-                match parse_tasks_file(&path) {
-                    Some(tasks) => {
-                        return Some(ProjectTasks {
-                            root: dir.to_path_buf(),
-                            tasks: tasks
-                                .into_iter()
-                                .filter(|t| t.visible_in(active))
-                                .filter(|t| t.visible_on_platform())
-                                .collect(),
-                        });
+                let content = match fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("Failed to read {}: {e}", path.display());
+                        return LoadTasksResult::ParseError {
+                            path,
+                            message: e.to_string(),
+                        };
                     }
-                    None => {
-                        tracing::warn!("Failed to parse tasks file: {}", path.display());
-                        return None;
+                };
+                return match parse_tasks_str(&content) {
+                    Ok(tasks) => LoadTasksResult::Found(ProjectTasks {
+                        root: dir.to_path_buf(),
+                        tasks: tasks
+                            .into_iter()
+                            .filter(|t| t.visible_in(active))
+                            .filter(|t| t.visible_on_platform())
+                            .collect(),
+                    }),
+                    Err(error) => {
+                        tracing::warn!("Failed to parse {}: {error}", path.display());
+                        LoadTasksResult::ParseError {
+                            path,
+                            message: error.to_string(),
+                        }
                     }
-                }
+                };
             }
             current = dir.parent();
         }
-        None
+        LoadTasksResult::NotFound
     }
     #[cfg(not(feature = "project-tasks"))]
     {
         let _ = cwd;
-        None
+        LoadTasksResult::NotFound
     }
 }
 
@@ -287,32 +312,6 @@ pub fn resolve_task(
     #[cfg(not(feature = "project-tasks"))]
     {
         let (_task, _base, _vars) = (task, base, vars);
-        None
-    }
-}
-
-#[allow(dead_code)]
-fn parse_tasks_file(path: &Path) -> Option<Vec<ProjectTaskConfig>> {
-    #[cfg(feature = "project-tasks")]
-    {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("Failed to read {}: {e}", path.display());
-                return None;
-            }
-        };
-        match parse_tasks_str(&content) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                tracing::warn!("Failed to parse {}: {e}", path.display());
-                None
-            }
-        }
-    }
-    #[cfg(not(feature = "project-tasks"))]
-    {
-        let _ = path;
         None
     }
 }
@@ -505,7 +504,10 @@ mod tests {
 
         // Simulate dev environment (CARGO_MANIFEST_DIR present → Dev).
         let _manifest = term_test_support::EnvVarGuard::set("CARGO_MANIFEST_DIR", "/fake/path");
-        let result = load_tasks_for_cwd(dir.path()).expect("load");
+        let result = match load_tasks_for_cwd(dir.path()) {
+            LoadTasksResult::Found(pt) => pt,
+            other => panic!("expected Found, got {other:?}"),
+        };
         assert_eq!(result.tasks.len(), 2);
     }
 
@@ -527,7 +529,10 @@ mod tests {
 
         let _env = term_test_support::EnvVarGuard::set("TERM_WM_ENV", "prod");
         let _manifest_absent = term_test_support::EnvVarGuard::removed("CARGO_MANIFEST_DIR");
-        let result = load_tasks_for_cwd(dir.path()).expect("load");
+        let result = match load_tasks_for_cwd(dir.path()) {
+            LoadTasksResult::Found(pt) => pt,
+            other => panic!("expected Found, got {other:?}"),
+        };
         assert_eq!(result.tasks.len(), 2);
         assert!(result.tasks.iter().any(|t| t.label == "prod"));
         assert!(result.tasks.iter().any(|t| t.label == "all"));
@@ -542,7 +547,10 @@ mod tests {
         let tasks_path = dir.path().join(TERM_WM_TASKS_PATH);
         fs::create_dir_all(tasks_path.parent().expect("has parent")).expect("mkdir");
         fs::write(&tasks_path, "{ invalid json").expect("write");
-        assert!(load_tasks_for_cwd(dir.path()).is_none());
+        assert!(matches!(
+            load_tasks_for_cwd(dir.path()),
+            LoadTasksResult::ParseError { .. }
+        ));
     }
 
     #[test]
@@ -559,7 +567,10 @@ mod tests {
         )
         .expect("write");
 
-        let result = load_tasks_for_cwd(&child).expect("load");
+        let result = match load_tasks_for_cwd(&child) {
+            LoadTasksResult::Found(pt) => pt,
+            other => panic!("expected Found, got {other:?}"),
+        };
         assert_eq!(result.root, root.path());
         assert_eq!(result.tasks[0].label, "from-parent");
     }
@@ -567,7 +578,10 @@ mod tests {
     #[test]
     fn returns_none_when_no_file_anywhere() {
         let dir = tempfile::tempdir().expect("tempdir failed");
-        assert!(load_tasks_for_cwd(dir.path()).is_none());
+        assert!(matches!(
+            load_tasks_for_cwd(dir.path()),
+            LoadTasksResult::NotFound
+        ));
     }
 
     #[test]
@@ -577,7 +591,10 @@ mod tests {
         fs::create_dir_all(tasks_path.parent().expect("has parent")).expect("mkdir");
         fs::write(&tasks_path, r#"[{"label": "twm", "command": "echo"}]"#).expect("write");
 
-        let result = load_tasks_for_cwd(dir.path()).expect("load");
+        let result = match load_tasks_for_cwd(dir.path()) {
+            LoadTasksResult::Found(pt) => pt,
+            other => panic!("expected Found, got {other:?}"),
+        };
         assert_eq!(result.root, dir.path());
         assert_eq!(result.tasks.len(), 1);
         assert_eq!(result.tasks[0].label, "twm");
@@ -647,7 +664,10 @@ mod tests {
             "#,
         )
         .expect("write");
-        let result = load_tasks_for_cwd(dir.path()).expect("load with comments");
+        let result = match load_tasks_for_cwd(dir.path()) {
+            LoadTasksResult::Found(pt) => pt,
+            other => panic!("expected Found, got {other:?}"),
+        };
         assert_eq!(result.tasks.len(), 1);
         assert_eq!(result.tasks[0].label, "commented");
     }
@@ -935,7 +955,10 @@ mod tests {
         )
         .expect("write");
 
-        let result = load_tasks_for_cwd(dir.path()).expect("load");
+        let result = match load_tasks_for_cwd(dir.path()) {
+            LoadTasksResult::Found(pt) => pt,
+            other => panic!("expected Found, got {other:?}"),
+        };
         let labels: Vec<&str> = result.tasks.iter().map(|t| t.label.as_str()).collect();
         assert_eq!(labels, vec!["native", "all"]);
     }
@@ -1041,8 +1064,8 @@ mod tests_disabled {
         std::fs::create_dir_all(tasks_path.parent().expect("has parent")).expect("mkdir");
         std::fs::write(&tasks_path, r#"[{"label": "x", "command": "echo"}]"#).expect("write");
         assert!(
-            load_tasks_for_cwd(dir.path()).is_none(),
-            "load_tasks_for_cwd must be None when feature disabled, even with valid file on disk"
+            matches!(load_tasks_for_cwd(dir.path()), LoadTasksResult::NotFound),
+            "load_tasks_for_cwd must return NotFound when feature disabled, even with valid file on disk"
         );
     }
 }
