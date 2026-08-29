@@ -75,7 +75,7 @@ impl Default for TaskVarContext {
 
 /// Resolve this process's executable path, degrading gracefully when the OS
 /// cannot supply it (no unwraps): `std::env::current_exe()` first, then
-/// argv[0] as reported by the OS, then an empty path (substitution yields an
+/// argv\[0\] as reported by the OS, then an empty path (substitution yields an
 /// empty string rather than failing the spawn).
 fn current_exe_fallback() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| {
