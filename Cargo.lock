@@ -3295,6 +3295,7 @@ dependencies = [
  "ratatui",
  "serial_test",
  "tempfile",
+ "term-clipboard",
  "term-logging",
  "term-session",
  "term-session-client",
