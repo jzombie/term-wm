@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 - Reverted drain-synchronized PTY resize to synchronous VT100 grid reflow + OS resize, fixing UI disappearance on Windows OS when resizing the viewport (#325). The deferred resize architecture caused the main thread to clone a transitional/empty screen buffer before the reader thread applied the VT100 reflow, resulting in permanently blank terminal windows.
 
+### Changed
+
+- Bumped `syn` from 3.0.3 to 3.0.4 (#330).
+- Bumped Rust CI image from 1.97-alpine3.24 to 1.98-alpine3.24 (#331).
+
 ## [0.10.5-alpha] - 2026-08-27
 
 ### Added
