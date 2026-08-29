@@ -30,7 +30,7 @@ const DSR_PATTERN_LEN: usize = 4;
 /// Env var that enables dumping raw PTY→emulator bytes (as hex) to a file.
 /// Temporary diagnostic aid for seeing exactly what a child app sends (e.g.
 /// pico's escape sequences at the right margin of a long line).
-const ESC_TRACE_ENV: &str = "TERM_WM_TRACE_ESC";
+use term_wm_config::env::ESC_TRACE_ENV;
 
 /// Whether `ESC_TRACE_ENV` is set — checked once per process.
 static ESC_TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
