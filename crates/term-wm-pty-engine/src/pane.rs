@@ -60,6 +60,11 @@ pub trait Pane {
     fn is_application_cursor_keys_active(&self) -> bool {
         false
     }
+    /// Attempt to reap the child and populate exit_status without firing callbacks.
+    /// Default delegates to `has_exited()`. The real `Pty` impl retries with backoff.
+    fn try_reap(&mut self) -> bool {
+        self.has_exited()
+    }
 }
 
 impl Pane for crate::Pty {
@@ -141,6 +146,10 @@ impl Pane for crate::Pty {
 
     fn is_application_cursor_keys_active(&self) -> bool {
         self.tracker.is_application_cursor_keys_active()
+    }
+
+    fn try_reap(&mut self) -> bool {
+        crate::Pty::try_reap(self)
     }
 
     fn shared_parser(&mut self) -> Arc<Mutex<term_wm_vt100::Parser>> {
