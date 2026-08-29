@@ -15,6 +15,14 @@ pub const TERM_WM_TASKS_PATH: &str = ".term-wm/tasks.json";
 /// e.g. `xcrun xctrace record ... --attach {wm.pid}`.
 pub const WM_PID_PLACEHOLDER: &str = "{wm.pid}";
 
+/// Placeholder substituted with the full path of the term-wm executable that
+/// spawns the task (resolved via `std::env::current_exe()` of the spawning
+/// process). Lets tasks.json invoke the binary itself, e.g. piping into
+/// `{wm.exe} --util copy`. Prefer passing it through a task `env` entry and
+/// referencing `$VAR` inside shell scripts: inline use inside quoted shell
+/// text breaks when the resolved path contains quote characters.
+pub const WM_EXE_PLACEHOLDER: &str = "{wm.exe}";
+
 /// Canonical platform string for macOS as compared against
 /// [`std::env::consts::OS`].
 pub const PLATFORM_MACOS: &str = "macos";
@@ -48,27 +56,44 @@ pub struct ProjectTaskConfig {
 ///
 /// `pid` is the OS PID of the term-wm process performing the spawn — the UI
 /// (WM) process for palette-launched tasks, the CLI process for
-/// `--task`-launched ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `--task`-launched ones. `exe` is the path of that same process's
+/// executable.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskVarContext {
     pub pid: u32,
+    pub exe: PathBuf,
 }
 
 impl Default for TaskVarContext {
     fn default() -> Self {
         Self {
             pid: std::process::id(),
+            exe: current_exe_fallback(),
         }
     }
 }
 
+/// Resolve this process's executable path, degrading gracefully when the OS
+/// cannot supply it (no unwraps): `std::env::current_exe()` first, then
+/// argv[0] as reported by the OS, then an empty path (substitution yields an
+/// empty string rather than failing the spawn).
+fn current_exe_fallback() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| {
+        std::env::args_os()
+            .next()
+            .map_or_else(PathBuf::new, PathBuf::from)
+    })
+}
+
 /// Substitute registered placeholders in a task string.
 ///
-/// Currently registered: [`WM_PID_PLACEHOLDER`]. Unknown `{...}` sequences are
-/// left verbatim so future placeholders and literal braces in user commands
-/// survive unchanged.
+/// Currently registered: [`WM_PID_PLACEHOLDER`] and [`WM_EXE_PLACEHOLDER`].
+/// Unknown `{...}` sequences are left verbatim so future placeholders and
+/// literal braces in user commands survive unchanged.
 pub fn substitute_vars(input: &str, ctx: &TaskVarContext) -> String {
-    input.replace(WM_PID_PLACEHOLDER, &ctx.pid.to_string())
+    input
+        .replace(WM_PID_PLACEHOLDER, &ctx.pid.to_string())
+        .replace(WM_EXE_PLACEHOLDER, &ctx.exe.to_string_lossy())
 }
 
 /// Discovery result: the project root (dir where the file was found) + tasks.
@@ -88,16 +113,17 @@ impl ProjectTaskConfig {
     ///   returns `args` directly (args-only form).
     /// - Returns `None` on empty/malformed results.
     ///
-    /// Uses a default [`TaskVarContext`] (current process PID); prefer
-    /// [`ProjectTaskConfig::argv_resolved`] when the substitution context is
-    /// known by the caller.
+    /// Uses a default [`TaskVarContext`] (current process PID and executable);
+    /// prefer [`ProjectTaskConfig::argv_resolved`] when the substitution
+    /// context is known by the caller.
     pub fn argv(&self) -> Option<Vec<String>> {
         self.argv_resolved(&TaskVarContext::default())
     }
 
     /// Like [`ProjectTaskConfig::argv`], but substitutes `{...}` placeholders
-    /// (`{wm.pid}`) BEFORE shell-words tokenization so a substituted value can
-    /// never be split into stray tokens, even inside quoted segments.
+    /// (`{wm.pid}`, `{wm.exe}`) BEFORE shell-words tokenization so a
+    /// substituted value can never be split into stray tokens, even inside
+    /// quoted segments.
     pub fn argv_resolved(&self, ctx: &TaskVarContext) -> Option<Vec<String>> {
         #[cfg(feature = "project-tasks")]
         {
@@ -650,10 +676,17 @@ mod tests {
         );
     }
 
-    // ── String substitution ({wm.pid}) ──────────────────────────────────
+    // ── String substitution ({wm.pid}, {wm.exe}) ────────────────────────
+
+    /// Fixed exe path used by the shared test context; contains a space so
+    /// tokenization-sensitive behavior is exercised by default.
+    const TEST_EXE: &str = "/opt/my wm/bin/term-wm";
 
     fn ctx_with_pid(pid: u32) -> TaskVarContext {
-        TaskVarContext { pid }
+        TaskVarContext {
+            pid,
+            exe: PathBuf::from(TEST_EXE),
+        }
     }
 
     #[test]
@@ -662,6 +695,90 @@ mod tests {
         assert_eq!(substitute_vars("attach {wm.pid}", &ctx), "attach 4242");
         assert_eq!(substitute_vars("{wm.pid}", &ctx), "4242");
         assert_eq!(substitute_vars("no placeholder", &ctx), "no placeholder");
+    }
+
+    #[test]
+    fn substitute_replaces_wm_exe_placeholder() {
+        let ctx = ctx_with_pid(1);
+        assert_eq!(
+            substitute_vars("git diff | '{wm.exe}' --util copy", &ctx),
+            format!("git diff | '{TEST_EXE}' --util copy")
+        );
+        // Both placeholders coexist in one string.
+        assert_eq!(
+            substitute_vars("{wm.exe} attach {wm.pid}", &ctx),
+            format!("{TEST_EXE} attach 1")
+        );
+    }
+
+    #[test]
+    fn default_ctx_resolves_current_exe() {
+        let ctx = TaskVarContext::default();
+        let expected = std::env::current_exe().unwrap_or_else(|_| PathBuf::new());
+        assert_eq!(ctx.exe, expected);
+    }
+
+    #[test]
+    fn argv_resolved_substitutes_wm_exe_in_args_without_retok() {
+        // `args` elements are substituted AFTER tokenization and never
+        // re-split, so an exe path containing spaces stays one argv element.
+        let task = ProjectTaskConfig {
+            label: "pipe".into(),
+            command: Some("sh".into()),
+            args: Some(vec![
+                "-c".into(),
+                "git diff | \"{wm.exe}\" --util copy".into(),
+            ]),
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let argv = task.argv_resolved(&ctx_with_pid(1)).expect("argv");
+        assert_eq!(argv.len(), 3);
+        assert_eq!(argv[2], format!("git diff | \"{TEST_EXE}\" --util copy"));
+    }
+
+    #[test]
+    fn argv_resolved_substitutes_quoted_wm_exe_command_as_one_token() {
+        // In `command` form, substitution precedes shell-words splitting, so
+        // a quoted '{wm.exe}' stays ONE token even with spaces in the path.
+        let task = ProjectTaskConfig {
+            label: "direct".into(),
+            command: Some("'{wm.exe}' --util copy".into()),
+            args: None,
+            cwd: None,
+            env: HashMap::new(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let argv = task.argv_resolved(&ctx_with_pid(7)).expect("argv");
+        assert_eq!(
+            argv,
+            vec![TEST_EXE.to_string(), "--util".into(), "copy".into()]
+        );
+    }
+
+    #[test]
+    fn resolve_task_substitutes_wm_exe_in_env_values() {
+        let task = ProjectTaskConfig {
+            label: "env-exe".into(),
+            command: Some("sh".into()),
+            args: Some(vec![
+                "-c".into(),
+                "git diff | \"$TERM_WM_EXE\" --util copy".into(),
+            ]),
+            cwd: None,
+            env: [("TERM_WM_EXE".to_string(), "{wm.exe}".to_string())].into(),
+            environments: Vec::new(),
+            platforms: None,
+        };
+        let resolved =
+            resolve_task(&task, Path::new("/project"), &ctx_with_pid(3)).expect("resolved");
+        assert_eq!(
+            resolved.env.get("TERM_WM_EXE").map(String::as_str),
+            Some(TEST_EXE)
+        );
     }
 
     #[test]

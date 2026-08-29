@@ -8,5 +8,7 @@
 //! support without pulling in the full PTY stack.
 
 pub mod clipboard;
+pub mod copy;
 
 pub use clipboard::*;
+pub use copy::*;

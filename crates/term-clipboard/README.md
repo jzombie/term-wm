@@ -26,4 +26,15 @@ Reads from `FILE` (or stdin when omitted) and writes to every backend, so it wor
 over SSH, and inside terminals without OSC 52 support. With no file and an interactive stdin
 it prints an error and exits instead of hanging.
 
+The main `term-wm` binary exposes the same mechanics as a built-in utility:
+
+```sh
+term-wm --util copy [FILE]   # or: git diff | term-wm --util copy
+```
+
+Both frontends share one ingestion core (`copy::run_copy_util`), so their FILE/stdin
+handling, messages, and exit codes are identical; only the program label in errors differs.
+This is what makes `--util copy` usable inside `tasks.json` pipelines (see
+`docs/tasks.md`).
+
 See the main [term-wm](https://crates.io/crates/term-wm) crate for documentation.
