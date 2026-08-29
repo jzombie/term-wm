@@ -71,9 +71,6 @@ mod tests {
     #[test]
     fn copy_maps_single_positional_to_file() {
         let one = vec!["diff.patch".to_string()];
-        assert_eq!(
-            copy_file_arg(&one),
-            Ok(Some(PathBuf::from("diff.patch")))
-        );
+        assert_eq!(copy_file_arg(&one), Ok(Some(PathBuf::from("diff.patch"))));
     }
 }

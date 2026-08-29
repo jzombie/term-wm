@@ -725,7 +725,10 @@ mod tests {
         let task = ProjectTaskConfig {
             label: "pipe".into(),
             command: Some("sh".into()),
-            args: Some(vec!["-c".into(), "git diff | \"{wm.exe}\" --util copy".into()]),
+            args: Some(vec![
+                "-c".into(),
+                "git diff | \"{wm.exe}\" --util copy".into(),
+            ]),
             cwd: None,
             env: HashMap::new(),
             environments: Vec::new(),
@@ -733,10 +736,7 @@ mod tests {
         };
         let argv = task.argv_resolved(&ctx_with_pid(1)).expect("argv");
         assert_eq!(argv.len(), 3);
-        assert_eq!(
-            argv[2],
-            format!("git diff | \"{TEST_EXE}\" --util copy")
-        );
+        assert_eq!(argv[2], format!("git diff | \"{TEST_EXE}\" --util copy"));
     }
 
     #[test]
@@ -753,7 +753,10 @@ mod tests {
             platforms: None,
         };
         let argv = task.argv_resolved(&ctx_with_pid(7)).expect("argv");
-        assert_eq!(argv, vec![TEST_EXE.to_string(), "--util".into(), "copy".into()]);
+        assert_eq!(
+            argv,
+            vec![TEST_EXE.to_string(), "--util".into(), "copy".into()]
+        );
     }
 
     #[test]
@@ -761,7 +764,10 @@ mod tests {
         let task = ProjectTaskConfig {
             label: "env-exe".into(),
             command: Some("sh".into()),
-            args: Some(vec!["-c".into(), "git diff | \"$TERM_WM_EXE\" --util copy".into()]),
+            args: Some(vec![
+                "-c".into(),
+                "git diff | \"$TERM_WM_EXE\" --util copy".into(),
+            ]),
             cwd: None,
             env: [("TERM_WM_EXE".to_string(), "{wm.exe}".to_string())].into(),
             environments: Vec::new(),

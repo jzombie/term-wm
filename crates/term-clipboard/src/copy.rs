@@ -97,7 +97,10 @@ mod tests {
         let (mut cb, buffer) = memory_only_clipboard();
         let streamed = std::io::Cursor::new(b"hello clipboard".to_vec());
         ingest_copy(&mut cb, None, Some(Box::new(streamed))).expect("ingest succeeds");
-        assert_eq!(buffer.read().expect("lock").as_deref(), Some("hello clipboard"));
+        assert_eq!(
+            buffer.read().expect("lock").as_deref(),
+            Some("hello clipboard")
+        );
     }
 
     #[test]
