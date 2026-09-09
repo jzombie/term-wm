@@ -16,6 +16,7 @@ pub mod logging;
 pub mod prelude;
 pub mod term_wm_app;
 pub mod unified_event_source;
+pub mod util;
 pub mod workspace_name;
 pub use term_wm_console::widget_adapter::{StatefulWidgetAdapter, WidgetAdapter};
 
