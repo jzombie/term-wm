@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Invalid CLI flags after a command (e.g., `term-wm vim --unknown`) are now rejected by clap instead of being silently passed to the shell (#332).
+
 ## [0.10.6-alpha] - 2026-08-28
 
 ### Fixed
