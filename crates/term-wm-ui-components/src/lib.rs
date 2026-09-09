@@ -50,6 +50,9 @@ pub use stack::{HStackComponent, VStackComponent};
 
 pub use svg_image::SvgImageComponent;
 pub use tab_bar::{TabBarComponent, TabBarEvent, TabItem};
-pub use terminal::{TerminalComponent, default_shell, default_shell_command};
+pub use terminal::{
+    SIGINT_EXIT_CODE, TerminalComponent, WINDOWS_CTRL_C_EXIT_CODE, default_shell,
+    default_shell_command,
+};
 pub use text_renderer::TextRendererComponent;
 pub use toggle_list::{ToggleItem, ToggleListComponent};

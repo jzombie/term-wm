@@ -9,9 +9,21 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
-use clap::{CommandFactory, FromArgMatches, Parser};
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 
 use term_wm_core::project_tasks::{ProjectTaskConfig, ProjectTasks, ResolvedTask};
+
+/// Built-in utility commands runnable via `--util`, then exit.
+///
+/// Utilities are small headless helpers (no window manager, no session) meant
+/// for scripting and project-task pipelines; see [`Cli::util`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum UtilAction {
+    /// Copy a FILE (or piped stdin when omitted) to every clipboard backend
+    /// (system clipboard via arboard, shared in-memory buffer, OSC 52 to the
+    /// host terminal). Mirrors the standalone `term-copy` binary.
+    Copy,
+}
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
 #[derive(Parser, Debug)]
@@ -36,7 +48,7 @@ pub struct Cli {
 
     /// One command for a window (the whole argv after `--`); it follows any
     /// `--run` windows. Remaining `--count` windows are default shells. Only takes effect on new sessions.
-    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(value_name = "CMD", num_args = 0.., trailing_var_arg = true)]
     pub cmds: Vec<String>,
 
     /// Workspace name; maps to the daemon channel `<workspace>`/main. When
@@ -102,6 +114,13 @@ pub struct Cli {
     /// sequentially and stop at the first non-zero exit.
     #[arg(long = "task", value_name = "LABEL", action = clap::ArgAction::Append)]
     pub tasks: Vec<String>,
+
+    /// Run a built-in utility, then exit (see `--help` output for the utility
+    /// list). Any positional arguments after `--` are forwarded to the
+    /// utility as its argument vector. For `copy`, the first positional is an
+    /// optional FILE path; with none, piped stdin is copied.
+    #[arg(long = "util", value_name = "UTIL")]
+    pub util: Option<UtilAction>,
 }
 
 /// Parse process arguments into a [`Cli`], exiting with clap's standard
@@ -203,12 +222,16 @@ pub fn exit_code_of(status: std::process::ExitStatus) -> i32 {
 /// Load `.term-wm/tasks.json` relative to the current directory for CLI use.
 pub fn load_cli_project_tasks() -> io::Result<ProjectTasks> {
     let cwd = std::env::current_dir()?;
-    term_wm_core::project_tasks::load_tasks_for_cwd(&cwd).ok_or_else(|| {
-        io::Error::other(format!(
+    match term_wm_core::project_tasks::load_tasks_for_cwd(&cwd) {
+        term_wm_core::project_tasks::LoadTasksResult::Found(pt) => Ok(pt),
+        term_wm_core::project_tasks::LoadTasksResult::ParseError { path, message } => Err(
+            io::Error::other(format!("failed to parse {}: {message}", path.display())),
+        ),
+        term_wm_core::project_tasks::LoadTasksResult::NotFound => Err(io::Error::other(format!(
             "no {} found in this directory or any of its parents",
             term_wm_core::project_tasks::TERM_WM_TASKS_PATH
-        ))
-    })
+        ))),
+    }
 }
 
 /// Resolve a `--task` argument to an index into the loaded task list.
@@ -541,5 +564,32 @@ mod tests {
 
         let cli = Cli::try_parse_from(["term-wm", "--workspace", "test"]).unwrap();
         assert!(!cli.allow_nested, "default must be false");
+    }
+
+    #[test]
+    fn cli_rejects_unknown_flag_before_positional() {
+        let result = Cli::try_parse_from(["term-wm", "--unknown-flag", "vim"]);
+        assert!(
+            result.is_err(),
+            "unknown flag before positional must be rejected"
+        );
+    }
+
+    #[test]
+    fn cli_captures_flags_after_positional_as_shell_args() {
+        let cli = Cli::try_parse_from(["term-wm", "vim", "--clean", "-l"]).unwrap();
+        assert_eq!(cli.cmds, vec!["vim", "--clean", "-l"]);
+    }
+
+    #[test]
+    fn cli_captures_short_flags_after_positional() {
+        let cli = Cli::try_parse_from(["term-wm", "ls", "-la"]).unwrap();
+        assert_eq!(cli.cmds, vec!["ls", "-la"]);
+    }
+
+    #[test]
+    fn cli_double_dash_before_positional_captures_all() {
+        let cli = Cli::try_parse_from(["term-wm", "--", "vim", "--unknown"]).unwrap();
+        assert_eq!(cli.cmds, vec!["vim", "--unknown"]);
     }
 }
