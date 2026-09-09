@@ -804,11 +804,18 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     /// Syncs both `TermWmApp` and `WindowManager::project_tasks` in one call.
     pub fn refresh_project_tasks(&mut self) {
         match project_tasks::load_tasks_for_cwd(&self.launch_cwd) {
-            Some(pt) => {
+            project_tasks::LoadTasksResult::Found(pt) => {
                 self.project_root = Some(pt.root);
                 self.project_tasks = pt.tasks;
             }
-            None => {
+            project_tasks::LoadTasksResult::ParseError { path, message } => {
+                self.project_root = None;
+                self.project_tasks.clear();
+                let body = format!("Failed to parse {}: {message}", path.display());
+                self.wm
+                    .push_notification(&body, std::time::Duration::from_secs(5));
+            }
+            project_tasks::LoadTasksResult::NotFound => {
                 self.project_root = None;
                 self.project_tasks.clear();
             }
@@ -916,7 +923,15 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // 1. Capture focus BEFORE mutable component borrows
         let is_focused = self.wm().focused_window() == key;
 
-        // 2. Fetch process exit status
+        // 2. Force a blocking reap with temporal backoff because we know EOF was reached.
+        // The reader thread fired Exited before has_exited() captured the real status.
+        if let Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) =
+            self.wm().component_for_key_mut(key)
+        {
+            scroll_view.content.borrow_mut().try_reap();
+        }
+
+        // 3. Fetch process exit status (now guaranteed to be captured if available)
         let status = self.wm().component_for_key_mut(key).and_then(|c| match c {
             AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view)) => {
                 scroll_view.content.borrow().exit_status()
@@ -924,7 +939,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             _ => None,
         });
 
-        // 3. Inject in-buffer completion marker directly into VT100 parser
+        // 4. Inject in-buffer completion marker directly into VT100 parser
         if let Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) =
             self.wm().component_for_key_mut(key)
         {
@@ -937,13 +952,23 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // avoid overlapping &mut borrows of self.wm().
         self.wm().mark_layout_dirty();
 
-        // 4. Fire notifications only when window is NOT focused
+        // 5. Fire notifications only when window is NOT focused
         if !is_focused {
-            let notif_body = match status {
-                Some(st) if !st.success() => {
-                    format!("Task '{label}' completed with exit code {}", st.exit_code())
+            let notif_body = match &status {
+                Some(st) => {
+                    if let Some(sig) = st.signal() {
+                        format!("Task '{label}' aborted: {sig}")
+                    } else if st.exit_code() == term_wm_ui_components::SIGINT_EXIT_CODE
+                        || st.exit_code() == term_wm_ui_components::WINDOWS_CTRL_C_EXIT_CODE
+                    {
+                        format!("Task '{label}' aborted: Interrupted")
+                    } else if !st.success() {
+                        format!("Task '{label}' completed with exit code {}", st.exit_code())
+                    } else {
+                        format!("Task '{label}' completed")
+                    }
                 }
-                _ => format!("Task '{label}' completed"),
+                None => format!("Task '{label}' connection dropped"),
             };
 
             self.wm()

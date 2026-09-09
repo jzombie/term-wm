@@ -66,6 +66,10 @@ fn force_native_selection(modifiers: KeyModifiers) -> bool {
 const SGR_BRIGHT_BLACK: &str = "\x1b[90m";
 /// SGR escape that resets all attributes after the completion marker.
 const SGR_RESET: &str = "\x1b[0m";
+/// Exit code convention for a process killed by SIGINT (128 + signal 2).
+pub const SIGINT_EXIT_CODE: u32 = 130;
+/// Windows exit code for Ctrl-C (STATUS_CONTROL_C_EXIT).
+pub const WINDOWS_CTRL_C_EXIT_CODE: u32 = 3221225786;
 
 pub struct TerminalComponent {
     hitbox_id: HitboxId,
@@ -420,11 +424,23 @@ impl TerminalComponent {
     /// Safe to call after the child has exited (bypasses the closed PTY master).
     pub fn append_process_exit(&mut self, status: Option<&portable_pty::ExitStatus>) {
         let msg = match status {
-            Some(st) if !st.success() => format!(
-                "\r\n{SGR_BRIGHT_BLACK}[Process completed with exit code: {}]{SGR_RESET}\r\n",
-                st.exit_code()
-            ),
-            _ => format!("\r\n{SGR_BRIGHT_BLACK}[Process completed]{SGR_RESET}\r\n"),
+            Some(st) => {
+                if let Some(sig) = st.signal() {
+                    format!("\r\n{SGR_BRIGHT_BLACK}[Process aborted: {sig}]{SGR_RESET}\r\n")
+                } else if st.exit_code() == SIGINT_EXIT_CODE
+                    || st.exit_code() == WINDOWS_CTRL_C_EXIT_CODE
+                {
+                    format!("\r\n{SGR_BRIGHT_BLACK}[Process aborted: Interrupted]{SGR_RESET}\r\n")
+                } else if !st.success() {
+                    format!(
+                        "\r\n{SGR_BRIGHT_BLACK}[Process completed with exit code: {}]{SGR_RESET}\r\n",
+                        st.exit_code()
+                    )
+                } else {
+                    format!("\r\n{SGR_BRIGHT_BLACK}[Process completed]{SGR_RESET}\r\n")
+                }
+            }
+            None => format!("\r\n{SGR_BRIGHT_BLACK}[Process connection dropped]{SGR_RESET}\r\n"),
         };
         let parser_arc = self.pane.borrow_mut().shared_parser();
         let mut parser = parser_arc.lock().unwrap_or_else(|err| err.into_inner());
@@ -473,6 +489,13 @@ impl TerminalComponent {
 
     pub fn exit_status(&self) -> Option<portable_pty::ExitStatus> {
         self.pane.borrow().exit_status()
+    }
+
+    /// Attempt to reap the child and populate exit_status without firing callbacks.
+    /// Retries with brief backoff to allow the kernel to finalize process teardown
+    /// after PTY pipe EOF. Returns true once the child has been reaped.
+    pub fn try_reap(&mut self) -> bool {
+        self.pane.borrow_mut().try_reap()
     }
 
     pub fn take_exit_status(&mut self) -> Option<portable_pty::ExitStatus> {
@@ -3388,7 +3411,7 @@ mod tests {
     }
 
     #[test]
-    fn append_process_exit_none_shows_generic_completed() {
+    fn append_process_exit_none_shows_connection_dropped() {
         let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
         term.append_process_exit(None);
 
@@ -3396,12 +3419,75 @@ mod tests {
         let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen().contents();
         assert!(
-            screen.contains("[Process completed]"),
-            "None status must show generic '[Process completed]', got: {screen}"
+            screen.contains("[Process connection dropped]"),
+            "None status must show '[Process connection dropped]', got: {screen}"
         );
         assert!(
             !screen.contains("exit code"),
             "None status must NOT show exit code, got: {screen}"
+        );
+    }
+
+    #[test]
+    fn append_process_exit_signal_shows_aborted_label() {
+        use portable_pty::ExitStatus;
+
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        let status = ExitStatus::with_signal("Terminated");
+        term.append_process_exit(Some(&status));
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process aborted: Terminated]"),
+            "signal death must show '[Process aborted: Terminated]', got: {screen}"
+        );
+        assert!(
+            !screen.contains("exit code"),
+            "signal death must NOT show exit code, got: {screen}"
+        );
+    }
+
+    #[test]
+    fn append_process_exit_sigint_code_shows_aborted_label() {
+        use portable_pty::ExitStatus;
+
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        let status = ExitStatus::with_exit_code(SIGINT_EXIT_CODE);
+        term.append_process_exit(Some(&status));
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process aborted: Interrupted]"),
+            "exit code 130 must show '[Process aborted: Interrupted]', got: {screen}"
+        );
+        assert!(
+            !screen.contains("exit code"),
+            "exit code 130 must NOT show 'exit code', got: {screen}"
+        );
+    }
+
+    #[test]
+    fn append_process_exit_windows_ctrl_c_shows_aborted_label() {
+        use portable_pty::ExitStatus;
+
+        let mut term = TerminalComponent::from_pane(Box::new(TestPane::new(24)));
+        let status = ExitStatus::with_exit_code(WINDOWS_CTRL_C_EXIT_CODE);
+        term.append_process_exit(Some(&status));
+
+        let parser = term.pane.borrow_mut().shared_parser();
+        let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = parser.screen().contents();
+        assert!(
+            screen.contains("[Process aborted: Interrupted]"),
+            "Windows Ctrl-C exit code must show '[Process aborted: Interrupted]', got: {screen}"
+        );
+        assert!(
+            !screen.contains("exit code"),
+            "Windows Ctrl-C exit code must NOT show 'exit code', got: {screen}"
         );
     }
 

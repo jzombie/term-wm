@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.7-alpha] - 2026-09-09
+
+### Added
+
+- `--util copy` CLI flag and `{wm.exe}` task placeholder for clipboard pipelines in project tasks (#312).
+
+### Changed
+
+- Process completion messages now distinguish signal-killed processes: signal deaths display `[Process aborted: <signal name>]` and Ctrl-C exits (exit code 130) display `[Process aborted: Interrupted]` instead of `[Process completed]` (#337).
+- Bumped `smallvec` from 1.15.2 to 1.16.0 (#342).
+
+### Fixed
+
+- Invalid CLI flags after a command (e.g., `term-wm vim --unknown`) are now rejected by clap instead of being silently passed to the shell (#332).
+
 ## [0.10.6-alpha] - 2026-08-28
 
 ### Fixed
