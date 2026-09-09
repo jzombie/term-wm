@@ -10,6 +10,11 @@ use std::path::{Path, PathBuf};
 
 use crate::clipboard::{Clipboard, ClipboardConfig, ClipboardError};
 
+/// Bare `--force-osc52` flag name (no leading dashes), shared by both copy
+/// frontends (`term-wm --util copy` positional scan and the `term-copy`
+/// clap interface) so the surface cannot drift between them.
+pub const FORCE_OSC52_FLAG: &str = "force-osc52";
+
 /// Message printed when neither a FILE argument nor piped stdin is available.
 ///
 /// With an interactive (TTY) stdin there is nothing to read; reading would
