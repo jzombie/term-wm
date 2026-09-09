@@ -599,6 +599,31 @@ impl Pty {
         self.exit_status.take()
     }
 
+    /// Attempt to reap the child and populate exit_status without firing callbacks.
+    /// Retries with brief backoff to allow the kernel to finalize process teardown
+    /// after PTY pipe EOF. Returns true once the child has been reaped.
+    pub fn try_reap(&mut self) -> bool {
+        if self.exited {
+            return true;
+        }
+        let Some(child) = self.child.as_mut() else {
+            self.exited = true;
+            return true;
+        };
+
+        for _ in 0..5 {
+            if let Ok(Some(status)) = child.try_wait() {
+                self.exited = true;
+                self.exit_status = Some(status);
+                self.child = None;
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        false
+    }
+
     /// Kill the child process if present.
     ///
     /// On Windows the whole contained tree is terminated via the Job Object
