@@ -22,7 +22,11 @@ const COPY_USAGE: &str = "usage: term-wm --util copy [--force-osc52] [FILE]";
 /// For copies whose stdout is captured by a framework that forwards bytes
 /// verbatim to a real terminal (e.g. an OxDock `RUN` step), restoring the
 /// terminal-emulator clipboard path that the TTY gate would otherwise skip.
-const COPY_FORCE_OSC52_ARG: &str = "--force-osc52";
+/// Spelled via the shared [`term_clipboard::FORCE_OSC52_FLAG`] so both copy
+/// frontends stay identical.
+fn is_force_osc52_arg(arg: &str) -> bool {
+    arg.strip_prefix("--") == Some(term_clipboard::FORCE_OSC52_FLAG)
+}
 
 /// Usage line for the `oxdock` utility (exactly one script PATH in v1).
 #[cfg(feature = "oxdock")]
@@ -65,7 +69,7 @@ fn copy_force_osc52(args: &[String]) -> (bool, Vec<String>) {
     let mut rest = Vec::with_capacity(args.len());
     let mut force = false;
     for arg in args {
-        if arg == COPY_FORCE_OSC52_ARG {
+        if is_force_osc52_arg(arg) {
             force = true;
         } else {
             rest.push(arg.clone());
@@ -154,16 +158,18 @@ mod tests {
     }
 
     /// The force flag separates from positionals in any order, leaving the
-    /// FILE mapping untouched.
+    /// FILE mapping untouched. Inputs derive from the shared const so a
+    /// rename breaks this test instead of drifting silently.
     #[test]
     fn copy_force_flag_splits_from_positionals() {
+        let flag = format!("--{}", term_clipboard::FORCE_OSC52_FLAG);
         let (force, rest) = copy_force_osc52(&[]);
         assert!(!force);
         assert!(rest.is_empty());
-        let (force, rest) = copy_force_osc52(&["--force-osc52".to_string()]);
+        let (force, rest) = copy_force_osc52(std::slice::from_ref(&flag));
         assert!(force);
         assert!(rest.is_empty());
-        let (force, rest) = copy_force_osc52(&["a.txt".to_string(), "--force-osc52".to_string()]);
+        let (force, rest) = copy_force_osc52(&["a.txt".to_string(), flag]);
         assert!(force);
         assert_eq!(rest, vec!["a.txt".to_string()]);
     }
