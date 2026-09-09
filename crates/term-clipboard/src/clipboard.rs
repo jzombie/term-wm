@@ -139,6 +139,13 @@ pub struct ClipboardConfig {
     /// truncated at a UTF-8 char boundary.  Default 1 MB
     /// ([`DEFAULT_MAX_OSC52_BYTES`]).
     pub osc52_limit: usize,
+    /// Emit OSC 52 even when stdout is not a terminal.  Default `false`:
+    /// the TTY gate keeps raw escape bytes out of piped data.  Set to
+    /// `true` only when stdout is captured by a framework that forwards
+    /// bytes verbatim to a real terminal (e.g. an OxDock `RUN` step whose
+    /// output reaches the host through `WITH_IO` piping), so the terminal
+    /// emulator still receives the sequence.
+    pub osc52_force: bool,
 }
 
 impl Default for ClipboardConfig {
@@ -146,6 +153,7 @@ impl Default for ClipboardConfig {
         Self {
             osc52_enabled: true,
             osc52_limit: DEFAULT_MAX_OSC52_BYTES,
+            osc52_force: false,
         }
     }
 }
@@ -299,6 +307,7 @@ impl ClipboardBackend for InMemoryBackend {
 pub struct Osc52Backend {
     enabled: bool,
     limit: usize,
+    force: bool,
     /// Captured OSC 52 output — only present in test builds so that tests can
     /// verify the OSC 52 path was exercised alongside the other backends.
     #[cfg(test)]
@@ -310,6 +319,7 @@ impl Osc52Backend {
         Self {
             enabled: config.osc52_enabled,
             limit: config.osc52_limit,
+            force: config.osc52_force,
             #[cfg(test)]
             output: Vec::new(),
         }
@@ -328,9 +338,11 @@ impl ClipboardBackend for Osc52Backend {
         // Only emit to an active terminal.  In an MCP server / daemon / IPC
         // worker stdout is a structured protocol stream, and a redirected
         // pipe/file must not be polluted with raw escape bytes — so the TTY
-        // check is what keeps this backend out of non-terminal stdout.
+        // gate keeps this backend out of non-terminal stdout.  `force`
+        // bypasses the gate for callers whose stdout is captured by a
+        // framework that forwards bytes verbatim to a real terminal.
         #[cfg(not(test))]
-        if std::io::stdout().is_terminal() {
+        if std::io::stdout().is_terminal() || self.force {
             let mut out = std::io::stdout().lock();
             set_via_osc52_with_writer(osc52_text, &mut out)?;
         }
@@ -338,6 +350,7 @@ impl ClipboardBackend for Osc52Backend {
         // pipe, so the TTY gate is intentionally bypassed here).
         #[cfg(test)]
         {
+            tracing::debug!("clipboard: set OSC 52 test capture (force={})", self.force);
             let mut buf = Vec::new();
             set_via_osc52_with_writer(osc52_text, &mut buf)?;
             self.output = buf;
@@ -1257,6 +1270,7 @@ mod tests {
             Box::new(Osc52Backend::new(ClipboardConfig {
                 osc52_enabled: true,
                 osc52_limit: 8,
+                ..ClipboardConfig::default()
             })),
         ]);
 
@@ -1288,6 +1302,7 @@ mod tests {
         let mut cb = Clipboard::with_backends(vec![Box::new(Osc52Backend::new(ClipboardConfig {
             osc52_enabled: true,
             osc52_limit: 5,
+            ..ClipboardConfig::default()
         }))]);
 
         // "héllo" — 'é' is 2 bytes.  A byte-5 cut would land inside 'é';

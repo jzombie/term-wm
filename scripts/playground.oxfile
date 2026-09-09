@@ -1,0 +1,8 @@
+# Playground script: proves the injected identity + internal pipes.
+# Hack on this freely. Run with:
+#   term-wm --util oxdock scripts/playground.oxfile
+# or via the "ox: playground ..." tasks in .term-wm/tasks.json.
+INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID]
+WORKSPACE LOCAL
+ECHO playground pid is {{ env:TERM_WM_PID }}
+ASSERT_STDOUT playground pid is

@@ -1,0 +1,23 @@
+# Playground copy flow: producer -> transform -> `--util copy` consumer,
+# all routed through internal WITH_IO pipes (no host shell pipes).
+# Run via the "ox: playground copy diff" task, or directly:
+#   term-wm --util oxdock scripts/playground_copy.oxfile
+# Tweak the middle step, then check the paste buffer.
+# NOTE: the consumer lines are platform-guarded because RUN executes through
+# the platform shell, so the env-var reference spelling differs per platform.
+INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID]
+WORKSPACE LOCAL
+WITH_IO [stdout=pipe:out] ECHO "--- CLIPBOARD START ---"
+WITH_IO [stdout=pipe:raw] RUN git diff
+# Transform slot: EXPAND renders the stream; double-brace placeholders in
+# the content resolve strictly (undeclared keys are fatal). True content
+# mangling (e.g. wrapping bytes in scripts/clipboard_template.txt) needs
+# command output bound to a variable, which the DSL cannot do yet; it lands
+# with rust-oxdock#111 ("Unified LET capture"), after which this step
+# becomes e.g. LET $body = RUN git diff + EXPAND template.txt SLOT=$body.
+#   https://github.com/jzombie/rust-oxdock/issues/111
+WITH_IO [stdin=pipe:raw, stdout=pipe:out] EXPAND
+WITH_IO [stdout=pipe:out] ECHO "--- CLIPBOARD END ---"
+
+[unix] WITH_IO [stdin=pipe:out] RUN "$TERM_WM_EXE" --util copy -- --force-osc52
+[windows] WITH_IO [stdin=pipe:out] RUN "%TERM_WM_EXE%" --util copy -- --force-osc52

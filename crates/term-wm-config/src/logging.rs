@@ -10,9 +10,10 @@
 //! platform details from leaking into the config crate.
 
 /// Default `RUST_LOG` filter when the environment variable is unset.
-/// `info` is the global default; `muxio` is forced to `warn` to silence
-/// high-frequency transport traces (≈95% volume reduction).
-pub const DEFAULT_DAEMON_LOG_FILTER: &str = "info,muxio=warn";
+/// `debug` is the global default so the in-app Debug Log shows diagnostic
+/// detail (e.g. clipboard backend decisions); `muxio` is forced to `warn`
+/// to silence high-frequency transport traces (≈95% volume reduction).
+pub const DEFAULT_DAEMON_LOG_FILTER: &str = "debug,muxio=warn";
 
 /// Maximum bytes per log file before rotation (10 MiB).
 pub const DEFAULT_LOG_MAX_BYTES: usize = 10 * 1024 * 1024;
