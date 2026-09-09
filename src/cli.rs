@@ -23,6 +23,10 @@ pub enum UtilAction {
     /// (system clipboard via arboard, shared in-memory buffer, OSC 52 to the
     /// host terminal). Mirrors the standalone `term-copy` binary.
     Copy,
+    /// Run an OxDock script file (`.oxfile`) in-process, then exit with the
+    /// script's exit code. The script path is the first positional; exactly
+    /// one positional is accepted in v1. Headless, like `Copy`.
+    Oxdock,
 }
 
 /// Simple CLI for launching `term-wm` with optional commands / window count.
@@ -118,7 +122,10 @@ pub struct Cli {
     /// Run a built-in utility, then exit (see `--help` output for the utility
     /// list). Any positional arguments after `--` are forwarded to the
     /// utility as its argument vector. For `copy`, the first positional is an
-    /// optional FILE path; with none, piped stdin is copied.
+    /// optional FILE path; with none, piped stdin is copied. `copy` also
+    /// accepts `--force-osc52` to emit OSC 52 even when stdout is captured
+    /// by a forwarding framework rather than a terminal. For `oxdock`,
+    /// the first positional is the required script PATH (exactly one).
     #[arg(long = "util", value_name = "UTIL")]
     pub util: Option<UtilAction>,
 }

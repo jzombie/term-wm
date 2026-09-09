@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- OxDock automation scripts now run in-process for clipboard pipelines and task steps, so copy content can be transformed by a script with no shell pipes involved (#346).
+- `--util copy --force-osc52` emits the terminal clipboard sequence even when stdout is captured by a forwarding framework, restoring the clipboard relay for scripted copy flows (#346).
+
+### Changed
+
+- The debug log now records diagnostic detail by default, so clipboard backend decisions and similar traces are visible without extra setup (#346).
+
 ## [0.10.7-alpha] - 2026-09-09
 
 ### Added

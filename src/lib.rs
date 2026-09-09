@@ -13,6 +13,8 @@ pub mod cli;
 pub mod components;
 pub mod internal_session;
 pub mod logging;
+#[cfg(feature = "oxdock")]
+pub mod oxdock_runner;
 pub mod prelude;
 pub mod term_wm_app;
 pub mod unified_event_source;
