@@ -863,6 +863,12 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
     // (no debounce) so the final payload of a burst is never dropped.
     let mut clipboard = clipboard.unwrap_or_else(Clipboard::new);
     const IO_BURST_BUDGET: usize = 256 * 1024; // 256 KB
+    // Safety net for mapped/unmapped transitions mid-burst: if no render
+    // (or background tick) clears dirty within this window, the reader
+    // breaks out and keeps draining instead of wedging forever. A bare
+    // wait→wait_timeout swap would NOT recover — the while loop would
+    // simply re-wait — so the timeout explicitly breaks the wait.
+    const DIRTY_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(50);
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -964,11 +970,21 @@ fn parser_read_loop(args: ParserReadLoopArgs) {
                 // IO_BURST_BUDGET bytes without a render, wait on the Condvar
                 // until the UI thread clears dirty. This prevents a single
                 // reader thread from consuming 100% CPU on infinite streams.
+                // The timeout is a recovery fallback only: a window parked
+                // mid-burst with no consumer clearing dirty (e.g. mid
+                // mapped/unmapped transition) resumes draining instead of
+                // wedging permanently.
                 if bytes_since_render >= IO_BURST_BUDGET {
                     let (lock, cvar) = &*dirty_cond;
                     let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
                     while dirty.load(Ordering::Acquire) {
-                        guard = cvar.wait(guard).unwrap_or_else(|err| err.into_inner());
+                        let (g, result) = cvar
+                            .wait_timeout(guard, DIRTY_WAIT_TIMEOUT)
+                            .unwrap_or_else(|err| err.into_inner());
+                        guard = g;
+                        if result.timed_out() {
+                            break;
+                        }
                     }
                     bytes_since_render = 0;
                 }
@@ -1470,6 +1486,77 @@ mod tests {
             *shared.read().unwrap(),
             Some("clip via pty".to_string()),
             "relayed set() must have written the shared in-memory buffer"
+        );
+    }
+
+
+    #[test]
+    fn burst_budget_wait_recovers_without_render() {
+        // Regression: an unmapped (never-rendered, never-screen()ed) window
+        // whose stream exceeds IO_BURST_BUDGET must still drain to completion
+        // so cross-chunk sequences reach their terminators and extract (this
+        // is how a 370KB background diff's OSC 52 payload was swallowed:
+        // the reader parked on the dirty condvar forever once past the
+        // budget, the terminator never arrived, and nothing was copied).
+        // No screen() call happens here on purpose — that IS the
+        // unmapped-window condition. Pre-fix this wedges the spawned thread;
+        // the deadline below fails the test instead of hanging the suite.
+        let payload_text = "D".repeat(300_000);
+        let wire = term_clipboard::format_osc52_bytes(&payload_text);
+        assert!(
+            wire.len() > 256 * 1024,
+            "payload must cross the burst budget, got {} bytes",
+            wire.len()
+        );
+        let mut args = make_parser_test_args(&wire);
+        let captured = Arc::new(Mutex::new(None));
+        args.osc52_text = Some(Arc::clone(&captured));
+        let handle = std::thread::spawn(move || parser_read_loop(args));
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "reader must drain past the burst budget with no render",
+            || handle.is_finished().then_some(()),
+        );
+        assert!(
+            handle.is_finished(),
+            "reader wedged waiting for a render that never comes"
+        );
+        handle
+            .join()
+            .unwrap_or_else(|_| panic!("reader thread panicked"));
+        assert_eq!(
+            captured.lock().unwrap().as_deref(),
+            Some(payload_text.as_str()),
+            "OSC 52 terminator must arrive so the full payload extracts"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unmapped_burst_child_drains_without_screen_calls() {
+        // End-to-end twin of the regression above through a real PTY: the
+        // child emits 400KB (over IO_BURST_BUDGET) while the test deliberately
+        // never calls screen() — the unmapped-window condition. Pre-fix the
+        // reader parked on dirty and the child blocked on the full master
+        // forever; AutoKillPty still reaps it on drop if we fail.
+        let mut cmd = CommandBuilder::new("head");
+        cmd.args(["-c", "400000", "/dev/zero"]);
+        let size = PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        let mut pty = AutoKillPty::spawn(cmd, size, 100).expect("spawn");
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "reader must drain 400KB with no screen() calls",
+            || (pty.bytes_received() >= 400_000).then_some(()),
+        );
+        wait_for(
+            PTY_EVENT_DEADLINE,
+            "child must exit, not linger blocked on the master",
+            || pty.has_exited().then_some(()),
         );
     }
 
