@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [UNRELEASED]
 
+### Added
+
+- Project tasks can now run in the background, staying hidden until they fail: expected exits show a completion toast and close automatically, while unexpected exits pop the window into view.
+
 ### Changed
 
 - Propagate explicit exit codes from OxDock scripts

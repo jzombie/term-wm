@@ -99,6 +99,28 @@ const DEFAULT_STANDALONE_MENU_ACTIONS: &[TermWmAction] = &[
 /// Returning `true` marks the action consumed.
 pub type CustomActionHandler<C> = Box<dyn FnMut(&TermWmAction, &mut TermWmApp<C>) -> bool>;
 
+/// Bookkeeping for a background (unmapped) project task window.
+///
+/// `expected` is the normalized expected-exit list (`[0]` when the task
+/// declares none); membership decides toast-and-unregister vs reveal.
+#[derive(Debug, Clone)]
+struct BackgroundTask {
+    expected: Vec<i32>,
+}
+
+/// Map a reaped PTY status to a comparable exit code.
+///
+/// Returns `None` for signal deaths (a killed task always reveals, never
+/// silently unregisters) and lets the caller treat a missing status the
+/// same way. Clean exits — including shell-convention codes like 130 —
+/// compare against the task's expected list.
+fn pty_exit_code(status: &portable_pty::ExitStatus) -> Option<i32> {
+    if status.signal().is_some() {
+        return None;
+    }
+    Some(status.exit_code() as i32)
+}
+
 /// A self-contained window manager app that eliminates dual-trait boilerplate.
 ///
 /// Generic parameter `C` allows injecting custom root-level components
@@ -226,6 +248,9 @@ where
     project_task_windows: HashMap<WindowKey, String>,
     /// Windows that have already been toasted on exit — prevents re-close on duplicate AppExited.
     exited_task_windows: HashSet<WindowKey>,
+    /// Background (unmapped) task windows awaiting exit classification.
+    /// Purged in `close_window` alongside the maps above.
+    background_task_windows: HashMap<WindowKey, BackgroundTask>,
     palette_tick_ticker: term_wm_core::utils::PeriodicTicker,
     #[cfg(feature = "session-persistence")]
     palette_ipc_ticker: term_wm_core::utils::PeriodicTicker,
@@ -390,6 +415,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             project_root: None,
             project_task_windows: HashMap::new(),
             exited_task_windows: HashSet::new(),
+            background_task_windows: HashMap::new(),
             palette_tick_ticker: term_wm_core::utils::PeriodicTicker::new_suppressed(
                 PALETTE_TICK_INTERVAL,
             ),
@@ -701,6 +727,21 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         initial_command: Option<String>,
         title: impl Into<String>,
     ) -> io::Result<WindowKey> {
+        self.spawn_terminal_window_with_placement(cmd, initial_command, title, true)
+    }
+
+    /// Spawn a wired terminal window, mapped or unmapped.
+    ///
+    /// PTY geometry always starts at [`TerminalComponent::default_pty_size`]
+    /// (80x24), so unmapped windows never hand zero rows/cols to
+    /// `portable_pty`. Unmapped windows skip tiling and focus entirely.
+    fn spawn_terminal_window_with_placement(
+        &mut self,
+        cmd: portable_pty::CommandBuilder,
+        initial_command: Option<String>,
+        title: impl Into<String>,
+        mapped: bool,
+    ) -> io::Result<WindowKey> {
         let scrollback = self.wm.config().scrollback_lines;
         let size = TerminalComponent::default_pty_size();
         let pty = Pty::spawn_with_scrollback(cmd, size, scrollback).map_err(io::Error::other)?;
@@ -714,9 +755,16 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
 
         let mut sv = ScrollViewComponent::new(pane);
         sv.set_keyboard_mode(ScrollKeyMode::PaginationOnly);
-        let key = self
-            .wm
-            .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+        let key = if mapped {
+            self.wm
+                .open_window(AppRootComponent::Core(CoreWmComponent::Terminal(sv)))
+        } else {
+            let key = self
+                .wm
+                .spawn(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+            self.wm.transition_window(key, WindowState::Unmapped);
+            key
+        };
         self.wm.set_window_tracker(key, tracker);
 
         // Attach status callback AFTER open_window so the closure captures
@@ -837,19 +885,34 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
     pub fn close_window(&mut self, key: WindowKey) {
         self.project_task_windows.remove(&key);
         self.exited_task_windows.remove(&key);
+        self.background_task_windows.remove(&key);
         self.wm.close_window(key);
         self.publish_wm_stats();
     }
 
-    /// Spawn a project task in a new terminal window.
+    /// Spawn a project task in a new terminal window — or, when the task
+    /// sets `background`, as an unmapped window that stays out of the layout
+    /// and focus ring until exit classification in `on_terminal_exited`.
     pub fn spawn_project_task(&mut self, task: &ProjectTaskConfig) -> io::Result<WindowKey> {
         let cmd = self
             .command_builder_for_task(task)
             .ok_or_else(|| io::Error::other("task has no valid command"))?;
-        let key = self.spawn_terminal_window(cmd, None, task.label.clone())?;
+        let key = if task.background {
+            self.spawn_terminal_window_with_placement(cmd, None, task.label.clone(), false)?
+        } else {
+            self.spawn_terminal_window(cmd, None, task.label.clone())?
+        };
         self.wm()
             .set_window_title_lock(key, task.label.clone(), true);
         self.project_task_windows.insert(key, task.label.clone());
+        if task.background {
+            self.background_task_windows.insert(
+                key,
+                BackgroundTask {
+                    expected: task.expected_codes(),
+                },
+            );
+        }
         // spawn_terminal_window already published; the new task entry changes
         // the running-task count, so republish with the updated snapshot.
         self.publish_wm_stats();
@@ -903,6 +966,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         if self.wm().window_state(key).is_none() {
             self.project_task_windows.remove(&key);
             self.exited_task_windows.remove(&key);
+            self.background_task_windows.remove(&key);
             self.publish_wm_stats();
             return;
         }
@@ -919,9 +983,13 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             .get(&key)
             .cloned()
             .unwrap_or_default();
+        let bg_expected = self
+            .background_task_windows
+            .get(&key)
+            .map(|bg| bg.expected.clone());
 
         // 1. Capture focus BEFORE mutable component borrows
-        let is_focused = self.wm().focused_window() == key;
+        let mut is_focused = self.wm().focused_window() == key;
 
         // 2. Force a blocking reap with temporal backoff because we know EOF was reached.
         // The reader thread fired Exited before has_exited() captured the real status.
@@ -938,6 +1006,33 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             }
             _ => None,
         });
+
+        // 3b. Background routing: expected exit → toast + unregister (return);
+        // unexpected (bad code, signal death, dropped connection) → reveal and
+        // continue below as a focused foreground task. transition_window
+        // reattaches the tiling tree itself, so no separate tile call is
+        // needed; the window is focused, so no toast fires below.
+        if let Some(expected) = bg_expected {
+            match status.as_ref().and_then(pty_exit_code) {
+                Some(code) if expected.contains(&code) => {
+                    let notif_body = if code == 0 {
+                        format!("Task '{label}' completed")
+                    } else {
+                        format!("Task '{label}' completed with exit code {code}")
+                    };
+                    self.wm()
+                        .push_notification(&notif_body, std::time::Duration::from_secs(3));
+                    tracing::info!(?key, %label, "background task exited expected; unregistering");
+                    self.close_window(key);
+                    return;
+                }
+                _ => {
+                    self.wm().transition_window(key, WindowState::Mapped);
+                    self.wm().focus_window_key(key);
+                    is_focused = true;
+                }
+            }
+        }
 
         // 4. Inject in-buffer completion marker directly into VT100 parser
         if let Some(AppRootComponent::Core(CoreWmComponent::Terminal(scroll_view))) =
@@ -2084,6 +2179,253 @@ mod tests {
         );
     }
 
+    // ── background (unmapped) task exit routing ──
+
+    /// Helper: open a MockPane terminal as an unmapped background task window.
+    fn open_mock_background_terminal(
+        app: &mut TermWmApp<NoopComponent>,
+        status: Option<portable_pty::ExitStatus>,
+        label: &str,
+        expected: Vec<i32>,
+    ) -> WindowKey {
+        let pane = MockPane::with_exit_status(status);
+        let terminal = TerminalComponent::from_pane(Box::new(pane));
+        let sv = term_wm_ui_components::scroll_view::ScrollViewComponent::new(terminal);
+        let key = app.wm.spawn(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+        app.wm().transition_window(key, WindowState::Unmapped);
+        app.project_task_windows.insert(key, label.into());
+        app.background_task_windows.insert(
+            key,
+            BackgroundTask { expected },
+        );
+        key
+    }
+
+    fn last_notification_body(app: &mut TermWmApp<NoopComponent>) -> String {
+        app.wm()
+            .notifications()
+            .renderable()
+            .next()
+            .map(|t| t.message.to_string())
+            .unwrap_or_default()
+    }
+
+    /// Expected exit toasts and unregisters the window.
+    #[test]
+    fn background_task_expected_exit_toasts_and_unregisters() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_background_terminal(
+            &mut app,
+            Some(portable_pty::ExitStatus::with_exit_code(0)),
+            "bg-task",
+            vec![0],
+        );
+        assert_eq!(
+            app.wm().window_state(key),
+            Some(WindowState::Unmapped),
+            "background window must start unmapped"
+        );
+        assert!(
+            !app.wm().mapped_windows().contains(&key),
+            "background window must stay out of the layout"
+        );
+
+        app.on_terminal_exited(key);
+
+        assert!(
+            app.wm().window_state(key).is_none(),
+            "expected exit must unregister the window"
+        );
+        assert!(
+            !app.background_task_windows.contains_key(&key),
+            "background bookkeeping must be purged"
+        );
+        assert!(
+            !app.project_task_windows.contains_key(&key),
+            "task bookkeeping must be purged"
+        );
+        let body = last_notification_body(&mut app);
+        assert!(
+            body.contains("bg-task") && body.contains("completed"),
+            "expected exit must toast completion: got {body}"
+        );
+        assert!(
+            !body.contains("exit code"),
+            "zero exit toast names no code: got {body}"
+        );
+    }
+
+    /// Expected nonzero exit toasts with the code and unregisters.
+    #[test]
+    fn background_task_expected_nonzero_exit_toasts_code_and_unregisters() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_background_terminal(
+            &mut app,
+            Some(portable_pty::ExitStatus::with_exit_code(2)),
+            "bg-lint",
+            vec![0, 2],
+        );
+
+        app.on_terminal_exited(key);
+
+        assert!(
+            app.wm().window_state(key).is_none(),
+            "listed nonzero exit must unregister the window"
+        );
+        let body = last_notification_body(&mut app);
+        assert!(
+            body.contains("bg-lint") && body.contains("exit code 2"),
+            "nonzero expected exit must name the code: got {body}"
+        );
+    }
+
+    /// Unexpected exit maps the window into the layout and focuses it.
+    #[test]
+    fn background_task_unexpected_exit_reveals_and_keeps_open() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_background_terminal(
+            &mut app,
+            Some(portable_pty::ExitStatus::with_exit_code(1)),
+            "bg-fail",
+            vec![0],
+        );
+
+        app.on_terminal_exited(key);
+
+        assert_eq!(
+            app.wm().window_state(key),
+            Some(WindowState::Mapped),
+            "unexpected exit must map the window"
+        );
+        assert_eq!(
+            app.wm().focused_window(),
+            key,
+            "unexpected exit must focus the window"
+        );
+        assert!(
+            app.wm().mapped_windows().contains(&key),
+            "revealed window must join the layout"
+        );
+    }
+
+    /// Signal death always reveals, even when the numeric code is listed.
+    #[test]
+    fn background_task_signal_death_reveals() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_background_terminal(
+            &mut app,
+            Some(portable_pty::ExitStatus::with_signal("SIGTERM")),
+            "bg-killed",
+            vec![0, 1],
+        );
+
+        app.on_terminal_exited(key);
+
+        assert_eq!(
+            app.wm().window_state(key),
+            Some(WindowState::Mapped),
+            "signal death must reveal the window"
+        );
+        assert_eq!(app.wm().focused_window(), key);
+    }
+
+    /// Dropped connection (`None` status) reveals rather than unregistering.
+    #[test]
+    fn background_task_dropped_connection_reveals() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_background_terminal(&mut app, None, "bg-drop", vec![0]);
+
+        app.on_terminal_exited(key);
+
+        assert_eq!(
+            app.wm().window_state(key),
+            Some(WindowState::Mapped),
+            "dropped connection must reveal the window"
+        );
+    }
+
+    /// `close_window` purges background bookkeeping for windows destroyed
+    /// outside `on_terminal_exited`.
+    #[test]
+    fn close_window_purges_background_bookkeeping() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        let key = open_mock_background_terminal(
+            &mut app,
+            Some(portable_pty::ExitStatus::with_exit_code(0)),
+            "bg-early",
+            vec![0],
+        );
+
+        app.close_window(key);
+
+        assert!(
+            !app.background_task_windows.contains_key(&key),
+            "close_window must purge background entries"
+        );
+        assert!(
+            !app.project_task_windows.contains_key(&key),
+            "close_window must purge task entries"
+        );
+    }
+
+    /// `spawn_project_task` with `background` registers an unmapped window
+    /// that never steals focus.
+    #[test]
+    fn spawn_project_task_background_registers_unmapped() {
+        let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
+        #[cfg(unix)]
+        let task = ProjectTaskConfig {
+            label: "bg".into(),
+            command: Some("true".into()),
+            args: None,
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+            platforms: None,
+            background: true,
+            expected_exit_codes: None,
+        };
+        #[cfg(windows)]
+        let task = ProjectTaskConfig {
+            label: "bg".into(),
+            command: Some("cmd".into()),
+            args: Some(vec!["/c".into(), "exit".into(), "0".into()]),
+            cwd: None,
+            env: Default::default(),
+            environments: Vec::new(),
+            platforms: None,
+            background: true,
+            expected_exit_codes: None,
+        };
+        let key = app.spawn_project_task(&task).expect("background spawn");
+        assert_eq!(
+            app.wm().window_state(key),
+            Some(WindowState::Unmapped),
+            "background spawn must stay unmapped"
+        );
+        assert!(
+            !app.wm().mapped_windows().contains(&key),
+            "background spawn must stay out of the layout"
+        );
+        assert_ne!(
+            app.wm().focused_window(),
+            key,
+            "background spawn must not steal focus"
+        );
+        assert!(
+            app.background_task_windows.contains_key(&key),
+            "background spawn must be tracked"
+        );
+        assert_eq!(
+            app.background_task_windows
+                .get(&key)
+                .map(|bg| bg.expected.clone()),
+            Some(vec![0]),
+            "omitted expected_exit_codes normalizes to [0]"
+        );
+        app.close_window(key);
+    }
+
     // ── command_builder_for_task tests ──
 
     #[test]
@@ -2098,6 +2440,8 @@ mod tests {
             env: Default::default(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -2123,6 +2467,8 @@ mod tests {
             env: Default::default(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -2148,6 +2494,8 @@ mod tests {
             env: Default::default(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let argv: Vec<&std::ffi::OsStr> = cmd.get_argv().iter().map(|s| s.as_os_str()).collect();
@@ -2169,6 +2517,8 @@ mod tests {
             env: Default::default(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         let cwd = cmd.get_cwd().expect("cwd must be set");
@@ -2193,6 +2543,8 @@ mod tests {
             env,
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let cmd = app.command_builder_for_task(&task).unwrap();
         assert_eq!(
@@ -2213,6 +2565,8 @@ mod tests {
             env: Default::default(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(
             app.command_builder_for_task(&task).is_none(),
@@ -2233,6 +2587,8 @@ mod tests {
             env: Default::default(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let result = app.spawn_project_task(&task);
         assert!(result.is_err(), "must fail for empty command");
@@ -2254,6 +2610,8 @@ mod tests {
             env: Default::default(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let result = app.spawn_project_task(&task);
         assert!(result.is_err(), "must fail for malformed command");

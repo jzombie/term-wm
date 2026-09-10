@@ -32,6 +32,10 @@ pub const PLATFORM_MACOS: &str = "macos";
 /// Darwin spelling (`darwin`).
 pub const PLATFORM_DARWIN_ALIAS: &str = "darwin";
 
+/// Default expected exit code when a task declares no explicit list.
+/// An absent `expected_exit_codes` (or an explicit empty array) means `[0]`.
+pub const DEFAULT_EXPECTED_EXIT_CODE: i32 = 0;
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct ProjectTaskConfig {
     pub label: String,
@@ -50,6 +54,16 @@ pub struct ProjectTaskConfig {
     /// `darwin` accepted as an alias for `macos`.
     #[serde(default)]
     pub platforms: Option<Vec<String>>,
+    /// Background execution: when true the task spawns as an unmapped window
+    /// (no layout tile, no focus). On exit with an expected code it toasts
+    /// and unregisters; on unexpected exit it maps and focuses for inspection.
+    #[serde(default)]
+    pub background: bool,
+    /// Exit codes treated as expected for background tasks. `None` (field
+    /// omitted) or an explicit empty array normalizes to
+    /// `[DEFAULT_EXPECTED_EXIT_CODE]`.
+    #[serde(default)]
+    pub expected_exit_codes: Option<Vec<i32>>,
 }
 
 /// Variables available during `{...}` placeholder substitution in task strings.
@@ -187,6 +201,18 @@ impl ProjectTaskConfig {
             Some(list) => list
                 .iter()
                 .any(|p| normalize_platform(p) == std::env::consts::OS),
+        }
+    }
+
+    /// Normalized expected exit codes for background-task exit classification.
+    ///
+    /// `None` (field omitted) and `Some(vec![])` (explicit empty array) both
+    /// mean `[DEFAULT_EXPECTED_EXIT_CODE]`, so every exit is unexpected only
+    /// when it differs from that set.
+    pub fn expected_codes(&self) -> Vec<i32> {
+        match &self.expected_exit_codes {
+            Some(codes) if !codes.is_empty() => codes.clone(),
+            _ => vec![DEFAULT_EXPECTED_EXIT_CODE],
         }
     }
 }
@@ -344,6 +370,36 @@ mod tests {
     }
 
     #[test]
+    fn background_fields_default_to_foreground() {
+        let tasks = serde_json::from_str::<Vec<ProjectTaskConfig>>(
+            r#"[{"label": "plain", "command": "echo"}]"#,
+        )
+        .expect("should parse");
+        assert!(!tasks[0].background);
+        assert_eq!(tasks[0].expected_exit_codes, None);
+        assert_eq!(tasks[0].expected_codes(), vec![DEFAULT_EXPECTED_EXIT_CODE]);
+    }
+
+    #[test]
+    fn background_fields_deserialize_explicitly() {
+        let tasks = serde_json::from_str::<Vec<ProjectTaskConfig>>(
+            r#"[{"label": "bg", "command": "echo", "background": true, "expected_exit_codes": [0, 2]}]"#,
+        )
+        .expect("should parse");
+        assert!(tasks[0].background);
+        assert_eq!(tasks[0].expected_codes(), vec![0, 2]);
+    }
+
+    #[test]
+    fn empty_expected_codes_normalizes_to_default() {
+        let tasks = serde_json::from_str::<Vec<ProjectTaskConfig>>(
+            r#"[{"label": "bg", "command": "echo", "background": true, "expected_exit_codes": []}]"#,
+        )
+        .expect("should parse");
+        assert_eq!(tasks[0].expected_codes(), vec![DEFAULT_EXPECTED_EXIT_CODE]);
+    }
+
+    #[test]
     fn argv_tokenizes_whole_command() {
         let task = ProjectTaskConfig {
             label: "test".into(),
@@ -353,6 +409,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(
             task.argv(),
@@ -375,6 +433,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(task.argv(), Some(vec!["cargo".into(), "build".into()]));
     }
@@ -389,6 +449,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(task.argv(), Some(vec!["cargo".into(), "check".into()]));
     }
@@ -403,6 +465,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(task.argv(), None);
     }
@@ -417,6 +481,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(task.argv(), None);
     }
@@ -433,6 +499,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(task.visible_in(Environment::Dev));
         assert!(task.visible_in(Environment::Prod));
@@ -449,6 +517,8 @@ mod tests {
             env: HashMap::new(),
             environments: vec!["dev".into()],
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(task.visible_in(Environment::Dev));
         assert!(!task.visible_in(Environment::Prod));
@@ -465,6 +535,8 @@ mod tests {
             env: HashMap::new(),
             environments: vec!["prod".into(), "test".into()],
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(!task.visible_in(Environment::Dev));
         assert!(task.visible_in(Environment::Prod));
@@ -481,6 +553,8 @@ mod tests {
             env: HashMap::new(),
             environments: vec!["staging".into()],
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(!task.visible_in(Environment::Dev));
         assert!(!task.visible_in(Environment::Prod));
@@ -684,6 +758,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(
             task.argv(),
@@ -753,6 +829,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let argv = task.argv_resolved(&ctx_with_pid(1)).expect("argv");
         assert_eq!(argv.len(), 3);
@@ -771,6 +849,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let argv = task.argv_resolved(&ctx_with_pid(7)).expect("argv");
         assert_eq!(
@@ -792,6 +872,8 @@ mod tests {
             env: [("TERM_WM_EXE".to_string(), "{wm.exe}".to_string())].into(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let resolved =
             resolve_task(&task, Path::new("/project"), &ctx_with_pid(3)).expect("resolved");
@@ -819,6 +901,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let argv = task.argv_resolved(&ctx_with_pid(77)).expect("argv");
         assert_eq!(
@@ -847,6 +931,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let argv = task.argv_resolved(&ctx_with_pid(9)).expect("argv");
         assert_eq!(argv.len(), 3);
@@ -865,6 +951,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(task.argv(), task.argv_resolved(&TaskVarContext::default()));
     }
@@ -885,6 +973,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms,
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(mk(None).visible_on_platform());
         assert!(mk(Some(Vec::new())).visible_on_platform());
@@ -900,6 +990,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: Some(vec![os_str().to_uppercase()]),
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(task.visible_on_platform());
     }
@@ -919,6 +1011,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: Some(vec![foreign.into()]),
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(!task.visible_on_platform());
     }
@@ -933,6 +1027,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: Some(vec!["Darwin".into()]),
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(task.visible_on_platform(), os_str() == PLATFORM_MACOS);
     }
@@ -975,6 +1071,8 @@ mod tests {
             env: [("OUT".to_string(), "/tmp/{wm.pid}.txt".to_string())].into(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let base = Path::new("/project");
         let resolved = resolve_task(&task, base, &ctx_with_pid(55)).expect("resolved");
@@ -999,6 +1097,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let resolved =
             resolve_task(&task, Path::new("/project"), &ctx_with_pid(1)).expect("resolved");
@@ -1015,6 +1115,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         let resolved = resolve_task(&task, Path::new("/base"), &ctx_with_pid(1)).expect("resolved");
         assert_eq!(resolved.cwd, Path::new("/base"));
@@ -1030,6 +1132,8 @@ mod tests {
             env: HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert!(resolve_task(&task, Path::new("/b"), &ctx_with_pid(1)).is_none());
     }
@@ -1049,6 +1153,8 @@ mod tests_disabled {
             env: std::collections::HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         };
         assert_eq!(
             task.argv(),
