@@ -60,5 +60,17 @@
         "env": { "TERM_WM_EXE": "{wm.exe}" },
         "environments": ["dev"],
         "platforms": ["windows"]
+    },
+    {
+        "label": "ox: playground demo",
+        "command": "\"{wm.exe}\" --util oxdock scripts/playground.oxfile",
+        "env": { "TERM_WM_EXE": "{wm.exe}", "TERM_WM_PID": "{wm.pid}" },
+        "environments": ["dev"]
+    },
+    {
+        "label": "ox: playground copy diff",
+        "command": "\"{wm.exe}\" --util oxdock scripts/playground_copy.oxfile",
+        "env": { "TERM_WM_EXE": "{wm.exe}", "TERM_WM_PID": "{wm.pid}" },
+        "environments": ["dev"]
     }
 ]

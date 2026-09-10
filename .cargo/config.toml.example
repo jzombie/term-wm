@@ -17,4 +17,12 @@ muxio-rpc-service-endpoint = { path = "../rust-muxio/extensions/muxio-rpc-servic
 muxio-tokio-rpc-ipc-client = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-client" }
 muxio-tokio-rpc-ipc-server = { path = "../rust-muxio/extensions/muxio-tokio-rpc-ipc-server" }
 muxio-tokio-mpsc-adapter = { path = "../rust-muxio/extensions/muxio-tokio-mpsc-adapter" }
+oxdock = { path = "../oxdock-rs/oxdock" }
+oxdock-build = { path = "../oxdock-rs/oxdock-build" }
+oxdock-cli = { path = "../oxdock-rs/oxdock-cli" }
+oxdock-macros = { path = "../oxdock-rs/oxdock-macros" }
+oxdock-core = { path = "../oxdock-rs/crates/oxdock-core" }
+oxdock-parser = { path = "../oxdock-rs/crates/oxdock-parser" }
+oxdock-fs = { path = "../oxdock-rs/crates/sys/oxdock-fs" }
+oxdock-process = { path = "../oxdock-rs/crates/sys/oxdock-process" }
 term-wm-vt100 = { path = "../term-wm-vt100" }

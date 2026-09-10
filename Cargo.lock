@@ -258,6 +258,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-buffer"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
 name = "block2"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -489,6 +498,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -508,6 +523,15 @@ name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "cpufeatures"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
@@ -616,6 +640,15 @@ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "crypto-common"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+dependencies = [
+ "hybrid-array",
 ]
 
 [[package]]
@@ -730,8 +763,19 @@ version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
- "block-buffer",
- "crypto-common",
+ "block-buffer 0.10.4",
+ "crypto-common 0.1.7",
+]
+
+[[package]]
+name = "digest"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+dependencies = [
+ "block-buffer 0.12.1",
+ "const-oid",
+ "crypto-common 0.2.2",
 ]
 
 [[package]]
@@ -1116,6 +1160,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360bd2cd76e0cd9032d42cf2922155cecea2685b0cfa4630c3246df030bcfd6"
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1181,6 +1231,15 @@ dependencies = [
  "cfg-if",
  "libc",
  "windows-link",
+]
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
+dependencies = [
+ "typenum",
 ]
 
 [[package]]
@@ -2033,6 +2092,150 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxdock"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85c626d8a0b7d7dd6d9db75ffd39caf87c9579f3225f1709ed8768a249abd0ab"
+dependencies = [
+ "oxdock-build",
+ "oxdock-cli",
+ "oxdock-core",
+ "oxdock-macros",
+ "oxdock-parser",
+]
+
+[[package]]
+name = "oxdock-build"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d58115842ad9f8f90797b9ed35f5a4785eff4e3198633cf65b76d86d6f357a4b"
+dependencies = [
+ "anyhow",
+ "oxdock-core",
+ "oxdock-embed",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-process",
+ "proc-macro2",
+ "sha2 0.11.0",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "oxdock-cli"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c48aad9341d3632b3349ba7b0c4bbeb4a2d276b88d591cea911ddc7088e7bea"
+dependencies = [
+ "anyhow",
+ "indoc",
+ "oxdock-core",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-process",
+ "tempfile",
+]
+
+[[package]]
+name = "oxdock-core"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2f6efd25caa5238663ebe21125f70f0964ddf212a8b95fb9e3a2a75b75ef54a"
+dependencies = [
+ "anyhow",
+ "indoc",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-process",
+ "serde_json",
+ "sha2 0.11.0",
+ "toml",
+]
+
+[[package]]
+name = "oxdock-embed"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30658b9e4adfc14ea588b638ed3ef79d5d538ed55ff78bfded8d407e9700741b"
+dependencies = [
+ "anyhow",
+ "oxdock-fs",
+ "proc-macro2",
+ "quote",
+ "sha2 0.11.0",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "oxdock-fs"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad129e5c8b6976f6e9eff4ac543c33fcb3ed6e788fbce35b4231cdf299e2952d"
+dependencies = [
+ "anyhow",
+ "glob",
+ "libc",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "oxdock-macros"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "993c0f3447183dd78e1fe3055f032772768e084c7e16783b7d72b5fd3ca7f791"
+dependencies = [
+ "anyhow",
+ "oxdock-build",
+ "oxdock-core",
+ "oxdock-embed",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-process",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "oxdock-parser"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03bcb9c907ca2176cf87fb51450ee60c57f49080d9e1b52798db13cf83f3069f"
+dependencies = [
+ "anyhow",
+ "indoc",
+ "line-ending",
+ "pest",
+ "pest_derive",
+ "proc-macro2",
+ "pulldown-cmark",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "oxdock-process"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affc3b9f1e6fcc226c057e529dc07b644e9768ab2223be551635582a7149a3d2"
+dependencies = [
+ "anyhow",
+ "libc",
+ "oxdock-fs",
+ "oxdock-parser",
+ "oxdock-sys-test-utils",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "oxdock-sys-test-utils"
+version = "0.11.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fec3fc001df48479b7e28d06c153d71004ab51844bb1735e3d1b7ad844254e9"
+
+[[package]]
 name = "page_size"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2106,9 +2309,9 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pest"
-version = "2.8.8"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7df728be843c7070fab6ab7c328c4e9e9d78e23bf749c0669c86ee7ebfa050a2"
+checksum = "6d45aeb61b4bf818e12d4205f2466f8c4748f85f4fce0146d1c03d69d753f0ad"
 dependencies = [
  "memchr",
  "ucd-trie",
@@ -2116,9 +2319,9 @@ dependencies = [
 
 [[package]]
 name = "pest_derive"
-version = "2.8.8"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e2dd6fc3b26b3462ee188aac870f5a41d398f1cd5e2408d16531bd71c9591fd"
+checksum = "89cc5a242e25ed4e7704d0be240f2cfbe20a8c27e7e252d94835be93d92dc39f"
 dependencies = [
  "pest",
  "pest_generator",
@@ -2126,9 +2329,9 @@ dependencies = [
 
 [[package]]
 name = "pest_generator"
-version = "2.8.8"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a7a9205cfb6f596a9e8b689c0a15f9ceb7a1aafae7aaf788150ac65b29975b6"
+checksum = "7abf21475cc3820fe4b2ca2dc2142902f67a02189f3b5b3a229f4febc01a43e5"
 dependencies = [
  "pest",
  "pest_meta",
@@ -2139,9 +2342,9 @@ dependencies = [
 
 [[package]]
 name = "pest_meta"
-version = "2.8.8"
+version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85abd351c0de1e8384fc791a0737111a350394937e92b956b743dac12429f57c"
+checksum = "adba4db388f687393c18c51348d44a41d870ca9df71a2c98172ea3035dc6936e"
 dependencies = [
  "pest",
 ]
@@ -2789,6 +2992,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "serial2"
 version = "0.2.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2831,8 +3043,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
- "cpufeatures",
- "digest",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -3116,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3126,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3139,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "term-logging"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "file-rotate",
  "libc",
@@ -3153,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3177,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3206,7 +3429,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3215,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3227,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3250,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3258,7 +3481,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "serial_test",
@@ -3268,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "term-test-support"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "serial_test",
  "tokio",
@@ -3276,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3290,6 +3513,8 @@ dependencies = [
  "muxio-rpc-service-endpoint",
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
+ "oxdock",
+ "oxdock-fs",
  "portable-pty",
  "proptest",
  "ratatui",
@@ -3324,7 +3549,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-config"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "serial_test",
  "tempfile",
@@ -3333,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3352,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3383,7 +3608,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3393,7 +3618,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitcode",
  "term-wm-layout-engine",
@@ -3401,14 +3626,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3431,11 +3656,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3452,7 +3677,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -3479,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3489,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3568,7 +3793,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "phf",
- "sha2",
+ "sha2 0.10.9",
  "signal-hook",
  "siphasher",
  "terminfo",
@@ -3770,6 +3995,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "1.1.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12c0ba9680044b4ce98d391a62094047eada0d64860b80166c39f4a6b5640785"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3798,6 +4038,12 @@ checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tracing"
@@ -4161,7 +4407,7 @@ checksum = "692daff6d93d94e29e4114544ef6d5c942a7ed998b37abdc19b17136ea428eb7"
 dependencies = [
  "getrandom 0.3.4",
  "mac_address",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
  "uuid",
 ]

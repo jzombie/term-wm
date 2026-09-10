@@ -8,7 +8,12 @@
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use crate::clipboard::{Clipboard, ClipboardError};
+use crate::clipboard::{Clipboard, ClipboardConfig, ClipboardError};
+
+/// Bare `--force-osc52` flag name (no leading dashes), shared by both copy
+/// frontends (`term-wm --util copy` positional scan and the `term-copy`
+/// clap interface) so the surface cannot drift between them.
+pub const FORCE_OSC52_FLAG: &str = "force-osc52";
 
 /// Message printed when neither a FILE argument nor piped stdin is available.
 ///
@@ -50,7 +55,19 @@ pub fn ingest_copy(
 /// [`COPY_EXIT_FAILURE`]). Used verbatim by both binaries so their user
 /// visible behavior stays identical; only the `label` differs.
 pub fn run_copy_util(file: Option<PathBuf>, label: &str) -> i32 {
-    let mut cb = Clipboard::new();
+    run_copy_util_with_config(file, label, ClipboardConfig::default())
+}
+
+/// Like [`run_copy_util`], but with an explicit [`ClipboardConfig`]: the
+/// `--force-osc52` frontend passes `osc52_force` so OSC 52 is emitted even
+/// when stdout is captured by a framework that forwards bytes verbatim to a
+/// real terminal (e.g. an OxDock `RUN` step).
+pub fn run_copy_util_with_config(
+    file: Option<PathBuf>,
+    label: &str,
+    config: ClipboardConfig,
+) -> i32 {
+    let mut cb = Clipboard::with_config(config);
 
     let result = if let Some(path) = file.as_deref() {
         ingest_copy(&mut cb, Some(path), None)
