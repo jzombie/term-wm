@@ -2797,6 +2797,27 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
         }
     }
 
+    /// Sync PTY stream state for unmapped (background) windows.
+    ///
+    /// Reader threads ingest bytes, update the parser, and extract OSC 52
+    /// regardless of mapping — but their I/O burst-budget backpressure only
+    /// releases when dirty state is synced, which normally happens during
+    /// render. Unmapped windows never render, so without this tick a
+    /// background task emitting more than the burst budget would wedge its
+    /// reader (and block the child) forever. Called each frame alongside
+    /// [`tick_notifications`](Self::tick_notifications); deliberately does
+    /// NOT mark layout dirty and requests no repaint.
+    pub fn tick_background_ptys(&mut self) {
+        for key in self.all_window_keys() {
+            if self.window_state(key) != Some(WindowState::Unmapped) {
+                continue;
+            }
+            if let Some(component) = self.component_for_key_mut(key) {
+                component.sync_pty_state();
+            }
+        }
+    }
+
     /// Dismiss a notification by ID.
     pub fn dismiss_notification(&mut self, id: u64) {
         tracing::info!("dismiss_notification: id={}", id);
@@ -6450,6 +6471,64 @@ mod tests {
     }
 
     // ── close_window ──────────────────────────────────────────────────
+
+    /// Probe component recording background sync ticks.
+    struct SyncProbe {
+        syncs: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl Component<TermWmAction> for SyncProbe {
+        fn render(
+            &mut self,
+            _backend: &mut dyn term_wm_render::RenderBackend,
+            _area: LayoutRect,
+            _ctx: &crate::component_context::ComponentContext,
+            _registry: &mut crate::hitbox_registry::HitboxRegistry,
+        ) {
+        }
+
+        fn sync_pty_state(&mut self) {
+            self.syncs.set(self.syncs.get() + 1);
+        }
+    }
+
+    #[test]
+    fn tick_background_ptys_syncs_only_unmapped_without_dirtying_layout() {
+        let mut wm = WindowManager::<SyncProbe>::with_config(
+            WmConfig::default(),
+            Arc::new(AppContext::new("test", "0.0.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        );
+        let mapped_syncs = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let bg_syncs = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let mapped = wm.create_window(SyncProbe {
+            syncs: std::rc::Rc::clone(&mapped_syncs),
+        });
+        let bg = wm.create_window(SyncProbe {
+            syncs: std::rc::Rc::clone(&bg_syncs),
+        });
+        wm.transition_window(mapped, WindowState::Mapped);
+        wm.transition_window(bg, WindowState::Unmapped);
+        assert_eq!(wm.window_state(mapped), Some(WindowState::Mapped));
+        assert_eq!(wm.window_state(bg), Some(WindowState::Unmapped));
+
+        wm.clear_layout_dirty();
+        wm.tick_background_ptys();
+        wm.tick_background_ptys();
+
+        assert_eq!(
+            mapped_syncs.get(),
+            0,
+            "mapped windows render on their own; the tick must not touch them"
+        );
+        assert_eq!(bg_syncs.get(), 2, "unmapped window must sync once per tick");
+        assert!(
+            !wm.layout_dirty(),
+            "background tick must not invalidate layout or request repaint"
+        );
+    }
 
     #[test]
     fn close_window_cleans_up_layout_and_state() {
