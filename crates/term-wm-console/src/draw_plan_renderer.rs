@@ -820,14 +820,19 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
 
     // Panel overlay in monocle mode — render BEFORE command menu so the panel
     // header (including hamburger icon) appears as a visual context layer.
-    // Use explicit SetPanelActive(true/false) because ComponentContext's active
+    // Use explicit SetPanelActive(true) because ComponentContext's active
     // flag does NOT control WmTopPanelComponent's internal self.active guard
     // (set at wm_top_panel.rs:462 via SetPanelActive action).
-    if wm.is_monocle_cramped() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
+    // In cramped monocle the tabbed window list stays visible at all times;
+    // only the bottom hints remain gated on the command palette. The active
+    // flag is intentionally left set: the next frame's layout pass resets it
+    // to false before consume_area so no layout row is claimed.
+    if wm.is_monocle_cramped() && !wm.is_tab_outline_active() {
         let display = wm.build_display_order();
         let titles_map: std::collections::BTreeMap<WindowKey, String> =
             wm.window_titles().into_iter().collect();
         let focus_current = wm.focused_window();
+        let menu_open = wm.command_menu_visible();
 
         let top_area = LayoutRect {
             x: 0,
@@ -844,17 +849,13 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
                     focus_current: Some(focus_current),
                     display_order: display,
                     status_line: None,
-                    menu_open: true,
+                    menu_open,
                     tiling_indicator: None,
                 },
             )));
 
             let ctx = ComponentContext::new(false).with_screen_area(top_area);
             p.render(backend, top_area, &ctx, &mut top_hb);
-
-            // Revert to layout-derived state — the next render_panels call will
-            // set the correct active state based on panel_active().
-            p.process_action(&ComponentAction::SetPanelActive(false));
         }
         wm.hitbox_registry_mut().merge(top_hb);
 
@@ -878,7 +879,9 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
             wm.hitbox_registry_mut()
                 .register(hitbox_id, ComponentOwner::Layer(layer_id), top_area);
         }
+    }
 
+    if wm.is_monocle_cramped() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
         // Bottom panel overlay in monocle mode — keybinding hints. Hints are
         // set during the layout phase (register_managed_layout); the render
         // phase only draws the component's already-established state.

@@ -5,13 +5,14 @@
 # Tweak the middle step, then check the paste buffer.
 # NOTE: the consumer lines are platform-guarded because RUN executes through
 # the platform shell, so the env-var reference spelling differs per platform.
-INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID]
+INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID, WITH_MAIN]
 WORKSPACE LOCAL
 
 # Include untracked files without staging them
 RUN git add -N .
 
-LET $body = RUN git diff
+[eq(env:WITH_MAIN, "0")] LET $body = RUN git diff
+[eq(env:WITH_MAIN, "1")] LET $body = RUN git diff main
 
 # Apply template around `git diff` body
 WITH_IO [stdout=pipe:out] ASYNC EXPAND .term-wm/.oxdock/code_reviewer.template CODE_PLAN=$body
