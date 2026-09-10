@@ -3339,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3349,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "term-logging"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "file-rotate",
  "libc",
@@ -3376,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3429,7 +3429,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3450,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3473,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3481,7 +3481,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "serial_test",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "term-test-support"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "serial_test",
  "tokio",
@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3549,7 +3549,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-config"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "serial_test",
  "tempfile",
@@ -3558,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3608,7 +3608,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3618,7 +3618,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitcode",
  "term-wm-layout-engine",
@@ -3626,14 +3626,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3656,11 +3656,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3677,7 +3677,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -3704,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
