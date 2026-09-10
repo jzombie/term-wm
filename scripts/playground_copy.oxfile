@@ -7,7 +7,9 @@
 # the platform shell, so the env-var reference spelling differs per platform.
 INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID]
 WORKSPACE LOCAL
-LET $body = RUN git diff
+
+# Diff against main branch
+LET $body = RUN git diff main
 
 # Apply template around `git diff` body
 WITH_IO [stdout=pipe:out] EXPAND scripts/code_reviewer.template CODE_PLAN=$body
