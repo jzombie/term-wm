@@ -2371,6 +2371,7 @@ mod tests {
     /// `spawn_project_task` with `background` registers an unmapped window
     /// that never steals focus.
     #[test]
+    #[cfg(feature = "project-tasks")]
     fn spawn_project_task_background_registers_unmapped() {
         let mut app = TermWmApp::<NoopComponent>::new_custom(AppContext::new("test", "0.0.0"));
         #[cfg(unix)]
