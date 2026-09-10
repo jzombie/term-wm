@@ -101,11 +101,11 @@ pub type CustomActionHandler<C> = Box<dyn FnMut(&TermWmAction, &mut TermWmApp<C>
 
 /// Bookkeeping for a background (unmapped) project task window.
 ///
-/// `expected` is the normalized expected-exit list (`[0]` when the task
-/// declares none); membership decides toast-and-unregister vs reveal.
+/// `expected_exit_codes` is the normalized expected-exit list (`[0]` when the
+/// task declares none); membership decides toast-and-unregister vs reveal.
 #[derive(Debug, Clone)]
 struct BackgroundTask {
-    expected: Vec<i32>,
+    expected_exit_codes: Vec<i32>,
 }
 
 /// Map a reaped PTY status to a comparable exit code.
@@ -909,7 +909,7 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             self.background_task_windows.insert(
                 key,
                 BackgroundTask {
-                    expected: task.expected_codes(),
+                    expected_exit_codes: task.expected_codes(),
                 },
             );
         }
@@ -983,10 +983,10 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             .get(&key)
             .cloned()
             .unwrap_or_default();
-        let bg_expected = self
+        let bg_expected_exit_codes = self
             .background_task_windows
             .get(&key)
-            .map(|bg| bg.expected.clone());
+            .map(|bg| bg.expected_exit_codes.clone());
 
         // 1. Capture focus BEFORE mutable component borrows
         let mut is_focused = self.wm().focused_window() == key;
@@ -1012,9 +1012,9 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
         // continue below as a focused foreground task. transition_window
         // reattaches the tiling tree itself, so no separate tile call is
         // needed; the window is focused, so no toast fires below.
-        if let Some(expected) = bg_expected {
+        if let Some(expected_exit_codes) = bg_expected_exit_codes {
             match status.as_ref().and_then(pty_exit_code) {
-                Some(code) if expected.contains(&code) => {
+                Some(code) if expected_exit_codes.contains(&code) => {
                     let notif_body = if code == 0 {
                         format!("Task '{label}' completed")
                     } else {
@@ -2186,7 +2186,7 @@ mod tests {
         app: &mut TermWmApp<NoopComponent>,
         status: Option<portable_pty::ExitStatus>,
         label: &str,
-        expected: Vec<i32>,
+        expected_exit_codes: Vec<i32>,
     ) -> WindowKey {
         let pane = MockPane::with_exit_status(status);
         let terminal = TerminalComponent::from_pane(Box::new(pane));
@@ -2196,8 +2196,12 @@ mod tests {
             .spawn(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         app.wm().transition_window(key, WindowState::Unmapped);
         app.project_task_windows.insert(key, label.into());
-        app.background_task_windows
-            .insert(key, BackgroundTask { expected });
+        app.background_task_windows.insert(
+            key,
+            BackgroundTask {
+                expected_exit_codes,
+            },
+        );
         key
     }
 
@@ -2420,7 +2424,7 @@ mod tests {
         assert_eq!(
             app.background_task_windows
                 .get(&key)
-                .map(|bg| bg.expected.clone()),
+                .map(|bg| bg.expected_exit_codes.clone()),
             Some(vec![0]),
             "omitted expected_exit_codes normalizes to [0]"
         );
