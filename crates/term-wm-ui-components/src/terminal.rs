@@ -362,6 +362,13 @@ impl Component<TermWmAction> for TerminalComponent {
         self.pane.get_mut().take_pending_title()
     }
 
+    fn sync_pty_state(&mut self) {
+        // Render-free stream sync for unmapped windows: processes pending
+        // terminal state, clears dirty, and wakes the reader's burst-budget
+        // wait without touching layout, hitboxes, or repaint flags.
+        self.pane.borrow_mut().sync_screen();
+    }
+
     fn take_alternate_screen_transition(&mut self) -> Option<bool> {
         let current = self.pane.get_mut().alternate_screen();
         if current != self.reported_alt_screen.get() {
@@ -1308,6 +1315,7 @@ struct TestPane {
     alt_screen: bool,
     pending_title: Option<String>,
     kill_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    sync_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     written_bytes: Vec<u8>,
 }
 
@@ -1323,6 +1331,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sync_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             written_bytes: Vec::new(),
         }
     }
@@ -1338,6 +1347,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::clone(&kill_count),
+            sync_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             written_bytes: Vec::new(),
         };
         (pane, kill_count)
@@ -1431,6 +1441,11 @@ impl Pane for TestPane {
 
     fn take_pending_title(&mut self) -> Option<String> {
         self.pending_title.take()
+    }
+
+    fn sync_screen(&mut self) {
+        self.sync_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -1548,6 +1563,20 @@ mod tests {
     }
 
     // --- Destroy / kill tests ---
+
+    #[test]
+    fn sync_pty_state_forwards_to_pane_sync_screen() {
+        let pane = TestPane::new(200);
+        let sync_count = std::sync::Arc::clone(&pane.sync_count);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        Component::<TermWmAction>::sync_pty_state(&mut term);
+        Component::<TermWmAction>::sync_pty_state(&mut term);
+        assert_eq!(
+            sync_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "each background tick must sync the pane exactly once"
+        );
+    }
 
     #[test]
     fn destroy_calls_kill_child() {

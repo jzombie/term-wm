@@ -212,6 +212,17 @@ pub trait Component<Msg> {
         None
     }
 
+    /// Sync PTY stream state without rendering.
+    ///
+    /// Called by the frame loop for windows that are not mapped (e.g.
+    /// background tasks), so their reader threads keep draining: terminal
+    /// sequence processing, scrollback updates, and OSC 52 extraction all
+    /// happen in the reader/parser, but the I/O burst-budget backpressure
+    /// only releases when dirty state is synced. Implementations must be
+    /// render-free: no layout invalidation, no repaint requests, no hitbox
+    /// changes. Default no-op for non-terminal components.
+    fn sync_pty_state(&mut self) {}
+
     /// Returns `Some(bool)` exactly once when the pane's alternate screen state changes.
     /// `None` means no change since the last poll.
     fn take_alternate_screen_transition(&mut self) -> Option<bool> {

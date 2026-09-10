@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.10-alpha] - 2026-09-10
+
+### Fixed
+
+- Background PTY windows no longer wedge past the reader I/O burst budget: the frame loop now syncs stream state (dirty flags, DSR, OSC 52 extraction) for unmapped windows without repainting, and the burst-budget condvar wait falls back to a 50ms timeout that breaks out and keeps draining. Previously a background task emitting more than 256KB (e.g. a large `git diff` piped to `--util copy`) parked its reader forever once past the budget, so the child blocked on the full PTY, the OSC 52 terminator never arrived, and nothing was copied with no completion toast.
+
+### Added
+
+- Project tasks emit debug-log lines on start (`project task started` with label and background flag) and finish (`project task finished` with label, background flag, and exit status), so background task activity is visible in the Debug Log even though their windows never map.
+
 ## [0.10.9-alpha] - 2026-09-10
 
 ### Added
