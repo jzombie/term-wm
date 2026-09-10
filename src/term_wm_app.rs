@@ -2191,13 +2191,13 @@ mod tests {
         let pane = MockPane::with_exit_status(status);
         let terminal = TerminalComponent::from_pane(Box::new(pane));
         let sv = term_wm_ui_components::scroll_view::ScrollViewComponent::new(terminal);
-        let key = app.wm.spawn(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
+        let key = app
+            .wm
+            .spawn(AppRootComponent::Core(CoreWmComponent::Terminal(sv)));
         app.wm().transition_window(key, WindowState::Unmapped);
         app.project_task_windows.insert(key, label.into());
-        app.background_task_windows.insert(
-            key,
-            BackgroundTask { expected },
-        );
+        app.background_task_windows
+            .insert(key, BackgroundTask { expected });
         key
     }
 
