@@ -1489,7 +1489,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn burst_budget_wait_recovers_without_render() {
         // Regression: an unmapped (never-rendered, never-screen()ed) window
