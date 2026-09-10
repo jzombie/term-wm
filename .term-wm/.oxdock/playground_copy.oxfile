@@ -8,8 +8,10 @@
 INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID]
 WORKSPACE LOCAL
 
-# Diff against main branch
-LET $body = RUN git diff main
+# Include untracked files without staging them
+RUN git add -N .
+
+LET $body = RUN git diff
 
 # Apply template around `git diff` body
 WITH_IO [stdout=pipe:out] EXPAND .term-wm/.oxdock/code_reviewer.template CODE_PLAN=$body
