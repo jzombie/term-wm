@@ -118,6 +118,18 @@ pub fn gateway_override() -> Option<String> {
 /// Read by [`active_environment()`] to override compile-time defaults.
 pub const ENVIRONMENT_ENV_VAR: &str = "TERM_WM_ENV";
 
+/// Spawner identity bridged into task and script environments: the OS PID
+/// of the term-wm process that spawns the task (UI spawner or CLI runner).
+/// Injected as an explicit `ENV` prelude by the OxDock runner and settable
+/// as an ordinary task `env` entry (`{wm.pid}` placeholder source).
+pub const SPAWNER_PID_ENV_VAR: &str = "TERM_WM_PID";
+
+/// Spawner identity bridged into task and script environments: the full
+/// path of the spawning term-wm executable, so tasks and scripts can invoke
+/// the binary itself (e.g. piping into `--util copy`). Same injection
+/// points as [`SPAWNER_PID_ENV_VAR`] (`{wm.exe}` placeholder source).
+pub const SPAWNER_EXE_ENV_VAR: &str = "TERM_WM_EXE";
+
 // TODO: Rename to TaskEnvironment
 /// Supported runtime environments. [`active_environment`] normalizes the
 /// `TERM_WM_ENV` value (trimmed, case-insensitive) so invalid states are

@@ -250,6 +250,82 @@ Split form is also supported (`args` appended after `command`):
 ]
 ```
 
+## OxDock Scripts
+
+Project content piped toward `--util copy` can instead be routed through an
+OxDock script (`.oxfile`) so it is programmatically altered first. Routing
+stays completely inside OxDock: the script runs its producer and consumer as
+`RUN` steps wired by internal `WITH_IO` named pipes, with no host shell
+pipes involved.
+
+Run any script headless with exactly one positional (the script path):
+
+```sh
+term-wm --util oxdock scripts/copy_via_oxdock.oxfile
+```
+
+Script environment: scripts start empty and opt into host values through
+OxDock's own front door, an `INHERIT_ENV [...]` first line. Values arrive
+from the host process environment: task runs supply them through ordinary
+task `env` entries (the `{wm.exe}` / `{wm.pid}` placeholders exist for
+exactly this), and direct CLI runs default to the invoking process itself
+(the runner fills unset `TERM_WM_EXE` / `TERM_WM_PID` with its own identity;
+exported variables still win):
+
+```sh
+term-wm --util oxdock scripts/copy.oxfile
+```
+
+Inside the script the spelling is `{{ env:TERM_WM_PID }}` /
+`{{ env:TERM_WM_EXE }}`. Scripts start in an ephemeral snapshot workspace;
+`WORKSPACE LOCAL` switches to the invocation directory (the live tree).
+`RUN` is the only non-portable command and it can touch the host: there is
+no sandbox beyond OxDock's workspace guard.
+
+Canonical shape (transform, then copy, internal pipes only):
+
+```
+// scripts/copy_via_oxdock.oxfile
+INHERIT_ENV [TERM_WM_EXE]
+WORKSPACE LOCAL
+WITH_IO [stdout=pipe:raw] RUN git diff
+WITH_IO [stdin=pipe:raw, stdout=pipe:out] EXPAND HEADER="filtered"
+[unix] WITH_IO [stdin=pipe:out] RUN "$TERM_WM_EXE" --util copy -- --force-osc52
+[windows] WITH_IO [stdin=pipe:out] RUN "%TERM_WM_EXE%" --util copy -- --force-osc52
+```
+
+The trailing `--force-osc52` (after `--`, so it reaches the utility as a
+positional) re-arms the terminal-emulator clipboard path: OxDock pipes every
+`RUN` child's stdout through its capture framework, which makes the copy
+backend see a pipe instead of a terminal and skip OSC 52 by design. Forced
+emission survives the framework's verbatim forwarding to the real terminal,
+restoring the relay that feeds the window-manager clipboard and debug log.
+Without it, a nested copy depends solely on the child process's own
+system-clipboard handle, which headless and daemon-backed contexts lack.
+
+Two details matter: consecutive single-line `WITH_IO` steps each bind one
+step only, so the transform is a single combined `[stdin, stdout]` step; and
+the consumer references the executable through the platform shell's own
+spelling (`$VAR` on Unix, `%VAR%` on Windows behind guards), not
+`"{{ env:TERM_WM_EXE }}"` (template expansion runs after `RUN` quote
+parsing, so a space-containing executable path would split). Same rule as
+`{wm.exe}` quoting above: prefer shell-native references over inline
+templates for paths. The Windows branch is untested on this end; `RUN`
+executes through `COMSPEC /C` there.
+
+As a project task, invoke the binary directly with the placeholder quoted
+(substitution runs before shell-words tokenization, so a quoted `{wm.exe}`
+stays one argv element even when the path contains spaces). No shell and no
+per-platform task variants are needed for the launcher itself:
+
+```jsonc
+[
+    { "label": "ox: copy diff",
+      "command": "\"{wm.exe}\" --util oxdock scripts/copy_via_oxdock.oxfile",
+      "env": { "TERM_WM_EXE": "{wm.exe}", "TERM_WM_PID": "{wm.pid}" } }
+]
+```
+
 ## Out of Scope
 
 - Zed `tasks.json` compatibility (v1 flat array, v2 `{ "tasks": [...] }` object,
