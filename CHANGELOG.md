@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Changed
+
+- Propagate explicit exit codes from OxDock scripts
+
 ## [0.10.8-alpha] - 2026-09-09
 
 ### Added
