@@ -37,6 +37,8 @@ is a task object:
 | `env`          | `object`   | `{}`    | Extra environment variables (`{ "KEY": "VALUE" }`) passed to the child. |
 | `environments` | `string[]` | `[]`    | Gating: `"dev"` / `"prod"` / `"test"` (see below). Empty = visible everywhere. |
 | `platforms`    | `string[]` | none    | Gating: OS names (see Platform Gating below). Absent or empty = visible on every platform. |
+| `background`   | `boolean`  | `false` | Run unmapped: no window in the layout, no focus steal. See Background Tasks below. |
+| `expected_exit_codes` | `number[]` | `[0]` | Exit codes treated as expected for background tasks. Omitted or `[]` means `[0]`. |
 
 ### Variable Substitution
 
@@ -224,6 +226,28 @@ accepted as an alias for `macos`.
 - The task runs in a **new window** titled with the task label.
 - On exit: the window stays open; a toast fires: `Task '<label>' finished` or
   `Task '<label>' finished (exit N)` on non-zero exit.
+
+## Background Tasks
+
+A task with `"background": true` runs as an **unmapped window**: it never
+appears in the layout and never steals focus while running.
+
+- On exit with an **expected** code (one of `expected_exit_codes`, default
+  `[0]`): a toast fires (`Task '<label>' completed`, with the exit code when
+  nonzero) and the window automatically unregisters — nothing stays open.
+- On **unexpected** exit (any other code, signal death, or dropped
+  connection): the window maps into the layout and focuses, staying open for
+  inspection like a foreground task. Signal deaths always reveal; only clean
+  exits match `expected_exit_codes`.
+
+```jsonc
+[
+    { "label": "ci: Lint",
+      "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "background": true,
+      "expected_exit_codes": [0] }
+]
+```
 
 ## Canonical Example
 
