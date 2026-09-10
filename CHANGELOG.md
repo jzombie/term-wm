@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.9-alpha] - 2026-09-10
+
+### Added
+
+- Project tasks can now run in the background, staying hidden until they fail: expected exits show a completion toast and close automatically, while unexpected exits pop the window into view.
+
+### Changed
+
+- Propagate explicit exit codes from OxDock scripts
+
 ## [0.10.8-alpha] - 2026-09-09
 
 ### Added

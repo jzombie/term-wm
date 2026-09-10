@@ -350,6 +350,8 @@ mod tests {
             env: std::collections::HashMap::new(),
             environments: Vec::new(),
             platforms: None,
+            background: false,
+            expected_exit_codes: None,
         }
     }
 
