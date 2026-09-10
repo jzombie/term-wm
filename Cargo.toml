@@ -85,8 +85,8 @@ muxio-tokio-mpsc-adapter = "0.16.0-alpha"
 muxio-tokio-rpc-ipc-client = "0.16.0-alpha"
 muxio-tokio-rpc-ipc-server = "0.16.0-alpha"
 nucleo-matcher = { version = "0.3", features = ["unicode-casefold", "unicode-normalization", "unicode-segmentation"] }
-oxdock = "0.10.0-alpha"
-oxdock-fs = "0.10.0-alpha"
+oxdock = "0.11.0-alpha"
+oxdock-fs = "0.11.0-alpha"
 portable-pty = "0.9.0"
 proc-macro-crate = "3.5.0"
 proc-macro2 = "1.0.107"
@@ -223,3 +223,10 @@ tokio = { workspace = true }
 
 [lints]
 workspace = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = "z" # Optimize strictly for binary size

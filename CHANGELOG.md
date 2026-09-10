@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 ### Changed
 
 - The debug log now records diagnostic detail by default, so clipboard backend decisions and similar traces are visible without extra setup (#346).
+- New OxDock `0.11.0-alpha` dependencies (`oxdock`, `oxdock-fs`) back the script runner (#346).
 
 ## [0.10.7-alpha] - 2026-09-09
 

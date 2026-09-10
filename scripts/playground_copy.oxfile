@@ -7,17 +7,9 @@
 # the platform shell, so the env-var reference spelling differs per platform.
 INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID]
 WORKSPACE LOCAL
-WITH_IO [stdout=pipe:out] ECHO "--- CLIPBOARD START ---"
-WITH_IO [stdout=pipe:raw] RUN git diff
-# Transform slot: EXPAND renders the stream; double-brace placeholders in
-# the content resolve strictly (undeclared keys are fatal). True content
-# mangling (e.g. wrapping bytes in scripts/clipboard_template.txt) needs
-# command output bound to a variable, which the DSL cannot do yet; it lands
-# with rust-oxdock#111 ("Unified LET capture"), after which this step
-# becomes e.g. LET $body = RUN git diff + EXPAND template.txt SLOT=$body.
-#   https://github.com/jzombie/rust-oxdock/issues/111
-WITH_IO [stdin=pipe:raw, stdout=pipe:out] EXPAND
-WITH_IO [stdout=pipe:out] ECHO "--- CLIPBOARD END ---"
+LET $body = RUN git diff
 
-[unix] WITH_IO [stdin=pipe:out] RUN "$TERM_WM_EXE" --util copy -- --force-osc52
-[windows] WITH_IO [stdin=pipe:out] RUN "%TERM_WM_EXE%" --util copy -- --force-osc52
+# Apply template around `git diff` body
+WITH_IO [stdout=pipe:out] EXPAND scripts/code_reviewer.template CODE_PLAN=$body
+
+WITH_IO [stdin=pipe:out] RUN ["{{ env:TERM_WM_EXE }}", "--util", "copy", "--", "--force-osc52"]
