@@ -2093,9 +2093,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c4c7d6518925c02ab5b704a6196068a7c280d88784ec70435b4ac1ea1024a09"
+checksum = "85c626d8a0b7d7dd6d9db75ffd39caf87c9579f3225f1709ed8768a249abd0ab"
 dependencies = [
  "oxdock-build",
  "oxdock-cli",
@@ -2106,9 +2106,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-build"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1ee837033710c67c06c2ecbbb19f5eba677df171f8c1cd4a28df63fcd0f9bb7"
+checksum = "d58115842ad9f8f90797b9ed35f5a4785eff4e3198633cf65b76d86d6f357a4b"
 dependencies = [
  "anyhow",
  "oxdock-core",
@@ -2123,9 +2123,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-cli"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7814507dee8ec91ba08a8195cd799c47ba8642a361d46d9dddec634f03e9dfba"
+checksum = "8c48aad9341d3632b3349ba7b0c4bbeb4a2d276b88d591cea911ddc7088e7bea"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2138,9 +2138,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-core"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05aec7796bc824ae90e9939ed5739f9295bb3f52f6e480339c167c48b25a626f"
+checksum = "e2f6efd25caa5238663ebe21125f70f0964ddf212a8b95fb9e3a2a75b75ef54a"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2154,9 +2154,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-embed"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "276a797a03b001ceacfbc50599c16e76178d76cc558d3447eba3ffa75d457479"
+checksum = "30658b9e4adfc14ea588b638ed3ef79d5d538ed55ff78bfded8d407e9700741b"
 dependencies = [
  "anyhow",
  "oxdock-fs",
@@ -2168,9 +2168,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fs"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8317d541eba88fe45360aad9ced0cb367734bb68345783058186bdc1ed3cbed"
+checksum = "ad129e5c8b6976f6e9eff4ac543c33fcb3ed6e788fbce35b4231cdf299e2952d"
 dependencies = [
  "anyhow",
  "glob",
@@ -2182,9 +2182,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-macros"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86680058cf88b5df134fe9fa89fcc9959d657f6c49f4dd38642b9359d900fece"
+checksum = "993c0f3447183dd78e1fe3055f032772768e084c7e16783b7d72b5fd3ca7f791"
 dependencies = [
  "anyhow",
  "oxdock-build",
@@ -2200,9 +2200,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-parser"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88db43597f8ec919bc86bc8c6609b3e043c673c7bab99109b5cf7056389bda7e"
+checksum = "03bcb9c907ca2176cf87fb51450ee60c57f49080d9e1b52798db13cf83f3069f"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2217,9 +2217,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-process"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69b79837bbcaeed180b02e2b604635447488bf3c4f4b560de96ab19e885ce126"
+checksum = "affc3b9f1e6fcc226c057e529dc07b644e9768ab2223be551635582a7149a3d2"
 dependencies = [
  "anyhow",
  "libc",
@@ -2231,9 +2231,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-sys-test-utils"
-version = "0.10.0-alpha"
+version = "0.11.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "269b8fb72ac8d5f1fdccdbba5b8318143c887e20c8b503b0a9920226e86ba1c1"
+checksum = "1fec3fc001df48479b7e28d06c153d71004ab51844bb1735e3d1b7ad844254e9"
 
 [[package]]
 name = "page_size"
@@ -3339,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3349,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "term-logging"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "file-rotate",
  "libc",
@@ -3376,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3429,7 +3429,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3450,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3473,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3481,7 +3481,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "libc",
  "serial_test",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "term-test-support"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "serial_test",
  "tokio",
@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "clap",
  "crossbeam-channel",
@@ -3549,7 +3549,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-config"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "serial_test",
  "tempfile",
@@ -3558,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3608,7 +3608,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3618,7 +3618,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "bitcode",
  "term-wm-layout-engine",
@@ -3626,14 +3626,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3656,11 +3656,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3677,7 +3677,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -3704,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.10.7-alpha"
+version = "0.10.8-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
