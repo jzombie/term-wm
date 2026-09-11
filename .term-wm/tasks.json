@@ -70,8 +70,13 @@
     {
         "label": "ox: playground copy diff",
         "command": "\"{wm.exe}\" --util oxdock .term-wm/.oxdock/playground_copy.oxfile",
-        "env": { "TERM_WM_EXE": "{wm.exe}", "TERM_WM_PID": "{wm.pid}" },
-        "environments": ["dev"],
+        "env": { "TERM_WM_EXE": "{wm.exe}", "TERM_WM_PID": "{wm.pid}", "WITH_MAIN": "0" },
+        "background": true
+    },
+    {
+        "label": "ox: playground copy diff [compare main]",
+        "command": "\"{wm.exe}\" --util oxdock .term-wm/.oxdock/playground_copy.oxfile",
+        "env": { "TERM_WM_EXE": "{wm.exe}", "TERM_WM_PID": "{wm.pid}", "WITH_MAIN": "1" },
         "background": true
     }
 ]

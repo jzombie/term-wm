@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Changed
+
+- The tabbed window list with navigation arrows now stays visible in constrained Monocle Mode without opening the Command Palette (#343).
+
 ## [0.10.10-alpha] - 2026-09-10
 
 ### Fixed
