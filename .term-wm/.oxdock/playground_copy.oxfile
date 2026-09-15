@@ -11,7 +11,7 @@ WORKSPACE LOCAL
 # Include untracked files without staging them
 RUN git add -N .
 
-[eq(env:WITH_MAIN, "0")] LET $body = RUN git diff
+[eq(env:WITH_MAIN, "0")] LET $body = RUN git diff HEAD
 [eq(env:WITH_MAIN, "1")] LET $body = RUN git diff main
 
 # Apply template around `git diff` body
