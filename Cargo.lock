@@ -2093,9 +2093,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1286e77b0babe56603cc0d58c10534dd2c9324130abcf2619a2cb1afd41f815f"
+checksum = "807cabcbfd3da2f45767b907e24be25488da047375ef68738aabb1a6ab9a72c3"
 dependencies = [
  "oxdock-build",
  "oxdock-cli",
@@ -2106,9 +2106,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-build"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0afe37d3a840d471f5764cba737134c3be5325e2b3bf856f2ab6eb3cbf119b73"
+checksum = "849c730676fc9c000c191e782310693fec7a789d780bc7c50cc133aeae1cf2bc"
 dependencies = [
  "anyhow",
  "oxdock-core",
@@ -2123,9 +2123,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-cli"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37d757f4eba9ee5226337eea279a29b46368a96f57672887c873a0a18354fabc"
+checksum = "2bb5e7f96a1cef2b70a614bfbfef47192b8849278ff7fdb60db22ccb00ba3604"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2138,9 +2138,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-core"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6ee69d6086afc8f49eff9b93a483141950a47fee252c14b9df35f7e367c5929"
+checksum = "dbb3059be9cdc403b4ee8dd48456cdd75b802b70191579552a46e2e170b9e260"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2154,9 +2154,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-embed"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca22e32d2e55836973e1e985758e3616da8580bc94575e97b958b5e877e65a42"
+checksum = "1a70f97218773b8a62f31986d4949491d678203a53ab99a1f3eb5a51e7728863"
 dependencies = [
  "anyhow",
  "oxdock-fs",
@@ -2168,9 +2168,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-fs"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14f89b4d0c4bf08379026b44c7ff4a83e66f5b12023c6d07142782079d508f50"
+checksum = "8f33273adb30d48cdaa8a1f527552df3f3f1bdac15d78bf65fc62ddc5d152b06"
 dependencies = [
  "anyhow",
  "glob",
@@ -2182,9 +2182,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-macros"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b3b59eaca88898a29499a02ba1f6162139ae0ed02b542a33c32e04f5176381f"
+checksum = "2f28d9640b11c401de492452e6cc10a19da7b8f45ae58b62656d4ac7cbe1fd8c"
 dependencies = [
  "anyhow",
  "oxdock-build",
@@ -2200,9 +2200,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-parser"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddbe5c145249fc7d7484643c4d61a8aebd024b70465717f1415b20b7b9082b8d"
+checksum = "4216f3309d7f8a4c12a69063636d60cbce8e6918fc05d1522c4a2587edff649c"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2217,9 +2217,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-process"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e2dbb6b19d1f20eb1356ad5a9eeb8f9896a2a6a062dab727d0fe7137c16cd51"
+checksum = "c3d56f3d720b66586bec04a4530591b768af00f0c135fbdade36c2f86eb51dcb"
 dependencies = [
  "anyhow",
  "libc",
@@ -2231,9 +2231,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-sys-test-utils"
-version = "0.14.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11e407f5916f6259a1a75f63097abbeac9ba924f2993968aa7d2ecd975061555"
+checksum = "0601a3993a4d86880abb45c1883ac06d775677f3f6f30638f1a031571e0f24f5"
 
 [[package]]
 name = "page_size"

@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Bumped `interprocess` from 2.4.3 to 2.4.4 (#359).
 - Bumped `syn` from 3.0.4 to 3.0.5 (#360).
 - Bumped `muxio` from 0.16.0-alpha to 0.16.1-alpha.
-- Bumped `oxdock` from 0.11.0-alpha to 0.14.0-alpha.
+- Bumped `oxdock` from 0.11.0-alpha to 0.14.1-alpha.
 
 ## [0.10.10-alpha] - 2026-09-10
 
