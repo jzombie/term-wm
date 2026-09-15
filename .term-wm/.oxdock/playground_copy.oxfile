@@ -11,8 +11,8 @@ WORKSPACE LOCAL
 # Include untracked files without staging them
 RUN git add -N .
 
-[eq(env:WITH_MAIN, "0")] LET $body = RUN git diff HEAD
-[eq(env:WITH_MAIN, "1")] LET $body = RUN git diff main
+[eq(env:WITH_MAIN, "0")] LET $body: STRING = RUN git diff HEAD
+[eq(env:WITH_MAIN, "1")] LET $body: STRING = RUN git diff main
 
 # Apply template around `git diff` body
 WITH_IO [stdout=pipe:out] ASYNC EXPAND .term-wm/.oxdock/code_reviewer.template CODE_PLAN=$body
