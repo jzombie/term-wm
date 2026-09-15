@@ -5,4 +5,4 @@
 INHERIT_ENV [TERM_WM_EXE, TERM_WM_PID]
 WORKSPACE LOCAL
 ECHO playground pid is {{ env:TERM_WM_PID }}
-ASSERT_STDOUT playground pid is
+ASSERT_CONTAINS stdout "playground pid is"

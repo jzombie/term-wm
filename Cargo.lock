@@ -152,7 +152,7 @@ checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -304,7 +304,7 @@ checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -431,7 +431,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -586,9 +586,9 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.16"
+version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d85363c37faeca707aef026efa9f3b34d077bce547e48f770770625c6013679e"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -692,7 +692,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -703,7 +703,7 @@ checksum = "68f5792fa0d41cd2325ce0ffa64f0a340eaebd4971a3a0c5e1ffd2cc488a355e"
 dependencies = [
  "darling_core",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -798,7 +798,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1446,14 +1446,14 @@ dependencies = [
  "indoc",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "interprocess"
-version = "2.4.3"
+version = "2.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "798de1433ba514cc6c04c4144c2469af81396e4906195218737c776d47769572"
+checksum = "6cb02ffbf25e8ef0f4a95bff054eef75f6d1bf16919474cf2caa63b21997478a"
 dependencies = [
  "doctest-file",
  "futures-core",
@@ -1762,9 +1762,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-core"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a4c838f5ef4eba94f674cd20fb561adb175700a0817dcefc251ff7daef1599"
+checksum = "40e3e3feaf15e9e86697491bf9064a4ce63f7f73c214a6c12cf1e6c3d80109cc"
 dependencies = [
  "once_cell",
  "tracing",
@@ -1772,9 +1772,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72c3d4a57576a7089efa69e6db79f2e025cf6778ffcf1c65e0e53ffc9bc952cd"
+checksum = "c3877ee8b25c3c3779c3931c50d4a02afe56c0a31836d949b0e4c9ceb5c4cb5a"
 dependencies = [
  "bitcode",
  "num_enum",
@@ -1783,9 +1783,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-caller"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca9fa188242909d85d5b8fd37deadceb7cb749c3075e6745660e2e5f819ddab7"
+checksum = "bf131ca3c5323a6240a85a43cefb5aeaa716c19f0ebe41888a5a0d0a2f2c4078"
 dependencies = [
  "async-trait",
  "futures",
@@ -1797,9 +1797,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-endpoint"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c4167526a92c41b660e3e6eab9b633f8fe67fdcdf6367b50dd5582a634f5d78"
+checksum = "b675ed2d65fadc64a771979c71e7431a0469ffb37c99cfbd4327afa73546b599"
 dependencies = [
  "async-trait",
  "bitcode",
@@ -1813,9 +1813,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-mpsc-adapter"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2adf36e7f48767689315f12a3840f49a0a294aa523fb69d47de5a9a2e13bb8b"
+checksum = "266925aa3d223507f8070631a4a9817801fd859df6092ae012d525bb0093608b"
 dependencies = [
  "async-trait",
  "muxio-core",
@@ -1828,9 +1828,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-client"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75772d0325d3e26f4e6f8454f6bdda2599a7b1d67550934c2338eb7e0cc2cb09"
+checksum = "7eaae91664d9a8e87c4f646d5e13f0c28386f70296fc2551d65b75cdbf6f55e4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1846,9 +1846,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-server"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d123f5c653feee65450eb1edce211123bda1b72f5a029c56b1a31767a2f6be2f"
+checksum = "4e4e62aed096ce4b0c01de692d7f225ddb9d641dcc1c4fe4b5129c510d1d3815"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2093,9 +2093,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85c626d8a0b7d7dd6d9db75ffd39caf87c9579f3225f1709ed8768a249abd0ab"
+checksum = "807cabcbfd3da2f45767b907e24be25488da047375ef68738aabb1a6ab9a72c3"
 dependencies = [
  "oxdock-build",
  "oxdock-cli",
@@ -2106,9 +2106,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-build"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d58115842ad9f8f90797b9ed35f5a4785eff4e3198633cf65b76d86d6f357a4b"
+checksum = "849c730676fc9c000c191e782310693fec7a789d780bc7c50cc133aeae1cf2bc"
 dependencies = [
  "anyhow",
  "oxdock-core",
@@ -2118,14 +2118,14 @@ dependencies = [
  "oxdock-process",
  "proc-macro2",
  "sha2 0.11.0",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "oxdock-cli"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c48aad9341d3632b3349ba7b0c4bbeb4a2d276b88d591cea911ddc7088e7bea"
+checksum = "2bb5e7f96a1cef2b70a614bfbfef47192b8849278ff7fdb60db22ccb00ba3604"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2138,9 +2138,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-core"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2f6efd25caa5238663ebe21125f70f0964ddf212a8b95fb9e3a2a75b75ef54a"
+checksum = "dbb3059be9cdc403b4ee8dd48456cdd75b802b70191579552a46e2e170b9e260"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2154,23 +2154,23 @@ dependencies = [
 
 [[package]]
 name = "oxdock-embed"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30658b9e4adfc14ea588b638ed3ef79d5d538ed55ff78bfded8d407e9700741b"
+checksum = "1a70f97218773b8a62f31986d4949491d678203a53ab99a1f3eb5a51e7728863"
 dependencies = [
  "anyhow",
  "oxdock-fs",
  "proc-macro2",
  "quote",
  "sha2 0.11.0",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "oxdock-fs"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad129e5c8b6976f6e9eff4ac543c33fcb3ed6e788fbce35b4231cdf299e2952d"
+checksum = "8f33273adb30d48cdaa8a1f527552df3f3f1bdac15d78bf65fc62ddc5d152b06"
 dependencies = [
  "anyhow",
  "glob",
@@ -2182,9 +2182,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-macros"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "993c0f3447183dd78e1fe3055f032772768e084c7e16783b7d72b5fd3ca7f791"
+checksum = "2f28d9640b11c401de492452e6cc10a19da7b8f45ae58b62656d4ac7cbe1fd8c"
 dependencies = [
  "anyhow",
  "oxdock-build",
@@ -2195,14 +2195,14 @@ dependencies = [
  "oxdock-process",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "oxdock-parser"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03bcb9c907ca2176cf87fb51450ee60c57f49080d9e1b52798db13cf83f3069f"
+checksum = "4216f3309d7f8a4c12a69063636d60cbce8e6918fc05d1522c4a2587edff649c"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2212,14 +2212,14 @@ dependencies = [
  "proc-macro2",
  "pulldown-cmark",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "oxdock-process"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "affc3b9f1e6fcc226c057e529dc07b644e9768ab2223be551635582a7149a3d2"
+checksum = "c3d56f3d720b66586bec04a4530591b768af00f0c135fbdade36c2f86eb51dcb"
 dependencies = [
  "anyhow",
  "libc",
@@ -2231,9 +2231,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock-sys-test-utils"
-version = "0.11.0-alpha"
+version = "0.14.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fec3fc001df48479b7e28d06c153d71004ab51844bb1735e3d1b7ad844254e9"
+checksum = "0601a3993a4d86880abb45c1883ac06d775677f3f6f30638f1a031571e0f24f5"
 
 [[package]]
 name = "page_size"
@@ -2533,7 +2533,7 @@ checksum = "af971f0c4f5eb79d0fe381e9b5a1e315ae8a3df58fa512666471e19b9e1f824d"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
  "version_check",
  "yansi",
 ]
@@ -2876,7 +2876,7 @@ dependencies = [
  "proc-macro2",
  "proc-macro2-diagnostics2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
  "syn_derive",
  "thiserror 2.0.20",
 ]
@@ -2975,7 +2975,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3033,7 +3033,7 @@ checksum = "a22144e767da4ddd8416dbf383700542ffd8a5dc493dfecedfe1fe3ad03c98ae"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3292,9 +3292,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3339,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "term-bench"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3349,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "term-logging"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "file-rotate",
  "libc",
@@ -3376,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3429,7 +3429,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3450,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3473,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3481,7 +3481,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "libc",
  "serial_test",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "term-test-support"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "serial_test",
  "tokio",
@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "anyhow",
  "clap",
@@ -3550,7 +3550,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-config"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "serial_test",
  "tempfile",
@@ -3559,7 +3559,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3578,7 +3578,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "bitflags 2.13.1",
  "console",
@@ -3609,7 +3609,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3619,7 +3619,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "bitcode",
  "term-wm-layout-engine",
@@ -3627,14 +3627,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3657,11 +3657,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3678,7 +3678,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -3705,7 +3705,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -3715,13 +3715,13 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.10.10-alpha"
+version = "0.10.11-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
  "rstml",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3859,7 +3859,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3992,7 +3992,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
