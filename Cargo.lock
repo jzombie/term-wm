@@ -83,7 +83,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -94,7 +94,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -847,7 +847,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1762,9 +1762,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-core"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19a4c838f5ef4eba94f674cd20fb561adb175700a0817dcefc251ff7daef1599"
+checksum = "40e3e3feaf15e9e86697491bf9064a4ce63f7f73c214a6c12cf1e6c3d80109cc"
 dependencies = [
  "once_cell",
  "tracing",
@@ -1772,9 +1772,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72c3d4a57576a7089efa69e6db79f2e025cf6778ffcf1c65e0e53ffc9bc952cd"
+checksum = "c3877ee8b25c3c3779c3931c50d4a02afe56c0a31836d949b0e4c9ceb5c4cb5a"
 dependencies = [
  "bitcode",
  "num_enum",
@@ -1783,9 +1783,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-caller"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca9fa188242909d85d5b8fd37deadceb7cb749c3075e6745660e2e5f819ddab7"
+checksum = "bf131ca3c5323a6240a85a43cefb5aeaa716c19f0ebe41888a5a0d0a2f2c4078"
 dependencies = [
  "async-trait",
  "futures",
@@ -1797,9 +1797,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-rpc-service-endpoint"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c4167526a92c41b660e3e6eab9b633f8fe67fdcdf6367b50dd5582a634f5d78"
+checksum = "b675ed2d65fadc64a771979c71e7431a0469ffb37c99cfbd4327afa73546b599"
 dependencies = [
  "async-trait",
  "bitcode",
@@ -1813,9 +1813,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-mpsc-adapter"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2adf36e7f48767689315f12a3840f49a0a294aa523fb69d47de5a9a2e13bb8b"
+checksum = "266925aa3d223507f8070631a4a9817801fd859df6092ae012d525bb0093608b"
 dependencies = [
  "async-trait",
  "muxio-core",
@@ -1828,9 +1828,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-client"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75772d0325d3e26f4e6f8454f6bdda2599a7b1d67550934c2338eb7e0cc2cb09"
+checksum = "7eaae91664d9a8e87c4f646d5e13f0c28386f70296fc2551d65b75cdbf6f55e4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1846,9 +1846,9 @@ dependencies = [
 
 [[package]]
 name = "muxio-tokio-rpc-ipc-server"
-version = "0.16.0-alpha"
+version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d123f5c653feee65450eb1edce211123bda1b72f5a029c56b1a31767a2f6be2f"
+checksum = "4e4e62aed096ce4b0c01de692d7f225ddb9d641dcc1c4fe4b5129c510d1d3815"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1921,7 +1921,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2900,7 +2900,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3207,7 +3207,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3334,7 +3334,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3745,7 +3745,7 @@ dependencies = [
  "parking_lot",
  "rustix",
  "signal-hook",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4490,7 +4490,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
