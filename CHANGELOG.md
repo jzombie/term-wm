@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.12-alpha] - 2026-09-21
+
+### Changed
+
+- Bumped `oxdock` from 0.14.1 to 0.17.0.
+- Bumped `bitflags` from 2.13.1 to 2.13.2 (#366).
+- Bumped `smallvec` from 1.16.0 to 1.16.1 (#365).
+- Bumped `clap` from 4.6.6 to 4.6.7 (#364).
+- Bumped `console` from 0.16.4 to 0.16.6 (#363).
+
 ## [0.10.11-alpha] - 2026-09-10
 
 ### Changed

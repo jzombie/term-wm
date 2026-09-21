@@ -15,6 +15,7 @@ RUN git add -N .
 [eq(env:WITH_MAIN, "1")] LET $body: STRING = RUN git diff main
 
 # Apply template around `git diff` body
-WITH_IO [stdout=pipe:out] ASYNC EXPAND .term-wm/.oxdock/code_reviewer.template CODE_PLAN=$body
+LET $out: PIPE
+WITH_IO [stdout=$out] EXPAND .term-wm/.oxdock/code_reviewer.template CODE_PLAN=$body
 
-WITH_IO [stdin=pipe:out] RUN ["{{ env:TERM_WM_EXE }}", "--util", "copy", "--", "--force-osc52"]
+WITH_IO [stdin=$out] RUN ["{{ env:TERM_WM_EXE }}", "--util", "copy", "--", "--force-osc52"]
