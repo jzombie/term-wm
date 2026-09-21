@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Changed
+
+- Bumped `oxdock` from 0.14.1 to 0.17.0.
+
 ## [0.10.11-alpha] - 2026-09-10
 
 ### Changed
