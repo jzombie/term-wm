@@ -83,7 +83,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -94,7 +94,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -318,6 +318,15 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "cache-manager"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b73304a3453d2acdff1b2a3c4fce7cdcf53d4aa8b440525683746a07a7ad8628"
+dependencies = [
+ "directories",
+]
 
 [[package]]
 name = "cast"
@@ -779,6 +788,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "directories"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16f5094c54661b38d03bd7e50df373292118db60b585c08a411c6d840017fe7d"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "dispatch2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -847,7 +877,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -915,6 +945,16 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "winapi",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -1614,6 +1654,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
+name = "libredox"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "line-clipping"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1777,10 +1826,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "muxio-core"
+version = "0.17.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef5978f5bc6c658403a54b6266459ba163a4d3707ba35ca79c29b8594be1314f"
+dependencies = [
+ "once_cell",
+ "tracing",
+]
+
+[[package]]
 name = "muxio-rpc-service"
 version = "0.16.1-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3877ee8b25c3c3779c3931c50d4a02afe56c0a31836d949b0e4c9ceb5c4cb5a"
+dependencies = [
+ "bitcode",
+ "num_enum",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "muxio-rpc-service"
+version = "0.17.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4003208f49b6e316bcf57dfdac3595444bdb9b598a187f1df5df2bb4fcb6261"
 dependencies = [
  "bitcode",
  "num_enum",
@@ -1795,8 +1865,22 @@ checksum = "bf131ca3c5323a6240a85a43cefb5aeaa716c19f0ebe41888a5a0d0a2f2c4078"
 dependencies = [
  "async-trait",
  "futures",
- "muxio-core",
- "muxio-rpc-service",
+ "muxio-core 0.16.1-alpha",
+ "muxio-rpc-service 0.16.1-alpha",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "muxio-rpc-service-caller"
+version = "0.17.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63087bf04f2e6e76d150e0a554edeab3c1d5523bf4bac630fa9f0c0ce7cc1615"
+dependencies = [
+ "async-trait",
+ "futures",
+ "muxio-core 0.17.0-alpha",
+ "muxio-rpc-service 0.17.0-alpha",
  "tokio",
  "tracing",
 ]
@@ -1811,8 +1895,55 @@ dependencies = [
  "bitcode",
  "bytes",
  "futures",
- "muxio-core",
- "muxio-rpc-service",
+ "muxio-core 0.16.1-alpha",
+ "muxio-rpc-service 0.16.1-alpha",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "muxio-rpc-service-endpoint"
+version = "0.17.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e9f1280319b1e5bfcc14f31582f3b8cdfd8847728c3c2cf80727c08784d0440"
+dependencies = [
+ "async-trait",
+ "bitcode",
+ "bytes",
+ "futures",
+ "muxio-core 0.17.0-alpha",
+ "muxio-rpc-service 0.17.0-alpha",
+ "tracing",
+]
+
+[[package]]
+name = "muxio-sync-rpc-client"
+version = "0.17.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca039326b2122446452862c92cb7eff9652d34cf15198811f8fa0f0e41c7bc87"
+dependencies = [
+ "async-trait",
+ "futures-executor",
+ "muxio-core 0.17.0-alpha",
+ "muxio-rpc-service 0.17.0-alpha",
+ "muxio-rpc-service-caller 0.17.0-alpha",
+ "muxio-rpc-service-endpoint 0.17.0-alpha",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "muxio-sync-rpc-server"
+version = "0.17.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14a44c7e217f02cb252b0eae58ab99e961083f55dc6b5b79542ca28ae761241a"
+dependencies = [
+ "async-trait",
+ "futures-executor",
+ "muxio-core 0.17.0-alpha",
+ "muxio-rpc-service 0.17.0-alpha",
+ "muxio-rpc-service-caller 0.17.0-alpha",
+ "muxio-rpc-service-endpoint 0.17.0-alpha",
  "tokio",
  "tracing",
 ]
@@ -1824,10 +1955,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "266925aa3d223507f8070631a4a9817801fd859df6092ae012d525bb0093608b"
 dependencies = [
  "async-trait",
- "muxio-core",
- "muxio-rpc-service",
- "muxio-rpc-service-caller",
- "muxio-rpc-service-endpoint",
+ "muxio-core 0.16.1-alpha",
+ "muxio-rpc-service 0.16.1-alpha",
+ "muxio-rpc-service-caller 0.16.1-alpha",
+ "muxio-rpc-service-endpoint 0.16.1-alpha",
  "tokio",
  "tracing",
 ]
@@ -1842,10 +1973,10 @@ dependencies = [
  "bytes",
  "futures-util",
  "interprocess",
- "muxio-core",
- "muxio-rpc-service",
- "muxio-rpc-service-caller",
- "muxio-rpc-service-endpoint",
+ "muxio-core 0.16.1-alpha",
+ "muxio-rpc-service 0.16.1-alpha",
+ "muxio-rpc-service-caller 0.16.1-alpha",
+ "muxio-rpc-service-endpoint 0.16.1-alpha",
  "tokio",
  "tracing",
 ]
@@ -1860,10 +1991,10 @@ dependencies = [
  "bytes",
  "futures-util",
  "interprocess",
- "muxio-core",
- "muxio-rpc-service",
- "muxio-rpc-service-caller",
- "muxio-rpc-service-endpoint",
+ "muxio-core 0.16.1-alpha",
+ "muxio-rpc-service 0.16.1-alpha",
+ "muxio-rpc-service-caller 0.16.1-alpha",
+ "muxio-rpc-service-endpoint 0.16.1-alpha",
  "tokio",
  "tracing",
 ]
@@ -1927,7 +2058,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2089,6 +2220,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "option-ext"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
 name = "ordered-float"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2099,9 +2236,9 @@ dependencies = [
 
 [[package]]
 name = "oxdock"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb95b9bfce6562ed8f2d0fb4b5f083cdacd04cfe19b2953d0dfaa9790ad0cef7"
+checksum = "5f8e7e791843ac935731e59a4ca2b1b1ae71a358a9189a72feb25808dcb1dedb"
 dependencies = [
  "oxdock-build",
  "oxdock-cli",
@@ -2113,14 +2250,14 @@ dependencies = [
 
 [[package]]
 name = "oxdock-build"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45ca3bfbbdc88ad6b647f7204e81958b21f543d2df7ca0509ccc150ff13fd818"
+checksum = "e6b9903069649041ccf22159addeb0fb2f4ee98bd18c0576be64a7cc06b9f36b"
 dependencies = [
  "anyhow",
  "oxdock-core",
  "oxdock-embed",
- "oxdock-fs",
+ "oxdock-fs 0.20.0-alpha",
  "oxdock-parser",
  "oxdock-process",
  "proc-macro2",
@@ -2130,30 +2267,38 @@ dependencies = [
 
 [[package]]
 name = "oxdock-cli"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3082881a98efc8858a8a02fae2d04936f305e8587e435757fc387dd10d5dcd4f"
+checksum = "11684d82996bc03dfe294768507017b63774627ed46af5c548eb24c28983fc8f"
 dependencies = [
  "anyhow",
+ "futures-executor",
  "indoc",
  "lexopt",
+ "muxio-core 0.17.0-alpha",
+ "muxio-rpc-service-endpoint 0.17.0-alpha",
+ "muxio-sync-rpc-server",
  "oxdock-core",
- "oxdock-fs",
+ "oxdock-fs 0.20.0-alpha",
  "oxdock-net-plugin",
  "oxdock-parser",
+ "oxdock-pipe",
  "oxdock-process",
+ "oxdock-remote-proto",
+ "serde_json",
+ "sha2 0.11.0",
  "tempfile",
 ]
 
 [[package]]
 name = "oxdock-core"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cba5d647f721243fc8ef8f69b431e80e1e8ca21d137eb9431cfc090c5fa2a942"
+checksum = "95bc641a2157efe28c8d458d90c0288c87c6029c9a3c54895d1e3f650972eb80"
 dependencies = [
  "anyhow",
  "indoc",
- "oxdock-fs",
+ "oxdock-fs 0.20.0-alpha",
  "oxdock-func-macro",
  "oxdock-parser",
  "oxdock-pipe",
@@ -2165,12 +2310,12 @@ dependencies = [
 
 [[package]]
 name = "oxdock-embed"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f75fd427bddc00b09aa4c3edd96b6c70613a161c2c266a1d47d9c90d29925d09"
+checksum = "b70c05f72f5e8c064111ebcc83b9978ab513112e48730a48fa0d20dc4b9acd28"
 dependencies = [
  "anyhow",
- "oxdock-fs",
+ "oxdock-fs 0.20.0-alpha",
  "proc-macro2",
  "quote",
  "sha2 0.11.0",
@@ -2192,10 +2337,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxdock-func-macro"
-version = "0.17.0-alpha"
+name = "oxdock-fs"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "039ae693f77809a7c6354e22eb34d4da370a45c5c2674b268cd68f39db6a4ba3"
+checksum = "19d63ef236023a8ac82338fe269462f4c4a52b8315d88f9460f15d39be4ac7a9"
+dependencies = [
+ "anyhow",
+ "cache-manager",
+ "glob",
+ "libc",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "oxdock-func-macro"
+version = "0.20.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21e95247db2e3048866a6a1696eddc24ea73e280bd2fc4b2320de7152ca7a8b7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2204,15 +2364,15 @@ dependencies = [
 
 [[package]]
 name = "oxdock-macros"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c6fde6f1624bc1e73208be0596e97e6acb3fab98cb2ed6059d8792d800e20cc"
+checksum = "2c7d800f723c49cc81575850d42f0734a65834860d5015f716fa54a6f4459872"
 dependencies = [
  "anyhow",
  "oxdock-build",
  "oxdock-core",
  "oxdock-embed",
- "oxdock-fs",
+ "oxdock-fs 0.20.0-alpha",
  "oxdock-parser",
  "oxdock-process",
  "proc-macro2",
@@ -2222,23 +2382,35 @@ dependencies = [
 
 [[package]]
 name = "oxdock-net-plugin"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bf98d32147976a6a472c282be7aa04e2073e681faa43e1b20b841f9d1846409"
+checksum = "130755705d7977de9f78e564c571ffda6d183aaabd61e1114e3c421958ec918f"
 dependencies = [
  "anyhow",
+ "futures-executor",
+ "futures-util",
+ "indoc",
+ "muxio-core 0.17.0-alpha",
+ "muxio-rpc-service 0.17.0-alpha",
+ "muxio-rpc-service-caller 0.17.0-alpha",
+ "muxio-sync-rpc-client",
  "oxdock-core",
+ "oxdock-fs 0.20.0-alpha",
  "oxdock-func-macro",
  "oxdock-parser",
  "oxdock-pipe",
  "oxdock-process",
+ "oxdock-remote-proto",
+ "serde_json",
+ "sha2 0.11.0",
+ "shell-words",
 ]
 
 [[package]]
 name = "oxdock-parser"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34c113ea2a0ff322c6315843fdabe92546026660d08a75d94a3c4018001ba8e1"
+checksum = "8f10d2581486bfda92340f4fbccbeb1594198741f6be8020fd0d804d199d19c0"
 dependencies = [
  "anyhow",
  "indoc",
@@ -2255,23 +2427,23 @@ dependencies = [
 
 [[package]]
 name = "oxdock-pipe"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f1aee878eed976e69174c9684072d7b856e20dbaf92ba41222b6a731eb697ba"
+checksum = "6b965c8efbbad46fc707cdc14b3e98c298dbfd2f796bccc0cb1bcb435d1c1219"
 dependencies = [
  "anyhow",
- "oxdock-fs",
+ "oxdock-fs 0.20.0-alpha",
 ]
 
 [[package]]
 name = "oxdock-process"
-version = "0.17.0-alpha"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e108f27e93e0bb3b16cb71dbdbb16f8358607675fab8aa2e524ef172015d4c5e"
+checksum = "4e070a58d50f1a8467f4ca021a95015aa09fb4bae10f1dcd52fa9adead692c82"
 dependencies = [
  "anyhow",
  "libc",
- "oxdock-fs",
+ "oxdock-fs 0.20.0-alpha",
  "oxdock-parser",
  "oxdock-pipe",
  "oxdock-sys-test-utils",
@@ -2279,10 +2451,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxdock-sys-test-utils"
-version = "0.17.0-alpha"
+name = "oxdock-remote-proto"
+version = "0.20.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9712c84fb7ea630e09c789366513e9e1ce632ad83cee49b0953bd9cbc17d6f5"
+checksum = "c492f2ae0b1566dba1700becb11025130600b7d461e5fb7f3252975a0d8f8a86"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "muxio-rpc-service 0.17.0-alpha",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tar",
+]
+
+[[package]]
+name = "oxdock-sys-test-utils"
+version = "0.20.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94a618a538f8778cde166008a53769ecd2df99bfa58889ca5de0966326613fd0"
 
 [[package]]
 name = "page_size"
@@ -2845,6 +3032,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_users"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
+dependencies = [
+ "libredox",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2949,7 +3146,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3256,7 +3453,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3374,6 +3571,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3383,7 +3591,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3431,7 +3639,7 @@ dependencies = [
  "hostname",
  "interprocess",
  "libc",
- "muxio-core",
+ "muxio-core 0.16.1-alpha",
  "muxio-tokio-rpc-ipc-client",
  "serial_test",
  "tempfile",
@@ -3456,10 +3664,10 @@ dependencies = [
  "hostname",
  "insta",
  "libc",
- "muxio-core",
- "muxio-rpc-service",
- "muxio-rpc-service-caller",
- "muxio-rpc-service-endpoint",
+ "muxio-core 0.16.1-alpha",
+ "muxio-rpc-service 0.16.1-alpha",
+ "muxio-rpc-service-caller 0.16.1-alpha",
+ "muxio-rpc-service-endpoint 0.16.1-alpha",
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
  "portable-pty",
@@ -3492,7 +3700,7 @@ dependencies = [
  "bitcode",
  "interprocess",
  "libc",
- "muxio-rpc-service",
+ "muxio-rpc-service 0.16.1-alpha",
  "term-wm-config",
  "term-wm-events",
 ]
@@ -3502,10 +3710,10 @@ name = "term-session-server"
 version = "0.10.12-alpha"
 dependencies = [
  "libc",
- "muxio-core",
- "muxio-rpc-service",
- "muxio-rpc-service-caller",
- "muxio-rpc-service-endpoint",
+ "muxio-core 0.16.1-alpha",
+ "muxio-rpc-service 0.16.1-alpha",
+ "muxio-rpc-service-caller 0.16.1-alpha",
+ "muxio-rpc-service-endpoint 0.16.1-alpha",
  "muxio-tokio-rpc-ipc-server",
  "portable-pty",
  "tempfile",
@@ -3558,13 +3766,13 @@ dependencies = [
  "interprocess",
  "libc",
  "line-ending",
- "muxio-rpc-service",
- "muxio-rpc-service-caller",
- "muxio-rpc-service-endpoint",
+ "muxio-rpc-service 0.16.1-alpha",
+ "muxio-rpc-service-caller 0.16.1-alpha",
+ "muxio-rpc-service-endpoint 0.16.1-alpha",
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
  "oxdock",
- "oxdock-fs",
+ "oxdock-fs 0.17.0-alpha",
  "portable-pty",
  "proptest",
  "ratatui",
@@ -3794,7 +4002,7 @@ dependencies = [
  "parking_lot",
  "rustix",
  "signal-hook",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4539,7 +4747,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4736,6 +4944,16 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
+]
 
 [[package]]
 name = "xmlwriter"
