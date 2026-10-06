@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Changed
+
+- Bumped `oxdock` from 0.17.0 to 0.21.0, adding `oxdock-remote-proto` with its HTTP/TLS (`ureq`, `rustls`) and archive (`tar`) stack plus a local download cache.
+- Bumped `syn` from 3.0.5 to 3.0.6 (#368).
+- Bumped `rstml` from 0.13.0 to 0.13.1 (#370).
+- Bumped `thiserror` from 2.0.20 to 2.0.21 (#371).
+- Bumped `smallvec` from 1.16.1 to 1.16.2 (#372).
+
 ## [0.10.12-alpha] - 2026-09-21
 
 ### Changed
