@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 ### Changed
 
 - Bumped `oxdock` from 0.17.0 to 0.21.0, adding `oxdock-remote-proto` with its HTTP/TLS (`ureq`, `rustls`) and archive (`tar`) stack plus a local download cache.
+- Refreshed transitive dependencies: too many to list here, see `Cargo.lock` for the full set.
 - Bumped `syn` from 3.0.5 to 3.0.6 (#368).
 - Bumped `rstml` from 0.13.0 to 0.13.1 (#370).
 - Bumped `thiserror` from 2.0.20 to 2.0.21 (#371).
