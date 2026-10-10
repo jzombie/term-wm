@@ -579,7 +579,7 @@ mod tests {
         push_windows(&mut p, &[key], area);
         render_panel(&mut p);
         // First tab starts at menu width + gap (no overflow).
-        let bar_start = (menu_icon("test").chars().count() as u16) + MENU_GAP;
+        let bar_start = (menu_icon("test").chars().count() as u16) + MENU_GAP_LABELED;
         assert_eq!(p.hit_test_window(bar_start + 1, 0), Some(key));
     }
 
@@ -906,8 +906,8 @@ mod tests {
         push_windows(&mut p, &keys, area);
         render_panel(&mut p);
 
-        // First tab starts at menu width + MENU_GAP (no overflow).
-        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
+        // First tab starts at menu width + MENU_GAP_LABELED (no overflow).
+        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP_LABELED;
         let res = p.handle_events(
             &mouse(MouseEventKind::Press(MouseButton::Left), bar_start + 1, 0),
             &ctx(),
@@ -1040,7 +1040,7 @@ mod tests {
         render_panel(&mut p);
 
         let icon_width = menu_icon("").chars().count() as u16;
-        // First tab starts exactly at the icon width (no MENU_GAP); pressing
+        // First tab starts exactly at the icon width (no MENU_GAP_LABELED); pressing
         // one cell inside it focuses the window.
         let res = p.handle_events(
             &mouse(MouseEventKind::Press(MouseButton::Left), icon_width + 1, 0),
@@ -1065,7 +1065,7 @@ mod tests {
         push_windows(&mut p, &keys, area);
         render_panel(&mut p);
 
-        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
+        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP_LABELED;
         // Tab i spans [bar_start + 10*i, bar_start + 10*(i+1)) (label 8 + 2 pad).
         let tab2 = bar_start + 20;
         let res = p.handle_events(
