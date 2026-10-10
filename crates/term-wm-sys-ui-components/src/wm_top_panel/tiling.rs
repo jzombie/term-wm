@@ -43,12 +43,15 @@ impl TilingIndicator {
         self.indicator = indicator;
     }
 
-    /// Label width in columns (0 when no indicator is set). The parent uses
-    /// this to reserve the right-edge slot.
-    pub(crate) fn label_width(&self) -> u16 {
+    /// Slot width in columns: the label plus the right-edge inset (0 when no
+    /// indicator is set). The parent uses this to reserve the right-edge slot,
+    /// keeping the `TILING_GAP` cell between the tab bar chevron and the label.
+    pub(crate) fn slot_width(&self) -> u16 {
         self.indicator
             .as_ref()
-            .map(|ind| ind.label.chars().count() as u16)
+            .map(|ind| {
+                (ind.label.chars().count() as u16).saturating_add(CHROME_BUTTON_INSET_RIGHT)
+            })
             .unwrap_or(0)
     }
 
@@ -197,7 +200,8 @@ mod tests {
     fn single_column_label_has_exact_hitbox() {
         let mut t = TilingIndicator::new();
         t.set_indicator(Some(close_indicator()));
-        assert_eq!(t.label_width(), 1);
+        // Slot reserves the glyph plus the right-edge inset.
+        assert_eq!(t.slot_width(), 2);
         let mut backend = make_backend(80, 1);
         t.render(&mut backend, slot(80), &NOIR);
         let rect = t.rect.expect("rect must be set");
@@ -225,7 +229,7 @@ mod tests {
     fn wide_label_keeps_measured_width() {
         let mut t = TilingIndicator::new();
         t.set_indicator(Some(toggle_indicator()));
-        assert_eq!(t.label_width(), 7);
+        assert_eq!(t.slot_width(), 8);
         let mut backend = make_backend(80, 1);
         t.render(&mut backend, slot(80), &NOIR);
         let rect = t.rect.expect("rect must be set");
@@ -235,7 +239,7 @@ mod tests {
     #[test]
     fn no_indicator_renders_nothing() {
         let (mut t, _) = render_indicator(None, 80);
-        assert_eq!(t.label_width(), 0);
+        assert_eq!(t.slot_width(), 0);
         assert!(t.rect.is_none());
         assert!(t.action().is_none());
         t.begin_frame();

@@ -192,14 +192,16 @@ impl WmTopPanelComponent {
             self.menu.render(backend, menu_slot, self.menu_open, &theme);
         }
 
-        // Center region: [menu + gap, max_x - tiling_width - TILING_GAP).
-        let tiling_width = self.tiling.label_width();
+        // Center region: [menu + gap, max_x - slot_width - TILING_GAP).
+        // The slot covers the label plus its right-edge inset, so the gap
+        // cell always separates the tab bar chevron from the label.
+        let slot_width = self.tiling.slot_width();
         let bar_start = area
             .x
             .saturating_add(i32::from(menu_width))
             .saturating_add(i32::from(MENU_GAP));
-        let bar_end = if tiling_width > 0 {
-            max_x.saturating_sub(i32::from(tiling_width + TILING_GAP))
+        let bar_end = if slot_width > 0 {
+            max_x.saturating_sub(i32::from(slot_width + TILING_GAP))
         } else {
             max_x
         };
@@ -233,8 +235,8 @@ impl WmTopPanelComponent {
             self.bar.render(backend, bar_rect, ctx, registry);
         }
 
-        // Tiling indicator (right edge).
-        if tiling_width > 0 {
+        // Top-right indicator (right edge).
+        if slot_width > 0 {
             self.tiling.render(backend, area, &theme);
         }
     }
@@ -951,6 +953,61 @@ mod tests {
                 "press beside the close glyph (col {col}) must not close"
             );
         }
+    }
+
+    #[test]
+    fn overflow_chevron_keeps_gap_from_close_button() {
+        use term_wm_core::components::{IndicatorTone, TopPanelState, TopRightIndicator};
+        use term_wm_core::window::WINDOW_CLOSE_GLYPH;
+        // Eight tabs overflow the bar, forcing the right `▶` chevron.
+        let keys = make_keys(8);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+            TopPanelState {
+                focus_current: Some(keys[0]),
+                display_order: keys.clone(),
+                status_line: None,
+                menu_open: false,
+                top_right_indicator: Some(TopRightIndicator {
+                    label: WINDOW_CLOSE_GLYPH,
+                    action: TermWmAction::CloseWindow(keys[0]),
+                    tone: IndicatorTone::Negative,
+                }),
+            },
+        )));
+        render_panel(&mut p);
+
+        let rect = p.tiling.rect.expect("indicator rect must be set");
+        let glyph_col = rect.x as u16;
+        // The cell between the overflow chevron and the glyph is a spacing
+        // gap: pressing it must never close nor focus, only consume.
+        let res = p.handle_events(
+            &mouse(
+                MouseEventKind::Press(MouseButton::Left),
+                glyph_col.saturating_sub(1),
+                0,
+            ),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Consumed),
+            "gap cell before the close glyph must be consumed, not actioned"
+        );
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), glyph_col, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::CloseWindow(k)) if k == keys[0]),
+            "press on the close glyph must map to CloseWindow"
+        );
     }
 
     #[test]
