@@ -38,6 +38,11 @@ const MENU_GAP: u16 = 1;
 /// Horizontal gap (columns) between the center region's right edge (and its
 /// `▶` chevron) and the right-aligned top-right indicator.
 const TILING_GAP: u16 = 1;
+/// Right-edge inset (columns) for the top-right indicator slot. Panel-owned
+/// metric: intentionally mirrors `CHROME_BUTTON_INSET_RIGHT` so the panel
+/// slot matches window header button placement without coupling panel layout
+/// to window chrome metrics (see the mirror test in `tiling.rs`).
+pub const TOP_PANEL_RIGHT_INSET: u16 = 1;
 
 #[derive(Debug)]
 pub struct WmTopPanelComponent {

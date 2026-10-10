@@ -10,7 +10,6 @@ use ratatui::style::{Modifier, Style};
 use term_wm_core::{
     actions::TermWmAction,
     components::{IndicatorTone, TopRightIndicator},
-    constants::CHROME_BUTTON_INSET_RIGHT,
     layout::rect_contains,
     theme::Theme,
 };
@@ -18,6 +17,8 @@ use term_wm_layout_engine::LayoutRect;
 use term_wm_ui_components::helpers::{
     color_to_ratatui, layout_rect_to_clipped_rect, safe_set_string,
 };
+
+use super::TOP_PANEL_RIGHT_INSET;
 
 /// Right-aligned top-right indicator applet. The parent reserves its width
 /// at the right edge so the window strip never under-draws it.
@@ -50,7 +51,7 @@ impl TilingIndicator {
         self.indicator
             .as_ref()
             .map(|ind| {
-                (ind.label.chars().count() as u16).saturating_add(CHROME_BUTTON_INSET_RIGHT)
+                (ind.label.chars().count() as u16).saturating_add(TOP_PANEL_RIGHT_INSET)
             })
             .unwrap_or(0)
     }
@@ -68,7 +69,7 @@ impl TilingIndicator {
     /// Render the label right-aligned within `area` and store its rect. The
     /// stored rect covers exactly the drawn glyphs, so only the visible
     /// label is clickable. The label sits one cell inside the right edge,
-    /// matching the window header button inset (`CHROME_BUTTON_INSET_RIGHT`).
+    /// matching the window header button inset (`TOP_PANEL_RIGHT_INSET`).
     pub(crate) fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -93,7 +94,7 @@ impl TilingIndicator {
         // Same right-edge inset as window header buttons: the glyph sits
         // one cell inside the edge rather than flush against it.
         let ix = max_x
-            .saturating_sub(i32::from(CHROME_BUTTON_INSET_RIGHT))
+            .saturating_sub(i32::from(TOP_PANEL_RIGHT_INSET))
             .saturating_sub(i32::from(tw));
         if ix < area.x {
             return;
@@ -131,6 +132,16 @@ mod tests {
     use ratatui::style::Modifier;
     use term_wm_core::theme::NOIR;
     use term_wm_core::window::{WINDOW_CLOSE_GLYPH, WindowKey};
+
+    #[test]
+    fn right_inset_mirrors_window_header() {
+        // Panel-owned metric stays decoupled, but the user-visible offset
+        // must match window header button placement.
+        assert_eq!(
+            TOP_PANEL_RIGHT_INSET,
+            term_wm_core::constants::CHROME_BUTTON_INSET_RIGHT
+        );
+    }
 
     fn make_backend(w: u16, h: u16) -> term_wm_console::RatatuiBackend {
         let area = RatatuiRect::new(0, 0, w, h);
