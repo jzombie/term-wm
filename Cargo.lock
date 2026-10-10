@@ -3138,7 +3138,6 @@ dependencies = [
  "proc-macro2-diagnostics",
  "quote",
  "syn 3.0.6",
- "syn_derive",
  "thiserror 2.0.21",
 ]
 
