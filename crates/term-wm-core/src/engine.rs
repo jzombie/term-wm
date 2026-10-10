@@ -183,8 +183,8 @@ fn generate_notification_regions<
     // paints unconditionally (it ignores the component `visible` flag), so
     // presence — not visibility — is the sound gate. `top_claimed_area()`
     // cannot be used: it is 0 in cramped mode by design.
-    let panel_overlays_top_row = wm.is_monocle_cramped()
-        && wm.get_semantic_component(ComponentTag::TopPanel).is_some();
+    let panel_overlays_top_row =
+        wm.is_monocle_cramped() && wm.get_semantic_component(ComponentTag::TopPanel).is_some();
     let mut y_offset: u16 = if panel_overlays_top_row {
         OVERLAY_PANEL_Y_SHIFT
     } else {
