@@ -50,9 +50,7 @@ impl TilingIndicator {
     pub(crate) fn slot_width(&self) -> u16 {
         self.indicator
             .as_ref()
-            .map(|ind| {
-                (ind.label.chars().count() as u16).saturating_add(TOP_PANEL_RIGHT_INSET)
-            })
+            .map(|ind| (ind.label.chars().count() as u16).saturating_add(TOP_PANEL_RIGHT_INSET))
             .unwrap_or(0)
     }
 

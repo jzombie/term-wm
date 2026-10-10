@@ -33,8 +33,10 @@ use menu::MenuButton;
 use status::StatusLine;
 use tiling::TilingIndicator;
 
-/// Single-column gap between the menu button and the center region.
-const MENU_GAP: u16 = 1;
+/// Single-column gap between the menu button and the center region. Only
+/// applied when the menu carries an app-name label; an icon-only menu
+/// (empty app name) adds no extra gap.
+const MENU_GAP_LABELED: u16 = 1;
 /// Horizontal gap (columns) between the center region's right edge (and its
 /// `▶` chevron) and the right-aligned top-right indicator.
 const TILING_GAP: u16 = 1;
@@ -201,10 +203,17 @@ impl WmTopPanelComponent {
         // The slot covers the label plus its right-edge inset, so the gap
         // cell always separates the tab bar chevron from the label.
         let slot_width = self.tiling.slot_width();
+        // Icon-only menu (no app-name label) takes no separator gap; the
+        // tabs start directly after the icon.
+        let menu_gap = if self.app_name.is_empty() {
+            0
+        } else {
+            MENU_GAP_LABELED
+        };
         let bar_start = area
             .x
             .saturating_add(i32::from(menu_width))
-            .saturating_add(i32::from(MENU_GAP));
+            .saturating_add(i32::from(menu_gap));
         let bar_end = if slot_width > 0 {
             max_x.saturating_sub(i32::from(slot_width + TILING_GAP))
         } else {
@@ -1012,6 +1021,34 @@ mod tests {
         assert!(
             matches!(res, EventResult::Action(TermWmAction::CloseWindow(k)) if k == keys[0]),
             "press on the close glyph must map to CloseWindow"
+        );
+    }
+
+    #[test]
+    fn icon_only_menu_adds_no_gap() {
+        // Empty app name means an icon-only menu ("≡ "): the tab strip must
+        // start directly after the icon with no separator gap.
+        let keys = make_keys(1);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        let icon_width = menu_icon("").chars().count() as u16;
+        // First tab starts exactly at the icon width (no MENU_GAP); pressing
+        // one cell inside it focuses the window.
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), icon_width + 1, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[0]),
+            "tab must start directly after an icon-only menu"
         );
     }
 
