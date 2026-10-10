@@ -10,6 +10,7 @@ use ratatui::style::{Modifier, Style};
 use term_wm_core::{
     actions::TermWmAction,
     components::{IndicatorTone, TopRightIndicator},
+    constants::CHROME_BUTTON_INSET_RIGHT,
     layout::rect_contains,
     theme::Theme,
 };
@@ -63,7 +64,8 @@ impl TilingIndicator {
 
     /// Render the label right-aligned within `area` and store its rect. The
     /// stored rect covers exactly the drawn glyphs, so only the visible
-    /// label is clickable.
+    /// label is clickable. The label sits one cell inside the right edge,
+    /// matching the window header button inset (`CHROME_BUTTON_INSET_RIGHT`).
     pub(crate) fn render(
         &mut self,
         backend: &mut dyn term_wm_render::RenderBackend,
@@ -85,7 +87,11 @@ impl TilingIndicator {
         let y = area.y;
         let max_x = area.x.saturating_add(i32::from(area.width));
         let tw = ind.label.chars().count() as u16;
-        let ix = max_x.saturating_sub(i32::from(tw));
+        // Same right-edge inset as window header buttons: the glyph sits
+        // one cell inside the edge rather than flush against it.
+        let ix = max_x
+            .saturating_sub(i32::from(CHROME_BUTTON_INSET_RIGHT))
+            .saturating_sub(i32::from(tw));
         if ix < area.x {
             return;
         }
@@ -168,8 +174,9 @@ mod tests {
     fn negative_tone_renders_error_style() {
         let (t, backend) = render_indicator(Some(close_indicator()), 80);
         let rect = t.rect.expect("close indicator must populate its rect");
-        assert_eq!((rect.x, rect.width), (79, 1));
-        let glyph = backend.buffer.cell((79, 0)).expect("glyph cell must exist");
+        // One-cell header inset: glyph at col 78, not flush at col 79.
+        assert_eq!((rect.x, rect.width), (78, 1));
+        let glyph = backend.buffer.cell((78, 0)).expect("glyph cell must exist");
         assert_eq!(glyph.symbol(), WINDOW_CLOSE_GLYPH);
         assert_eq!(glyph.style().fg, Some(color_to_ratatui(NOIR.error)));
         assert!(glyph.modifier.contains(Modifier::BOLD));
@@ -179,8 +186,8 @@ mod tests {
     fn positive_tone_renders_success_style() {
         let (t, backend) = render_indicator(Some(toggle_indicator()), 80);
         let rect = t.rect.expect("toggle indicator must populate its rect");
-        assert_eq!((rect.x, rect.width), (73, 7));
-        let head = backend.buffer.cell((73, 0)).expect("label cell must exist");
+        assert_eq!((rect.x, rect.width), (72, 7));
+        let head = backend.buffer.cell((72, 0)).expect("label cell must exist");
         assert_eq!(head.symbol(), "▢");
         assert_eq!(head.style().fg, Some(color_to_ratatui(NOIR.success)));
         assert!(head.modifier.contains(Modifier::BOLD));
@@ -194,12 +201,12 @@ mod tests {
         let mut backend = make_backend(80, 1);
         t.render(&mut backend, slot(80), &NOIR);
         let rect = t.rect.expect("rect must be set");
-        assert_eq!((rect.x, rect.width), (79, 1));
+        assert_eq!((rect.x, rect.width), (78, 1));
         assert!(
-            t.contains(79, 0),
+            t.contains(78, 0),
             "the visible glyph cell must hit the indicator"
         );
-        for col in [77u16, 78] {
+        for col in [77u16, 79] {
             assert!(
                 !t.contains(col, 0),
                 "cells beside the glyph must not hit the indicator"
@@ -222,7 +229,7 @@ mod tests {
         let mut backend = make_backend(80, 1);
         t.render(&mut backend, slot(80), &NOIR);
         let rect = t.rect.expect("rect must be set");
-        assert_eq!((rect.x, rect.width), (73, 7));
+        assert_eq!((rect.x, rect.width), (72, 7));
     }
 
     #[test]

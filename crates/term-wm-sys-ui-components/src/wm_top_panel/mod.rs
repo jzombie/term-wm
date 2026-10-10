@@ -930,17 +930,18 @@ mod tests {
         )));
         render_panel(&mut p);
 
-        // Only the visible glyph cell (last column) closes; the cells beside
-        // it fall through to the panel background and must never close.
+        // Only the visible glyph cell (one inside the right edge, matching the
+        // window header inset) closes; the cells beside it fall through to the
+        // panel background and must never close.
         let res = p.handle_events(
-            &mouse(MouseEventKind::Press(MouseButton::Left), 79, 0),
+            &mouse(MouseEventKind::Press(MouseButton::Left), 78, 0),
             &ctx(),
         );
         assert!(
             matches!(res, EventResult::Action(TermWmAction::CloseWindow(k)) if k == keys[0]),
             "press on the close glyph must map to CloseWindow"
         );
-        for col in [77u16, 78] {
+        for col in [77u16, 79] {
             let res = p.handle_events(
                 &mouse(MouseEventKind::Press(MouseButton::Left), col, 0),
                 &ctx(),
