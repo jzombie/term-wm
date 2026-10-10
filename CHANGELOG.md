@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.14-alpha] - 2026-10-10
+
+### Added
+
+- The top panel now shows a close button for the current window in Monocle Mode when the window can be closed.
+
+### Fixed
+
+- Toast notifications no longer appear behind the top panel in constrained Monocle Mode; they now render one row lower (#357).
+
 ## [0.10.13-alpha] - 2026-10-07
 
 ### Changed

@@ -2924,7 +2924,7 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             btns.push(WmButton {
                 action: TermWmAction::CloseWindow(key),
                 label: "Close Window",
-                symbol: "X",
+                symbol: WINDOW_CLOSE_GLYPH,
             });
         }
         if !self.is_monocle() {
@@ -2966,6 +2966,10 @@ impl OutsideClickResult {
         !matches!(self, Self::Ignored)
     }
 }
+
+/// Canonical close glyph shared by window chrome buttons and the monocle
+/// top-panel close indicator (single source of truth).
+pub const WINDOW_CLOSE_GLYPH: &str = "X";
 
 #[derive(Clone)]
 pub struct WmButton {
