@@ -83,7 +83,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -94,7 +94,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -805,7 +805,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -877,7 +877,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1540,9 +1540,9 @@ dependencies = [
 
 [[package]]
 name = "insta"
-version = "1.48.0"
+version = "1.49.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
+checksum = "b67d3d2e287e4b86c10b3f3b641033d1f89b74bdb39d05f34952e2b9a6fe21cd"
 dependencies = [
  "console",
  "once_cell",
@@ -1620,7 +1620,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -1682,7 +1682,7 @@ checksum = "bde5057d6143cc94e861d90f591b9303d6716c6b9602309150bd068853c10899"
 dependencies = [
  "hashbrown 0.16.1",
  "portable-atomic",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2092,7 +2092,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2755,27 +2755,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2785,16 +2764,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro2-diagnostics2"
+name = "proc-macro2-diagnostics"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af971f0c4f5eb79d0fe381e9b5a1e315ae8a3df58fa512666471e19b9e1f824d"
+checksum = "df921e1ef974ebc8dd9effdb0c037a96928ae8cbf871438e02d6fd67204b595e"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
  "version_check",
- "yansi",
 ]
 
 [[package]]
@@ -2959,7 +2937,7 @@ dependencies = [
  "palette",
  "serde",
  "strum",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "unicode-segmentation",
  "unicode-truncate",
  "unicode-width",
@@ -3061,7 +3039,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
 dependencies = [
  "libredox",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3151,17 +3129,16 @@ dependencies = [
 
 [[package]]
 name = "rstml"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c008ffc8b9cd3238289f5d25b3d9b00fc63445c9cdf766995b3c8bbe43612f6"
+checksum = "c6bd1bfba3c4c0b57aae906204d9e5744f3f65800ce6c75bd4cc162f2c26f3aa"
 dependencies = [
  "derive-where",
  "proc-macro2",
- "proc-macro2-diagnostics2",
+ "proc-macro2-diagnostics",
  "quote",
  "syn 3.0.6",
- "syn_derive",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3183,7 +3160,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3508,9 +3485,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.16.1"
+version = "1.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
+checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "smawk"
@@ -3525,7 +3502,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3626,18 +3603,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "syn_derive"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdb066a04799e45f5d582e8fc6ec8e6d6896040d00898eb4e6a835196815b219"
-dependencies = [
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3677,15 +3642,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "term-bench"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "clap",
  "crossterm",
@@ -3695,20 +3660,20 @@ dependencies = [
 
 [[package]]
 name = "term-clipboard"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "arboard",
  "base64 0.23.1",
  "clap",
  "tempfile",
  "term-sys-io",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
 [[package]]
 name = "term-logging"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "file-rotate",
  "libc",
@@ -3722,7 +3687,7 @@ dependencies = [
 
 [[package]]
 name = "term-session"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "clap",
  "hostname",
@@ -3746,7 +3711,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-client"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "crossbeam-channel",
  "crossterm",
@@ -3775,7 +3740,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-mock"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "libc",
  "term-session-muxio-service-definitions",
@@ -3784,7 +3749,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-muxio-service-definitions"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "bitcode",
  "interprocess",
@@ -3796,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "term-session-server"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "libc",
  "muxio-core",
@@ -3819,7 +3784,7 @@ dependencies = [
 
 [[package]]
 name = "term-size-box"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3827,7 +3792,7 @@ dependencies = [
 
 [[package]]
 name = "term-sys-io"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "libc",
  "serial_test",
@@ -3837,7 +3802,7 @@ dependencies = [
 
 [[package]]
 name = "term-test-support"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "serial_test",
  "tokio",
@@ -3845,7 +3810,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "anyhow",
  "clap",
@@ -3896,7 +3861,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-config"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "serial_test",
  "tempfile",
@@ -3905,7 +3870,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-console"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "criterion",
  "crossbeam-channel",
@@ -3924,7 +3889,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-core"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "bitflags 2.13.2",
  "console",
@@ -3955,7 +3920,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-crossterm-adapter"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "crossterm",
  "insta",
@@ -3965,7 +3930,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-events"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "bitcode",
  "term-wm-layout-engine",
@@ -3973,14 +3938,14 @@ dependencies = [
 
 [[package]]
 name = "term-wm-layout-engine"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "term-wm-pty-engine"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "ctrlc",
  "indoc",
@@ -3995,7 +3960,7 @@ dependencies = [
  "term-wm-config",
  "term-wm-events",
  "term-wm-vt100",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "vte",
  "windows-sys 0.61.2",
@@ -4003,11 +3968,11 @@ dependencies = [
 
 [[package]]
 name = "term-wm-render"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 
 [[package]]
 name = "term-wm-sys-ui-components"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -4024,7 +3989,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-components"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "criterion",
  "crossterm",
@@ -4043,7 +4008,7 @@ dependencies = [
  "term-wm-pty-engine",
  "term-wm-render",
  "term-wm-vt100",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "unicode-width",
  "webbrowser",
@@ -4051,7 +4016,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-ui-facade"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "term-wm-core",
  "term-wm-render",
@@ -4061,7 +4026,7 @@ dependencies = [
 
 [[package]]
 name = "term-wm-view"
-version = "0.10.13-alpha"
+version = "0.10.14-alpha"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -4091,7 +4056,7 @@ dependencies = [
  "parking_lot",
  "rustix",
  "signal-hook",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4179,11 +4144,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.20",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -4199,9 +4164,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4871,7 +4836,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5163,12 +5128,6 @@ name = "xxhash-rust"
 version = "0.8.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
-
-[[package]]
-name = "yansi"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yoke"
