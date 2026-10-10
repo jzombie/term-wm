@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 - The top panel now shows a close button for the current window in Monocle Mode when the window can be closed.
 
+### Changed
+
+- Bumped `rstml` from 0.13.0 to 0.13.1 (#374).
+- Bumped `insta` from 1.48.0 to 1.49.0 (#375).
+- Bumped `smallvec` from 1.16.1 to 1.16.2 (#376).
+- Bumped `thiserror` from 2.0.20 to 2.0.21 (#377).
+- Bumped the Docker base image from `rust:1.98-alpine3.24` to `rust:1.99-alpine3.24` (#378).
+
 ### Fixed
 
 - Toast notifications no longer appear behind the top panel in constrained Monocle Mode; they now render one row lower (#357).
