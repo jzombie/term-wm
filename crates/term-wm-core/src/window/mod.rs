@@ -25,8 +25,8 @@ pub use entry::{ClosePolicy, WindowMode, WindowState};
 
 pub use window_manager::layer_manager::{ComponentTag, LayerId, LayerManager, MacroFocus, ZPlane};
 pub use window_manager::{
-    DrawTask, ScrollState, WindowDrawContext, WindowManager, WindowSurface, WmButton,
-    WorkspaceTotals,
+    DrawTask, ScrollState, WINDOW_CLOSE_GLYPH, WindowDrawContext, WindowManager, WindowSurface,
+    WmButton, WorkspaceTotals,
 };
 
 /// Signed floating rectangle (alias for engine `LayoutRect`).

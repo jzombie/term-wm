@@ -1,12 +1,12 @@
 //! Top status panel — composed of small applets (menu, tab bar, status line,
-//! tiling indicator) that each own a bounded region of the single row.
+//! top-right indicator) that each own a bounded region of the single row.
 //!
 //! The parent runs a small layout pass each frame: it reserves the menu on the
-//! left and the tiling indicator on the right, then hands the middle region to
+//! left and the top-right indicator on the right, then hands the middle region to
 //! either the status line or the scrollable, draggable tab bar. Because each
 //! applet renders and interacts strictly inside its own allocated rect, the tab
 //! bar's `◀`/`▶` overflow indicators are always contained and never overwritten
-//! by the menu or the tiling label.
+//! by the menu or the top-right label.
 
 mod menu;
 mod status;
@@ -36,7 +36,7 @@ use tiling::TilingIndicator;
 /// Single-column gap between the menu button and the center region.
 const MENU_GAP: u16 = 1;
 /// Horizontal gap (columns) between the center region's right edge (and its
-/// `▶` chevron) and the right-aligned tiling indicator.
+/// `▶` chevron) and the right-aligned top-right indicator.
 const TILING_GAP: u16 = 1;
 
 #[derive(Debug)]
@@ -146,7 +146,7 @@ impl WmTopPanelComponent {
 
     /// Layout pass + applet rendering into `self.area`.
     ///
-    /// Reserves the menu (left) and tiling label (right), then hands the middle
+    /// Reserves the menu (left) and top-right indicator (right), then hands the middle
     /// region to EITHER the status line OR the tab bar (mutually exclusive), so
     /// applets never overlap.
     fn render_contents(
@@ -254,7 +254,7 @@ impl Component<TermWmAction> for WmTopPanelComponent {
     ) {
         let theme = ctx.config().theme;
         if !self.active {
-            // Still render the tiling indicator even when inactive so the
+            // Still render the top-right indicator even when inactive so the
             // label is visible and its rect is populated for clicks.
             self.bar.clear_drag_state();
             self.tiling.render(backend, area, &theme);
@@ -362,7 +362,7 @@ impl WmComponent for WmTopPanelComponent {
                 self.display_order = state.display_order.clone();
                 self.status_line = state.status_line.clone();
                 self.menu_open = state.menu_open;
-                self.tiling.set_indicator(state.tiling_indicator.clone());
+                self.tiling.set_indicator(state.top_right_indicator.clone());
             }
             ComponentAction::SetWindowLabels(labels) => {
                 self.window_labels = labels.clone();
@@ -740,7 +740,7 @@ mod tests {
             display_order: vec![key],
             status_line: Some("ready".to_string()),
             menu_open: true,
-            tiling_indicator: None,
+            top_right_indicator: None,
         };
         p.process_action(&ComponentAction::SetTopPanelState(Box::new(state)));
         assert_eq!(p.focus_current, Some(key));
@@ -900,6 +900,56 @@ mod tests {
             matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[0]),
             "pressing a tab must map to FocusWindow"
         );
+    }
+
+    #[test]
+    fn press_close_indicator_closes_focused_window() {
+        use term_wm_core::components::{IndicatorTone, TopPanelState, TopRightIndicator};
+        use term_wm_core::window::WINDOW_CLOSE_GLYPH;
+        let keys = make_keys(1);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+            TopPanelState {
+                focus_current: Some(keys[0]),
+                display_order: keys.clone(),
+                status_line: None,
+                menu_open: false,
+                top_right_indicator: Some(TopRightIndicator {
+                    label: WINDOW_CLOSE_GLYPH,
+                    action: TermWmAction::CloseWindow(keys[0]),
+                    tone: IndicatorTone::Negative,
+                }),
+            },
+        )));
+        render_panel(&mut p);
+
+        // Only the visible glyph cell (last column) closes; the cells beside
+        // it fall through to the panel background and must never close.
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), 79, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::CloseWindow(k)) if k == keys[0]),
+            "press on the close glyph must map to CloseWindow"
+        );
+        for col in [77u16, 78] {
+            let res = p.handle_events(
+                &mouse(MouseEventKind::Press(MouseButton::Left), col, 0),
+                &ctx(),
+            );
+            assert!(
+                matches!(res, EventResult::Consumed),
+                "press beside the close glyph (col {col}) must not close"
+            );
+        }
     }
 
     #[test]

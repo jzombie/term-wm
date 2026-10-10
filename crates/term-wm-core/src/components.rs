@@ -687,6 +687,24 @@ pub enum ComponentAction {
     SetWindowLabels(std::collections::BTreeMap<crate::window::WindowKey, String>),
 }
 
+/// Visual tone of the top-right panel indicator. The producer maps intent
+/// to tone; sys-ui renders tone to color without inspecting the action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndicatorTone {
+    Positive,
+    Negative,
+}
+
+/// Clickable indicator in the top panel's top-right slot: the tiling toggle
+/// outside monocle mode, or the close button for the focused window inside
+/// monocle mode.
+#[derive(Debug, Clone)]
+pub struct TopRightIndicator {
+    pub label: &'static str,
+    pub action: crate::actions::TermWmAction,
+    pub tone: IndicatorTone,
+}
+
 /// Render-time state pushed to the top panel before each frame.
 #[derive(Debug, Clone)]
 pub struct TopPanelState {
@@ -696,7 +714,7 @@ pub struct TopPanelState {
     pub menu_open: bool,
     /// If set, render a clickable label in the top-right with this text
     /// that dispatches the given action when clicked.
-    pub tiling_indicator: Option<(&'static str, crate::actions::TermWmAction)>,
+    pub top_right_indicator: Option<TopRightIndicator>,
 }
 
 /// Queries the engine can ask components.
