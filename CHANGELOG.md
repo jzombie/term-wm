@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.15-alpha] - 2026-10-10
+
+### Fixed
+
+- The top panel close button no longer stacks with the window header close button in Monocle Mode: it now only appears when the focused window has no visible header.
+
 ## [0.10.14-alpha] - 2026-10-10
 
 ### Added
