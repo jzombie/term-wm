@@ -739,8 +739,12 @@ impl Default for DrawPlanRenderer {
 
 /// Top-right panel indicator for the current frame: the float/tile toggle
 /// outside monocle mode, or a close button for the focused window inside
-/// monocle mode (where the toggle is hidden). Returns `None` in monocle when
-/// the focused window is not closable, so the slot collapses.
+/// monocle mode (where the toggle is hidden). The close button never
+/// duplicates the header below it: it is hidden exactly when the layout
+/// pass reserved panel rows and the header is enabled, i.e. the window
+/// starts below the panel and carries its own close button. With no
+/// reserved rows the panel overlays row 0 and covers the header, so the
+/// panel carries close instead. Non-closable windows never show it.
 fn top_right_indicator<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
     wm: &WindowManager<C, L, O>,
 ) -> Option<TopRightIndicator> {
@@ -757,15 +761,17 @@ fn top_right_indicator<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
         });
     }
     let focus = wm.focused_window();
-    if wm.is_closable(focus) {
-        Some(TopRightIndicator {
-            label: WINDOW_CLOSE_GLYPH,
-            action: TermWmAction::CloseWindow(focus),
-            tone: IndicatorTone::Negative,
-        })
-    } else {
-        None
+    if !wm.is_closable(focus) {
+        return None;
     }
+    if !wm.top_claimed_area().is_empty() && wm.window_header_enabled(focus) {
+        return None;
+    }
+    Some(TopRightIndicator {
+        label: WINDOW_CLOSE_GLYPH,
+        action: TermWmAction::CloseWindow(focus),
+        tone: IndicatorTone::Negative,
+    })
 }
 
 pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
