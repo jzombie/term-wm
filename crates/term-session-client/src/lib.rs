@@ -1067,39 +1067,70 @@ pub fn render_frame(
     }
 
     // Cursor restoration with DECAWM pending-wrap reconstruction (issue #115).
-    // cursor_position() is 0-based while CUP is 1-based. A column at or past
-    // the rendered width means the inner parser holds the pending-wrap latch
-    // (with DECAWM off the cursor clamps to the margin, so only a pending
-    // latch can reach here). Every CUP clears the latch in the receiver, so
-    // the latch is rebuilt by printing into the final column with DECAWM on.
-    // SGR resets are non-motion sequences and preserve the latch.
+    // cursor_position() is 0-based while CUP is 1-based. The inner parser
+    // latches pending-wrap only when the cursor reaches the inner width
+    // (with DECAWM off the cursor clamps to the margin instead), so
+    // reconstruction requires a genuine inner latch (cur_col >= inner_cols)
+    // at full width (render_cols == inner_cols): a cursor parked inside a
+    // truncated-away region is an ordinary position, not a latch. Every CUP
+    // clears the latch in the receiver, so the latch is rebuilt by printing
+    // into the final column with DECAWM on. SGR resets are non-motion
+    // sequences and preserve the latch. DECAWM mode itself persists across
+    // CUP, so the single ?7h below covers the reconstruction too.
     buf.extend_from_slice(b"\x1b[?7h");
     buf.extend_from_slice(b"\x1b[0m");
     active_style = CellStyle::default();
     let (cur_row, cur_col) = screen.cursor_position();
-    if cur_col >= render_cols && render_cols > 0 && cur_row < render_rows {
+    if cur_col >= inner_cols
+        && render_cols == inner_cols
+        && render_cols > 0
+        && cur_row < render_rows
+    {
         // Pending wrap: address the final column (1-based column == width),
-        // enable DECAWM, then re-emit the boundary cell so the outer parser
-        // latches pending-wrap exactly like the inner one. An empty boundary
-        // still needs a printable byte to advance the state machine, so fall
-        // back to a space under the boundary style.
+        // then re-emit the boundary cell so the outer parser latches
+        // pending-wrap exactly like the inner one. When a double-width
+        // character touches the margin, the glyph lives in the preceding
+        // cell while the boundary cell is an empty continuation: re-emit
+        // from the glyph cell, since printing a space over the continuation
+        // would destroy the character. A genuinely blank boundary still
+        // needs a printable byte to advance the state machine, so only then
+        // fall back to a space.
+        let boundary_col = render_cols.saturating_sub(1);
+        let boundary = screen.cell(cur_row, boundary_col);
+        let wide_start = if boundary_col > 0 {
+            screen.cell(cur_row, boundary_col.saturating_sub(1))
+        } else {
+            None
+        };
+        let reemit_wide = matches!(
+            (boundary.map(|cell| cell.contents()), wide_start),
+            (Some(contents), Some(prev))
+                if contents.is_empty()
+                    && unicode_width::UnicodeWidthStr::width(prev.contents()) == 2
+        );
+        // emit_col is the 0-based column to position at; the CUP below
+        // adds one for 1-based ANSI addressing, so the normal case lands
+        // on 1-based render_cols (the final column) and the wide case on
+        // 1-based render_cols - 1 (the glyph start cell).
+        let (emit_col, emit_cell) = if reemit_wide {
+            (boundary_col.saturating_sub(1), wide_start)
+        } else {
+            (boundary_col, boundary)
+        };
         write!(
             buf,
             "\x1b[{};{}H",
             cur_row.saturating_add(1),
-            render_cols
+            emit_col.saturating_add(1)
         )?;
-        buf.extend_from_slice(b"\x1b[?7h");
-        let boundary_col = render_cols.saturating_sub(1);
-        let boundary = screen.cell(cur_row, boundary_col);
-        let style = boundary.map(CellStyle::from_cell).unwrap_or_default();
+        let style = emit_cell.map(CellStyle::from_cell).unwrap_or_default();
         // No tracker update for the boundary style itself: the rendition is
         // terminated unconditionally below, so the intermediate value is
         // never read. The reset afterwards resynchronizes the tracker.
         if style != active_style {
             apply_sgr(&mut buf, &style)?;
         }
-        match boundary.map(|cell| cell.contents()) {
+        match emit_cell.map(|cell| cell.contents()) {
             Some(contents) if !contents.is_empty() => {
                 buf.extend_from_slice(contents.as_bytes());
             }
@@ -1576,8 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn render_frame_truncates_to_narrower_target() {
-        // Inner 4-wide content rendered for a 3-wide outer viewport must
+    fn render_frame_truncates_to_narrower_target() {        // Inner 4-wide content rendered for a 3-wide outer viewport must
         // truncate instead of clamping the excess into the margin column.
         let outer = round_trip(b"ABCD", 1, 4, 1, 3);
         let screen = outer.screen();
@@ -1604,6 +1634,41 @@ mod tests {
             term_wm_vt100::Color::Default,
             "trailing margin must not inherit the content background",
         );
+    }
+
+    #[test]
+    fn render_frame_round_trip_preserves_wide_char_at_margin() {
+        // A double-width glyph touching the margin stores its bytes in the
+        // preceding cell; the boundary cell is an empty continuation.
+        // Reconstruction must re-emit the glyph, never a space over it.
+        let outer = round_trip("B\u{3042}".as_bytes(), 1, 3, 1, 3);
+        let screen = outer.screen();
+        assert_eq!(
+            screen.cell(0, 1).expect("cell").contents(),
+            "\u{3042}",
+            "margin wide char must survive the round trip intact",
+        );
+        assert!(
+            screen
+                .cell(0, 2)
+                .is_none_or(|cell| cell.contents().is_empty()),
+            "continuation cell must not be overwritten with a space glyph",
+        );
+    }
+
+    #[test]
+    fn render_frame_truncated_cursor_is_not_pending_wrap() {
+        // Inner cursor parked at column 3 of a 4-wide session is an ordinary
+        // position, not a latch. Rendered for a 3-wide target it must take
+        // the standard clamped CUP path without latching pending-wrap in
+        // the outer parser.
+        let outer = round_trip(b"ABC", 1, 4, 1, 3);
+        assert_eq!(
+            outer.screen().cursor_position(),
+            (0, 2),
+            "truncated cursor must clamp without pending-wrap",
+        );
+        assert_eq!(outer.screen().contents(), "ABC");
     }
 
     // ── is_coalescable_mouse tests ────────────────────────────────────────
