@@ -1607,7 +1607,8 @@ mod tests {
     }
 
     #[test]
-    fn render_frame_truncates_to_narrower_target() {        // Inner 4-wide content rendered for a 3-wide outer viewport must
+    fn render_frame_truncates_to_narrower_target() {
+        // Inner 4-wide content rendered for a 3-wide outer viewport must
         // truncate instead of clamping the excess into the margin column.
         let outer = round_trip(b"ABCD", 1, 4, 1, 3);
         let screen = outer.screen();

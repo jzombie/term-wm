@@ -1859,10 +1859,7 @@ mod tests {
 
         // resolve_color: Default always maps to None (terminal default),
         // independent of any SGR the child left active (issue #115).
-        assert_eq!(
-            resolve_color(term_wm_vt100::Color::Default),
-            None
-        );
+        assert_eq!(resolve_color(term_wm_vt100::Color::Default), None);
         assert_eq!(
             resolve_color(term_wm_vt100::Color::Idx(7)),
             Some(TColor::Indexed(7))
