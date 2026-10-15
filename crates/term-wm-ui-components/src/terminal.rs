@@ -747,10 +747,6 @@ impl TerminalComponent {
             );
         }
 
-        // Hoist loop-invariant color defaults
-        let default_fg = screen.fgcolor();
-        let default_bg = screen.bgcolor();
-
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             let cell_y = area.y.saturating_add(row);
@@ -768,7 +764,7 @@ impl TerminalComponent {
 
                 if let Some(cell) = vt_row.get(col) {
                     let mut symbol = cell.contents().chars().next().unwrap_or(' ');
-                    let (fg, bg) = resolve_colors_with_defaults(cell, default_fg, default_bg);
+                    let (fg, bg) = resolve_colors(cell);
                     let mut style = Style::default();
                     if let Some(fg) = fg {
                         style = style.fg(fg);
@@ -1241,28 +1237,19 @@ impl SelectionHost for RenderDragHost<'_> {
     }
 }
 
+/// Resolve a grid cell to ratatui colors using cell-local attributes only.
+///
+/// A cell whose color is `Default` maps to `None` (the terminal default),
+/// regardless of which SGR attributes the child happens to have left active
+/// at frame time. Falling back to the screen's live active colors instead
+/// repaints every default cell with the trailing SGR state (issue #115:
+/// PowerShell leaves yellow active, so all surrounding text turned yellow).
+/// The emulator already stores BCE-correct per-cell colors at write time,
+// so the renderer must not reinterpret them afterwards.
 #[allow(dead_code)]
-fn resolve_colors(
-    cell: &term_wm_vt100::Cell,
-    screen: &term_wm_vt100::Screen,
-) -> (Option<TColor>, Option<TColor>) {
-    let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
-    let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
-    if cell.bold() {
-        fg = brighten_indexed(fg);
-    }
-    (fg, bg)
-}
-
-/// Like `resolve_colors` but takes pre-computed default fg/bg colors
-/// to avoid redundant `screen.fgcolor()`/`bgcolor()` calls per cell.
-fn resolve_colors_with_defaults(
-    cell: &term_wm_vt100::Cell,
-    default_fg: term_wm_vt100::Color,
-    default_bg: term_wm_vt100::Color,
-) -> (Option<TColor>, Option<TColor>) {
-    let mut fg = resolve_color(cell.fgcolor(), default_fg);
-    let bg = resolve_color(cell.bgcolor(), default_bg);
+fn resolve_colors(cell: &term_wm_vt100::Cell) -> (Option<TColor>, Option<TColor>) {
+    let mut fg = resolve_color(cell.fgcolor());
+    let bg = resolve_color(cell.bgcolor());
     if cell.bold() {
         fg = brighten_indexed(fg);
     }
@@ -1279,20 +1266,10 @@ fn vt_color_to_ratatui(color: term_wm_vt100::Color) -> Option<TColor> {
     }
 }
 
-fn resolve_color(
-    color: term_wm_vt100::Color,
-    screen_default: term_wm_vt100::Color,
-) -> Option<TColor> {
-    match color {
-        term_wm_vt100::Color::Default => match screen_default {
-            // Default to Reset (No Color) which ratatui treats as "Inherit" or "Transparent" usually.
-            // But since this is a Terminal component, we treat Default as Black/Opaque if undefined,
-            // otherwise we risk bleeding through windows underneath.
-            term_wm_vt100::Color::Default => None,
-            other => vt_color_to_ratatui(other),
-        },
-        other => vt_color_to_ratatui(other),
-    }
+fn resolve_color(color: term_wm_vt100::Color) -> Option<TColor> {
+    // Default maps to Reset (No Color), which ratatui treats as inherit /
+    // transparent. Explicit colors pass through unchanged.
+    vt_color_to_ratatui(color)
 }
 
 fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
@@ -1880,15 +1857,57 @@ mod tests {
         // indexed color. Assert the function produces *some* color.
         assert!(vt_color_to_ratatui(term_wm_vt100::Color::Rgb(1, 2, 3)).is_some());
 
-        // resolve_color: when both default -> None
+        // resolve_color: Default always maps to None (terminal default),
+        // independent of any SGR the child left active (issue #115).
         assert_eq!(
-            resolve_color(term_wm_vt100::Color::Default, term_wm_vt100::Color::Default),
+            resolve_color(term_wm_vt100::Color::Default),
             None
         );
-        // when screen default is idx, default maps to that
         assert_eq!(
-            resolve_color(term_wm_vt100::Color::Default, term_wm_vt100::Color::Idx(7)),
+            resolve_color(term_wm_vt100::Color::Idx(7)),
             Some(TColor::Indexed(7))
+        );
+    }
+
+    #[test]
+    fn unreset_trailing_sgr_does_not_recolor_earlier_cells() {
+        // Issue #115: the child may leave an SGR color active at end of
+        // output (PowerShell `dir` leaves yellow active). Cells written
+        // before the SGR must keep default colors; only cells written while
+        // the SGR was active may carry it.
+        let mut pane = TestPane::new(0);
+        pane.write_to_parser(b"plain\x1b[33myellow");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let (handle, _shared) = make_handle();
+        let ctx = make_ctx(0, handle);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(
+            backend.buffer.cell((0, 0)).expect("cell").fg,
+            TColor::Reset,
+            "cells written before the SGR must keep the default foreground",
+        );
+        assert_eq!(
+            backend.buffer.cell((4, 0)).expect("cell").fg,
+            TColor::Reset,
+            "cells written before the SGR must keep the default foreground",
+        );
+        assert_eq!(
+            backend.buffer.cell((5, 0)).expect("cell").fg,
+            TColor::Indexed(3),
+            "cells written while the SGR was active must carry it",
         );
     }
 

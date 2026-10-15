@@ -916,7 +916,7 @@ pub fn run_session(
     }
 }
 
-#[derive(Default, PartialEq, Clone, Copy)]
+#[derive(Default, PartialEq, Clone, Copy, Debug)]
 struct CellStyle {
     fg: term_wm_vt100::Color,
     bg: term_wm_vt100::Color,
@@ -978,8 +978,18 @@ pub fn render_frame(
     cols: u16,
     clear_display: bool,
 ) -> io::Result<()> {
-    let mut buf =
-        Vec::with_capacity((rows as usize) * (cols as usize) * RENDER_BUF_CELL_MULTIPLIER);
+    // Truncate the inner grid to the target viewport (issue #115): when a
+    // nested session is wider than the outer window, emitting past the outer
+    // width would clamp excess cells into the margin column of the receiving
+    // parser and duplicate the boundary color there.
+    let (inner_rows, inner_cols) = screen.size();
+    let render_rows = inner_rows.min(rows);
+    let render_cols = inner_cols.min(cols);
+    let mut buf = Vec::with_capacity(
+        (rows as usize)
+            .saturating_mul(cols as usize)
+            .saturating_mul(RENDER_BUF_CELL_MULTIPLIER),
+    );
     let mut active_style = CellStyle::default();
 
     // Synchronized Output begin, hide cursor, reset attributes
@@ -989,14 +999,15 @@ pub fn render_frame(
     }
     buf.extend_from_slice(b"\x1b[?7l");
 
-    for row in 0..rows {
-        write!(buf, "\x1b[{};1H", row + 1)?;
+    for row in 0..render_rows {
+        write!(buf, "\x1b[{};1H", row.saturating_add(1))?;
 
         let mut col: u16 = 0;
-        while col < cols {
+        while col < render_cols {
             // Compute cell width first to handle wide chars (CJK, emoji) that
-            // span multiple columns — checking col + width >= cols catches the
-            // right-edge case even when a wide char at cols-2 jumps past cols-1.
+            // span multiple columns — checking col + width >= render_cols
+            // catches the right-edge case even when a wide char at
+            // render_cols-2 jumps past render_cols-1.
             let cell_opt = screen.cell(row, col);
             let contents = cell_opt.map_or("", |c| c.contents());
             let width = if contents.is_empty() {
@@ -1008,7 +1019,7 @@ pub fn render_frame(
             // Margin sanitation: clear right margin before writing the cell that
             // touches or passes the right edge.  Placing \x1b[K here (while the
             // cursor is still at col) avoids cursor-inclusive erasure of the cell.
-            if col + width >= cols {
+            if col.saturating_add(width) >= render_cols {
                 buf.extend_from_slice(b"\x1b[0m\x1b[K");
                 active_style = CellStyle::default();
             }
@@ -1025,14 +1036,126 @@ pub fn render_frame(
                 buf.extend_from_slice(contents.as_bytes());
             }
 
-            col += width;
+            col = col.saturating_add(width);
+        }
+
+        // Trailing margin clear, only when the target viewport extends past
+        // the rendered content. The cursor moves strictly past the last
+        // content cell (1-based column render_cols + 1; EL0 is
+        // cursor-inclusive, so clearing at render_cols would erase the
+        // boundary character) and clears with default background: the margin
+        // lies outside the inner application and must never inherit content
+        // colors such as the PowerShell yellow from issue #115.
+        if render_cols < cols {
+            write!(
+                buf,
+                "\x1b[{};{}H",
+                row.saturating_add(1),
+                render_cols.saturating_add(1)
+            )?;
+            buf.extend_from_slice(b"\x1b[0m\x1b[K");
+            active_style = CellStyle::default();
         }
     }
 
+    // Target rows with no inner content stay blank under default attributes.
+    // No tracker update inside the loop: nothing reads cell styles here and
+    // the cursor-restore reset below resynchronizes the tracker afterwards.
+    for row in render_rows..rows {
+        write!(buf, "\x1b[{};1H", row.saturating_add(1))?;
+        buf.extend_from_slice(b"\x1b[0m\x1b[K");
+    }
+
+    // Cursor restoration with DECAWM pending-wrap reconstruction (issue #115).
+    // cursor_position() is 0-based while CUP is 1-based. The inner parser
+    // latches pending-wrap only when the cursor reaches the inner width
+    // (with DECAWM off the cursor clamps to the margin instead), so
+    // reconstruction requires a genuine inner latch (cur_col >= inner_cols)
+    // at full width (render_cols == inner_cols): a cursor parked inside a
+    // truncated-away region is an ordinary position, not a latch. Every CUP
+    // clears the latch in the receiver, so the latch is rebuilt by printing
+    // into the final column with DECAWM on. SGR resets are non-motion
+    // sequences and preserve the latch. DECAWM mode itself persists across
+    // CUP, so the single ?7h below covers the reconstruction too.
     buf.extend_from_slice(b"\x1b[?7h");
     buf.extend_from_slice(b"\x1b[0m");
+    active_style = CellStyle::default();
     let (cur_row, cur_col) = screen.cursor_position();
-    write!(buf, "\x1b[{};{}H", cur_row + 1, cur_col + 1)?;
+    if cur_col >= inner_cols
+        && render_cols == inner_cols
+        && render_cols > 0
+        && cur_row < render_rows
+    {
+        // Pending wrap: address the final column (1-based column == width),
+        // then re-emit the boundary cell so the outer parser latches
+        // pending-wrap exactly like the inner one. When a double-width
+        // character touches the margin, the glyph lives in the preceding
+        // cell while the boundary cell is an empty continuation: re-emit
+        // from the glyph cell, since printing a space over the continuation
+        // would destroy the character. A genuinely blank boundary still
+        // needs a printable byte to advance the state machine, so only then
+        // fall back to a space.
+        let boundary_col = render_cols.saturating_sub(1);
+        let boundary = screen.cell(cur_row, boundary_col);
+        let wide_start = if boundary_col > 0 {
+            screen.cell(cur_row, boundary_col.saturating_sub(1))
+        } else {
+            None
+        };
+        let reemit_wide = matches!(
+            (boundary.map(|cell| cell.contents()), wide_start),
+            (Some(contents), Some(prev))
+                if contents.is_empty()
+                    && unicode_width::UnicodeWidthStr::width(prev.contents()) == 2
+        );
+        // emit_col is the 0-based column to position at; the CUP below
+        // adds one for 1-based ANSI addressing, so the normal case lands
+        // on 1-based render_cols (the final column) and the wide case on
+        // 1-based render_cols - 1 (the glyph start cell).
+        let (emit_col, emit_cell) = if reemit_wide {
+            (boundary_col.saturating_sub(1), wide_start)
+        } else {
+            (boundary_col, boundary)
+        };
+        write!(
+            buf,
+            "\x1b[{};{}H",
+            cur_row.saturating_add(1),
+            emit_col.saturating_add(1)
+        )?;
+        let style = emit_cell.map(CellStyle::from_cell).unwrap_or_default();
+        // No tracker update for the boundary style itself: the rendition is
+        // terminated unconditionally below, so the intermediate value is
+        // never read. The reset afterwards resynchronizes the tracker.
+        if style != active_style {
+            apply_sgr(&mut buf, &style)?;
+        }
+        match emit_cell.map(|cell| cell.contents()) {
+            Some(contents) if !contents.is_empty() => {
+                buf.extend_from_slice(contents.as_bytes());
+            }
+            _ => {
+                buf.push(b' ');
+            }
+        }
+        // Terminate the re-emitted rendition: without this reset the
+        // boundary cell attributes leak into all subsequent output, which is
+        // the full-window color bleed from issue #115.
+        buf.extend_from_slice(b"\x1b[0m");
+        active_style = CellStyle::default();
+    } else {
+        let cup_row = cur_row.min(rows.saturating_sub(1));
+        let cup_col = cur_col.min(cols.saturating_sub(1));
+        write!(
+            buf,
+            "\x1b[{};{}H",
+            cup_row.saturating_add(1),
+            cup_col.saturating_add(1)
+        )?;
+    }
+    // The tracker is function-local, but assert it matches the wire: every
+    // path above ends with default attributes active.
+    debug_assert_eq!(active_style, CellStyle::default());
     if screen.hide_cursor() {
         buf.extend_from_slice(b"\x1b[?25l");
     } else {
@@ -1414,6 +1537,138 @@ mod tests {
         );
         // Should not contain raw ESC characters without following sequences
         assert!(!output.contains("\x1b\x1b"), "no double ESC sequences");
+    }
+
+    // ── issue #115 round-trip tests ─────────────────────────────────────
+    // A rendered frame re-fed into a fresh outer parser must reproduce the
+    // inner grid: colors stay cell-local, the pending-wrap latch survives,
+    // and narrower targets truncate instead of clamping into the margin.
+
+    /// Feed an inner screen through `render_frame` into a fresh outer parser.
+    fn round_trip(
+        inner_bytes: &[u8],
+        inner_rows: u16,
+        inner_cols: u16,
+        target_rows: u16,
+        target_cols: u16,
+    ) -> term_wm_vt100::Parser {
+        let mut inner = term_wm_vt100::Parser::new(inner_rows, inner_cols, 0);
+        inner.process(inner_bytes);
+        let mut frame: Vec<u8> = Vec::new();
+        render_frame(&mut frame, inner.screen(), target_rows, target_cols, false)
+            .expect("render frame");
+        let mut outer = term_wm_vt100::Parser::new(target_rows, target_cols, 0);
+        outer.process(&frame);
+        outer
+    }
+
+    #[test]
+    fn render_frame_round_trip_keeps_margin_color_local() {
+        // Yellow background on the first two cells only; the boundary cell
+        // and its neighbors must come back with default background.
+        let outer = round_trip(b"\x1b[43mAB\x1b[0mCD", 1, 4, 1, 4);
+        let screen = outer.screen();
+        assert_eq!(
+            screen.cell(0, 0).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Idx(3)
+        );
+        assert_eq!(
+            screen.cell(0, 1).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Idx(3)
+        );
+        assert_eq!(
+            screen.cell(0, 2).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Default,
+            "boundary-adjacent cell must not inherit the margin color",
+        );
+        assert_eq!(
+            screen.cell(0, 3).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Default,
+            "boundary cell must not inherit the margin color",
+        );
+    }
+
+    #[test]
+    fn render_frame_round_trip_reconstructs_pending_wrap() {
+        // Filling the row leaves the inner cursor pending at col == cols.
+        let mut inner = term_wm_vt100::Parser::new(1, 4, 0);
+        inner.process(b"ABCD");
+        assert_eq!(inner.screen().cursor_position(), (0, 4));
+        let mut frame: Vec<u8> = Vec::new();
+        render_frame(&mut frame, inner.screen(), 1, 4, false).expect("render");
+        let mut outer = term_wm_vt100::Parser::new(1, 4, 0);
+        outer.process(&frame);
+        assert_eq!(
+            outer.screen().cursor_position(),
+            (0, 4),
+            "outer parser must latch pending-wrap like the inner one",
+        );
+        assert_eq!(outer.screen().contents(), "ABCD");
+    }
+
+    #[test]
+    fn render_frame_truncates_to_narrower_target() {        // Inner 4-wide content rendered for a 3-wide outer viewport must
+        // truncate instead of clamping the excess into the margin column.
+        let outer = round_trip(b"ABCD", 1, 4, 1, 3);
+        let screen = outer.screen();
+        assert_eq!(screen.cell(0, 0).expect("cell").contents(), "A");
+        assert_eq!(screen.cell(0, 1).expect("cell").contents(), "B");
+        assert_eq!(screen.cell(0, 2).expect("cell").contents(), "C");
+    }
+
+    #[test]
+    fn render_frame_wider_target_margin_uses_default_bg() {
+        // Content narrower than the target: the trailing margin must clear
+        // with default background, never with the content color.
+        let outer = round_trip(b"\x1b[41mAB\x1b[0m", 1, 2, 1, 4);
+        let screen = outer.screen();
+        assert_eq!(screen.cell(0, 0).expect("cell").contents(), "A");
+        assert_eq!(screen.cell(0, 1).expect("cell").contents(), "B");
+        assert_eq!(
+            screen.cell(0, 2).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Default,
+            "trailing margin must not inherit the content background",
+        );
+        assert_eq!(
+            screen.cell(0, 3).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Default,
+            "trailing margin must not inherit the content background",
+        );
+    }
+
+    #[test]
+    fn render_frame_round_trip_preserves_wide_char_at_margin() {
+        // A double-width glyph touching the margin stores its bytes in the
+        // preceding cell; the boundary cell is an empty continuation.
+        // Reconstruction must re-emit the glyph, never a space over it.
+        let outer = round_trip("B\u{3042}".as_bytes(), 1, 3, 1, 3);
+        let screen = outer.screen();
+        assert_eq!(
+            screen.cell(0, 1).expect("cell").contents(),
+            "\u{3042}",
+            "margin wide char must survive the round trip intact",
+        );
+        assert!(
+            screen
+                .cell(0, 2)
+                .is_none_or(|cell| cell.contents().is_empty()),
+            "continuation cell must not be overwritten with a space glyph",
+        );
+    }
+
+    #[test]
+    fn render_frame_truncated_cursor_is_not_pending_wrap() {
+        // Inner cursor parked at column 3 of a 4-wide session is an ordinary
+        // position, not a latch. Rendered for a 3-wide target it must take
+        // the standard clamped CUP path without latching pending-wrap in
+        // the outer parser.
+        let outer = round_trip(b"ABC", 1, 4, 1, 3);
+        assert_eq!(
+            outer.screen().cursor_position(),
+            (0, 2),
+            "truncated cursor must clamp without pending-wrap",
+        );
+        assert_eq!(outer.screen().contents(), "ABC");
     }
 
     // ── is_coalescable_mouse tests ────────────────────────────────────────

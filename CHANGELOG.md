@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.16-alpha] - TBD
+
+### Fixed
+
+- Fixed: terminal text no longer picks up a leftover color across the whole window when a program leaves a color active, such as the yellow output of PowerShell `dir` (#115).
+
 ## [0.10.15-alpha] - 2026-10-10
 
 ### Fixed
