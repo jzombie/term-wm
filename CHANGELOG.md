@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [0.10.16-alpha] - TBD
 
+### Changed
+
+- Bumped `rustls` from 0.23.45 to 0.23.46, fixing four security advisories (RUSTSEC-2026-0346 through RUSTSEC-2026-0349).
+
 ### Fixed
 
 - Fixed: terminal text no longer picks up a leftover color across the whole window when a program leaves a color active, such as the yellow output of PowerShell `dir` (#115).
