@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ### Fixed
 
-- In Monocle Mode the bottom row is now always reserved for the menu button, which also renders inverted so it stays visible; app content no longer draws under it (#390).
+- In Monocle Mode the bottom row is now always reserved for the menu button, which stretches the app's background across the row and inverts only its label so it stays visible; app content no longer draws under it (#390).
 
 ## [0.10.16-alpha] - 2026-10-15
 

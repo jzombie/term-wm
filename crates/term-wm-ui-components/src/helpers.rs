@@ -137,6 +137,76 @@ pub fn color_to_ratatui(c: term_wm_core::theme::Color) -> Color {
     }
 }
 
+/// Reverse of [`color_to_ratatui`]: map a rendered cell color back to the
+/// core palette so core color math (e.g. [`term_wm_core::theme::invert`])
+/// applies. Returns `None` for `Reset`, which has no core counterpart: the
+/// terminal default is unknown to the palette.
+pub fn ratatui_to_color(c: Color) -> Option<term_wm_core::theme::Color> {
+    use term_wm_core::theme::Color as CoreColor;
+    match c {
+        Color::Reset => None,
+        Color::Black => Some(CoreColor::Black),
+        Color::Red => Some(CoreColor::Red),
+        Color::Green => Some(CoreColor::Green),
+        Color::Yellow => Some(CoreColor::Yellow),
+        Color::Blue => Some(CoreColor::Blue),
+        Color::Magenta => Some(CoreColor::Magenta),
+        Color::Cyan => Some(CoreColor::Cyan),
+        Color::White => Some(CoreColor::White),
+        Color::Gray => Some(CoreColor::Gray),
+        Color::DarkGray => Some(CoreColor::DarkGray),
+        Color::LightRed => Some(CoreColor::LightRed),
+        Color::LightGreen => Some(CoreColor::LightGreen),
+        Color::LightYellow => Some(CoreColor::LightYellow),
+        Color::LightBlue => Some(CoreColor::LightBlue),
+        Color::LightMagenta => Some(CoreColor::LightMagenta),
+        Color::LightCyan => Some(CoreColor::LightCyan),
+        Color::Rgb(r, g, b) => Some(CoreColor::Rgb(r, g, b)),
+        Color::Indexed(i) => Some(CoreColor::Indexed(i)),
+    }
+}
+
+/// Most frequent background color on a buffer row: the row's representative
+/// color. Coordinates are clipped to the buffer; ties keep the leftmost
+/// color. Returns `None` when no row cell is addressable. Frequency counting
+/// uses a fixed-size stack array: a terminal row holds only a handful of
+/// distinct colors, so no heap allocation happens on the render path. Colors
+/// beyond the array capacity are ignored.
+pub fn dominant_row_bg(buffer: &Buffer, y: i32, x_start: i32, x_end: i32) -> Option<Color> {
+    const CAPACITY: usize = 8;
+    let mut counts = [(Color::Reset, 0_usize); CAPACITY];
+    let mut best: Option<Color> = None;
+    let mut best_count: usize = 0;
+    let mut x = x_start;
+    while x < x_end {
+        if x >= 0
+            && y >= 0
+            && let Some(cell) = buffer.cell((x as u16, y as u16))
+        {
+            let mut found = false;
+            for entry in counts.iter_mut() {
+                if entry.1 == 0 {
+                    entry.0 = cell.bg;
+                    entry.1 = 1;
+                    found = true;
+                } else if entry.0 == cell.bg {
+                    entry.1 += 1;
+                    found = true;
+                }
+                if found {
+                    if entry.1 > best_count {
+                        best_count = entry.1;
+                        best = Some(cell.bg);
+                    }
+                    break;
+                }
+            }
+        }
+        x = x.saturating_add(1);
+    }
+    best
+}
+
 pub fn safe_set_string(
     buffer: &mut Buffer,
     bounds: Rect,
@@ -477,6 +547,35 @@ mod tests {
         assert_eq!(color_to_ratatui(TColor::LightCyan), Color::LightCyan);
         assert_eq!(color_to_ratatui(TColor::Rgb(1, 2, 3)), Color::Rgb(1, 2, 3));
         assert_eq!(color_to_ratatui(TColor::Indexed(42)), Color::Indexed(42));
+    }
+
+    #[test]
+    fn ratatui_to_color_round_trips_and_rejects_reset() {
+        assert_eq!(ratatui_to_color(Color::Reset), None);
+        // Every convertible variant round-trips through the core palette.
+        for c in [
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::White,
+            Color::Gray,
+            Color::DarkGray,
+            Color::LightRed,
+            Color::LightGreen,
+            Color::LightYellow,
+            Color::LightBlue,
+            Color::LightMagenta,
+            Color::LightCyan,
+            Color::Rgb(1, 2, 3),
+            Color::Indexed(42),
+        ] {
+            let core = ratatui_to_color(c).expect("variant converts");
+            assert_eq!(color_to_ratatui(core), c);
+        }
     }
 
     #[test]
