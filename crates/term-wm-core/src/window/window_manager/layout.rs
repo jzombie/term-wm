@@ -409,12 +409,11 @@ impl<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>> Windo
         };
         self.bottom_claimed = bottom_rect;
         let prev_managed = self.managed_area;
-        // Cramped monocle: the FAB occupies the bottom-right of the screen. Reserve
-        // the bottom row for it while the app draws content under the FAB's footprint,
-        // so the focused window never renders beneath it; the PTY resizes to the shorter
-        // area and apps format status lines above the row natively. The flag is set by
-        // the render pass on the previous frame, so this lags content by one frame.
-        let apply_padding = self.is_monocle_cramped() && self.has_bottom_content();
+        // Cramped monocle: the FAB overlays the bottom-right of the screen, so
+        // the bottom row is always reserved for it and the PTY resizes to the
+        // shorter area. Apps format status lines above the row natively and no
+        // frame can draw app content under the FAB's footprint.
+        let apply_padding = self.is_monocle_cramped();
         self.managed_area = reserve_fab_row(managed_area, apply_padding);
         // First real frame: the true viewport is now known. If no tiling layout
         // was built yet (startup windows were tiled lazily, not at 0x0), build
@@ -1006,6 +1005,28 @@ mod tests {
         assert!(
             actions.contains(&TermWmAction::OpenCommandPalette),
             "with the command menu disabled, hints should be unfiltered (include Global actions), got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn cramped_monocle_always_reserves_fab_row() {
+        let mut wm = make_wm();
+        // Narrow viewport triggers cramped monocle under the default Auto mode.
+        wm.update_monocle_mode(40);
+        assert!(wm.is_monocle_cramped());
+        // No bottom content detected: the row is reserved regardless so no
+        // frame can draw app content under the FAB's footprint.
+        assert!(!wm.has_bottom_content());
+        wm.register_managed_layout(Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 24,
+        });
+        assert_eq!(
+            wm.managed_area().height,
+            23,
+            "FAB row must be reserved even with no detected content"
         );
     }
 

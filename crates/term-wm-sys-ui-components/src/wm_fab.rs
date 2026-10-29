@@ -1,4 +1,4 @@
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use term_wm_layout_engine::LayoutRect;
 use unicode_width::UnicodeWidthStr;
 
@@ -82,9 +82,9 @@ impl Component<TermWmAction> for WmFabComponent {
         // not a SlotMap window, so on_mount is never called.
         registry.register_active(self.hitbox_id, self.fab_rect);
 
-        // Render the shared menu icon with the same style as the top panel's
-        // closed menu button (no background, no hardcoded colors — the theme
-        // drives panel styling).
+        // Render the shared menu icon inverted so it stays visible against
+        // any app content or background color behind it.
+        let style = Style::default().add_modifier(Modifier::REVERSED);
         let ratatui_backend = downcast_ratatui(backend);
         let buffer = &mut ratatui_backend.buffer;
 
@@ -98,7 +98,6 @@ impl Component<TermWmAction> for WmFabComponent {
             return;
         }
 
-        let style = Style::default();
         safe_set_string(buffer, bounds, bounds.x, bounds.y, &label, style);
     }
 
@@ -214,8 +213,9 @@ mod tests {
         // The label itself should be drawn into the buffer.
         let cell = backend.buffer.cell((71, 23)).expect("label start cell");
         assert_eq!(cell.symbol(), "≡");
-        // Style matches the top panel's closed menu button: no hardcoded
-        // background/foreground, no bold (the theme drives panel styling).
+        // The label renders inverted so it stays visible against any
+        // background color behind it: no hardcoded background/foreground,
+        // no bold, REVERSED always set.
         assert_ne!(cell.style().bg, Some(ratatui::style::Color::DarkGray));
         assert_ne!(cell.style().fg, Some(ratatui::style::Color::White));
         assert!(
@@ -223,6 +223,11 @@ mod tests {
                 .style()
                 .add_modifier
                 .contains(ratatui::style::Modifier::BOLD)
+        );
+        assert!(
+            cell.style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::REVERSED)
         );
         // Hitbox should be registered
         assert!(!reg.is_empty());

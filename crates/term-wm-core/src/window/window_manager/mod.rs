@@ -3266,7 +3266,7 @@ mod tests {
     }
 
     #[test]
-    fn cramped_monocle_without_content_does_not_reserve() {
+    fn cramped_monocle_without_content_still_reserves() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -3291,8 +3291,8 @@ mod tests {
         });
         assert_eq!(
             wm.managed_area().height,
-            24,
-            "no reservation when the FAB footprint has no content"
+            23,
+            "the FAB row is reserved even when its footprint has no content"
         );
     }
 

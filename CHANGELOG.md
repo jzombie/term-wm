@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- In Monocle Mode the bottom row is now always reserved for the menu button, which also renders inverted so it stays visible; app content no longer draws under it (#390).
+
 ## [0.10.16-alpha] - 2026-10-15
 
 ### Changed
