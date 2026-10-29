@@ -1014,9 +1014,8 @@ mod tests {
         // Narrow viewport triggers cramped monocle under the default Auto mode.
         wm.update_monocle_mode(40);
         assert!(wm.is_monocle_cramped());
-        // No bottom content detected: the row is reserved regardless so no
+        // The row is reserved unconditionally so no
         // frame can draw app content under the FAB's footprint.
-        assert!(!wm.has_bottom_content());
         wm.register_managed_layout(Rect {
             x: 0,
             y: 0,

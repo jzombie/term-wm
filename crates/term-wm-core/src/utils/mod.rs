@@ -5,7 +5,6 @@ pub mod linkifier;
 pub mod selectable_text;
 
 pub use debounce::Debouncer;
-pub use debounce::DelayedReleaseBool;
 pub use debounce::KeyedTaskDebouncer;
 pub use debounce::PeriodicTicker;
 pub use keyboard_normalizer::KeyboardNormalizer;
