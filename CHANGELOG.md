@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `smallvec` from 1.16.2 to 1.16.3 (#383).
+- Bumped `serde_json` from 1.0.151 to 1.0.154 (#385).
+- Bumped `interprocess` from 2.4.4 to 2.4.6 (#387).
+
 ### Fixed
 
 - In Monocle Mode the bottom row is now always reserved for the menu button, which stretches the app's background across the row and inverts only its label so it stays visible; app content no longer draws under it (#390).
