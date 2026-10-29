@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Bumped `smallvec` from 1.16.2 to 1.16.3 (#383).
 - Bumped `serde_json` from 1.0.151 to 1.0.154 (#385).
 - Bumped `interprocess` from 2.4.4 to 2.4.6 (#387).
+- Bumped `tokio` from 1.53.2 to 1.54.1 to fix the `interprocess` 2.4.6 build.
 
 ### Fixed
 
