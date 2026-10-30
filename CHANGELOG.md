@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.17-alpha] - 2026-10-30
+
+### Changed
+
+- Bumped `smallvec` from 1.16.2 to 1.16.3 (#383).
+- Bumped `serde_json` from 1.0.151 to 1.0.154 (#385).
+- Bumped `interprocess` from 2.4.4 to 2.4.6 (#387).
+- Bumped `tokio` from 1.53.2 to 1.54.1 to fix the `interprocess` 2.4.6 build.
+- Bumped `pulldown-cmark` from 0.13.4 to 0.13.5, fixing a security advisory (RUSTSEC-2026-0414).
+- Bumped `rustls-webpki` from 0.103.15 to 0.103.16 and `webpki-roots` from 1.0.9 to 1.0.11, fixing certificate trust advisories (RUSTSEC-2026-0382, RUSTSEC-2026-0381).
+- Bumped `clipboard-win` from 5.4.1 to 5.4.3 to replace a yanked release.
+
+### Fixed
+
+- In Monocle Mode the bottom row is now always reserved for the menu button, which stretches the app's background across the row and inverts only its label so it stays visible; app content no longer draws under it (#390).
+
 ## [0.10.16-alpha] - 2026-10-15
 
 ### Changed
