@@ -1021,11 +1021,10 @@ mod tests {
             .build::<NoopComponent, NoopOverlay>()
             .expect("test build");
 
-        // Cramped monocle + command palette open + FAB row reserved (app content
-        // detected under the FAB footprint) → managed_area is 23 rows tall.
+        // Cramped monocle + command palette open + FAB row reserved
+        // → managed_area is 23 rows tall.
         wm.update_monocle_mode(40);
         assert!(wm.is_monocle_cramped());
-        wm.set_bottom_content_flag(true);
         wm.open_command_palette_overlay(NoopOverlay);
         assert!(wm.command_menu_visible());
 

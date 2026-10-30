@@ -913,6 +913,11 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
                 },
             );
         }
+        tracing::info!(
+            label = task.label.as_str(),
+            background = task.background,
+            "project task started"
+        );
         // spawn_terminal_window already published; the new task entry changes
         // the running-task count, so republish with the updated snapshot.
         self.publish_wm_stats();
@@ -1006,6 +1011,22 @@ impl<C: Component<TermWmAction> + 'static> TermWmApp<C> {
             }
             _ => None,
         });
+
+        // Task lifecycle visibility: one finish line per exit, whatever the
+        // routing below decides (toast+close, reveal, or keep-open).
+        let status_desc = match &status {
+            Some(st) => match st.signal() {
+                Some(sig) => format!("signal {sig}"),
+                None => format!("exit code {}", st.exit_code()),
+            },
+            None => "unknown status".to_string(),
+        };
+        tracing::info!(
+            label = label.as_str(),
+            background = bg_expected_exit_codes.is_some(),
+            status = status_desc.as_str(),
+            "project task finished"
+        );
 
         // 3b. Background routing: expected exit → toast + unregister (return);
         // unexpected (bad code, signal death, dropped connection) → reveal and

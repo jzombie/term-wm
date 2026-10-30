@@ -212,6 +212,17 @@ pub trait Component<Msg> {
         None
     }
 
+    /// Sync PTY stream state without rendering.
+    ///
+    /// Called by the frame loop for windows that are not mapped (e.g.
+    /// background tasks), so their reader threads keep draining: terminal
+    /// sequence processing, scrollback updates, and OSC 52 extraction all
+    /// happen in the reader/parser, but the I/O burst-budget backpressure
+    /// only releases when dirty state is synced. Implementations must be
+    /// render-free: no layout invalidation, no repaint requests, no hitbox
+    /// changes. Default no-op for non-terminal components.
+    fn sync_pty_state(&mut self) {}
+
     /// Returns `Some(bool)` exactly once when the pane's alternate screen state changes.
     /// `None` means no change since the last poll.
     fn take_alternate_screen_transition(&mut self) -> Option<bool> {
@@ -676,6 +687,24 @@ pub enum ComponentAction {
     SetWindowLabels(std::collections::BTreeMap<crate::window::WindowKey, String>),
 }
 
+/// Visual tone of the top-right panel indicator. The producer maps intent
+/// to tone; sys-ui renders tone to color without inspecting the action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndicatorTone {
+    Positive,
+    Negative,
+}
+
+/// Clickable indicator in the top panel's top-right slot: the tiling toggle
+/// outside monocle mode, or the close button for the focused window inside
+/// monocle mode.
+#[derive(Debug, Clone)]
+pub struct TopRightIndicator {
+    pub label: &'static str,
+    pub action: crate::actions::TermWmAction,
+    pub tone: IndicatorTone,
+}
+
 /// Render-time state pushed to the top panel before each frame.
 #[derive(Debug, Clone)]
 pub struct TopPanelState {
@@ -685,7 +714,7 @@ pub struct TopPanelState {
     pub menu_open: bool,
     /// If set, render a clickable label in the top-right with this text
     /// that dispatches the given action when clicked.
-    pub tiling_indicator: Option<(&'static str, crate::actions::TermWmAction)>,
+    pub top_right_indicator: Option<TopRightIndicator>,
 }
 
 /// Queries the engine can ask components.

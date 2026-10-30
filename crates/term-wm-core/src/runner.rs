@@ -498,6 +498,11 @@ where
             // Centralized notification bus: tick expiries and drain workspace/
             // presence events unconditionally (not only in Some(event) branch).
             app.wm().tick_notifications();
+            // Decoupled PTY consumption: sync stream state (dirty flags, DSR,
+            // OSC 52 extraction) for unmapped windows whose readers would
+            // otherwise wedge past the I/O burst budget. Render-free: no
+            // layout invalidation, no repaint.
+            app.wm().tick_background_ptys();
             for ws in driver.take_workspace_entered() {
                 // #284: keep the WM workspace mirror fresh so per-frame
                 // dynamic branding follows daemon-pushed entries/rebinds

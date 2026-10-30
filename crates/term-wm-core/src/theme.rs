@@ -306,6 +306,72 @@ pub fn contrast_ratio(a: Color, b: Color) -> f64 {
     (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05)
 }
 
+/// Standard 16-color palette (VGA values) used to resolve named colors to
+/// RGB for inversion. Exact hues do not matter here, only that the inverted
+/// color contrasts with the original.
+const ANSI_16_PALETTE: [(u8, u8, u8); 16] = [
+    (0, 0, 0),
+    (170, 0, 0),
+    (0, 170, 0),
+    (170, 85, 0),
+    (0, 0, 170),
+    (170, 0, 170),
+    (0, 170, 170),
+    (170, 170, 170),
+    (85, 85, 85),
+    (255, 85, 85),
+    (85, 255, 85),
+    (255, 255, 85),
+    (85, 85, 255),
+    (255, 85, 255),
+    (85, 255, 255),
+    (255, 255, 255),
+];
+
+/// Decode an xterm 256-color index to RGB.
+fn indexed_to_rgb(index: u8) -> (u8, u8, u8) {
+    match index {
+        0..=15 => ANSI_16_PALETTE[usize::from(index)],
+        16..=231 => {
+            let j = index - 16;
+            let channel = |c: u8| {
+                if c == 0 { 0 } else { 55 + 40 * c }
+            };
+            (channel(j / 36), channel((j % 36) / 6), channel(j % 6))
+        }
+        _ => {
+            let v = 8 + 10 * index.saturating_sub(232);
+            (v, v, v)
+        }
+    }
+}
+
+/// Invert a color channel-wise so text drawn in the result stays readable
+/// on a background of the original color.
+pub fn invert(color: Color) -> Color {
+    let (r, g, b) = match color {
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Indexed(i) => indexed_to_rgb(i),
+        Color::Black => ANSI_16_PALETTE[0],
+        Color::Red => ANSI_16_PALETTE[1],
+        Color::Green => ANSI_16_PALETTE[2],
+        Color::Yellow => ANSI_16_PALETTE[3],
+        Color::Blue => ANSI_16_PALETTE[4],
+        Color::Magenta => ANSI_16_PALETTE[5],
+        Color::Cyan => ANSI_16_PALETTE[6],
+        Color::White => ANSI_16_PALETTE[15],
+        Color::Gray => ANSI_16_PALETTE[7],
+        Color::DarkGray => ANSI_16_PALETTE[8],
+        Color::LightRed => ANSI_16_PALETTE[9],
+        Color::LightGreen => ANSI_16_PALETTE[10],
+        Color::LightYellow => ANSI_16_PALETTE[11],
+        Color::LightBlue => ANSI_16_PALETTE[12],
+        Color::LightMagenta => ANSI_16_PALETTE[13],
+        Color::LightCyan => ANSI_16_PALETTE[14],
+    };
+    Color::Rgb(255 - r, 255 - g, 255 - b)
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -673,6 +739,17 @@ mod tests {
     fn contrast_ratio_known_values() {
         let r = contrast_ratio(Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255));
         assert!((r - 21.0).abs() < 0.5, "black/white ratio: {r}");
+    }
+
+    #[test]
+    fn invert_inverts_channels() {
+        assert_eq!(invert(Color::Rgb(10, 20, 30)), Color::Rgb(245, 235, 225));
+        // Blue resolves via the palette (0, 0, 170).
+        assert_eq!(invert(Color::Blue), Color::Rgb(255, 255, 85));
+        // Grayscale index 232 decodes to (8, 8, 8).
+        assert_eq!(invert(Color::Indexed(232)), Color::Rgb(247, 247, 247));
+        // Double inversion round-trips RGB inputs.
+        assert_eq!(invert(invert(Color::Rgb(1, 2, 3))), Color::Rgb(1, 2, 3));
     }
 
     #[test]

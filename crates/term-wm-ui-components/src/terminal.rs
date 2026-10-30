@@ -362,6 +362,13 @@ impl Component<TermWmAction> for TerminalComponent {
         self.pane.get_mut().take_pending_title()
     }
 
+    fn sync_pty_state(&mut self) {
+        // Render-free stream sync for unmapped windows: processes pending
+        // terminal state, clears dirty, and wakes the reader's burst-budget
+        // wait without touching layout, hitboxes, or repaint flags.
+        self.pane.borrow_mut().sync_screen();
+    }
+
     fn take_alternate_screen_transition(&mut self) -> Option<bool> {
         let current = self.pane.get_mut().alternate_screen();
         if current != self.reported_alt_screen.get() {
@@ -740,10 +747,6 @@ impl TerminalComponent {
             );
         }
 
-        // Hoist loop-invariant color defaults
-        let default_fg = screen.fgcolor();
-        let default_bg = screen.bgcolor();
-
         let focused = ctx.focused();
         for row in start_row..start_row + visible.height {
             let cell_y = area.y.saturating_add(row);
@@ -761,7 +764,7 @@ impl TerminalComponent {
 
                 if let Some(cell) = vt_row.get(col) {
                     let mut symbol = cell.contents().chars().next().unwrap_or(' ');
-                    let (fg, bg) = resolve_colors_with_defaults(cell, default_fg, default_bg);
+                    let (fg, bg) = resolve_colors(cell);
                     let mut style = Style::default();
                     if let Some(fg) = fg {
                         style = style.fg(fg);
@@ -1234,28 +1237,19 @@ impl SelectionHost for RenderDragHost<'_> {
     }
 }
 
+/// Resolve a grid cell to ratatui colors using cell-local attributes only.
+///
+/// A cell whose color is `Default` maps to `None` (the terminal default),
+/// regardless of which SGR attributes the child happens to have left active
+/// at frame time. Falling back to the screen's live active colors instead
+/// repaints every default cell with the trailing SGR state (issue #115:
+/// PowerShell leaves yellow active, so all surrounding text turned yellow).
+/// The emulator already stores BCE-correct per-cell colors at write time,
+// so the renderer must not reinterpret them afterwards.
 #[allow(dead_code)]
-fn resolve_colors(
-    cell: &term_wm_vt100::Cell,
-    screen: &term_wm_vt100::Screen,
-) -> (Option<TColor>, Option<TColor>) {
-    let mut fg = resolve_color(cell.fgcolor(), screen.fgcolor());
-    let bg = resolve_color(cell.bgcolor(), screen.bgcolor());
-    if cell.bold() {
-        fg = brighten_indexed(fg);
-    }
-    (fg, bg)
-}
-
-/// Like `resolve_colors` but takes pre-computed default fg/bg colors
-/// to avoid redundant `screen.fgcolor()`/`bgcolor()` calls per cell.
-fn resolve_colors_with_defaults(
-    cell: &term_wm_vt100::Cell,
-    default_fg: term_wm_vt100::Color,
-    default_bg: term_wm_vt100::Color,
-) -> (Option<TColor>, Option<TColor>) {
-    let mut fg = resolve_color(cell.fgcolor(), default_fg);
-    let bg = resolve_color(cell.bgcolor(), default_bg);
+fn resolve_colors(cell: &term_wm_vt100::Cell) -> (Option<TColor>, Option<TColor>) {
+    let mut fg = resolve_color(cell.fgcolor());
+    let bg = resolve_color(cell.bgcolor());
     if cell.bold() {
         fg = brighten_indexed(fg);
     }
@@ -1272,20 +1266,10 @@ fn vt_color_to_ratatui(color: term_wm_vt100::Color) -> Option<TColor> {
     }
 }
 
-fn resolve_color(
-    color: term_wm_vt100::Color,
-    screen_default: term_wm_vt100::Color,
-) -> Option<TColor> {
-    match color {
-        term_wm_vt100::Color::Default => match screen_default {
-            // Default to Reset (No Color) which ratatui treats as "Inherit" or "Transparent" usually.
-            // But since this is a Terminal component, we treat Default as Black/Opaque if undefined,
-            // otherwise we risk bleeding through windows underneath.
-            term_wm_vt100::Color::Default => None,
-            other => vt_color_to_ratatui(other),
-        },
-        other => vt_color_to_ratatui(other),
-    }
+fn resolve_color(color: term_wm_vt100::Color) -> Option<TColor> {
+    // Default maps to Reset (No Color), which ratatui treats as inherit /
+    // transparent. Explicit colors pass through unchanged.
+    vt_color_to_ratatui(color)
 }
 
 fn brighten_indexed(color: Option<TColor>) -> Option<TColor> {
@@ -1308,6 +1292,7 @@ struct TestPane {
     alt_screen: bool,
     pending_title: Option<String>,
     kill_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    sync_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     written_bytes: Vec<u8>,
 }
 
@@ -1323,6 +1308,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sync_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             written_bytes: Vec::new(),
         }
     }
@@ -1338,6 +1324,7 @@ impl TestPane {
             alt_screen: false,
             pending_title: None,
             kill_count: std::sync::Arc::clone(&kill_count),
+            sync_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             written_bytes: Vec::new(),
         };
         (pane, kill_count)
@@ -1431,6 +1418,11 @@ impl Pane for TestPane {
 
     fn take_pending_title(&mut self) -> Option<String> {
         self.pending_title.take()
+    }
+
+    fn sync_screen(&mut self) {
+        self.sync_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -1548,6 +1540,20 @@ mod tests {
     }
 
     // --- Destroy / kill tests ---
+
+    #[test]
+    fn sync_pty_state_forwards_to_pane_sync_screen() {
+        let pane = TestPane::new(200);
+        let sync_count = std::sync::Arc::clone(&pane.sync_count);
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        Component::<TermWmAction>::sync_pty_state(&mut term);
+        Component::<TermWmAction>::sync_pty_state(&mut term);
+        assert_eq!(
+            sync_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "each background tick must sync the pane exactly once"
+        );
+    }
 
     #[test]
     fn destroy_calls_kill_child() {
@@ -1851,15 +1857,54 @@ mod tests {
         // indexed color. Assert the function produces *some* color.
         assert!(vt_color_to_ratatui(term_wm_vt100::Color::Rgb(1, 2, 3)).is_some());
 
-        // resolve_color: when both default -> None
+        // resolve_color: Default always maps to None (terminal default),
+        // independent of any SGR the child left active (issue #115).
+        assert_eq!(resolve_color(term_wm_vt100::Color::Default), None);
         assert_eq!(
-            resolve_color(term_wm_vt100::Color::Default, term_wm_vt100::Color::Default),
-            None
-        );
-        // when screen default is idx, default maps to that
-        assert_eq!(
-            resolve_color(term_wm_vt100::Color::Default, term_wm_vt100::Color::Idx(7)),
+            resolve_color(term_wm_vt100::Color::Idx(7)),
             Some(TColor::Indexed(7))
+        );
+    }
+
+    #[test]
+    fn unreset_trailing_sgr_does_not_recolor_earlier_cells() {
+        // Issue #115: the child may leave an SGR color active at end of
+        // output (PowerShell `dir` leaves yellow active). Cells written
+        // before the SGR must keep default colors; only cells written while
+        // the SGR was active may carry it.
+        let mut pane = TestPane::new(0);
+        pane.write_to_parser(b"plain\x1b[33myellow");
+        let mut term = TerminalComponent::from_pane(Box::new(pane));
+        let (handle, _shared) = make_handle();
+        let ctx = make_ctx(0, handle);
+        let area = Rect::new(0, 0, 80, 24);
+        let buffer = Buffer::empty(area);
+        let mut backend = term_wm_console::RatatuiBackend::new_simple(buffer, area);
+        term.render(
+            &mut backend,
+            LayoutRect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+            &ctx,
+            &mut term_wm_core::hitbox_registry::HitboxRegistry::new(),
+        );
+        assert_eq!(
+            backend.buffer.cell((0, 0)).expect("cell").fg,
+            TColor::Reset,
+            "cells written before the SGR must keep the default foreground",
+        );
+        assert_eq!(
+            backend.buffer.cell((4, 0)).expect("cell").fg,
+            TColor::Reset,
+            "cells written before the SGR must keep the default foreground",
+        );
+        assert_eq!(
+            backend.buffer.cell((5, 0)).expect("cell").fg,
+            TColor::Indexed(3),
+            "cells written while the SGR was active must carry it",
         );
     }
 

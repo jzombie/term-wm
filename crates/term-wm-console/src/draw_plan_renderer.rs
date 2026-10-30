@@ -6,7 +6,10 @@ use term_wm_layout_engine::LayoutRect;
 use crate::RatatuiBackend;
 use term_wm_core::actions::TermWmAction;
 use term_wm_core::component_context::ComponentContext;
-use term_wm_core::components::{Component, ComponentAction, Overlay, TopPanelState, WmComponent};
+use term_wm_core::components::{
+    Component, ComponentAction, IndicatorTone, Overlay, TopPanelState, TopRightIndicator,
+    WmComponent,
+};
 use term_wm_core::constants::{SHADOW_OFFSET_X, SHADOW_OFFSET_Y};
 use term_wm_core::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
 use term_wm_core::hitbox_registry::{HitboxId, HitboxRegistry};
@@ -17,7 +20,9 @@ use term_wm_core::layout::{Direction, FloatingPane, RectSpec, RegionMap};
 use term_wm_core::term_color::lerp_color;
 use term_wm_core::theme::{BgColor, Color, FgColor, Theme};
 use term_wm_core::utils::truncate_with_ellipsis;
-use term_wm_core::window::{ComponentTag, WindowKey, WindowManager, WindowSurface};
+use term_wm_core::window::{
+    ComponentTag, WINDOW_CLOSE_GLYPH, WindowKey, WindowManager, WindowSurface,
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Render context for window chrome (owned by console, not core).
@@ -50,44 +55,6 @@ struct ChromeHitboxParams {
     wm_buttons: Vec<term_wm_core::window::WmButton>,
     borders_enabled: bool,
     header_enabled: bool,
-}
-
-/// True if any cell in `[x_start, x_end)` on row `y` has a non-space symbol.
-/// Coordinates are clipped to `buffer.area` and accessed via the Option-returning
-/// `Buffer::cell`, so a clipped or offscreen range can never panic.
-///
-/// Used to detect whether app content collides with the FAB's bottom-right
-/// footprint. `y` is the window's current bottom row, which moves when the FAB
-/// row is reserved — checking the relative row (not a fixed screen row) is what
-/// prevents SIGWINCH oscillation.
-pub fn row_has_content_in_range(
-    buffer: &ratatui::buffer::Buffer,
-    x_start: i32,
-    x_end: i32,
-    y: i32,
-) -> bool {
-    let buf = buffer.area;
-    let buf_top = i32::from(buf.y);
-    let buf_bottom = buf_top.saturating_add(i32::from(buf.height));
-    if y < buf_top || y >= buf_bottom {
-        return false;
-    }
-    let left = x_start.max(i32::from(buf.x));
-    let right = x_end.min(i32::from(buf.x).saturating_add(i32::from(buf.width)));
-    if left >= right {
-        return false;
-    }
-    // Direct slice scan over Ratatui's contiguous `content` array. The row/column
-    // bounds are clamped (and y validated) once above, so the loop itself does zero
-    // per-cell bounds checks and LLVM can auto-vectorize the ASCII-space scan in
-    // --release. All indices are provably within `content.len()`.
-    let buf_w = usize::from(buf.width);
-    let row_offset = (y as usize - buf.y as usize) * buf_w;
-    let start_idx = row_offset + (left as usize - buf.x as usize);
-    let end_idx = row_offset + (right as usize - buf.x as usize);
-    buffer.content[start_idx..end_idx]
-        .iter()
-        .any(|c| !c.symbol().starts_with(' '))
 }
 
 /// Register chrome hitboxes for a window (resize, drag, close, maximize buttons).
@@ -732,6 +699,43 @@ impl Default for DrawPlanRenderer {
 
 // ── Rendering functions (called by render_app in lib.rs) ──────────────
 
+/// Top-right panel indicator for the current frame: the float/tile toggle
+/// outside monocle mode, or a close button for the focused window inside
+/// monocle mode (where the toggle is hidden). The close button never
+/// duplicates the header below it: it is hidden exactly when the layout
+/// pass reserved panel rows and the header is enabled, i.e. the window
+/// starts below the panel and carries its own close button. With no
+/// reserved rows the panel overlays row 0 and covers the header, so the
+/// panel carries close instead. Non-closable windows never show it.
+fn top_right_indicator<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
+    wm: &WindowManager<C, L, O>,
+) -> Option<TopRightIndicator> {
+    if !wm.is_monocle() {
+        let any_tiled = wm
+            .mapped_windows()
+            .iter()
+            .any(|k| !wm.is_window_floating(*k));
+        let label = if any_tiled { "▢ float" } else { "⊞ tile" };
+        return Some(TopRightIndicator {
+            label,
+            action: TermWmAction::ToggleTiling,
+            tone: IndicatorTone::Positive,
+        });
+    }
+    let focus = wm.focused_window();
+    if !wm.is_closable(focus) {
+        return None;
+    }
+    if !wm.top_claimed_area().is_empty() && wm.window_header_enabled(focus) {
+        return None;
+    }
+    Some(TopRightIndicator {
+        label: WINDOW_CLOSE_GLYPH,
+        action: TermWmAction::CloseWindow(focus),
+        tone: IndicatorTone::Negative,
+    })
+}
+
 pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<TermWmAction>>(
     backend: &mut dyn term_wm_render::RenderBackend,
     wm: &mut WindowManager<C, L, O>,
@@ -744,17 +748,8 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
     let focus_current = wm.focused_window();
     let wm_overlay_visible = wm.command_menu_visible();
 
-    // Tiling indicator button (top-right of top panel)
-    let tiling_indicator: Option<(&str, TermWmAction)> = if !wm.is_monocle() {
-        let any_tiled = wm
-            .mapped_windows()
-            .iter()
-            .any(|k| !wm.is_window_floating(*k));
-        let label = if any_tiled { "▢ float" } else { "⊞ tile" };
-        Some((label, TermWmAction::ToggleTiling))
-    } else {
-        None
-    };
+    // Top-right panel indicator (tiling toggle, or close in monocle)
+    let top_right_indicator = top_right_indicator(wm);
 
     // Top panel
     {
@@ -767,7 +762,7 @@ pub fn render_panels<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Term
                     display_order: display,
                     status_line,
                     menu_open: wm_overlay_visible,
-                    tiling_indicator,
+                    top_right_indicator,
                 },
             )));
         }
@@ -820,14 +815,20 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
 
     // Panel overlay in monocle mode — render BEFORE command menu so the panel
     // header (including hamburger icon) appears as a visual context layer.
-    // Use explicit SetPanelActive(true/false) because ComponentContext's active
+    // Use explicit SetPanelActive(true) because ComponentContext's active
     // flag does NOT control WmTopPanelComponent's internal self.active guard
     // (set at wm_top_panel.rs:462 via SetPanelActive action).
-    if wm.is_monocle_cramped() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
+    // In cramped monocle the tabbed window list stays visible at all times;
+    // only the bottom hints remain gated on the command palette. The active
+    // flag is intentionally left set: the next frame's layout pass resets it
+    // to false before consume_area so no layout row is claimed.
+    if wm.is_monocle_cramped() && !wm.is_tab_outline_active() {
         let display = wm.build_display_order();
         let titles_map: std::collections::BTreeMap<WindowKey, String> =
             wm.window_titles().into_iter().collect();
         let focus_current = wm.focused_window();
+        let menu_open = wm.command_menu_visible();
+        let top_right_indicator = top_right_indicator(wm);
 
         let top_area = LayoutRect {
             x: 0,
@@ -844,17 +845,13 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
                     focus_current: Some(focus_current),
                     display_order: display,
                     status_line: None,
-                    menu_open: true,
-                    tiling_indicator: None,
+                    menu_open,
+                    top_right_indicator,
                 },
             )));
 
             let ctx = ComponentContext::new(false).with_screen_area(top_area);
             p.render(backend, top_area, &ctx, &mut top_hb);
-
-            // Revert to layout-derived state — the next render_panels call will
-            // set the correct active state based on panel_active().
-            p.process_action(&ComponentAction::SetPanelActive(false));
         }
         wm.hitbox_registry_mut().merge(top_hb);
 
@@ -878,7 +875,9 @@ pub fn render_overlays<C: Component<TermWmAction>, L: WmComponent, O: Overlay<Te
             wm.hitbox_registry_mut()
                 .register(hitbox_id, ComponentOwner::Layer(layer_id), top_area);
         }
+    }
 
+    if wm.is_monocle_cramped() && wm.command_menu_visible() && !wm.is_tab_outline_active() {
         // Bottom panel overlay in monocle mode — keybinding hints. Hints are
         // set during the layout phase (register_managed_layout); the render
         // phase only draws the component's already-established state.
@@ -1959,7 +1958,7 @@ mod tests {
             WmButton {
                 action: TermWmAction::CloseWindow(Default::default()),
                 label: "Close Window",
-                symbol: "X",
+                symbol: WINDOW_CLOSE_GLYPH,
             },
             WmButton {
                 action: TermWmAction::MaximizeWindow(Default::default()),
@@ -2270,6 +2269,89 @@ mod tests {
         buf
     }
 
+    // ── top_right_indicator tests ─────────────────────────────────────
+
+    fn monocle_wm_with_window(
+        closable: bool,
+    ) -> (
+        WindowManager<NoopComponent>,
+        term_wm_core::window::WindowKey,
+    ) {
+        use term_wm_core::window::WindowState;
+        let mut wm = make_wm();
+        let key = wm.create_window(NoopComponent);
+        wm.transition_window(key, WindowState::Mapped);
+        wm.focus_window_key(key);
+        wm.set_closable(key, closable);
+        wm.toggle_monocle(); // Auto → On
+        assert!(wm.is_monocle(), "test setup must reach monocle mode");
+        (wm, key)
+    }
+
+    #[test]
+    fn top_right_indicator_monocle_closable_shows_close() {
+        let (wm, key) = monocle_wm_with_window(true);
+        let ind = top_right_indicator(&wm).expect("closable focus must show a close button");
+        assert_eq!(ind.label, WINDOW_CLOSE_GLYPH);
+        assert_eq!(ind.action, TermWmAction::CloseWindow(key));
+        assert_eq!(ind.tone, IndicatorTone::Negative);
+    }
+
+    #[test]
+    fn top_right_indicator_monocle_non_closable_hides() {
+        let (wm, _key) = monocle_wm_with_window(false);
+        assert!(
+            top_right_indicator(&wm).is_none(),
+            "non-closable window must not expose a close button"
+        );
+    }
+
+    #[test]
+    fn top_right_indicator_monocle_without_windows_hides() {
+        let mut wm = make_wm();
+        wm.toggle_monocle(); // Auto → On, no windows mapped
+        assert!(wm.is_monocle());
+        assert!(
+            top_right_indicator(&wm).is_none(),
+            "unknown focus key must not expose a close button"
+        );
+    }
+
+    #[test]
+    fn top_right_indicator_non_monocle_shows_toggle() {
+        use term_wm_core::window::WindowState;
+        let mut wm = make_wm();
+        assert!(!wm.is_monocle(), "fresh wm must not be in monocle mode");
+        let key = wm.create_window(NoopComponent);
+        wm.transition_window(key, WindowState::Mapped);
+        let ind = top_right_indicator(&wm).expect("toggle must show outside monocle");
+        assert_eq!(ind.label, "▢ float");
+        assert_eq!(ind.action, TermWmAction::ToggleTiling);
+        assert_eq!(ind.tone, IndicatorTone::Positive);
+    }
+
+    #[test]
+    fn top_right_indicator_non_monocle_all_floating_shows_tile() {
+        let wm = make_wm();
+        assert!(!wm.is_monocle());
+        let ind = top_right_indicator(&wm).expect("toggle must show outside monocle");
+        assert_eq!(ind.label, "⊞ tile");
+        assert_eq!(ind.tone, IndicatorTone::Positive);
+    }
+
+    #[test]
+    fn close_glyph_is_single_sourced() {
+        let (wm, key) = monocle_wm_with_window(true);
+        let ind = top_right_indicator(&wm).expect("closable focus must show a close button");
+        let chrome_close = wm
+            .window_management_buttons_for(key)
+            .into_iter()
+            .find(|b| matches!(b.action, TermWmAction::CloseWindow(k) if k == key))
+            .expect("chrome must expose a close button for a closable window");
+        assert_eq!(ind.label, WINDOW_CLOSE_GLYPH);
+        assert_eq!(chrome_close.symbol, WINDOW_CLOSE_GLYPH);
+    }
+
     #[test]
     fn cursor_overlay_no_hover_is_noop() {
         let mut buf = make_buf(10, 10);
@@ -2439,46 +2521,5 @@ mod tests {
         }
         assert_eq!(symbol(12), "═", "edge right of the occluder must light up");
         assert_eq!(symbol(13), "═", "edge right of the occluder must light up");
-    }
-
-    #[test]
-    fn row_has_content_in_range_detects_content_in_range() {
-        let mut buffer = Buffer::empty(RatatuiRect::new(0, 0, 20, 3));
-        buffer.cell_mut((15, 2)).expect("cell").set_symbol("x");
-        assert!(row_has_content_in_range(&buffer, 12, 18, 2));
-        // Content outside the range is not detected.
-        assert!(!row_has_content_in_range(&buffer, 0, 10, 2));
-    }
-
-    #[test]
-    fn row_has_content_in_range_blank_row_is_false() {
-        let buffer = Buffer::empty(RatatuiRect::new(0, 0, 20, 3));
-        assert!(!row_has_content_in_range(&buffer, 0, 20, 1));
-    }
-
-    #[test]
-    fn row_has_content_in_range_offscreen_does_not_panic() {
-        let mut buffer = Buffer::empty(RatatuiRect::new(0, 0, 20, 3));
-        buffer.cell_mut((5, 2)).expect("cell").set_symbol("x");
-        // Row outside the buffer height.
-        assert!(!row_has_content_in_range(&buffer, 0, 20, 9));
-        // Range wholly outside the buffer width (e.g. stale x from a resize).
-        assert!(!row_has_content_in_range(&buffer, 50, 60, 2));
-        // Partially offscreen range is clipped and still detects in-bounds content.
-        assert!(row_has_content_in_range(&buffer, -5, 6, 2));
-        // Empty range.
-        assert!(!row_has_content_in_range(&buffer, 10, 10, 2));
-    }
-
-    #[test]
-    fn row_has_content_in_range_nonzero_buffer_origin() {
-        // Buffer origin is not (0,0); the slice-scan row/column offset math must
-        // account for area.x/area.y (e.g. a clipped or translated sub-viewport).
-        let mut buffer = Buffer::empty(RatatuiRect::new(10, 20, 20, 3));
-        buffer.cell_mut((15, 21)).expect("cell").set_symbol("x");
-        assert!(row_has_content_in_range(&buffer, 14, 16, 21));
-        assert!(!row_has_content_in_range(&buffer, 11, 13, 21));
-        // Row 21 is the buffer's middle row; rows outside its area are rejected.
-        assert!(!row_has_content_in_range(&buffer, 14, 16, 23));
     }
 }
