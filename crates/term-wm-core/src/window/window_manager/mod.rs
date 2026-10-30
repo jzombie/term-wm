@@ -51,7 +51,6 @@ use crate::power_profile::PowerProfile;
 use crate::reaper::Reaper;
 use crate::task_scheduler::{TaskHandle, TaskId};
 use crate::user_registry::UserRegistry;
-use crate::utils::DelayedReleaseBool;
 use crate::utils::KeyedTaskDebouncer;
 #[cfg(test)]
 use crate::window::test_component::TestComponent;
@@ -423,13 +422,6 @@ pub struct WindowManager<
     pub(crate) input_mode: crate::actions::WmInputMode,
     /// Whether the FAB component is enabled
     pub(crate) fab_enabled: bool,
-    /// True when the app draws content under the FAB's footprint on its bottom
-    /// row (populated by the render pass each frame; consumed by the layout pass
-    /// on the next frame to reserve the FAB's bottom row in cramped monocle).
-    /// Wrapped in a `DelayedReleaseBool` so a clear holds for
-    /// `FAB_RESERVATION_DEBOUNCE` instead of toggling the window height
-    /// frame-to-frame during a resize.
-    bottom_content: DelayedReleaseBool,
     /// Namespaced semantic registry for programmatic component lookup.
     /// Hotkeys and structural routing query this instead of hardcoded fields.
     pub semantic_registry: HashMap<layer_manager::ComponentTag, layer_manager::LayerId>,
@@ -961,7 +953,6 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             last_snap_cursor: None,
             input_mode: crate::actions::WmInputMode::Passthrough,
             fab_enabled: true,
-            bottom_content: DelayedReleaseBool::new(crate::constants::FAB_RESERVATION_DEBOUNCE),
             tap_swap_state: None,
             cached_workspaces: Vec::new(),
             // Leave empty. The outer executable injects the real workspace immediately after instantiation.
@@ -1034,22 +1025,6 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
     /// Set the FAB enabled state.
     pub fn set_fab_enabled(&mut self, enabled: bool) {
         self.fab_enabled = enabled;
-    }
-
-    /// True when the focused window draws content under the FAB's footprint on
-    /// its bottom row. Populated by the render pass; consumed by the layout pass
-    /// (register_managed_layout) on the next frame to reserve the FAB's row. A
-    /// clear is held for `FAB_RESERVATION_DEBOUNCE` (see `set_bottom_content_flag`).
-    pub fn has_bottom_content(&self) -> bool {
-        self.bottom_content.get()
-    }
-
-    /// Record whether the app draws content under the FAB's footprint. A clear
-    /// (false) is held for `FAB_RESERVATION_DEBOUNCE` so the window height (and
-    /// PTY) does not oscillate when a resize reflow briefly changes the
-    /// bottom-right footprint content.
-    pub fn set_bottom_content_flag(&mut self, has: bool) {
-        self.bottom_content.set(has);
     }
 
     /// Get a mutable reference to the FAB component.
@@ -2924,7 +2899,7 @@ impl<C: Component<TermWmAction> + 'static, L: WmComponent, O: Overlay<TermWmActi
             btns.push(WmButton {
                 action: TermWmAction::CloseWindow(key),
                 label: "Close Window",
-                symbol: "X",
+                symbol: WINDOW_CLOSE_GLYPH,
             });
         }
         if !self.is_monocle() {
@@ -2966,6 +2941,10 @@ impl OutsideClickResult {
         !matches!(self, Self::Ignored)
     }
 }
+
+/// Canonical close glyph shared by window chrome buttons and the monocle
+/// top-panel close indicator (single source of truth).
+pub const WINDOW_CLOSE_GLYPH: &str = "X";
 
 #[derive(Clone)]
 pub struct WmButton {
@@ -3246,7 +3225,6 @@ mod tests {
             wm.is_monocle_cramped(),
             "width 50 < 80 must be cramped monocle"
         );
-        wm.set_bottom_content_flag(true);
 
         wm.register_managed_layout(crate::Rect {
             x: 0,
@@ -3257,12 +3235,12 @@ mod tests {
         assert_eq!(
             wm.managed_area().height,
             23,
-            "cramped monocle must reserve the FAB's bottom row when content detected"
+            "cramped monocle must always reserve the FAB's bottom row"
         );
     }
 
     #[test]
-    fn cramped_monocle_without_content_does_not_reserve() {
+    fn cramped_monocle_without_content_still_reserves() {
         let mut wm = WindowManager::<TestComponent>::with_config(
             WmConfig::default(),
             Arc::new(AppContext::new("test", "0.0.0")),
@@ -3277,7 +3255,6 @@ mod tests {
         ));
         wm.update_monocle_mode(50);
         assert!(wm.is_monocle_cramped());
-        wm.set_bottom_content_flag(false);
 
         wm.register_managed_layout(crate::Rect {
             x: 0,
@@ -3287,8 +3264,8 @@ mod tests {
         });
         assert_eq!(
             wm.managed_area().height,
-            24,
-            "no reservation when the FAB footprint has no content"
+            23,
+            "the FAB row is reserved even when its footprint has no content"
         );
     }
 
@@ -3311,8 +3288,6 @@ mod tests {
             !wm.is_monocle_cramped(),
             "width 100 >= 80 must not be cramped"
         );
-        // Even with a stale content flag, a non-cramped viewport must not reserve.
-        wm.set_bottom_content_flag(true);
 
         wm.register_managed_layout(crate::Rect {
             x: 0,
@@ -3342,7 +3317,6 @@ mod tests {
             crate::layout::LayoutNode::leaf(key),
         ));
         wm.update_monocle_mode(50);
-        wm.set_bottom_content_flag(true);
 
         // A 1-row-tall area is never shrunk below height 1, even when cramped.
         wm.register_managed_layout(crate::Rect {

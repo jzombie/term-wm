@@ -1,7 +1,7 @@
 use crate::actions::TermWmAction;
 use crate::components::{Component, Overlay, WmComponent};
 use crate::draw_plan::{DrawPlan, RegionType, RenderRegion, ZLayer};
-use crate::window::WindowManager;
+use crate::window::{ComponentTag, WindowManager};
 use term_wm_layout_engine::LayoutRect;
 
 /// Pre-allocated capacity for the draw plan
@@ -153,6 +153,14 @@ fn generate_notification_regions<
     const TOAST_W: u16 = 40;
     const H_MARGIN: u16 = 2;
     const Y_OFFSET: u16 = 0;
+    /// Rows to shift toasts down when the top panel overlays row 0 without
+    /// reserving layout space (cramped monocle, #357). The value is the
+    /// top panel's single-row height invariant (the overlay renders exactly
+    /// one row and `split_area` claims `self.height`, default 1); it cannot
+    /// be derived from `top_claimed_area()`, which is 0 in cramped mode by
+    /// design. In every other mode `managed.y` already accounts for the
+    /// panel, so no shift applies.
+    const OVERLAY_PANEL_Y_SHIFT: u16 = 1;
     const GAP: u16 = 0;
 
     let managed = wm.managed_area();
@@ -170,7 +178,18 @@ fn generate_notification_regions<
     let inner_w = actual_w.saturating_sub(2) as usize;
     let wrap_opts = Options::new(inner_w);
 
-    let mut y_offset: u16 = Y_OFFSET;
+    // Shift only when the panel actually paints row 0 as an overlay: cramped
+    // monocle with a registered top panel component. The overlay render path
+    // paints unconditionally (it ignores the component `visible` flag), so
+    // presence — not visibility — is the sound gate. `top_claimed_area()`
+    // cannot be used: it is 0 in cramped mode by design.
+    let panel_overlays_top_row =
+        wm.is_monocle_cramped() && wm.get_semantic_component(ComponentTag::TopPanel).is_some();
+    let mut y_offset: u16 = if panel_overlays_top_row {
+        OVERLAY_PANEL_Y_SHIFT
+    } else {
+        Y_OFFSET
+    };
 
     for notification in wm.notifications().renderable().rev() {
         let lines = textwrap::wrap(&notification.message, &wrap_opts);
@@ -246,5 +265,134 @@ mod tests {
         // Mark dirty again
         engine.mark_dirty();
         assert!(engine.is_dirty());
+    }
+
+    fn make_wm() -> WindowManager<crate::components::NoopComponent> {
+        use std::sync::Arc;
+        WindowManager::<crate::components::NoopComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            Arc::new(crate::app_context::AppContext::new("test", "0.1.0")),
+            None,
+            crate::window::LayerManager::new(),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    fn make_wm_with_top_panel() -> WindowManager<crate::components::NoopComponent> {
+        use std::sync::Arc;
+        let mut layer_manager = crate::window::LayerManager::new();
+        let id = layer_manager.insert(
+            crate::components::NoopWmComponent,
+            crate::window::ZPlane::Background,
+        );
+        let mut semantic_registry = std::collections::HashMap::new();
+        semantic_registry.insert(crate::window::ComponentTag::TopPanel, id);
+        WindowManager::<crate::components::NoopComponent>::with_config(
+            crate::wm_config::WmConfig::default(),
+            Arc::new(crate::app_context::AppContext::new("test", "0.1.0")),
+            None,
+            layer_manager,
+            semantic_registry,
+        )
+    }
+
+    fn toast_bounds_y(
+        wm: &WindowManager<crate::components::NoopComponent>,
+        message: &str,
+    ) -> Vec<i32> {
+        let mut plan = DrawPlan::with_capacity(4);
+        generate_notification_regions(&mut plan, wm);
+        plan.regions()
+            .iter()
+            .filter(|r| {
+                matches!(&r.region_type, RegionType::Notification(msg) if msg.as_ref() == message)
+            })
+            .map(|r| r.bounds.y)
+            .collect()
+    }
+
+    #[test]
+    fn toast_starts_at_top_outside_monocle() {
+        let mut wm = make_wm();
+        wm.managed_area = crate::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        assert!(!wm.is_monocle());
+        wm.push_notification("hello", std::time::Duration::from_secs(60));
+        assert_eq!(toast_bounds_y(&wm, "hello"), vec![0]);
+    }
+
+    #[test]
+    fn toast_not_shifted_in_non_cramped_monocle() {
+        // Manual monocle on a wide viewport: the panel claims row 0, so
+        // managed.y is already 1 and no extra shift may apply (#357 review).
+        let mut wm = make_wm();
+        wm.managed_area = crate::Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 23,
+        };
+        wm.monocle_mode = crate::window::window_manager::MonocleMode::On;
+        assert!(wm.is_monocle());
+        assert!(!wm.is_monocle_cramped());
+        wm.push_notification("hello", std::time::Duration::from_secs(60));
+        assert_eq!(toast_bounds_y(&wm, "hello"), vec![1]);
+    }
+
+    #[test]
+    fn toast_shifts_down_a_row_in_cramped_monocle() {
+        // Constrained viewport: auto monocle with the panel overlaying row 0
+        // without reserving layout space, so toasts must clear it (#357).
+        let mut wm = make_wm_with_top_panel();
+        wm.managed_area = crate::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.update_monocle_mode(50);
+        assert!(wm.is_monocle());
+        assert!(wm.is_monocle_cramped());
+        wm.push_notification("hello", std::time::Duration::from_secs(60));
+        assert_eq!(toast_bounds_y(&wm, "hello"), vec![1]);
+    }
+
+    #[test]
+    fn toast_not_shifted_in_cramped_monocle_without_panel() {
+        // No registered top panel component means nothing paints row 0,
+        // so toasts stay at the managed origin even when cramped.
+        let mut wm = make_wm();
+        wm.managed_area = crate::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.update_monocle_mode(50);
+        assert!(wm.is_monocle_cramped());
+        wm.push_notification("hello", std::time::Duration::from_secs(60));
+        assert_eq!(toast_bounds_y(&wm, "hello"), vec![0]);
+    }
+
+    #[test]
+    fn stacked_toasts_keep_offset_in_cramped_monocle() {
+        let mut wm = make_wm_with_top_panel();
+        wm.managed_area = crate::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        wm.update_monocle_mode(50);
+        assert!(wm.is_monocle_cramped());
+        wm.push_notification("one", std::time::Duration::from_secs(60));
+        wm.push_notification("two", std::time::Duration::from_secs(60));
+        // Newest first: 3-row toasts ("two" on top at the shifted origin).
+        assert_eq!(toast_bounds_y(&wm, "two"), vec![1]);
+        assert_eq!(toast_bounds_y(&wm, "one"), vec![4]);
     }
 }

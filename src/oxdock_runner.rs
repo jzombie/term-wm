@@ -184,7 +184,7 @@ mod tests {
     fn scratch_script_inherits_declared_host_vars() {
         let _guard = term_test_support::EnvVarGuard::set("OXDOCK_RUNNER_TEST_TOKEN", "ping");
         let (_dir, path) = write_scratch_script(
-            "INHERIT_ENV [OXDOCK_RUNNER_TEST_TOKEN]\nECHO got {{ env:OXDOCK_RUNNER_TEST_TOKEN }}\nASSERT_STDOUT got ping",
+            "INHERIT_ENV [OXDOCK_RUNNER_TEST_TOKEN]\nECHO got {{ env:OXDOCK_RUNNER_TEST_TOKEN }}\nASSERT_CONTAINS stdout \"got ping\"",
         );
         let code = run_oxdock_script(&path).expect("script runs");
         assert_eq!(code, 0);
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     #[serial]
     fn scratch_script_succeeds() {
-        let (_dir, path) = write_scratch_script("ECHO hello\nASSERT_STDOUT hello");
+        let (_dir, path) = write_scratch_script("ECHO hello\nASSERT_CONTAINS stdout hello");
         let code = run_oxdock_script(&path).expect("script runs");
         assert_eq!(code, 0);
     }
@@ -264,7 +264,7 @@ mod tests {
     #[serial]
     fn scratch_script_assertion_payload_does_not_hijack_exit_code() {
         let (_dir, path) = write_scratch_script(
-            "ECHO EXIT requested with code 99\nASSERT_STDOUT does-not-match-anything",
+            "ECHO EXIT requested with code 99\nASSERT_CONTAINS stdout does-not-match-anything",
         );
         let code = run_oxdock_script(&path).expect("script runs");
         assert_eq!(code, SCRIPT_FAILURE_CODE);
@@ -287,11 +287,11 @@ mod tests {
     #[test]
     fn exit_code_rejects_context_poisoning() {
         let inner = anyhow::anyhow!(
-            "ASSERT_STDOUT failed: expected no-match, got EXIT requested with code 99"
+            "ASSERT_CONTAINS did not contain 'no-match'; emitted:\nEXIT requested with code 99"
         );
         assert_eq!(exit_code_from_error(&inner), None);
         let wrapped: anyhow::Error = Err::<(), _>(anyhow::anyhow!(
-            "ASSERT_STDOUT failed: expected no-match, got EXIT requested with code 99"
+            "ASSERT_CONTAINS did not contain 'no-match'; emitted:\nEXIT requested with code 99"
         ))
         .context("step 1 failed: EXIT requested with code 99")
         .unwrap_err();

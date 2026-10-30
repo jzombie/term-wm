@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   test_matrix:
-    name: test (OS=${{ matrix.os }}, Features=${{ matrix.name }})
+    name: test (OS=${{ matrix.os }}, Flags=${{ matrix.flags }})
     runs-on: ${{ matrix.os }}
 
     # Hard bound so a hung PTY/socket test fails the job instead of freezing
@@ -25,14 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        features: [all-features, no-default-features]
-        include:
-          - features: all-features
-            name: "All Features"
-            flags: "--all-features"
-          - features: no-default-features
-            name: "No Default Features"
-            flags: "--no-default-features"
+        flags: ["--all-features", "--no-default-features"]
 
     steps:
       - name: Checkout repository
@@ -84,7 +77,7 @@ jobs:
         run: bash ci/check-mutex-unwrap.sh
 
       - name: Test
-        run: cargo test --workspace ${{ matrix.flags }} --lib --bins --tests --examples -- --include-ignored
+        run: cargo test --workspace ${{ matrix.flags }} -- --include-ignored
 
       # Failure diagnostics: test harnesses point spawned daemons/clients at
       # TERM_WM_LOG_FILE under term-wm-test-logs/ (see

@@ -1,14 +1,92 @@
 # Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
-## [UNRELEASED]
+## [0.10.17-alpha] - 2026-10-30
+
+### Changed
+
+- Bumped `smallvec` from 1.16.2 to 1.16.3 (#383).
+- Bumped `serde_json` from 1.0.151 to 1.0.154 (#385).
+- Bumped `interprocess` from 2.4.4 to 2.4.6 (#387).
+- Bumped `tokio` from 1.53.2 to 1.54.1 to fix the `interprocess` 2.4.6 build.
+- Bumped `pulldown-cmark` from 0.13.4 to 0.13.5, fixing a security advisory (RUSTSEC-2026-0414).
+- Bumped `rustls-webpki` from 0.103.15 to 0.103.16 and `webpki-roots` from 1.0.9 to 1.0.11, fixing certificate trust advisories (RUSTSEC-2026-0382, RUSTSEC-2026-0381).
+- Bumped `clipboard-win` from 5.4.1 to 5.4.3 to replace a yanked release.
+
+### Fixed
+
+- In Monocle Mode the bottom row is now always reserved for the menu button, which stretches the app's background across the row and inverts only its label so it stays visible; app content no longer draws under it (#390).
+
+## [0.10.16-alpha] - 2026-10-15
+
+### Changed
+
+- Bumped `rustls` from 0.23.45 to 0.23.46, fixing four security advisories (RUSTSEC-2026-0346 through RUSTSEC-2026-0349).
+
+### Fixed
+
+- Fixed: terminal text no longer picks up a leftover color across the whole window when a program leaves a color active, such as the yellow output of PowerShell `dir` (#115).
+
+## [0.10.15-alpha] - 2026-10-10
+
+### Fixed
+
+- The top panel close button no longer stacks with the window header close button in Monocle Mode: it now only appears when the focused window has no visible header.
+
+## [0.10.14-alpha] - 2026-10-10
+
+### Added
+
+- The top panel now shows a close button for the current window in Monocle Mode when the window can be closed.
+
+### Changed
+
+- Bumped `rstml` from 0.13.0 to 0.13.1 (#374).
+- Bumped `insta` from 1.48.0 to 1.49.0 (#375).
+- Bumped `smallvec` from 1.16.1 to 1.16.2 (#376).
+- Bumped `thiserror` from 2.0.20 to 2.0.21 (#377).
+- Bumped the Docker base image from `rust:1.98-alpine3.24` to `rust:1.99-alpine3.24` (#378).
+
+### Fixed
+
+- Toast notifications no longer appear behind the top panel in constrained Monocle Mode; they now render one row lower (#357).
+
+## [0.10.13-alpha] - 2026-10-07
+
+### Changed
+
+- Bumped `oxdock` from 0.17.0 to 0.21.0, adding `oxdock-remote-proto` with its HTTP/TLS (`ureq`, `rustls`) and archive (`tar`) stack plus a local download cache.
+- Bumped `muxio` from 0.16.1 to 0.17.0.
+- Refreshed transitive dependencies: too many to list here, see `Cargo.lock` for the full set.
+- Bumped `syn` from 3.0.5 to 3.0.6 (#368).
+- Bumped `rstml` from 0.13.0 to 0.13.1 (#370).
+- Bumped `thiserror` from 2.0.20 to 2.0.21 (#371).
+- Bumped `smallvec` from 1.16.1 to 1.16.2 (#372).
+
+## [0.10.12-alpha] - 2026-09-21
+
+### Changed
+
+- Bumped `oxdock` from 0.14.1 to 0.17.0.
+- Bumped `bitflags` from 2.13.1 to 2.13.2 (#366).
+- Bumped `smallvec` from 1.16.0 to 1.16.1 (#365).
+- Bumped `clap` from 4.6.6 to 4.6.7 (#364).
+- Bumped `console` from 0.16.4 to 0.16.6 (#363).
+
+## [0.10.11-alpha] - 2026-09-10
 
 ### Changed
 
 - The tabbed window list with navigation arrows now stays visible in constrained Monocle Mode without opening the Command Palette (#343).
+- Bumped `crossbeam-channel` from 0.5.16 to 0.5.17 (#358).
+- Bumped `interprocess` from 2.4.3 to 2.4.4 (#359).
+- Bumped `syn` from 3.0.4 to 3.0.5 (#360).
+- Bumped `muxio` from 0.16.0-alpha to 0.16.1-alpha.
+- Bumped `oxdock` from 0.11.0-alpha to 0.14.1-alpha.
 
 ## [0.10.10-alpha] - 2026-09-10
 

@@ -1,12 +1,12 @@
 //! Top status panel — composed of small applets (menu, tab bar, status line,
-//! tiling indicator) that each own a bounded region of the single row.
+//! top-right indicator) that each own a bounded region of the single row.
 //!
 //! The parent runs a small layout pass each frame: it reserves the menu on the
-//! left and the tiling indicator on the right, then hands the middle region to
+//! left and the top-right indicator on the right, then hands the middle region to
 //! either the status line or the scrollable, draggable tab bar. Because each
 //! applet renders and interacts strictly inside its own allocated rect, the tab
 //! bar's `◀`/`▶` overflow indicators are always contained and never overwritten
-//! by the menu or the tiling label.
+//! by the menu or the top-right label.
 
 mod menu;
 mod status;
@@ -33,11 +33,18 @@ use menu::MenuButton;
 use status::StatusLine;
 use tiling::TilingIndicator;
 
-/// Single-column gap between the menu button and the center region.
-const MENU_GAP: u16 = 1;
+/// Single-column gap between the menu button and the center region. Only
+/// applied when the menu carries an app-name label; an icon-only menu
+/// (empty app name) adds no extra gap.
+const MENU_GAP_LABELED: u16 = 1;
 /// Horizontal gap (columns) between the center region's right edge (and its
-/// `▶` chevron) and the right-aligned tiling indicator.
+/// `▶` chevron) and the right-aligned top-right indicator.
 const TILING_GAP: u16 = 1;
+/// Right-edge inset (columns) for the top-right indicator slot. Panel-owned
+/// metric: intentionally mirrors `CHROME_BUTTON_INSET_RIGHT` so the panel
+/// slot matches window header button placement without coupling panel layout
+/// to window chrome metrics (see the mirror test in `tiling.rs`).
+pub const TOP_PANEL_RIGHT_INSET: u16 = 1;
 
 #[derive(Debug)]
 pub struct WmTopPanelComponent {
@@ -146,7 +153,7 @@ impl WmTopPanelComponent {
 
     /// Layout pass + applet rendering into `self.area`.
     ///
-    /// Reserves the menu (left) and tiling label (right), then hands the middle
+    /// Reserves the menu (left) and top-right indicator (right), then hands the middle
     /// region to EITHER the status line OR the tab bar (mutually exclusive), so
     /// applets never overlap.
     fn render_contents(
@@ -192,14 +199,23 @@ impl WmTopPanelComponent {
             self.menu.render(backend, menu_slot, self.menu_open, &theme);
         }
 
-        // Center region: [menu + gap, max_x - tiling_width - TILING_GAP).
-        let tiling_width = self.tiling.label_width();
+        // Center region: [menu + gap, max_x - slot_width - TILING_GAP).
+        // The slot covers the label plus its right-edge inset, so the gap
+        // cell always separates the tab bar chevron from the label.
+        let slot_width = self.tiling.slot_width();
+        // Icon-only menu (no app-name label) takes no separator gap; the
+        // tabs start directly after the icon.
+        let menu_gap = if self.app_name.is_empty() {
+            0
+        } else {
+            MENU_GAP_LABELED
+        };
         let bar_start = area
             .x
             .saturating_add(i32::from(menu_width))
-            .saturating_add(i32::from(MENU_GAP));
-        let bar_end = if tiling_width > 0 {
-            max_x.saturating_sub(i32::from(tiling_width + TILING_GAP))
+            .saturating_add(i32::from(menu_gap));
+        let bar_end = if slot_width > 0 {
+            max_x.saturating_sub(i32::from(slot_width + TILING_GAP))
         } else {
             max_x
         };
@@ -233,8 +249,8 @@ impl WmTopPanelComponent {
             self.bar.render(backend, bar_rect, ctx, registry);
         }
 
-        // Tiling indicator (right edge).
-        if tiling_width > 0 {
+        // Top-right indicator (right edge).
+        if slot_width > 0 {
             self.tiling.render(backend, area, &theme);
         }
     }
@@ -254,7 +270,7 @@ impl Component<TermWmAction> for WmTopPanelComponent {
     ) {
         let theme = ctx.config().theme;
         if !self.active {
-            // Still render the tiling indicator even when inactive so the
+            // Still render the top-right indicator even when inactive so the
             // label is visible and its rect is populated for clicks.
             self.bar.clear_drag_state();
             self.tiling.render(backend, area, &theme);
@@ -362,7 +378,7 @@ impl WmComponent for WmTopPanelComponent {
                 self.display_order = state.display_order.clone();
                 self.status_line = state.status_line.clone();
                 self.menu_open = state.menu_open;
-                self.tiling.set_indicator(state.tiling_indicator.clone());
+                self.tiling.set_indicator(state.top_right_indicator.clone());
             }
             ComponentAction::SetWindowLabels(labels) => {
                 self.window_labels = labels.clone();
@@ -563,7 +579,7 @@ mod tests {
         push_windows(&mut p, &[key], area);
         render_panel(&mut p);
         // First tab starts at menu width + gap (no overflow).
-        let bar_start = (menu_icon("test").chars().count() as u16) + MENU_GAP;
+        let bar_start = (menu_icon("test").chars().count() as u16) + MENU_GAP_LABELED;
         assert_eq!(p.hit_test_window(bar_start + 1, 0), Some(key));
     }
 
@@ -740,7 +756,7 @@ mod tests {
             display_order: vec![key],
             status_line: Some("ready".to_string()),
             menu_open: true,
-            tiling_indicator: None,
+            top_right_indicator: None,
         };
         p.process_action(&ComponentAction::SetTopPanelState(Box::new(state)));
         assert_eq!(p.focus_current, Some(key));
@@ -890,8 +906,8 @@ mod tests {
         push_windows(&mut p, &keys, area);
         render_panel(&mut p);
 
-        // First tab starts at menu width + MENU_GAP (no overflow).
-        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
+        // First tab starts at menu width + MENU_GAP_LABELED (no overflow).
+        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP_LABELED;
         let res = p.handle_events(
             &mouse(MouseEventKind::Press(MouseButton::Left), bar_start + 1, 0),
             &ctx(),
@@ -899,6 +915,140 @@ mod tests {
         assert!(
             matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[0]),
             "pressing a tab must map to FocusWindow"
+        );
+    }
+
+    #[test]
+    fn press_close_indicator_closes_focused_window() {
+        use term_wm_core::components::{IndicatorTone, TopPanelState, TopRightIndicator};
+        use term_wm_core::window::WINDOW_CLOSE_GLYPH;
+        let keys = make_keys(1);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+            TopPanelState {
+                focus_current: Some(keys[0]),
+                display_order: keys.clone(),
+                status_line: None,
+                menu_open: false,
+                top_right_indicator: Some(TopRightIndicator {
+                    label: WINDOW_CLOSE_GLYPH,
+                    action: TermWmAction::CloseWindow(keys[0]),
+                    tone: IndicatorTone::Negative,
+                }),
+            },
+        )));
+        render_panel(&mut p);
+
+        // Only the visible glyph cell (one inside the right edge, matching the
+        // window header inset) closes; the cells beside it fall through to the
+        // panel background and must never close.
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), 78, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::CloseWindow(k)) if k == keys[0]),
+            "press on the close glyph must map to CloseWindow"
+        );
+        for col in [77u16, 79] {
+            let res = p.handle_events(
+                &mouse(MouseEventKind::Press(MouseButton::Left), col, 0),
+                &ctx(),
+            );
+            assert!(
+                matches!(res, EventResult::Consumed),
+                "press beside the close glyph (col {col}) must not close"
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_chevron_keeps_gap_from_close_button() {
+        use term_wm_core::components::{IndicatorTone, TopPanelState, TopRightIndicator};
+        use term_wm_core::window::WINDOW_CLOSE_GLYPH;
+        // Eight tabs overflow the bar, forcing the right `▶` chevron.
+        let keys = make_keys(8);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("test-app");
+        push_windows(&mut p, &keys, area);
+        p.process_action(&ComponentAction::SetTopPanelState(Box::new(
+            TopPanelState {
+                focus_current: Some(keys[0]),
+                display_order: keys.clone(),
+                status_line: None,
+                menu_open: false,
+                top_right_indicator: Some(TopRightIndicator {
+                    label: WINDOW_CLOSE_GLYPH,
+                    action: TermWmAction::CloseWindow(keys[0]),
+                    tone: IndicatorTone::Negative,
+                }),
+            },
+        )));
+        render_panel(&mut p);
+
+        let rect = p.tiling.rect.expect("indicator rect must be set");
+        let glyph_col = rect.x as u16;
+        // The cell between the overflow chevron and the glyph is a spacing
+        // gap: pressing it must never close nor focus, only consume.
+        let res = p.handle_events(
+            &mouse(
+                MouseEventKind::Press(MouseButton::Left),
+                glyph_col.saturating_sub(1),
+                0,
+            ),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Consumed),
+            "gap cell before the close glyph must be consumed, not actioned"
+        );
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), glyph_col, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::CloseWindow(k)) if k == keys[0]),
+            "press on the close glyph must map to CloseWindow"
+        );
+    }
+
+    #[test]
+    fn icon_only_menu_adds_no_gap() {
+        // Empty app name means an icon-only menu ("≡ "): the tab strip must
+        // start directly after the icon with no separator gap.
+        let keys = make_keys(1);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        let mut p = WmTopPanelComponent::new("");
+        push_windows(&mut p, &keys, area);
+        render_panel(&mut p);
+
+        let icon_width = menu_icon("").chars().count() as u16;
+        // First tab starts exactly at the icon width (no MENU_GAP_LABELED); pressing
+        // one cell inside it focuses the window.
+        let res = p.handle_events(
+            &mouse(MouseEventKind::Press(MouseButton::Left), icon_width + 1, 0),
+            &ctx(),
+        );
+        assert!(
+            matches!(res, EventResult::Action(TermWmAction::FocusWindow(k)) if k == keys[0]),
+            "tab must start directly after an icon-only menu"
         );
     }
 
@@ -915,7 +1065,7 @@ mod tests {
         push_windows(&mut p, &keys, area);
         render_panel(&mut p);
 
-        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP;
+        let bar_start = (menu_icon("test-app").chars().count() as u16) + MENU_GAP_LABELED;
         // Tab i spans [bar_start + 10*i, bar_start + 10*(i+1)) (label 8 + 2 pad).
         let tab2 = bar_start + 20;
         let res = p.handle_events(

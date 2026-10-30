@@ -279,7 +279,7 @@ Split form is also supported (`args` appended after `command`):
 Project content piped toward `--util copy` can instead be routed through an
 OxDock script (`.oxfile`) so it is programmatically altered first. Routing
 stays completely inside OxDock: the script runs its producer and consumer as
-`RUN` steps wired by internal `WITH_IO` named pipes, with no host shell
+`RUN` steps wired by internal `WITH_IO` pipes, with no host shell
 pipes involved.
 
 Run any script headless with exactly one positional (the script path):
@@ -312,10 +312,12 @@ Canonical shape (transform, then copy, internal pipes only):
 // scripts/copy_via_oxdock.oxfile
 INHERIT_ENV [TERM_WM_EXE]
 WORKSPACE LOCAL
-WITH_IO [stdout=pipe:raw] RUN git diff
-WITH_IO [stdin=pipe:raw, stdout=pipe:out] EXPAND HEADER="filtered"
-[unix] WITH_IO [stdin=pipe:out] RUN "$TERM_WM_EXE" --util copy -- --force-osc52
-[windows] WITH_IO [stdin=pipe:out] RUN "%TERM_WM_EXE%" --util copy -- --force-osc52
+LET $raw: PIPE
+LET $out: PIPE
+WITH_IO [stdout=$raw] RUN git diff
+WITH_IO [stdin=$raw, stdout=$out] EXPAND HEADER="filtered"
+[unix] WITH_IO [stdin=$out] RUN "$TERM_WM_EXE" --util copy -- --force-osc52
+[windows] WITH_IO [stdin=$out] RUN "%TERM_WM_EXE%" --util copy -- --force-osc52
 ```
 
 The trailing `--force-osc52` (after `--`, so it reaches the utility as a

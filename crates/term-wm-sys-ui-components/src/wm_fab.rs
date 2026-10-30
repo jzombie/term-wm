@@ -1,4 +1,4 @@
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use term_wm_layout_engine::LayoutRect;
 use unicode_width::UnicodeWidthStr;
 
@@ -10,13 +10,16 @@ use term_wm_core::{
     window::WindowKey,
 };
 use term_wm_ui_components::helpers::{
-    downcast_ratatui, layout_rect_to_clipped_rect, menu_icon, safe_set_string,
+    color_to_ratatui, dominant_row_bg, downcast_ratatui, layout_rect_to_clipped_rect, menu_icon,
+    ratatui_to_color, safe_set_string,
 };
 
 /// Floating Action Button (FAB) component.
 /// Renders the term-wm menu icon (e.g. `≡ term-wm`) as a touch target at the
 /// absolute bottom-right of the terminal buffer. Tapping the FAB opens the
-/// command palette.
+/// command palette. The FAB's line is painted with the app bottom row's
+/// background color stretched down, and the label inverts only its
+/// foreground against it.
 #[derive(Debug)]
 pub struct WmFabComponent {
     visible: bool,
@@ -82,11 +85,42 @@ impl Component<TermWmAction> for WmFabComponent {
         // not a SlotMap window, so on_mount is never called.
         registry.register_active(self.hitbox_id, self.fab_rect);
 
-        // Render the shared menu icon with the same style as the top panel's
-        // closed menu button (no background, no hardcoded colors — the theme
-        // drives panel styling).
+        // Backdrop: stretch the app bottom row's background color down across
+        // the FAB's line so the button always sits on familiar ground. The
+        // label keeps that background and inverts only its foreground, so it
+        // stays readable without painting an inverted block. Sampling runs
+        // only when a row exists above the FAB; on a 1-row viewport there is
+        // no app row to sample and the default style applies.
         let ratatui_backend = downcast_ratatui(backend);
+        let row_style = if self.fab_rect.y > 0 {
+            let app_row_y = self.fab_rect.y - 1;
+            let row_end_x = area.x.saturating_add(i32::from(area.width));
+            match dominant_row_bg(&ratatui_backend.buffer, app_row_y, area.x, row_end_x) {
+                Some(bg) if bg != Color::Reset => match ratatui_to_color(bg) {
+                    Some(core_bg) => Style::default()
+                        .bg(bg)
+                        .fg(color_to_ratatui(term_wm_core::theme::invert(core_bg))),
+                    None => Style::default(),
+                },
+                _ => Style::default(),
+            }
+        } else {
+            Style::default()
+        };
+        let row_end_x = area.x.saturating_add(i32::from(area.width));
         let buffer = &mut ratatui_backend.buffer;
+        if self.fab_rect.y >= 0 {
+            let mut x = area.x;
+            while x < row_end_x {
+                if x >= 0
+                    && let Some(cell) = buffer.cell_mut((x as u16, self.fab_rect.y as u16))
+                {
+                    cell.set_symbol(" ");
+                    cell.set_style(row_style);
+                }
+                x = x.saturating_add(1);
+            }
+        }
 
         // Intersect the FAB's designated area with the buffer's actual area.
         // This ensures we only write to valid cells within the FAB's bounds,
@@ -98,8 +132,7 @@ impl Component<TermWmAction> for WmFabComponent {
             return;
         }
 
-        let style = Style::default();
-        safe_set_string(buffer, bounds, bounds.x, bounds.y, &label, style);
+        safe_set_string(buffer, bounds, bounds.x, bounds.y, &label, row_style);
     }
 
     fn handle_events(
@@ -214,16 +247,26 @@ mod tests {
         // The label itself should be drawn into the buffer.
         let cell = backend.buffer.cell((71, 23)).expect("label start cell");
         assert_eq!(cell.symbol(), "≡");
-        // Style matches the top panel's closed menu button: no hardcoded
-        // background/foreground, no bold (the theme drives panel styling).
-        assert_ne!(cell.style().bg, Some(ratatui::style::Color::DarkGray));
-        assert_ne!(cell.style().fg, Some(ratatui::style::Color::White));
+        // Blank buffer: the stretched row background is the terminal default,
+        // so the label keeps default colors with no modifiers.
+        assert_eq!(cell.bg, ratatui::style::Color::Reset);
+        assert_eq!(cell.fg, ratatui::style::Color::Reset);
         assert!(
             !cell
                 .style()
                 .add_modifier
                 .contains(ratatui::style::Modifier::BOLD)
         );
+        assert!(
+            !cell
+                .style()
+                .add_modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+        // The stretched backdrop covers the whole line, not just the label.
+        let plain = backend.buffer.cell((0, 23)).expect("backdrop cell");
+        assert_eq!(plain.symbol(), " ");
+        assert_eq!(plain.bg, ratatui::style::Color::Reset);
         // Hitbox should be registered
         assert!(!reg.is_empty());
         let result = reg.hit_test(term_wm_layout_engine::MousePosition {
@@ -233,6 +276,42 @@ mod tests {
         });
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, id);
+    }
+
+    #[test]
+    fn fab_row_stretches_app_background_with_inverted_foreground() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
+        let mut fab = WmFabComponent::new();
+        let mut backend = make_backend(80, 24);
+        // Paint the app's bottom row (row 22) blue: the FAB line must stretch
+        // that background down and invert only the label foreground.
+        for x in 0..80 {
+            if let Some(cell) = backend.buffer.cell_mut((x, 22)) {
+                cell.set_symbol("~");
+                cell.set_bg(ratatui::style::Color::Blue);
+            }
+        }
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        fab.render(&mut backend, area, &app_ctx(), &mut reg);
+        // Backdrop stretched: the full line carries the app row's background.
+        let plain = backend.buffer.cell((0, 23)).expect("backdrop cell");
+        assert_eq!(plain.symbol(), " ");
+        assert_eq!(plain.bg, ratatui::style::Color::Blue);
+        // Label keeps the background; the foreground is the channel inverse
+        // of blue (0, 0, 170).
+        let cell = backend.buffer.cell((71, 23)).expect("label start cell");
+        assert_eq!(cell.symbol(), "≡");
+        assert_eq!(cell.bg, ratatui::style::Color::Blue);
+        assert_eq!(cell.fg, ratatui::style::Color::Rgb(255, 255, 85));
+        // The app's own row is untouched.
+        let app = backend.buffer.cell((0, 22)).expect("app row cell");
+        assert_eq!(app.symbol(), "~");
     }
 
     #[test]
@@ -253,6 +332,29 @@ mod tests {
         // the invisible portion at render time), and the row stays at the bottom.
         assert_eq!(fab.fab_rect().x, -4);
         assert_eq!(fab.fab_rect().y, 2);
+    }
+
+    #[test]
+    fn fab_single_row_viewport_skips_backdrop_sampling() {
+        use term_wm_core::hitbox_registry::ComponentOwner;
+        let mut fab = WmFabComponent::new();
+        // 1-row viewport: no app row exists above the FAB, so sampling is
+        // skipped instead of reading the FAB's own row, and the label keeps
+        // the default style.
+        let mut backend = make_backend(80, 1);
+        let mut reg = HitboxRegistry::with_owner(ComponentOwner::Test);
+        let area = LayoutRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 1,
+        };
+        fab.render(&mut backend, area, &app_ctx(), &mut reg);
+        assert_eq!(fab.fab_rect().y, 0);
+        let cell = backend.buffer.cell((71, 0)).expect("label start cell");
+        assert_eq!(cell.symbol(), "≡");
+        assert_eq!(cell.bg, ratatui::style::Color::Reset);
+        assert_eq!(cell.fg, ratatui::style::Color::Reset);
     }
 
     #[test]

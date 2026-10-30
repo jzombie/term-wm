@@ -22,44 +22,23 @@
 [
     {
         "label": "dev: cargo pkg --help",
-        "command": "cargo run -- --help",
-        "environments": ["dev"]
+        "command": "cargo run -- --help"
     },
     {
         "label": "dev: cargo udeps",
-        "command": "cargo udeps --workspace --all-targets --all-features",
-        "environments": ["dev"]
+        "command": "cargo udeps --workspace --all-targets --all-features"
     },
     {
         "label": "dev: cargo clippy",
-        "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
-        "environments": ["dev"]
+        "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings"
     },
     {
         "label": "dev: cargo fmt",
-        "command": "cargo fmt --all",
-        "environments": ["dev"]
+        "command": "cargo fmt --all"
     },
     {
         "label": "dev: cargo test all features",
-        "command": "cargo test --workspace --all-features",
-        "environments": ["dev"]
-    },
-    {
-        "label": "dev: Copy Git Diff",
-        "command": "sh",
-        "args": ["-c", "git diff | \"$TERM_WM_EXE\" --util copy"],
-        "env": { "TERM_WM_EXE": "{wm.exe}" },
-        "environments": ["dev"],
-        "platforms": ["linux", "macos"]
-    },
-    {
-        "label": "dev: Copy Git Diff",
-        "command": "powershell",
-        "args": ["-NoProfile", "-Command", "git diff | & $env:TERM_WM_EXE --util copy"],
-        "env": { "TERM_WM_EXE": "{wm.exe}" },
-        "environments": ["dev"],
-        "platforms": ["windows"]
+        "command": "cargo test --workspace --all-features"
     },
     {
         "label": "ox: playground demo",
