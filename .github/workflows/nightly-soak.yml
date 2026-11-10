@@ -22,7 +22,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -58,7 +58,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check mutex unwrap policy
-        run: bash ci/check-mutex-unwrap.sh
+        run: bash .github/scripts/check-mutex-unwrap.sh
         shell: bash
 
       - name: Run nightly soak
