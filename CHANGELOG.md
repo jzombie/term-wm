@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 - Rapid mouse movement no longer queues input lag behind stale pointer positions; only the latest position in each burst is dispatched.
 - Remote session display over slow SSH links no longer lags seconds behind keystrokes, since the client now sends only changed screen rows instead of repainting the whole viewport on every frame (#400).
+- Help overlay no longer shows an empty keybinding for opening a new terminal window; it now directs to the Command Palette when no key is bound (#398).
 
 ### Changed
 

@@ -192,7 +192,14 @@ impl WmHelpOverlayComponent {
 
             let focus_next = kb.combos_for(TermWmAction::FocusNext).join(" / ");
             let focus_prev = kb.combos_for(TermWmAction::FocusPrev).join(" / ");
-            let new_term = kb.combos_for(TermWmAction::NewTerminal).join(" / ");
+            let new_term = {
+                let s = kb.combos_for(TermWmAction::NewTerminal).join(" / ");
+                if s.is_empty() {
+                    "Command Palette, then New Terminal".to_string()
+                } else {
+                    s
+                }
+            };
             let menu_nav = {
                 let a = kb.combos_for(TermWmAction::MenuUp).join(" / ");
                 let b = kb.combos_for(TermWmAction::MenuDown).join(" / ");
