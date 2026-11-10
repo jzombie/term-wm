@@ -2692,7 +2692,9 @@ mod tests {
     fn console_preserves_non_motion_mouse_events() {
         let (mut source, console_tx) = console_source();
         let left = term_wm_core::events::MouseButton::Left;
-        console_tx.send(mouse_evt(MouseEventKind::Moved, 1, 1)).unwrap();
+        console_tx
+            .send(mouse_evt(MouseEventKind::Moved, 1, 1))
+            .unwrap();
         console_tx
             .send(mouse_evt(MouseEventKind::Drag(left), 2, 2))
             .unwrap();
@@ -2750,4 +2752,3 @@ mod tests {
         );
     }
 }
-
