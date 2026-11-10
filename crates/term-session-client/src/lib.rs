@@ -702,13 +702,16 @@ pub fn run_session(
         })
         .map_err(|e| io::Error::other(format!("spawn input thread: {e}")))?;
 
-    // Initial full-frame render
+    // Initial full-frame render. `render_cache` is owned by this session scope:
+    // returning (or rebinding to another channel) drops it, so the next
+    // attach repaints fully.
+    let mut render_cache = RenderCache::new();
     {
         let parser = pane.shared_parser();
         let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
         let screen = parser.screen();
         let (rows, cols) = screen.size();
-        render_frame(&mut out, screen, rows, cols, false)?;
+        render_frame(&mut out, screen, rows, cols, false, &mut render_cache)?;
     }
 
     let mut pending_input: Option<Event> = None;
@@ -906,7 +909,14 @@ pub fn run_session(
             let parser = parser.lock().unwrap_or_else(|e| e.into_inner());
             let screen = parser.screen();
             let (rows, cols) = screen.size();
-            render_frame(&mut out, screen, rows, cols, clear_display)?;
+            render_frame(
+                &mut out,
+                screen,
+                rows,
+                cols,
+                clear_display,
+                &mut render_cache,
+            )?;
         }
 
         // Exit on session exit
@@ -971,115 +981,234 @@ fn apply_sgr(out: &mut dyn Write, style: &CellStyle) -> io::Result<()> {
     Ok(())
 }
 
-pub fn render_frame(
-    out: &mut dyn Write,
-    screen: &Screen,
+// ── Diffed render path (issue #400) ─────────────────────────────────
+// The session client renders over a (possibly slow) SSH link. Re-emitting the
+// full viewport on every PTY chunk saturates the link and blocks input
+// draining, so `render_frame` diffs per row and emits only what changed since
+// the last paint. `RenderCache` is owned by `run_session` (never global); it
+// is dropped on return/rebind, which resets the snapshot.
+
+// Opens every paint: synchronized-output begin, cursor hidden, SGR reset.
+const FRAME_BEGIN: &[u8] = b"\x1b[?2026h\x1b[?25l\x1b[0m";
+// Full-screen clear, emitted only when `clear_display` is set (resize).
+const CLEAR_DISPLAY_SEQ: &[u8] = b"\x1b[2J";
+// DECAWM off: row payloads assume DECAWM-off entry (issue #115).
+const DECAWM_OFF: &[u8] = b"\x1b[?7l";
+// DECAWM on, restoring the mode before cursor placement (issue #115).
+const DECAWM_ON: &[u8] = b"\x1b[?7h";
+// SGR reset: every emitted row opens with this; every paint closes with it.
+const SGR_RESET: &[u8] = b"\x1b[0m";
+// Erase to end of line with default background (issue #115 margin rule).
+const ERASE_TO_EOL: &[u8] = b"\x1b[K";
+// Cursor visibility sequences.
+const CURSOR_HIDE_SEQ: &[u8] = b"\x1b[?25l";
+const CURSOR_SHOW_SEQ: &[u8] = b"\x1b[?25h";
+// Closes every paint: global SGR reset, then synchronized-output end. The
+// reset guarantees a partial row can never leak styling onto the terminal.
+const FRAME_END: &[u8] = b"\x1b[0m\x1b[?2026l";
+
+/// Last-emitted paint snapshot for `render_frame` (issue #400).
+///
+/// Owned by `run_session` and threaded through every `render_frame` call;
+/// never global/static, so returning from or rebinding the session drops the
+/// snapshot and the next attach repaints fully.
+pub struct RenderCache {
     rows: u16,
     cols: u16,
-    clear_display: bool,
+    inner_rows: u16,
+    inner_cols: u16,
+    /// `row_hashes[row]` is the FxHash of the last-emitted payload of that
+    /// target row (CUP prefix excluded). Comparison is one integer per row.
+    row_hashes: Vec<u64>,
+    /// Single reusable row-render buffer. The diff loop clears and reuses it
+    /// for every row, so steady-state diffing performs zero allocations (the
+    /// buffer grows once to the widest row).
+    scratch: Vec<u8>,
+    /// Accumulated CUP + row payloads for the current paint. Cleared and
+    /// reused every frame, so frame assembly allocates nothing in steady
+    /// state (capacity grows once to the largest paint).
+    segments: Vec<u8>,
+    /// Final frame bytes (header + segments + trailer). Cleared and reused
+    /// every paint, like `segments`.
+    frame_buf: Vec<u8>,
+    /// Cursor position and visibility at the last paint; part of the diff key
+    /// so cursor-only movement emits a minimal paint.
+    last_cursor: ((u16, u16), bool),
+}
+
+impl RenderCache {
+    pub fn new() -> Self {
+        Self {
+            rows: 0,
+            cols: 0,
+            inner_rows: 0,
+            inner_cols: 0,
+            row_hashes: Vec::new(),
+            scratch: Vec::new(),
+            segments: Vec::new(),
+            frame_buf: Vec::new(),
+            last_cursor: ((0, 0), false),
+        }
+    }
+
+    /// Reset the snapshot for a `rows`-tall viewport. Explicitly `clear()`s
+    /// and `resize()`s so geometry growth can never panic on out-of-bounds
+    /// row access; the next paint repaints fully and repopulates the hashes.
+    fn invalidate(&mut self, rows: u16) {
+        self.row_hashes.clear();
+        self.row_hashes.resize(rows as usize, 0);
+        self.scratch.clear();
+        self.last_cursor = ((0, 0), false);
+    }
+}
+
+impl Default for RenderCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 64-bit FxHash over row bytes (same rotate-xor-multiply mixing as
+/// `rustc-hash`'s `FxHasher`, dependency-free, stable-only constructs).
+/// Non-cryptographic: it only compares self-rendered row payloads, so a
+/// collision merely delays one row until the next full repaint (resize or
+/// `clear_display`).
+fn row_hash(bytes: &[u8]) -> u64 {
+    const FX_MULT: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+    let mut hash: u64 = 0;
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        let word = u64::from_ne_bytes([
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+            bytes[i + 4],
+            bytes[i + 5],
+            bytes[i + 6],
+            bytes[i + 7],
+        ]);
+        hash = (hash.rotate_left(5) ^ word).wrapping_mul(FX_MULT);
+        i += 8;
+    }
+    if i < bytes.len() {
+        let mut padded = [0u8; 8];
+        let mut j = 0;
+        while i < bytes.len() {
+            padded[j] = bytes[i];
+            i += 1;
+            j += 1;
+        }
+        hash = (hash.rotate_left(5) ^ u64::from_ne_bytes(padded)).wrapping_mul(FX_MULT);
+    }
+    hash
+}
+
+/// Render one target row's payload into `scratch` (no allocation; the caller
+/// clears first). The row is self-contained: it opens with an SGR reset and
+/// tracks style locally, so an isolated partial repaint can never inherit
+/// stale SGR state from another frame. Truncation, margin clearing, wide-char
+/// and DECAWM entry assumptions follow issue #115 as before.
+fn render_row_bytes(
+    screen: &Screen,
+    row: u16,
+    render_cols: u16,
+    cols: u16,
+    scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
-    // Truncate the inner grid to the target viewport (issue #115): when a
-    // nested session is wider than the outer window, emitting past the outer
-    // width would clamp excess cells into the margin column of the receiving
-    // parser and duplicate the boundary color there.
-    let (inner_rows, inner_cols) = screen.size();
-    let render_rows = inner_rows.min(rows);
-    let render_cols = inner_cols.min(cols);
-    let mut buf = Vec::with_capacity(
-        (rows as usize)
-            .saturating_mul(cols as usize)
-            .saturating_mul(RENDER_BUF_CELL_MULTIPLIER),
-    );
+    scratch.extend_from_slice(SGR_RESET);
     let mut active_style = CellStyle::default();
 
-    // Synchronized Output begin, hide cursor, reset attributes
-    buf.extend_from_slice(b"\x1b[?2026h\x1b[?25l\x1b[0m");
-    if clear_display {
-        buf.extend_from_slice(b"\x1b[2J");
-    }
-    buf.extend_from_slice(b"\x1b[?7l");
+    let mut col: u16 = 0;
+    while col < render_cols {
+        // Compute cell width first to handle wide chars (CJK, emoji) that
+        // span multiple columns. Checking col + width >= render_cols catches
+        // the right-edge case even when a wide char at render_cols-2 jumps
+        // past render_cols-1.
+        let cell_opt = screen.cell(row, col);
+        let contents = cell_opt.map_or("", |c| c.contents());
+        let width = if contents.is_empty() {
+            1
+        } else {
+            unicode_width::UnicodeWidthStr::width(contents).max(1) as u16
+        };
 
-    for row in 0..render_rows {
-        write!(buf, "\x1b[{};1H", row.saturating_add(1))?;
-
-        let mut col: u16 = 0;
-        while col < render_cols {
-            // Compute cell width first to handle wide chars (CJK, emoji) that
-            // span multiple columns — checking col + width >= render_cols
-            // catches the right-edge case even when a wide char at
-            // render_cols-2 jumps past render_cols-1.
-            let cell_opt = screen.cell(row, col);
-            let contents = cell_opt.map_or("", |c| c.contents());
-            let width = if contents.is_empty() {
-                1
-            } else {
-                unicode_width::UnicodeWidthStr::width(contents).max(1) as u16
-            };
-
-            // Margin sanitation: clear right margin before writing the cell that
-            // touches or passes the right edge.  Placing \x1b[K here (while the
-            // cursor is still at col) avoids cursor-inclusive erasure of the cell.
-            if col.saturating_add(width) >= render_cols {
-                buf.extend_from_slice(b"\x1b[0m\x1b[K");
-                active_style = CellStyle::default();
-            }
-
-            let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
-            if style != active_style {
-                apply_sgr(&mut buf, &style)?;
-                active_style = style;
-            }
-
-            if contents.is_empty() {
-                buf.push(b' ');
-            } else {
-                buf.extend_from_slice(contents.as_bytes());
-            }
-
-            col = col.saturating_add(width);
-        }
-
-        // Trailing margin clear, only when the target viewport extends past
-        // the rendered content. The cursor moves strictly past the last
-        // content cell (1-based column render_cols + 1; EL0 is
-        // cursor-inclusive, so clearing at render_cols would erase the
-        // boundary character) and clears with default background: the margin
-        // lies outside the inner application and must never inherit content
-        // colors such as the PowerShell yellow from issue #115.
-        if render_cols < cols {
-            write!(
-                buf,
-                "\x1b[{};{}H",
-                row.saturating_add(1),
-                render_cols.saturating_add(1)
-            )?;
-            buf.extend_from_slice(b"\x1b[0m\x1b[K");
+        // Margin sanitation: clear right margin before writing the cell that
+        // touches or passes the right edge. Placing erase here (while the
+        // cursor is still at col) avoids cursor-inclusive erasure of the cell.
+        if col.saturating_add(width) >= render_cols {
+            scratch.extend_from_slice(SGR_RESET);
+            scratch.extend_from_slice(ERASE_TO_EOL);
             active_style = CellStyle::default();
         }
+
+        let style = cell_opt.map(CellStyle::from_cell).unwrap_or_default();
+        if style != active_style {
+            apply_sgr(scratch, &style)?;
+            active_style = style;
+        }
+
+        if contents.is_empty() {
+            scratch.push(b' ');
+        } else {
+            scratch.extend_from_slice(contents.as_bytes());
+        }
+
+        col = col.saturating_add(width);
     }
 
-    // Target rows with no inner content stay blank under default attributes.
-    // No tracker update inside the loop: nothing reads cell styles here and
-    // the cursor-restore reset below resynchronizes the tracker afterwards.
-    for row in render_rows..rows {
-        write!(buf, "\x1b[{};1H", row.saturating_add(1))?;
-        buf.extend_from_slice(b"\x1b[0m\x1b[K");
+    // Trailing margin clear, only when the target viewport extends past the
+    // rendered content. The cursor moves strictly past the last content cell
+    // (1-based column render_cols + 1; EL0 is cursor-inclusive, so clearing
+    // at render_cols would erase the boundary character) and clears with
+    // default background: the margin lies outside the inner application and
+    // must never inherit content colors such as the PowerShell yellow from
+    // issue #115.
+    if render_cols < cols {
+        write!(
+            scratch,
+            "\x1b[{};{}H",
+            row.saturating_add(1),
+            render_cols.saturating_add(1)
+        )?;
+        scratch.extend_from_slice(SGR_RESET);
+        scratch.extend_from_slice(ERASE_TO_EOL);
+        active_style = CellStyle::default();
     }
 
-    // Cursor restoration with DECAWM pending-wrap reconstruction (issue #115).
-    // cursor_position() is 0-based while CUP is 1-based. The inner parser
-    // latches pending-wrap only when the cursor reaches the inner width
-    // (with DECAWM off the cursor clamps to the margin instead), so
-    // reconstruction requires a genuine inner latch (cur_col >= inner_cols)
-    // at full width (render_cols == inner_cols): a cursor parked inside a
-    // truncated-away region is an ordinary position, not a latch. Every CUP
-    // clears the latch in the receiver, so the latch is rebuilt by printing
-    // into the final column with DECAWM on. SGR resets are non-motion
-    // sequences and preserve the latch. DECAWM mode itself persists across
-    // CUP, so the single ?7h below covers the reconstruction too.
-    buf.extend_from_slice(b"\x1b[?7h");
-    buf.extend_from_slice(b"\x1b[0m");
-    active_style = CellStyle::default();
+    // The tracker is function-local; restore it to the wire state (default
+    // attributes are active after the unconditional opening reset and any
+    // resets above) so the final assert documents the invariant.
+    if active_style != CellStyle::default() {
+        scratch.extend_from_slice(SGR_RESET);
+        active_style = CellStyle::default();
+    }
+    debug_assert_eq!(active_style, CellStyle::default());
+    Ok(())
+}
+
+/// Append cursor restoration with DECAWM pending-wrap reconstruction
+/// (issue #115). `cursor_position()` is 0-based while CUP is 1-based. The
+/// inner parser latches pending-wrap only when the cursor reaches the inner
+/// width (with DECAWM off the cursor clamps to the margin instead), so
+/// reconstruction requires a genuine inner latch (cur_col >= inner_cols) at
+/// full width (render_cols == inner_cols): a cursor parked inside a
+/// truncated-away region is an ordinary position, not a latch. Every CUP
+/// clears the latch in the receiver, so the latch is rebuilt by printing
+/// into the final column with DECAWM on. SGR resets are non-motion sequences
+/// and preserve the latch. DECAWM mode itself persists across CUP, so the
+/// single ?7h below covers the reconstruction too.
+fn append_cursor_trailer(
+    buf: &mut Vec<u8>,
+    screen: &Screen,
+    inner_cols: u16,
+    render_rows: u16,
+    render_cols: u16,
+    rows: u16,
+    cols: u16,
+) -> io::Result<()> {
+    buf.extend_from_slice(DECAWM_ON);
+    buf.extend_from_slice(SGR_RESET);
     let (cur_row, cur_col) = screen.cursor_position();
     if cur_col >= inner_cols
         && render_cols == inner_cols
@@ -1124,11 +1253,8 @@ pub fn render_frame(
             emit_col.saturating_add(1)
         )?;
         let style = emit_cell.map(CellStyle::from_cell).unwrap_or_default();
-        // No tracker update for the boundary style itself: the rendition is
-        // terminated unconditionally below, so the intermediate value is
-        // never read. The reset afterwards resynchronizes the tracker.
-        if style != active_style {
-            apply_sgr(&mut buf, &style)?;
+        if style != CellStyle::default() {
+            apply_sgr(buf, &style)?;
         }
         match emit_cell.map(|cell| cell.contents()) {
             Some(contents) if !contents.is_empty() => {
@@ -1141,8 +1267,7 @@ pub fn render_frame(
         // Terminate the re-emitted rendition: without this reset the
         // boundary cell attributes leak into all subsequent output, which is
         // the full-window color bleed from issue #115.
-        buf.extend_from_slice(b"\x1b[0m");
-        active_style = CellStyle::default();
+        buf.extend_from_slice(SGR_RESET);
     } else {
         let cup_row = cur_row.min(rows.saturating_sub(1));
         let cup_col = cur_col.min(cols.saturating_sub(1));
@@ -1153,19 +1278,118 @@ pub fn render_frame(
             cup_col.saturating_add(1)
         )?;
     }
-    // The tracker is function-local, but assert it matches the wire: every
-    // path above ends with default attributes active.
-    debug_assert_eq!(active_style, CellStyle::default());
-    if screen.hide_cursor() {
-        buf.extend_from_slice(b"\x1b[?25l");
-    } else {
-        buf.extend_from_slice(b"\x1b[?25h");
-    }
-    // Synchronized Output end — terminal now paints atomically
-    buf.extend_from_slice(b"\x1b[?2026l");
+    Ok(())
+}
 
-    out.write_all(&buf)?;
-    out.flush()
+/// Render one frame of the inner screen to the attached terminal.
+///
+/// The frame is diffed against the last paint recorded in `cache`: only rows
+/// whose rendered bytes changed are emitted, each self-contained (opens with
+/// an SGR reset, tracks style locally) so a partial paint can never inherit
+/// stale styling. Returns `true` when bytes were written, `false` when the
+/// screen was unchanged and nothing was emitted (idle ticks cost zero wire
+/// bytes). Geometry changes and `clear_display` repaint fully through the
+/// same unified path. Every paint closes with a global SGR reset so no row
+/// can leak styling onto the terminal (issue #400); margin, pending-wrap,
+/// wide-char and truncation rules follow issue #115 as before.
+pub fn render_frame(
+    out: &mut dyn Write,
+    screen: &Screen,
+    rows: u16,
+    cols: u16,
+    clear_display: bool,
+    cache: &mut RenderCache,
+) -> io::Result<bool> {
+    // Truncate the inner grid to the target viewport (issue #115): when a
+    // nested session is wider than the outer window, emitting past the outer
+    // width would clamp excess cells into the margin column of the receiving
+    // parser and duplicate the boundary color there.
+    let (inner_rows, inner_cols) = screen.size();
+    let render_rows = inner_rows.min(rows);
+    let render_cols = inner_cols.min(cols);
+
+    // A geometry change (target or inner) or an explicit clear invalidates the
+    // snapshot: repaint everything through the same unified path below. An
+    // empty cache (fresh `RenderCache::new()`) takes this path too, so the
+    // first paint populates all hashes.
+    let full = clear_display
+        || cache.rows != rows
+        || cache.cols != cols
+        || cache.inner_rows != inner_rows
+        || cache.inner_cols != inner_cols
+        || cache.row_hashes.len() != rows as usize;
+    if full {
+        cache.invalidate(rows);
+        cache.rows = rows;
+        cache.cols = cols;
+        cache.inner_rows = inner_rows;
+        cache.inner_cols = inner_cols;
+        // Reserve once per geometry: steady-state paints reuse the capacity.
+        let frame_cap = (rows as usize)
+            .saturating_mul(cols as usize)
+            .saturating_mul(RENDER_BUF_CELL_MULTIPLIER);
+        cache.segments.reserve(frame_cap);
+        cache.frame_buf.reserve(frame_cap.saturating_add(128));
+    }
+
+    // Diff and accumulate in one pass over the reused scratch buffer into the
+    // reused segments buffer: no per-row allocations and no retained
+    // full-frame copy. `full` forces every row through (never compare against
+    // the zeroed hashes, which a real payload could theoretically match).
+    cache.segments.clear();
+    for row in 0..rows {
+        cache.scratch.clear();
+        if row < render_rows {
+            render_row_bytes(screen, row, render_cols, cols, &mut cache.scratch)?;
+        } else {
+            // Target rows with no inner content stay blank under default
+            // attributes.
+            cache.scratch.extend_from_slice(SGR_RESET);
+            cache.scratch.extend_from_slice(ERASE_TO_EOL);
+        }
+        let hash = row_hash(&cache.scratch);
+        if full || cache.row_hashes[row as usize] != hash {
+            write!(cache.segments, "\x1b[{};1H", row.saturating_add(1))?;
+            cache.segments.extend_from_slice(&cache.scratch);
+            cache.row_hashes[row as usize] = hash;
+        }
+    }
+
+    let cursor = (screen.cursor_position(), screen.hide_cursor());
+    if cache.segments.is_empty() && cursor == cache.last_cursor {
+        // Nothing changed: emit zero bytes so the 100 ms idle timer costs no
+        // wire traffic and no allocation churn. `out` is untouched and no
+        // flush occurs.
+        return Ok(false);
+    }
+
+    cache.frame_buf.clear();
+    cache.frame_buf.extend_from_slice(FRAME_BEGIN);
+    if clear_display {
+        cache.frame_buf.extend_from_slice(CLEAR_DISPLAY_SEQ);
+    }
+    cache.frame_buf.extend_from_slice(DECAWM_OFF);
+    cache.frame_buf.extend_from_slice(&cache.segments);
+    append_cursor_trailer(
+        &mut cache.frame_buf,
+        screen,
+        inner_cols,
+        render_rows,
+        render_cols,
+        rows,
+        cols,
+    )?;
+    if screen.hide_cursor() {
+        cache.frame_buf.extend_from_slice(CURSOR_HIDE_SEQ);
+    } else {
+        cache.frame_buf.extend_from_slice(CURSOR_SHOW_SEQ);
+    }
+    cache.frame_buf.extend_from_slice(FRAME_END);
+
+    cache.last_cursor = cursor;
+    out.write_all(&cache.frame_buf)?;
+    out.flush()?;
+    Ok(true)
 }
 
 #[allow(clippy::unwrap_used)]
@@ -1521,7 +1745,9 @@ mod tests {
         let screen = parser.screen();
         let mut buf: Vec<u8> = Vec::new();
         let (rows, cols) = screen.size();
-        render_frame(&mut buf, screen, rows, cols, false).unwrap();
+        let mut cache = RenderCache::new();
+        let painted = render_frame(&mut buf, screen, rows, cols, false, &mut cache).unwrap();
+        assert!(painted, "first paint with an empty cache must emit");
         let output = String::from_utf8_lossy(&buf);
         // Should contain CUP to each row (4 rows)
         assert!(output.contains("\x1b[1;1H"));
@@ -1555,8 +1781,16 @@ mod tests {
         let mut inner = term_wm_vt100::Parser::new(inner_rows, inner_cols, 0);
         inner.process(inner_bytes);
         let mut frame: Vec<u8> = Vec::new();
-        render_frame(&mut frame, inner.screen(), target_rows, target_cols, false)
-            .expect("render frame");
+        let mut cache = RenderCache::new();
+        render_frame(
+            &mut frame,
+            inner.screen(),
+            target_rows,
+            target_cols,
+            false,
+            &mut cache,
+        )
+        .expect("render frame");
         let mut outer = term_wm_vt100::Parser::new(target_rows, target_cols, 0);
         outer.process(&frame);
         outer
@@ -1595,7 +1829,8 @@ mod tests {
         inner.process(b"ABCD");
         assert_eq!(inner.screen().cursor_position(), (0, 4));
         let mut frame: Vec<u8> = Vec::new();
-        render_frame(&mut frame, inner.screen(), 1, 4, false).expect("render");
+        let mut cache = RenderCache::new();
+        render_frame(&mut frame, inner.screen(), 1, 4, false, &mut cache).expect("render");
         let mut outer = term_wm_vt100::Parser::new(1, 4, 0);
         outer.process(&frame);
         assert_eq!(
@@ -1670,6 +1905,237 @@ mod tests {
             "truncated cursor must clamp without pending-wrap",
         );
         assert_eq!(outer.screen().contents(), "ABC");
+    }
+
+    // ── issue #400 diff tests ─────────────────────────────────────────
+    // The frame is diffed against the last paint in `RenderCache`: identical
+    // screens emit zero bytes, single-row changes emit only that row, cursor
+    // movement alone emits a minimal paint, and every paint ends in default
+    // SGR state.
+
+    /// Render `screen` with `cache`, returning (painted, bytes).
+    fn render_with(
+        screen: &Screen,
+        rows: u16,
+        cols: u16,
+        clear_display: bool,
+        cache: &mut RenderCache,
+    ) -> (bool, Vec<u8>) {
+        let mut out = Vec::new();
+        let painted =
+            render_frame(&mut out, screen, rows, cols, clear_display, cache).expect("render frame");
+        (painted, out)
+    }
+
+    #[test]
+    fn render_frame_second_identical_render_emits_nothing() {
+        let mut inner = term_wm_vt100::Parser::new(4, 8, 0);
+        inner.process(b"Hello\nWorld");
+        let mut cache = RenderCache::new();
+        let (painted_first, first) = render_with(inner.screen(), 4, 8, false, &mut cache);
+        assert!(painted_first, "first paint must emit");
+        assert!(!first.is_empty());
+        let (painted_second, second) = render_with(inner.screen(), 4, 8, false, &mut cache);
+        assert!(
+            !painted_second,
+            "identical screen must not repaint: {}",
+            second.len()
+        );
+        assert!(
+            second.is_empty(),
+            "idle repaint must cost zero wire bytes, got {}",
+            second.len()
+        );
+    }
+
+    #[test]
+    fn render_frame_single_row_change_emits_only_that_row() {
+        let mut inner = term_wm_vt100::Parser::new(3, 4, 0);
+        inner.process(b"\x1b[1;1HAAAA\x1b[2;1HBBBB\x1b[3;1HCCCC");
+        let mut cache = RenderCache::new();
+        let (painted_first, _) = render_with(inner.screen(), 3, 4, false, &mut cache);
+        assert!(painted_first);
+        // Mutate only the middle row.
+        inner.process(b"\x1b[2;1HX");
+        let (painted, out) = render_with(inner.screen(), 3, 4, false, &mut cache);
+        assert!(painted, "changed row must repaint");
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            text.contains("\x1b[2;1H"),
+            "changed row CUP must be present: {text:?}"
+        );
+        assert!(
+            !text.contains("\x1b[1;1H"),
+            "unchanged row 1 must not repaint: {text:?}"
+        );
+        assert!(
+            !text.contains("\x1b[3;1H"),
+            "unchanged row 3 must not repaint: {text:?}"
+        );
+        assert!(text.contains('X'), "changed content must be present");
+    }
+
+    #[test]
+    fn render_frame_isolated_row_is_self_contained_and_frame_ends_reset() {
+        // Row 1 starts in a non-default style with row 0 default: a regression
+        // for the cross-frame style trap, where an isolated row could inherit
+        // stale SGR state.
+        let mut inner = term_wm_vt100::Parser::new(2, 4, 0);
+        inner.process(b"\x1b[2;1H\x1b[41mAB\x1b[0m");
+        let mut cache = RenderCache::new();
+        let (painted, out) = render_with(inner.screen(), 2, 4, false, &mut cache);
+        assert!(painted);
+        let row_cup = out
+            .windows(b"\x1b[2;1H".len())
+            .position(|w| w == b"\x1b[2;1H")
+            .expect("row 2 CUP present");
+        let row_start = row_cup + b"\x1b[2;1H".len();
+        assert!(
+            out[row_start..].starts_with(b"\x1b[0m"),
+            "isolated row must open with a style reset"
+        );
+        assert!(
+            out.ends_with(b"\x1b[0m\x1b[?2026l"),
+            "every paint must end with a global reset: {out:?}"
+        );
+        // Round trip: the red background must land on the row cells only.
+        let mut outer = term_wm_vt100::Parser::new(2, 4, 0);
+        outer.process(&out);
+        assert_eq!(
+            outer.screen().cell(1, 0).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Idx(1)
+        );
+        assert_eq!(
+            outer.screen().cell(0, 0).expect("cell").bgcolor(),
+            term_wm_vt100::Color::Default,
+            "row 0 must not inherit the isolated row style",
+        );
+    }
+
+    #[test]
+    fn render_frame_partial_round_trip_matches_inner() {
+        // Property the single-frame tests cannot cover: frame 1, then a
+        // partial frame 2, fed into one outer parser must equal the inner
+        // screen (content and cursor).
+        let mut inner = term_wm_vt100::Parser::new(2, 4, 0);
+        inner.process(b"AB\x1b[2;1HCD");
+        let mut cache = RenderCache::new();
+        let (_, first) = render_with(inner.screen(), 2, 4, false, &mut cache);
+        let mut outer = term_wm_vt100::Parser::new(2, 4, 0);
+        outer.process(&first);
+        inner.process(b"\x1b[1;2HX");
+        let (painted, second) = render_with(inner.screen(), 2, 4, false, &mut cache);
+        assert!(painted, "mutation must repaint");
+        assert!(
+            !String::from_utf8_lossy(&second).contains("\x1b[2;1H"),
+            "unchanged row 2 must not repaint"
+        );
+        outer.process(&second);
+        // `contents()` distinguishes explicitly painted spaces from untouched
+        // cells (the renderer writes spaces for empty cells, as before), so
+        // compare with trailing whitespace trimmed: the visible state is what
+        // must match.
+        fn trim_trailing_spaces(s: &str) -> String {
+            s.lines()
+                .map(|line| line.trim_end())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        assert_eq!(
+            trim_trailing_spaces(&outer.screen().contents()),
+            trim_trailing_spaces(&inner.screen().contents()),
+            "outer must match inner across partial frames"
+        );
+        assert_eq!(
+            outer.screen().cursor_position(),
+            inner.screen().cursor_position(),
+            "cursor must match across partial frames"
+        );
+    }
+
+    #[test]
+    fn render_frame_clear_display_forces_full_repaint() {
+        let mut inner = term_wm_vt100::Parser::new(2, 4, 0);
+        inner.process(b"AB\x1b[2;1HCD");
+        let mut cache = RenderCache::new();
+        let _ = render_with(inner.screen(), 2, 4, false, &mut cache);
+        inner.process(b"\x1b[1;1HX");
+        let _ = render_with(inner.screen(), 2, 4, false, &mut cache);
+        // Clear must repaint everything, byte-identical to a fresh cache.
+        let (painted, cleared) = render_with(inner.screen(), 2, 4, true, &mut cache);
+        assert!(painted, "clear_display must repaint");
+        assert!(
+            cleared.windows(4).any(|w| w == b"\x1b[2J"),
+            "clear_display must emit a full-screen clear"
+        );
+        let mut fresh = RenderCache::new();
+        let (_, fresh_out) = render_with(inner.screen(), 2, 4, true, &mut fresh);
+        assert_eq!(
+            cleared, fresh_out,
+            "clear repaint must match a fresh full paint"
+        );
+        // Geometry growth must not panic and must repaint fully.
+        let (painted_grown, _) = render_with(inner.screen(), 4, 8, false, &mut cache);
+        assert!(painted_grown, "geometry change must repaint");
+        assert_eq!(
+            cache.row_hashes.len(),
+            4,
+            "invalidate must resize hashes to the new geometry"
+        );
+    }
+
+    #[test]
+    fn render_frame_cursor_only_movement_emits_minimal_paint() {
+        let mut inner = term_wm_vt100::Parser::new(4, 8, 0);
+        inner.process(b"Hello");
+        let mut cache = RenderCache::new();
+        let _ = render_with(inner.screen(), 4, 8, false, &mut cache);
+        // Move only the cursor (no cell changes).
+        inner.process(b"\x1b[3;5H");
+        assert_eq!(inner.screen().cursor_position(), (2, 4));
+        let (painted, out) = render_with(inner.screen(), 4, 8, false, &mut cache);
+        assert!(painted, "cursor movement must repaint");
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            text.contains("\x1b[3;5H"),
+            "cursor CUP must be present: {text:?}"
+        );
+        for row in 1..=4 {
+            let cup = format!("\x1b[{row};1H");
+            assert!(
+                !text.contains(&cup),
+                "cursor-only paint must not emit row CUP {cup:?}: {text:?}"
+            );
+        }
+        assert!(
+            out.len() < 128,
+            "cursor-only paint must be minimal, got {} bytes",
+            out.len()
+        );
+        assert!(
+            out.ends_with(b"\x1b[0m\x1b[?2026l"),
+            "cursor-only paint must end with a global reset"
+        );
+        // The outer parser must observe the moved cursor.
+        let mut outer = term_wm_vt100::Parser::new(4, 8, 0);
+        outer.process(b"Hello");
+        outer.process(&out);
+        assert_eq!(outer.screen().cursor_position(), (2, 4));
+    }
+
+    #[test]
+    fn render_cache_invalidate_resizes_for_growth() {
+        let mut cache = RenderCache::new();
+        cache.invalidate(2);
+        assert_eq!(cache.row_hashes.len(), 2);
+        cache.invalidate(6);
+        assert_eq!(
+            cache.row_hashes.len(),
+            6,
+            "growth must resize without panicking"
+        );
+        cache.invalidate(1);
+        assert_eq!(cache.row_hashes.len(), 1);
     }
 
     // ── is_coalescable_mouse tests ────────────────────────────────────────
@@ -1966,7 +2432,10 @@ mod snapshot_tests {
         let screen = parser.screen();
         let (rows, cols) = screen.size();
         let mut out = Vec::new();
-        render_frame(&mut out, screen, rows, cols, clear_display).unwrap();
+        // Fresh cache per capture: each snapshot is a full paint through the
+        // same unified path production uses on first attach.
+        let mut cache = RenderCache::new();
+        render_frame(&mut out, screen, rows, cols, clear_display, &mut cache).unwrap();
         out
     }
 
