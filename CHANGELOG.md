@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [0.10.18-alpha] - 2026-11-10
+
+### Fixed
+
+- Rapid mouse movement no longer queues input lag behind stale pointer positions; only the latest position in each burst is dispatched.
+- Remote session display over slow SSH links no longer lags seconds behind keystrokes, since the client now sends only changed screen rows instead of repainting the whole viewport on every frame (#400).
+- Help overlay no longer shows an empty keybinding for opening a new terminal window; it now directs to the Command Palette when no key is bound (#398).
+
+### Changed
+
+- Bumped `oxdock` from 0.21.0-alpha to 0.36.0-alpha with default features disabled (minimal `cli` only).
+- Bumped `line-ending` from 1.5.1 to 1.6.0 as required by the new `oxdock`.
+- Bumped `libc` from 0.2.190 to 0.2.191 (#392).
+- Bumped `syn` from 3.0.6 to 3.0.9 (#393).
+- Bumped `indoc` from 2.0.7 to 2.0.8 (#394).
+- Bumped `term-wm-vt100` from 0.16.2-patch4 to 0.16.2-patch6 (#395).
+
 ## [0.10.17-alpha] - 2026-10-30
 
 ### Changed

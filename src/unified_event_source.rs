@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, bounded};
 
 use term_wm_console::background_console_reader::BackgroundConsoleReader;
-use term_wm_core::events::{Event, KeyEvent, MouseEvent};
+use term_wm_core::events::{Event, KeyEvent, MouseEvent, MouseEventKind};
 use term_wm_core::io::EventSource;
 use term_wm_core::io::frame_pacer::FramePacer;
 use term_wm_core::power_profile::PowerProfile;
@@ -134,6 +134,29 @@ pub struct UnifiedEventSource {
     user_cache_refreshed: Option<Vec<term_session::protocol::UserInfo>>,
 }
 
+/// Whether an event is mouse motion (`Moved`/`Drag`) whose intermediate
+/// positions may be superseded by a newer position.
+fn is_mouse_motion(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved | MouseEventKind::Drag(_),
+            ..
+        })
+    )
+}
+
+/// Whether `newer` may replace `older` in the input buffer: both are mouse
+/// motion of the same kind with the same modifiers, so only the latest
+/// position matters. Modifier changes mid-drag are preserved because they
+/// signal state transitions that applications rely on.
+fn motion_supersedes(newer: &Event, older: &Event) -> bool {
+    match (newer, older) {
+        (Event::Mouse(a), Event::Mouse(b)) => a.kind == b.kind && a.modifiers == b.modifiers,
+        _ => false,
+    }
+}
+
 /// Outcome of processing one unified-channel event during `poll`.
 enum UnifiedPoll {
     /// A normalized input event is ready.
@@ -204,6 +227,28 @@ impl UnifiedEventSource {
         self.tx.clone()
     }
 
+    /// Queue one normalized input event for a later `poll`/`read`.
+    ///
+    /// Consecutive mouse-motion events with identical kind and modifiers are
+    /// coalesced: a pointer sweep can enqueue dozens of positions per frame,
+    /// and only the latest one matters for hover, selection, and PTY
+    /// forwarding. Keeping just the newest position stops a motion burst from
+    /// turning into one event-loop dispatch per event, which otherwise delays
+    /// the next frame on high-latency links. Button, key, and scroll events
+    /// are never dropped, and a modifier change mid-drag resets coalescing.
+    fn push_input(&mut self, conn_id: Option<usize>, event: Event) {
+        let superseded = self.input_buffer.back().is_some_and(|(back_id, back)| {
+            *back_id == conn_id
+                && is_mouse_motion(back)
+                && is_mouse_motion(&event)
+                && motion_supersedes(&event, back)
+        });
+        if superseded {
+            self.input_buffer.pop_back();
+        }
+        self.input_buffer.push_back((conn_id, event));
+    }
+
     /// Drain all pending events from the channel (non-blocking) into internal
     /// state.  Called at the start of each event-loop iteration so PtyWakeup
     /// floods don't cause render-backlog.
@@ -218,7 +263,7 @@ impl UnifiedEventSource {
                     event,
                 }) => {
                     if let Some(normalized) = self.normalizer.normalize(event) {
-                        self.input_buffer.push_back((None, normalized));
+                        self.push_input(None, normalized);
                     }
                 }
                 Ok(UnifiedEvent::Input {
@@ -226,7 +271,7 @@ impl UnifiedEventSource {
                     event,
                 }) => {
                     if let Some(normalized) = self.normalizer.normalize(event) {
-                        self.input_buffer.push_back((Some(conn_id), normalized));
+                        self.push_input(Some(conn_id), normalized);
                     }
                 }
                 Ok(UnifiedEvent::PtyWakeup(key)) => {
@@ -283,7 +328,7 @@ impl UnifiedEventSource {
             match console_rx.try_recv() {
                 Ok(event) => {
                     if let Some(normalized) = self.normalizer.normalize(event) {
-                        self.input_buffer.push_back((None, normalized));
+                        self.push_input(None, normalized);
                     }
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
@@ -677,6 +722,9 @@ impl EventSource for UnifiedEventSource {
                 if let Event::Key(key) = event {
                     return Ok(key);
                 }
+                // `pending_event` predates anything already drained into the
+                // buffer, so it must not supersede (and be dropped for) a
+                // newer buffered position: push it back verbatim.
                 self.input_buffer.push_back((None, event));
             }
 
@@ -694,7 +742,7 @@ impl EventSource for UnifiedEventSource {
                                 if let Event::Key(key) = normalized {
                                     return Ok(key);
                                 }
-                                self.input_buffer.push_back((None, normalized));
+                                self.push_input(None, normalized);
                             }
                         }
                         Err(_) => {
@@ -706,14 +754,14 @@ impl EventSource for UnifiedEventSource {
                             if let Event::Key(key) = event {
                                 return Ok(key);
                             }
-                            self.input_buffer.push_back((None, event));
+                            self.push_input(None, event);
                         }
                         Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
                             if let Event::Key(key) = event {
                                 *self.event_owner.lock().unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                                 return Ok(key);
                             }
-                            self.input_buffer.push_back((Some(conn_id), event));
+                            self.push_input(Some(conn_id), event);
                         }
                         Ok(UnifiedEvent::PtyWakeup(_)) => {}
                         Ok(UnifiedEvent::AppExited(key)) => {
@@ -762,7 +810,7 @@ impl EventSource for UnifiedEventSource {
                         if let Event::Key(key) = event {
                             return Ok(key);
                         }
-                        self.input_buffer.push_back((None, event));
+                        self.push_input(None, event);
                     }
                     Ok(UnifiedEvent::Input {
                         conn_id: Some(conn_id),
@@ -775,7 +823,7 @@ impl EventSource for UnifiedEventSource {
                                 .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                             return Ok(key);
                         }
-                        self.input_buffer.push_back((Some(conn_id), event));
+                        self.push_input(Some(conn_id), event);
                     }
                     Ok(UnifiedEvent::PtyWakeup(_)) => {}
                     Ok(UnifiedEvent::AppExited(key)) => {
@@ -829,6 +877,8 @@ impl EventSource for UnifiedEventSource {
                 if let Event::Mouse(mouse) = event {
                     return Ok(mouse);
                 }
+                // Older than anything drained since: push back verbatim so a
+                // buffered newer position is not dropped in its favor.
                 self.input_buffer.push_back((None, event));
             }
 
@@ -846,7 +896,7 @@ impl EventSource for UnifiedEventSource {
                                 if let Event::Mouse(mouse) = normalized {
                                     return Ok(mouse);
                                 }
-                                self.input_buffer.push_back((None, normalized));
+                                self.push_input(None, normalized);
                             }
                         }
                         Err(_) => {
@@ -858,14 +908,14 @@ impl EventSource for UnifiedEventSource {
                             if let Event::Mouse(mouse) = event {
                                 return Ok(mouse);
                             }
-                            self.input_buffer.push_back((None, event));
+                            self.push_input(None, event);
                         }
                         Ok(UnifiedEvent::Input { conn_id: Some(conn_id), event }) => {
                             if let Event::Mouse(mouse) = event {
                                 *self.event_owner.lock().unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                                 return Ok(mouse);
                             }
-                            self.input_buffer.push_back((Some(conn_id), event));
+                            self.push_input(Some(conn_id), event);
                         }
                         Ok(UnifiedEvent::PtyWakeup(_)) => {}
                         Ok(UnifiedEvent::AppExited(key)) => {
@@ -914,7 +964,7 @@ impl EventSource for UnifiedEventSource {
                         if let Event::Mouse(mouse) = event {
                             return Ok(mouse);
                         }
-                        self.input_buffer.push_back((None, event));
+                        self.push_input(None, event);
                     }
                     Ok(UnifiedEvent::Input {
                         conn_id: Some(conn_id),
@@ -927,7 +977,7 @@ impl EventSource for UnifiedEventSource {
                                 .unwrap_or_else(|err| err.into_inner()) = Some(conn_id);
                             return Ok(mouse);
                         }
-                        self.input_buffer.push_back((Some(conn_id), event));
+                        self.push_input(Some(conn_id), event);
                     }
                     Ok(UnifiedEvent::PtyWakeup(_)) => {}
                     Ok(UnifiedEvent::AppExited(key)) => {
@@ -2553,4 +2603,153 @@ mod tests {
         assert_eq!(source.user_disconnected, vec![2]);
         assert!(source.user_cache_refreshed.is_some());
     }
+
+    /// Build a source wired to a test console channel the way the runner
+    /// wires the background crossterm reader, and return its send side.
+    fn console_source() -> (UnifiedEventSource, Sender<Event>) {
+        let (tx, rx) = bounded(EVENT_CHANNEL_CAPACITY);
+        let (console, console_rx, console_tx) = test_console();
+        let source = UnifiedEventSource {
+            rx,
+            tx,
+            console: Some(console),
+            console_rx: Some(console_rx),
+            console_alive: true,
+            dirty_windows: HashSet::new(),
+            exited_windows: Vec::new(),
+            direct_input_changed: Vec::new(),
+            pending_redraw: false,
+            event_owner: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pending_event: None,
+            input_buffer: VecDeque::new(),
+            signal_received: false,
+            normalizer: KeyboardNormalizer::new(),
+            last_event_at: None,
+            frame_pacer: FramePacer::new(),
+            pending_work: false,
+            max_sleep_duration: None,
+            #[cfg(feature = "session-persistence")]
+            workspace_entered: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_connected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_disconnected: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_resized: Vec::new(),
+            #[cfg(feature = "session-persistence")]
+            user_cache_refreshed: None,
+        };
+        (source, console_tx)
+    }
+
+    fn mouse_evt(kind: MouseEventKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            modifiers: KeyModifiers::NONE,
+            column,
+            row,
+        })
+    }
+
+    /// A pointer sweep arrives as a burst of `Moved` events; only the newest
+    /// position matters, so the burst must collapse to one buffered event and
+    /// one dispatch instead of one dispatch per motion event.
+    #[test]
+    fn console_coalesces_consecutive_mouse_moved_events() {
+        let (mut source, console_tx) = console_source();
+        for (column, row) in [(3, 3), (8, 8), (12, 5)] {
+            console_tx
+                .send(mouse_evt(MouseEventKind::Moved, column, row))
+                .unwrap();
+        }
+
+        source.drain_console();
+        assert_eq!(
+            source.input_buffer.len(),
+            1,
+            "consecutive Moved events must collapse to the newest position"
+        );
+
+        assert!(
+            source.poll(Duration::ZERO).unwrap(),
+            "the coalesced motion must still be reportable"
+        );
+        let evt = source.read().unwrap();
+        assert!(
+            matches!(
+                evt,
+                Event::Mouse(m)
+                    if m.kind == MouseEventKind::Moved && m.column == 12 && m.row == 5
+            ),
+            "the newest position must survive coalescing, got {evt:?}"
+        );
+    }
+
+    /// Drag positions coalesce like plain motion, but a button press or a
+    /// scroll between them must never be dropped: click and scroll state has
+    /// to stay exact.
+    #[test]
+    fn console_preserves_non_motion_mouse_events() {
+        let (mut source, console_tx) = console_source();
+        let left = term_wm_core::events::MouseButton::Left;
+        console_tx
+            .send(mouse_evt(MouseEventKind::Moved, 1, 1))
+            .unwrap();
+        console_tx
+            .send(mouse_evt(MouseEventKind::Drag(left), 2, 2))
+            .unwrap();
+        console_tx
+            .send(mouse_evt(MouseEventKind::Drag(left), 9, 9))
+            .unwrap();
+        console_tx
+            .send(mouse_evt(MouseEventKind::Press(left), 9, 9))
+            .unwrap();
+        console_tx
+            .send(mouse_evt(MouseEventKind::ScrollDown, 9, 9))
+            .unwrap();
+
+        source.drain_console();
+        assert_eq!(
+            source.input_buffer.len(),
+            4,
+            "only the two same-kind Drag events may collapse; Press and \
+             ScrollDown must be preserved"
+        );
+    }
+
+    /// A modifier change mid-motion signals a state transition applications
+    /// rely on, so motion with differing modifiers must not be coalesced
+    /// away.
+    #[test]
+    fn console_keeps_motion_with_changed_modifiers() {
+        let (mut source, console_tx) = console_source();
+        console_tx
+            .send(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers {
+                    shift: true,
+                    control: false,
+                    alt: false,
+                },
+                column: 4,
+                row: 4,
+            }))
+            .unwrap();
+        console_tx
+            .send(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                modifiers: KeyModifiers::NONE,
+                column: 5,
+                row: 5,
+            }))
+            .unwrap();
+
+        source.drain_console();
+        assert_eq!(
+            source.input_buffer.len(),
+            2,
+            "a modifier change must reset motion coalescing"
+        );
+    }
 }
+

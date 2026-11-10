@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,7 +74,7 @@ jobs:
 
       - name: Check for bare .lock().unwrap() in production code
         shell: bash
-        run: bash ci/check-mutex-unwrap.sh
+        run: bash .github/scripts/check-mutex-unwrap.sh
 
       - name: Test
         run: cargo test --workspace ${{ matrix.flags }} -- --include-ignored
@@ -131,7 +131,7 @@ jobs:
       line_coverage: ${{ steps.cov-summary.outputs.line_percent }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust with llvm-tools
         uses: dtolnay/rust-toolchain@stable
