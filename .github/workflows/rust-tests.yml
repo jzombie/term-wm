@@ -74,7 +74,7 @@ jobs:
 
       - name: Check for bare .lock().unwrap() in production code
         shell: bash
-        run: bash ci/check-mutex-unwrap.sh
+        run: bash .github/scripts/check-mutex-unwrap.sh
 
       - name: Test
         run: cargo test --workspace ${{ matrix.flags }} -- --include-ignored
