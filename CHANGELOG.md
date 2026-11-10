@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ### Fixed
 
+- Rapid mouse movement no longer queues input lag behind stale pointer positions; only the latest position in each burst is dispatched.
 - Remote session display over slow SSH links no longer lags seconds behind keystrokes, since the client now sends only changed screen rows instead of repainting the whole viewport on every frame (#400).
 
 ### Changed
