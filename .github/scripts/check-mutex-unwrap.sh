@@ -65,7 +65,7 @@ if [ "$FAIL" -eq 1 ]; then
     echo ""
     echo "ERROR: Found .lock().unwrap() in production code."
     echo "Use .lock().unwrap_or_else(|err| err.into_inner()) instead."
-    echo "See ci/check-mutex-unwrap.sh for details."
+    echo "See .github/scripts/check-mutex-unwrap.sh for details."
     exit 1
 fi
 

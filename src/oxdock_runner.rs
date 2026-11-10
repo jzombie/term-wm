@@ -23,7 +23,7 @@
 use std::io;
 use std::path::Path;
 
-use oxdock_fs::GuardedPath;
+use oxdock::GuardedPath;
 use term_wm_config::env::{SPAWNER_EXE_ENV_VAR, SPAWNER_PID_ENV_VAR};
 use term_wm_core::project_tasks::TaskVarContext;
 
