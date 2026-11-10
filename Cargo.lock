@@ -329,6 +329,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache-manager"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d16266b6585746ebb43da97987694bbaa4b32c2de02e6cadb9a22e4faf2fc14"
+dependencies = [
+ "directories",
+]
+
+[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2291,7 +2300,7 @@ dependencies = [
  "anyhow",
  "oxdock-core",
  "oxdock-embed",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
  "oxdock-parser",
  "oxdock-process",
  "proc-macro2",
@@ -2313,7 +2322,7 @@ dependencies = [
  "muxio-rpc-service-endpoint",
  "muxio-sync-rpc-server",
  "oxdock-core",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
  "oxdock-net-plugin",
  "oxdock-parser",
  "oxdock-pipe",
@@ -2332,7 +2341,7 @@ checksum = "f658b37ff0e1645af45da693015c07bae1d1b2b586e3cb323e719f702471f789"
 dependencies = [
  "anyhow",
  "indoc",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
  "oxdock-func-macro",
  "oxdock-parser",
  "oxdock-pipe",
@@ -2349,7 +2358,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f4ddede542dedd426d5001cc470f48907a5d689ff1b1b307169d7723efe9f27"
 dependencies = [
  "anyhow",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
  "proc-macro2",
  "quote",
  "sha2 0.11.0",
@@ -2363,8 +2372,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba8b4138b15ae4bf34c4ec122c98744e201a7180484cb9e5d8e653c9ce78ea65"
 dependencies = [
  "anyhow",
- "cache-manager",
+ "cache-manager 0.5.0",
  "glob",
+ "libc",
+ "tempfile",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "oxdock-fs"
+version = "0.31.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7088b998e8593000c8279ec8dee98f63f15718fea7dc007e0ecf6423ce341ff"
+dependencies = [
+ "anyhow",
+ "cache-manager 0.6.0",
+ "glob",
+ "indoc",
  "libc",
  "tempfile",
  "tracing",
@@ -2392,7 +2417,7 @@ dependencies = [
  "oxdock-build",
  "oxdock-core",
  "oxdock-embed",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
  "oxdock-parser",
  "oxdock-process",
  "proc-macro2",
@@ -2415,7 +2440,7 @@ dependencies = [
  "muxio-rpc-service-caller",
  "muxio-sync-rpc-client",
  "oxdock-core",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
  "oxdock-func-macro",
  "oxdock-parser",
  "oxdock-pipe",
@@ -2453,7 +2478,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8ee1f2b21baac6eac81a639bdc5ebe77c7359c87b9720f4aaddc2bc183a31ce"
 dependencies = [
  "anyhow",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
 ]
 
 [[package]]
@@ -2464,7 +2489,7 @@ checksum = "60b00f526c9df031fe6dcab7cfa6f083ba7a661070c1f03329c91dc1305fd9c9"
 dependencies = [
  "anyhow",
  "libc",
- "oxdock-fs",
+ "oxdock-fs 0.21.0-alpha",
  "oxdock-parser",
  "oxdock-pipe",
  "oxdock-sys-test-utils",
@@ -3642,7 +3667,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -3826,7 +3851,7 @@ dependencies = [
  "muxio-tokio-mpsc-adapter",
  "muxio-tokio-rpc-ipc-client",
  "oxdock",
- "oxdock-fs",
+ "oxdock-fs 0.31.0-alpha",
  "portable-pty",
  "proptest",
  "ratatui",
