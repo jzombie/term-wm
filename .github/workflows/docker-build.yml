@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Buildx with the docker-container driver is required for the GHA cache
       # backend and gives cross-run layer caching for the cargo fetch/build
