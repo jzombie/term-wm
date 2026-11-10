@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [UNRELEASED]
 
+### Fixed
+
+- Remote session display over slow SSH links no longer lags seconds behind keystrokes, since the client now sends only changed screen rows instead of repainting the whole viewport on every frame (#400).
+
 ### Changed
 
 - Bumped `oxdock` from 0.21.0-alpha to 0.36.0-alpha with default features disabled (minimal `cli` only).
