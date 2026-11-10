@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 - Bumped `oxdock` from 0.21.0-alpha to 0.36.0-alpha with default features disabled (minimal `cli` only).
 - Bumped `line-ending` from 1.5.1 to 1.6.0 as required by the new `oxdock`.
+- Bumped `libc` from 0.2.190 to 0.2.191 (#392).
+- Bumped `syn` from 3.0.6 to 3.0.9 (#393).
+- Bumped `indoc` from 2.0.7 to 2.0.8 (#394).
+- Bumped `term-wm-vt100` from 0.16.2-patch4 to 0.16.2-patch6 (#395).
 
 ## [0.10.17-alpha] - 2026-10-30
 
