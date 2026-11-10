@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Changed
+
+- Bumped `oxdock` from 0.21.0-alpha to 0.36.0-alpha with default features disabled (minimal `cli` only).
+- Bumped `line-ending` from 1.5.1 to 1.6.0 as required by the new `oxdock`.
+
 ## [0.10.17-alpha] - 2026-10-30
 
 ### Changed
