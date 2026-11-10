@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Fixed
+
+- Rapid mouse movement no longer queues input lag behind stale pointer positions; only the latest position in each burst is dispatched.
+
 ## [0.10.17-alpha] - 2026-10-30
 
 ### Changed
