@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 (or is loosely based on) Semantic Versioning.
 
+## [UNRELEASED]
+
+### Changed
+
+- Bumped `interprocess` from 2.4.6 to 2.4.8 (#407).
+- Bumped `resvg` from 0.48.1 to 0.49.0 (#408).
+- Bumped `proptest` from 1.11.0 to 1.12.0 (#409).
+- Bumped `webbrowser` from 1.2.4 to 1.2.6 (#410).
+- Bumped `syn` from 3.0.9 to 3.0.10 (#411).
+
 ## [0.10.18-alpha] - 2026-11-10
 
 ### Fixed
