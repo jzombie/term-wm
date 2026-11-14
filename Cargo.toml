@@ -58,7 +58,6 @@ publish = true
 [workspace.dependencies]
 anyhow = "1.0.104"
 arboard = "3.6.1"
-arc-swap = "1.9.2"
 base64 = "0.23.0"
 bitcode = "0.6.9"
 bitflags = "2.13.1"
@@ -68,7 +67,6 @@ criterion = { version = "0.8.2", default-features = false }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
-dirs = "5.0"
 file-rotate = "0.8.0"
 hostname = "0.4.2"
 indoc = "2.0.7"
@@ -114,7 +112,6 @@ term-session-muxio-service-definitions = { path = "crates/term-session-muxio-ser
 term-session-server = { path = "crates/term-session-server", version = "0.10.18-alpha" }
 term-sys-io = { path = "crates/term-sys-io", version = "0.10.18-alpha" }
 term-test-support = { path = "crates/term-test-support", version = "0.10.18-alpha" }
-term-wm = { path = ".", version = "0.10.18-alpha" }
 term-wm-config = { path = "crates/term-wm-config", version = "0.10.18-alpha" }
 term-wm-console = { path = "crates/term-wm-console", version = "0.10.18-alpha" }
 term-wm-core = { path = "crates/term-wm-core", version = "0.10.18-alpha", default-features = false }
@@ -198,9 +195,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 unicode-width = { workspace = true }
 webbrowser = { workspace = true }
-
-[build-dependencies]
-indoc = { workspace = true }
 
 [dev-dependencies]
 interprocess = { workspace = true }

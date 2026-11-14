@@ -3749,7 +3749,6 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "hostname",
- "indoc",
  "interprocess",
  "libc",
  "line-ending",
