@@ -34,7 +34,7 @@ Every subcommand performs **real** OS behavior — real process spawning, real e
 Test suites locate the compiled binary through [`get_mock_bin`](src/lib.rs), which:
 
 1. honors `CARGO_BIN_EXE_term-session-mock` when Cargo provides it (this crate's own integration tests);
-2. otherwise finds the workspace build in `target/debug` or the hashed `target/debug/deps` location;
-3. if neither exists, **runs `cargo build` for this crate on demand** and re-resolves.
+2. otherwise finds the workspace build in `target/debug`, the hashed `target/debug/deps` location (classic Cargo layout), or the per-unit `target/debug/build/term-session-mock/*/out` location (Cargo per-unit output layout, the default since ~1.100);
+3. if none exists, **runs `cargo build` for this crate on demand** (in the enclosing target directory, so `cargo llvm-cov` runs stay isolated) and re-resolves.
 
 The helper never returns a missing path, so tests can never silently skip. If the binary still cannot be located after an on-demand build, it panics — a broken build fails loudly instead of quietly dropping coverage.
