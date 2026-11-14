@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Bumped `webbrowser` from 1.2.4 to 1.2.6 (#410).
 - Bumped `syn` from 3.0.9 to 3.0.10 (#411).
 - Bumped `term-wm-vt100` from 0.16.2-patch6 to 0.16.2-patch7.
+- Bumped `oxdock` from 0.36.0-alpha to 0.39.0-alpha.
 
 ## [0.10.18-alpha] - 2026-11-10
 
