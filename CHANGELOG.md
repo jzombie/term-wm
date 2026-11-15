@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Bumped `term-wm-vt100` from 0.16.2-patch6 to 0.16.2-patch7.
 - Bumped `oxdock` from 0.36.0-alpha to 0.39.0-alpha.
 
+### Fixed
+
+- The test mock binary is now located reliably under newer Cargo toolchains, whose per-unit build output moved test executables out of `target/debug/deps`, and under release or custom build profiles; on-demand rebuilds now target the same profile and cross-compilation target as the running tests (#412).
+- The test suite now builds warning-free under the toolchain's unreachable-code detection, which flags error handling on infallible terminal test backends (#412).
+
 ## [0.10.18-alpha] - 2026-11-10
 
 ### Fixed
