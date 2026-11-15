@@ -67,7 +67,9 @@ impl RenderTarget for TestOutput {
                 }
             })
             .map(|_| ())
-            .map_err(|e| io::Error::other(e.to_string()))
+            // `TestBackend` never fails (`Error = Infallible`), so there is
+            // no error to convert; the empty match documents that.
+            .map_err(|e| match e {})
     }
 }
 
