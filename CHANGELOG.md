@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - Bumped `proptest` from 1.11.0 to 1.12.0 (#409).
 - Bumped `webbrowser` from 1.2.4 to 1.2.6 (#410).
 - Bumped `syn` from 3.0.9 to 3.0.10 (#411).
+- Bumped `smallvec` from 1.16.3 to 1.16.6 (#413).
 - Bumped `term-wm-vt100` from 0.16.2-patch6 to 0.16.2-patch7.
 - Bumped `oxdock` from 0.36.0-alpha to 0.39.0-alpha.
 
