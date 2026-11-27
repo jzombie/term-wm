@@ -67,7 +67,7 @@ criterion = { version = "0.8.2", default-features = false }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 ctrlc = "3.5.2"
-file-rotate = "0.8.0"
+file-rotate = "0.9.0"
 hostname = "0.4.2"
 indoc = "2.0.7"
 insta = "1.48.0"
