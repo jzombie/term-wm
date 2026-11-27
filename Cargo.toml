@@ -84,7 +84,7 @@ muxio-tokio-mpsc-adapter = "0.17.0-alpha"
 muxio-tokio-rpc-ipc-client = "0.17.0-alpha"
 muxio-tokio-rpc-ipc-server = "0.17.0-alpha"
 nucleo-matcher = { version = "0.3", features = ["unicode-casefold", "unicode-normalization", "unicode-segmentation"] }
-oxdock = { version = "0.39.0-alpha", default-features = false, features = ["cli"] }
+oxdock = { version = "0.44.1-alpha", default-features = false, features = ["cli"] }
 portable-pty = "0.9.0"
 proc-macro-crate = "3.5.0"
 proc-macro2 = "1.0.107"
